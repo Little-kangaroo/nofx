@@ -3,8 +3,8 @@ export type Language = 'en' | 'zh';
 export const translations = {
   en: {
     // Header
-    appTitle: 'NOFX',
-    subtitle: 'Multi-AI Model Trading Platform',
+    appTitle: 'AI Trading Platform',
+    subtitle: 'Multi-AI Model Trading System',
     aiTraders: 'AI Traders',
     details: 'Details',
     tradingPanel: 'Trading Panel',
@@ -22,7 +22,7 @@ export const translations = {
     dashboardNav: 'Dashboard',
 
     // Footer
-    footerTitle: 'NOFX - AI Trading System',
+    footerTitle: 'AI Trading System',
     footerWarning: '⚠️ Trading involves risk. Use at your own discretion.',
 
     // Stats Cards
@@ -339,18 +339,18 @@ export const translations = {
     githubStarsInDays: '2.5K+ GitHub Stars in 3 days',
     heroTitle1: 'Read the Market.',
     heroTitle2: 'Write the Trade.',
-    heroDescription: 'NOFX is the future standard for AI trading — an open, community-driven agentic trading OS. Supporting Binance, Aster DEX and other exchanges, self-hosted, multi-agent competition, let AI automatically make decisions, execute and optimize trades for you.',
+    heroDescription: 'The future standard for AI trading — an open, community-driven agentic trading OS. Supporting Binance, Aster DEX and other exchanges, self-hosted, multi-agent competition, let AI automatically make decisions, execute and optimize trades for you.',
     poweredBy: 'Powered by Aster DEX and Binance, strategically invested by Amber.ac.',
     
     // Landing Page CTA
     readyToDefine: 'Ready to define the future of AI trading?',
-    startWithCrypto: 'Starting with crypto markets, expanding to TradFi. NOFX is the infrastructure of AgentFi.',
+    startWithCrypto: 'Starting with crypto markets, expanding to TradFi. This is the infrastructure of AgentFi.',
     getStartedNow: 'Get Started Now',
     viewSourceCode: 'View Source Code',
     
     // Features Section
     coreFeatures: 'Core Features',
-    whyChooseNofx: 'Why Choose NOFX?',
+    whyChooseNofx: 'Why Choose Our Platform?',
     openCommunityDriven: 'Open source, transparent, community-driven AI trading OS',
     openSourceSelfHosted: '100% Open Source & Self-Hosted',
     openSourceDesc: 'Your framework, your rules. Non-black box, supports custom prompts and multi-models.',
@@ -372,9 +372,9 @@ export const translations = {
     secureFeatures4: 'Trading log auditing',
     
     // About Section
-    aboutNofx: 'About NOFX',
-    whatIsNofx: 'What is NOFX?',
-    nofxNotAnotherBot: "NOFX is not another trading bot, but the 'Linux' of AI trading —",
+    aboutNofx: 'About Our Platform',
+    whatIsNofx: 'What is This Platform?',
+    nofxNotAnotherBot: "This is not another trading bot, but the 'Linux' of AI trading —",
     nofxDescription1: 'a transparent, trustworthy open source OS that provides a unified',
     nofxDescription2: "'decision-risk-execution' layer, supporting all asset classes.",
     nofxDescription3: 'Starting with crypto markets (24/7, high volatility perfect testing ground), future expansion to stocks, futures, forex. Core: open architecture, AI',
@@ -387,7 +387,7 @@ export const translations = {
     startupMessages3: 'Web console http://localhost:3000',
     
     // How It Works Section
-    howToStart: 'How to Get Started with NOFX',
+    howToStart: 'How to Get Started',
     fourSimpleSteps: 'Four simple steps to start your AI automated trading journey',
     step1Title: 'Clone GitHub Repository',
     step1Desc: 'git clone https://github.com/tinkle-community/nofx and switch to dev branch to test new features.',
@@ -398,7 +398,7 @@ export const translations = {
     step4Title: 'Optimize & Contribute',
     step4Desc: 'Monitor trading, submit PRs to improve framework. Join Telegram to share strategies.',
     importantRiskWarning: 'Important Risk Warning',
-    riskWarningText: 'Dev branch is unstable, do not use funds you cannot afford to lose. NOFX is non-custodial, no official strategies. Trading involves risks, invest carefully.',
+    riskWarningText: 'Dev branch is unstable, do not use funds you cannot afford to lose. This platform is non-custodial, no official strategies. Trading involves risks, invest carefully.',
     
     // Community Section (testimonials are kept as-is since they are quotes)
     
@@ -417,7 +417,7 @@ export const translations = {
   },
   zh: {
     // Header
-    appTitle: 'NOFX',
+    appTitle: 'AI Trading Platform',
     subtitle: '多AI模型交易平台',
     aiTraders: 'AI交易员',
     details: '详情',
@@ -436,7 +436,7 @@ export const translations = {
     dashboardNav: '看板',
 
     // Footer
-    footerTitle: 'NOFX - AI交易系统',
+    footerTitle: 'AI交易系统',
     footerWarning: '⚠️ 交易有风险，请谨慎使用。',
 
     // Stats Cards
@@ -753,18 +753,18 @@ export const translations = {
     githubStarsInDays: '3 天内 2.5K+ GitHub Stars',
     heroTitle1: 'Read the Market.',
     heroTitle2: 'Write the Trade.',
-    heroDescription: 'NOFX 是 AI 交易的未来标准——一个开放、社区驱动的代理式交易操作系统。支持 Binance、Aster DEX 等交易所，自托管、多代理竞争，让 AI 为你自动决策、执行和优化交易。',
+    heroDescription: 'AI 交易的未来标准——一个开放、社区驱动的代理式交易操作系统。支持 Binance、Aster DEX 等交易所，自托管、多代理竞争，让 AI 为你自动决策、执行和优化交易。',
     poweredBy: '由 Aster DEX 和 Binance 提供支持，Amber.ac 战略投资。',
     
     // Landing Page CTA
     readyToDefine: '准备好定义 AI 交易的未来吗？',
-    startWithCrypto: '从加密市场起步，扩展到 TradFi。NOFX 是 AgentFi 的基础架构。',
+    startWithCrypto: '从加密市场起步，扩展到 TradFi。这是 AgentFi 的基础架构。',
     getStartedNow: '立即开始',
     viewSourceCode: '查看源码',
     
     // Features Section
     coreFeatures: '核心功能',
-    whyChooseNofx: '为什么选择 NOFX？',
+    whyChooseNofx: '为什么选择我们？',
     openCommunityDriven: '开源、透明、社区驱动的 AI 交易操作系统',
     openSourceSelfHosted: '100% 开源与自托管',
     openSourceDesc: '你的框架，你的规则。非黑箱，支持自定义提示词和多模型。',
@@ -786,9 +786,9 @@ export const translations = {
     secureFeatures4: '交易日志审计',
     
     // About Section
-    aboutNofx: '关于 NOFX',
-    whatIsNofx: '什么是 NOFX？',
-    nofxNotAnotherBot: 'NOFX 不是另一个交易机器人，而是 AI 交易的 \'Linux\' ——',
+    aboutNofx: '关于我们',
+    whatIsNofx: '这是什么？',
+    nofxNotAnotherBot: '这不是另一个交易机器人，而是 AI 交易的 \'Linux\' ——',
     nofxDescription1: '一个透明、可信任的开源 OS，提供统一的 \'决策-风险-执行\'',
     nofxDescription2: '层，支持所有资产类别。',
     nofxDescription3: '从加密市场起步（24/7、高波动性完美测试场），未来扩展到股票、期货、外汇。核心：开放架构、AI',
@@ -801,7 +801,7 @@ export const translations = {
     startupMessages3: 'Web 控制台 http://localhost:3000',
     
     // How It Works Section
-    howToStart: '如何开始使用 NOFX',
+    howToStart: '如何开始使用',
     fourSimpleSteps: '四个简单步骤，开启 AI 自动交易之旅',
     step1Title: '拉取 GitHub 仓库',
     step1Desc: 'git clone https://github.com/tinkle-community/nofx 并切换到 dev 分支测试新功能。',

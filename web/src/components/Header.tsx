@@ -12,11 +12,8 @@ export function Header({ simple = false }: HeaderProps) {
     <header className="glass sticky top-0 z-50 backdrop-blur-xl">
       <div className="max-w-[1920px] mx-auto px-6 py-4">
         <div className="flex items-center justify-between">
-          {/* Left - Logo and Title */}
+          {/* Left - Title */}
           <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center">
-              <img src="/icons/nofx.svg" alt="NoFx Logo" className="w-8 h-8" />
-            </div>
             <div>
               <h1 className="text-xl font-bold" style={{ color: '#EAECEF' }}>
                 {t('appTitle', language)}

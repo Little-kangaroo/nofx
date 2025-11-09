@@ -199,7 +199,6 @@ function App() {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: '#0B0E11' }}>
         <div className="text-center">
-          <img src="/icons/nofx.svg" alt="NoFx Logo" className="w-16 h-16 mx-auto mb-4 animate-pulse" />
           <p style={{ color: '#EAECEF' }}>{t('loading', language)}</p>
         </div>
       </div>

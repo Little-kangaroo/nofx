@@ -69,13 +69,9 @@ export function LoginPage() {
       <div className="flex items-center justify-center pt-20" style={{ minHeight: 'calc(100vh - 80px)' }}>
         <div className="w-full max-w-md">
 
-          {/* Logo */}
           <div className="text-center mb-8">
-            <div className="w-16 h-16 mx-auto mb-4 flex items-center justify-center">
-              <img src="/icons/nofx.svg" alt="NoFx Logo" className="w-16 h-16 object-contain" />
-            </div>
             <h1 className="text-2xl font-bold" style={{ color: 'var(--brand-light-gray)' }}>
-              登录 NOFX
+              登录
             </h1>
             <p className="text-sm mt-2" style={{ color: 'var(--text-secondary)' }}>
               {step === 'login' ? '请输入您的邮箱和密码' : '请输入两步验证码'}

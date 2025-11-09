@@ -107,11 +107,7 @@ export function RegisterPage() {
       <div className="flex items-center justify-center pt-20" style={{ minHeight: 'calc(100vh - 80px)' }}>
         <div className="w-full max-w-md">
 
-          {/* Logo */}
           <div className="text-center mb-8">
-          <div className="w-16 h-16 mx-auto mb-4 flex items-center justify-center">
-            <img src="/icons/nofx.svg" alt="NoFx Logo" className="w-16 h-16 object-contain" />
-          </div>
           <h1 className="text-2xl font-bold" style={{ color: '#EAECEF' }}>
             {t('appTitle', language)}
           </h1>
