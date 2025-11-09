@@ -71,7 +71,27 @@ export function TraderConfigModal({
 
   useEffect(() => {
     if (traderData) {
-      setFormData(traderData);
+      // 确保字段名映射正确，处理后端返回的数据格式
+      const mappedData: TraderConfigData = {
+        trader_id: traderData.trader_id,
+        trader_name: traderData.trader_name,
+        ai_model: traderData.ai_model, // 后端返回的完整AI模型ID
+        exchange_id: traderData.exchange_id,
+        btc_eth_leverage: traderData.btc_eth_leverage || 5,
+        altcoin_leverage: traderData.altcoin_leverage || 3,
+        trading_symbols: traderData.trading_symbols || '',
+        custom_prompt: traderData.custom_prompt || '',
+        override_base_prompt: traderData.override_base_prompt || false,
+        system_prompt_template: traderData.system_prompt_template || 'default',
+        is_cross_margin: traderData.is_cross_margin !== undefined ? traderData.is_cross_margin : true,
+        use_coin_pool: traderData.use_coin_pool || false,
+        use_oi_top: traderData.use_oi_top || false,
+        initial_balance: traderData.initial_balance || 1000,
+        scan_interval_minutes: traderData.scan_interval_minutes || 3,
+      };
+      
+      setFormData(mappedData);
+      
       // 设置已选择的币种
       if (traderData.trading_symbols) {
         const coins = traderData.trading_symbols.split(',').map(s => s.trim()).filter(s => s);
