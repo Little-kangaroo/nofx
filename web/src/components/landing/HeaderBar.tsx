@@ -216,11 +216,16 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
               {/* Only show original navigation items on home page */}
               {isHomePage && [
                 { key: 'features', label: t('features', language) },
-                { key: 'howItWorks', label: t('howItWorks', language) },
-                { key: 'GitHub', label: 'GitHub' },
-                { key: 'community', label: t('community', language) }
+                { key: 'howItWorks', label: t('howItWorks', language) }
               ].map((item) => (
-
+                  <a
+                      key={item.key}
+                      href={`#${item.key === 'features' ? 'features' : 'how-it-works'}`}
+                      className='text-sm transition-colors hover:text-yellow-500'
+                      style={{ color: 'var(--brand-light-gray)' }}
+                  >
+                      {item.label}
+                  </a>
               ))}
 
               {/* User Info and Actions */}
