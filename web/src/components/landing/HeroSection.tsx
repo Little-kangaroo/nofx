@@ -1,8 +1,6 @@
 import { motion, useScroll, useTransform, useAnimation } from 'framer-motion'
 import { Sparkles } from 'lucide-react'
 import { t, Language } from '../../i18n/translations'
-import { useGitHubStats } from '../../hooks/useGitHubStats'
-import { useCounterAnimation } from '../../hooks/useCounterAnimation'
 
 interface HeroSectionProps {
   language: Language
