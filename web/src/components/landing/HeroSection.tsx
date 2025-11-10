@@ -13,17 +13,11 @@ export default function HeroSection({ language }: HeroSectionProps) {
   const opacity = useTransform(scrollYProgress, [0, 0.2], [1, 0])
   const scale = useTransform(scrollYProgress, [0, 0.2], [1, 0.8])
   const handControls = useAnimation()
-  const { stars, daysOld, isLoading } = useGitHubStats('NoFxAiOS', 'nofx')
 
   // 动画数字 - 仅对 stars 添加动画
-  const animatedStars = useCounterAnimation({
-    start: 0,
-    end: stars,
-    duration: 2000,
-  })
+
 
   // 格式化 stars 显示
-  const formattedStars = (animatedStars / 1000).toFixed(1)
 
   const fadeInUp = {
     initial: { opacity: 0, y: 60 },
