@@ -804,7 +804,7 @@ export const translations = {
     howToStart: '如何开始使用',
     fourSimpleSteps: '四个简单步骤，开启 AI 自动交易之旅',
     step1Title: '拉取 GitHub 仓库',
-    step1Desc: 'git clone https://github.com/tinkle-community/nofx 并切换到 dev 分支测试新功能。',
+    step1Desc: ' 并切换到 dev 分支测试新功能。',
     step2Title: '配置环境',
     step2Desc: '前端设置交易所 API（如 Binance、Hyperliquid）、AI 模型和自定义提示词。',
     step3Title: '部署与运行',
@@ -825,7 +825,7 @@ export const translations = {
     strategicInvestment: '(战略投资)',
     
     // Login Modal
-    accessNofxPlatform: '访问 NOFX 平台',
+    accessNofxPlatform: '访问平台',
     loginRegisterPrompt: '请选择登录或注册以访问完整的 AI 交易平台',
     registerNewAccount: '注册新账号',
   }
