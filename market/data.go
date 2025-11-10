@@ -69,6 +69,10 @@ func Get(symbol string) (*Data, error) {
 	// 计算长期数据
 	longerTermData := calculateLongerTermData(klines4h)
 
+	// 道氏理论分析
+	dowAnalyzer := NewDowTheoryAnalyzer()
+	dowTheoryData := dowAnalyzer.Analyze(klines3m, klines4h, currentPrice)
+
 	return &Data{
 		Symbol:            symbol,
 		CurrentPrice:      currentPrice,
@@ -81,6 +85,7 @@ func Get(symbol string) (*Data, error) {
 		FundingRate:       fundingRate,
 		IntradaySeries:    intradayData,
 		LongerTermContext: longerTermData,
+		DowTheory:         dowTheoryData,
 	}, nil
 }
 
@@ -417,6 +422,12 @@ func Format(data *Data) string {
 		}
 	}
 
+	// 道氏理论分析
+	if data.DowTheory != nil {
+		sb.WriteString("Dow Theory Analysis:\n\n")
+		sb.WriteString(formatDowTheoryData(data.DowTheory))
+	}
+
 	return sb.String()
 }
 
@@ -427,6 +438,154 @@ func formatFloatSlice(values []float64) string {
 		strValues[i] = fmt.Sprintf("%.3f", v)
 	}
 	return "[" + strings.Join(strValues, ", ") + "]"
+}
+
+// formatDowTheoryData 格式化道氏理论数据
+func formatDowTheoryData(data *DowTheoryData) string {
+	var sb strings.Builder
+
+	// 趋势强度分析
+	if data.TrendStrength != nil {
+		sb.WriteString("Trend Strength Analysis:\n")
+		sb.WriteString(fmt.Sprintf("  Overall Strength: %.1f%% (%s trend, %s quality)\n",
+			data.TrendStrength.Overall, data.TrendStrength.Direction, data.TrendStrength.Quality))
+		sb.WriteString(fmt.Sprintf("  Short-term: %.1f%%, Long-term: %.1f%%\n",
+			data.TrendStrength.ShortTerm, data.TrendStrength.LongTerm))
+		sb.WriteString(fmt.Sprintf("  Momentum: %.1f%%, Consistency: %.1f%%, Volume Support: %.1f%%\n\n",
+			data.TrendStrength.Momentum, data.TrendStrength.Consistency, data.TrendStrength.VolumeSupport))
+	}
+
+	// 摆动点分析
+	if len(data.SwingPoints) > 0 {
+		confirmedHighs := 0
+		confirmedLows := 0
+		for _, point := range data.SwingPoints {
+			if point.Confirmed {
+				if point.Type == SwingHigh {
+					confirmedHighs++
+				} else {
+					confirmedLows++
+				}
+			}
+		}
+		sb.WriteString(fmt.Sprintf("Swing Points: %d total (%d confirmed highs, %d confirmed lows)\n",
+			len(data.SwingPoints), confirmedHighs, confirmedLows))
+
+		// 显示最近的几个确认摆动点
+		recentPoints := getRecentSwingPoints(data.SwingPoints, 4)
+		if len(recentPoints) > 0 {
+			sb.WriteString("  Recent confirmed points: ")
+			for i, point := range recentPoints {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(fmt.Sprintf("%s@%.2f", point.Type, point.Price))
+			}
+			sb.WriteString("\n\n")
+		} else {
+			sb.WriteString("\n")
+		}
+	}
+
+	// 趋势线分析
+	if len(data.TrendLines) > 0 {
+		supportLines := 0
+		resistanceLines := 0
+		for _, line := range data.TrendLines {
+			if line.Type == SupportLine {
+				supportLines++
+			} else {
+				resistanceLines++
+			}
+		}
+		sb.WriteString(fmt.Sprintf("Trend Lines: %d total (%d support, %d resistance)\n",
+			len(data.TrendLines), supportLines, resistanceLines))
+
+		// 显示最强的几条趋势线
+		strongestLines := getStrongestTrendLines(data.TrendLines, 3)
+		for i, line := range strongestLines {
+			sb.WriteString(fmt.Sprintf("  %d. %s line: strength %.1f, touches %d\n",
+				i+1, line.Type, line.Strength, line.Touches))
+		}
+		sb.WriteString("\n")
+	}
+
+	// 平行通道分析
+	if data.Channel != nil {
+		sb.WriteString(fmt.Sprintf("Parallel Channel (%s trend):\n", data.Channel.Direction))
+		sb.WriteString(fmt.Sprintf("  Quality: %.1f%%, Width: %.1f%%, Current Position: %s\n",
+			data.Channel.Quality*100, data.Channel.Width*100, data.Channel.CurrentPos))
+		sb.WriteString(fmt.Sprintf("  Price Ratio in Channel: %.1f%% (0=lower rail, 100=upper rail)\n\n",
+			data.Channel.PriceRatio*100))
+	}
+
+	// 交易信号
+	if data.TradingSignal != nil {
+		sb.WriteString("Trading Signal:\n")
+		sb.WriteString(fmt.Sprintf("  Action: %s (%s signal)\n",
+			strings.ToUpper(string(data.TradingSignal.Action)), data.TradingSignal.Type))
+		sb.WriteString(fmt.Sprintf("  Confidence: %.1f%%, Risk/Reward: %.2f\n",
+			data.TradingSignal.Confidence, data.TradingSignal.RiskReward))
+
+		if data.TradingSignal.Entry > 0 {
+			sb.WriteString(fmt.Sprintf("  Entry: %.4f", data.TradingSignal.Entry))
+			if data.TradingSignal.StopLoss > 0 {
+				sb.WriteString(fmt.Sprintf(", Stop Loss: %.4f", data.TradingSignal.StopLoss))
+			}
+			if data.TradingSignal.TakeProfit > 0 {
+				sb.WriteString(fmt.Sprintf(", Take Profit: %.4f", data.TradingSignal.TakeProfit))
+			}
+			sb.WriteString("\n")
+		}
+
+		sb.WriteString(fmt.Sprintf("  Description: %s\n", data.TradingSignal.Description))
+
+		// 显示信号特征
+		features := []string{}
+		if data.TradingSignal.ChannelBased {
+			features = append(features, "channel-based")
+		}
+		if data.TradingSignal.BreakoutBased {
+			features = append(features, "breakout-based")
+		}
+		if len(features) > 0 {
+			sb.WriteString(fmt.Sprintf("  Features: %s\n", strings.Join(features, ", ")))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// getRecentSwingPoints 获取最近的确认摆动点
+func getRecentSwingPoints(points []*SwingPoint, count int) []*SwingPoint {
+	var confirmed []*SwingPoint
+	for _, point := range points {
+		if point.Confirmed {
+			confirmed = append(confirmed, point)
+		}
+	}
+
+	if len(confirmed) <= count {
+		return confirmed
+	}
+
+	// 按时间排序，返回最近的几个
+	return confirmed[len(confirmed)-count:]
+}
+
+// getStrongestTrendLines 获取最强的趋势线
+func getStrongestTrendLines(lines []*TrendLine, count int) []*TrendLine {
+	if len(lines) <= count {
+		return lines
+	}
+
+	// 复制切片以避免修改原数据
+	sorted := make([]*TrendLine, len(lines))
+	copy(sorted, lines)
+
+	// 按强度排序（已经在原函数中排序过了）
+	return sorted[:count]
 }
 
 // Normalize 标准化symbol,确保是USDT交易对
