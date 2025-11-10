@@ -45,22 +45,6 @@ export default function HeroSection({ language }: HeroSectionProps) {
                 whileHover={{ scale: 1.05, boxShadow: '0 0 20px rgba(240, 185, 11, 0.2)' }}
               >
                 <Sparkles className='w-4 h-4' style={{ color: 'var(--brand-yellow)' }} />
-                <span className='text-sm font-semibold' style={{ color: 'var(--brand-yellow)' }}>
-                  {isLoading ? (
-                    t('githubStarsInDays', language)
-                  ) : language === 'zh' ? (
-                    <>
-                      {daysOld} 天内{' '}
-                      <span className='inline-block tabular-nums'>{formattedStars}</span>
-                      K+ GitHub Stars
-                    </>
-                  ) : (
-                    <>
-                      <span className='inline-block tabular-nums'>{formattedStars}</span>
-                      K+ GitHub Stars in {daysOld} days
-                    </>
-                  )}
-                </span>
               </motion.div>
             </motion.div>
 

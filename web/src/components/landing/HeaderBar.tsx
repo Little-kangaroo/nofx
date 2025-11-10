@@ -46,9 +46,7 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
         <div className='flex items-center justify-between h-16'>
           {/* Logo */}
           <a href='/' className='flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer'>
-
             <span className='text-xl font-bold' style={{ color: 'var(--brand-yellow)' }}>
-
             </span>
             <span className='text-sm hidden sm:block' style={{ color: 'var(--text-secondary)' }}>
               Agentic Trading OS
@@ -508,8 +506,8 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
             { key: 'GitHub', label: 'GitHub' },
             { key: 'community', label: t('community', language) }
           ].map((item) => (
-            <a 
-              key={item.key} 
+            <a
+              key={item.key}
               href={
                 item.key === 'GitHub'
                   ? 'https://github.com/tinkle-community/nofx'
@@ -519,7 +517,7 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
               }
               target={item.key === 'GitHub' || item.key === 'community' ? '_blank' : undefined}
               rel={item.key === 'GitHub' || item.key === 'community' ? 'noopener noreferrer' : undefined}
-              className='block text-sm py-2' 
+              className='block text-sm py-2'
               style={{ color: 'var(--brand-light-gray)' }}
             >
               {item.label}
