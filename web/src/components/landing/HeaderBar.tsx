@@ -218,25 +218,8 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
                 { key: 'GitHub', label: 'GitHub' },
                 { key: 'community', label: t('community', language) }
               ].map((item) => (
-                <a
-                  key={item.key}
-                  href={
-                    item.key === 'GitHub'
-                      ? 'https://github.com/tinkle-community/nofx'
-                      : item.key === 'community'
-                      ? 'https://t.me/nofx_dev_community'
-                      : `#${item.key === 'features' ? 'features' : 'how-it-works'}`
-                  }
-                  target={item.key === 'GitHub' || item.key === 'community' ? '_blank' : undefined}
-                  rel={item.key === 'GitHub' || item.key === 'community' ? 'noopener noreferrer' : undefined}
-                  className='text-sm transition-colors relative group'
-                  style={{ color: 'var(--brand-light-gray)' }}
-                >
                   {item.label}
-                  <span
-                    className='absolute -bottom-1 left-0 w-0 h-0.5 group-hover:w-full transition-all duration-300'
-                    style={{ background: 'var(--brand-yellow)' }}
-                  />
+
                 </a>
               ))}
 
