@@ -46,7 +46,9 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
         <div className='flex items-center justify-between h-16'>
           {/* Logo */}
           <a href='/' className='flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer'>
+
             <span className='text-xl font-bold' style={{ color: 'var(--brand-yellow)' }}>
+              小新
             </span>
             <span className='text-sm hidden sm:block' style={{ color: 'var(--text-secondary)' }}>
               Agentic Trading OS
@@ -218,9 +220,7 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
                 { key: 'GitHub', label: 'GitHub' },
                 { key: 'community', label: t('community', language) }
               ].map((item) => (
-                  {item.label}
 
-                </a>
               ))}
 
               {/* User Info and Actions */}
