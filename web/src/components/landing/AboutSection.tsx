@@ -88,14 +88,6 @@ export default function AboutSection({ language }: AboutSectionProps) {
             </motion.div>
           </motion.div>
 
-          <div className='relative'>
-            <div
-              className='rounded-2xl p-8'
-              style={{
-                background: 'var(--brand-black)',
-                border: '1px solid var(--panel-border)',
-              }}
-            >
               <Typewriter
                 lines={[
                   '$ git clone https://github.com/tinkle-community/nofx.git',

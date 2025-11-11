@@ -1,0 +1,547 @@
+package market
+
+import (
+	"fmt"
+	"log"
+	"time"
+)
+
+// FVGExample FVG分析示例
+func FVGExample() {
+	fmt.Println("=== Fair Value Gap (FVG) 公平价值缺口分析示例 ===")
+
+	// 1. 创建模拟K线数据（专门设计包含FVG的数据）
+	klines := generateFVGSampleData()
+	fmt.Printf("生成了 %d 根K线数据\n", len(klines))
+
+	// 2. 创建FVG分析器
+	analyzer := NewFVGAnalyzer()
+	fmt.Println("FVG分析器创建成功")
+
+	// 3. 执行FVG分析
+	fvgData := analyzer.Analyze(klines)
+	if fvgData == nil {
+		log.Println("FVG分析失败")
+		return
+	}
+
+	// 4. 显示分析结果
+	displayFVGResults(fvgData)
+
+	// 5. 生成交易信号
+	currentPrice := klines[len(klines)-1].Close
+	signals := analyzer.GenerateSignals(fvgData, currentPrice)
+	displayFVGSignals(signals, currentPrice)
+
+	// 6. 演示辅助功能
+	demonstrateFVGUtilities(analyzer, fvgData, currentPrice)
+
+	// 7. 演示自定义配置
+	customConfig := FVGConfig{
+		MinGapPercent:    0.001, // 0.1%更敏感的最小缺口
+		MaxGapPercent:    0.08,  // 8%更大的最大缺口
+		MinVolumeRatio:   1.5,   // 1.5倍成交量要求
+		MaxAge:           30,    // 30根K线最大年龄
+		MaxTouchCount:    2,     // 最大2次触及
+		FillThreshold:    0.7,   // 70%填补阈值
+		TimeFrames:       []string{"5m", "15m", "1h"},
+		EnableValidation: true,
+		QualityThreshold: 0.7,   // 70%质量阈值
+		RequireVolConf:   true,  // 需要成交量确认
+	}
+
+	customAnalyzer := NewFVGAnalyzerWithConfig(customConfig)
+	customFVGData := customAnalyzer.Analyze(klines)
+	if customFVGData != nil {
+		fmt.Println("\n=== 自定义配置FVG分析结果 ===")
+		displayFVGResults(customFVGData)
+		compareFVGResults(fvgData, customFVGData, "默认配置", "自定义配置")
+	}
+}
+
+// generateFVGSampleData 生成包含FVG的示例K线数据
+func generateFVGSampleData() []Kline {
+	klines := make([]Kline, 100)
+	basePrice := 50000.0
+	baseTime := time.Now().UnixMilli() - int64(100*3600*1000) // 100小时前
+
+	for i := range klines {
+		var open, high, low, close, volume float64
+
+		// 生成不同阶段，确保包含明显的FVG
+		switch {
+		case i < 20:
+			// 阶段1: 初始波动
+			open = basePrice + float64(i)*20 + float64(i%7-3)*100
+			close = open + float64(i%5-2)*80
+			
+		case i == 20:
+			// 创建看涨FVG: 前一根K线高点 < 后一根K线低点
+			open = basePrice + 400 + 200  // 跳空高开
+			close = open + 300
+			
+		case i == 21:
+			// FVG形成的关键K线
+			open = basePrice + 400 + 500
+			close = open + 400
+			volume = 200 // 高成交量确认
+			
+		case i < 35:
+			// 阶段2: FVG形成后的上涨
+			trend := float64(i-22) * 50
+			open = basePrice + 1200 + trend + float64(i%4-2)*80
+			close = open + float64(i%3)*120 + 100
+			
+		case i == 35:
+			// 价格回调测试FVG
+			open = basePrice + 1800
+			close = basePrice + 700 // 大幅回调到FVG区域
+			
+		case i < 45:
+			// 阶段3: 在FVG区域反弹
+			open = basePrice + 700 + float64(i-35)*60
+			close = open + float64(i%4)*80 + 150
+			
+		case i == 50:
+			// 创建看跌FVG: 前一根K线低点 > 后一根K线高点
+			open = basePrice + 1500 - 300 // 跳空低开
+			close = open - 200
+			
+		case i == 51:
+			// 看跌FVG形成的关键K线
+			open = basePrice + 1500 - 500
+			close = open - 300
+			volume = 180 // 高成交量
+			
+		case i < 65:
+			// 阶段4: FVG后下跌
+			trend := float64(i-52) * -40
+			open = basePrice + 700 + trend + float64(i%5-2)*100
+			close = open + float64(i%6-3)*60 - 120
+			
+		case i == 70:
+			// 反弹测试看跌FVG
+			open = basePrice + 200
+			close = basePrice + 1200 // 反弹到看跌FVG区域
+			
+		default:
+			// 阶段5: 最近走势
+			trend := float64(i-75) * 30
+			open = basePrice + 800 + trend + float64(i%6-3)*120
+			close = open + float64(i%7-3)*90
+		}
+
+		// 计算最高价和最低价
+		if close > open {
+			high = max(open, close) + float64(i%3)*50
+			low = min(open, close) - float64(i%4)*40
+		} else {
+			high = max(open, close) + float64(i%4)*40
+			low = min(open, close) - float64(i%3)*50
+		}
+
+		// 确保价格合理
+		if low < open*0.98 {
+			low = open * 0.98
+		}
+		if high > open*1.02 {
+			high = open * 1.02
+		}
+
+		// 默认成交量
+		if volume == 0 {
+			priceChange := abs(close - open)
+			baseVolume := 80.0
+			volumeMultiplier := 1.0 + priceChange/open*8
+			volume = baseVolume * volumeMultiplier * (1 + float64(i%5)*0.2)
+		}
+
+		klines[i] = Kline{
+			OpenTime:            baseTime + int64(i*3600*1000),
+			Open:                open,
+			High:                high,
+			Low:                 low,
+			Close:               close,
+			Volume:              volume,
+			CloseTime:           baseTime + int64((i+1)*3600*1000) - 1,
+			QuoteVolume:         volume * (high + low) / 2,
+			Trades:              int(volume / 10),
+			TakerBuyBaseVolume:  volume * 0.6,
+			TakerBuyQuoteVolume: volume * 0.6 * close,
+		}
+	}
+
+	return klines
+}
+
+// displayFVGResults 显示FVG分析结果
+func displayFVGResults(fvgData *FVGData) {
+	if fvgData == nil {
+		fmt.Println("无FVG数据")
+		return
+	}
+
+	fmt.Println("\n=== FVG分析结果 ===")
+
+	// 统计信息
+	if fvgData.Statistics != nil {
+		stats := fvgData.Statistics
+		fmt.Printf("总看涨FVG: %d, 总看跌FVG: %d\n", stats.TotalBullishFVGs, stats.TotalBearishFVGs)
+		fmt.Printf("活跃看涨FVG: %d, 活跃看跌FVG: %d\n", stats.ActiveBullishFVGs, stats.ActiveBearishFVGs)
+		fmt.Printf("平均FVG宽度: %.3f%%, 平均强度: %.1f\n", stats.AvgFVGWidth, stats.AvgFVGStrength)
+		fmt.Printf("填补率: %.1f%%, 成功率: %.1f%%\n", stats.FillRate, stats.SuccessRate)
+		if stats.AvgFillTime > 0 {
+			fmt.Printf("平均填补时间: %.1f小时\n", stats.AvgFillTime)
+		}
+
+		// 质量分布
+		fmt.Printf("质量分布: ")
+		for quality, count := range stats.QualityDistribution {
+			if count > 0 {
+				fmt.Printf("%s=%d ", getFVGQualityName(quality), count)
+			}
+		}
+		fmt.Println()
+	}
+
+	// 显示看涨FVG
+	fmt.Printf("\n=== 看涨FVG (%d个) ===\n", len(fvgData.BullishFVGs))
+	displayFVGsByType(fvgData.BullishFVGs, "看涨FVG")
+
+	// 显示看跌FVG
+	fmt.Printf("\n=== 看跌FVG (%d个) ===\n", len(fvgData.BearishFVGs))
+	displayFVGsByType(fvgData.BearishFVGs, "看跌FVG")
+
+	// 显示最强的活跃FVG
+	if len(fvgData.ActiveFVGs) > 0 {
+		fmt.Printf("\n=== 最强的活跃FVG (前5个) ===\n")
+		analyzer := NewFVGAnalyzer()
+		strongestFVGs := analyzer.GetStrongestFVGs(fvgData, 5)
+		for i, fvg := range strongestFVGs {
+			displayFVGDetail(fvg, i+1)
+		}
+	}
+}
+
+// displayFVGsByType 按类型显示FVG
+func displayFVGsByType(fvgs []*FairValueGap, typeName string) {
+	activeCount := 0
+	for _, fvg := range fvgs {
+		if fvg.IsActive {
+			activeCount++
+		}
+	}
+
+	if activeCount == 0 {
+		fmt.Printf("  无活跃%s\n", typeName)
+		return
+	}
+
+	count := 0
+	for _, fvg := range fvgs {
+		if fvg.IsActive && count < 3 { // 最多显示3个
+			displayFVGDetail(fvg, count+1)
+			count++
+		}
+	}
+}
+
+// displayFVGDetail 显示FVG详细信息
+func displayFVGDetail(fvg *FairValueGap, index int) {
+	fmt.Printf("%d. %s: %.2f-%.2f (中心: %.2f)\n", 
+		index, 
+		getFVGTypeName(fvg.Type),
+		fvg.LowerBound, 
+		fvg.UpperBound, 
+		fvg.CenterPrice)
+	fmt.Printf("   强度: %.1f, 质量: %s, 状态: %s\n", 
+		fvg.Strength, 
+		getFVGQualityName(fvg.Quality), 
+		getFVGStatusName(fvg.Status))
+	fmt.Printf("   宽度: %.2f (%.3f%%), 触及次数: %d\n", 
+		fvg.Width, 
+		fvg.WidthPercent, 
+		fvg.TouchCount)
+	fmt.Printf("   填补进度: %.1f%%", fvg.FillProgress)
+	
+	if fvg.Origin != nil {
+		fmt.Printf(", 形成类型: %s", getFormationTypeName(fvg.Origin.FormationType))
+		fmt.Printf(", 冲动移动: %.2f%%", fvg.Origin.ImpulsiveMove)
+	}
+	fmt.Println()
+
+	if fvg.VolumeContext != nil {
+		fmt.Printf("   成交量比率: %.2f, 确认: %t\n", 
+			fvg.VolumeContext.VolumeRatio,
+			fvg.VolumeContext.VolumeConfirmation)
+	}
+
+	if fvg.Validation != nil {
+		fmt.Printf("   验证: 反应=%t", fvg.Validation.HasReaction)
+		if fvg.Validation.HasReaction {
+			fmt.Printf("(强度: %.2f%%)", fvg.Validation.ReactionStrength*100)
+		}
+		fmt.Printf(", 持有强度=%.1f", fvg.Validation.HoldingStrength)
+		if fvg.Validation.ReversalSign {
+			fmt.Printf(", ⚠️反转迹象")
+		}
+		fmt.Println()
+	}
+	fmt.Println()
+}
+
+// displayFVGSignals 显示FVG交易信号
+func displayFVGSignals(signals []*FVGSignal, currentPrice float64) {
+	fmt.Printf("\n=== FVG交易信号 (当前价格: %.2f) ===\n", currentPrice)
+
+	if len(signals) == 0 {
+		fmt.Println("当前无FVG交易信号")
+		return
+	}
+
+	for i, signal := range signals {
+		fmt.Printf("\n信号 %d:\n", i+1)
+		fmt.Printf("  类型: %s\n", getFVGSignalTypeName(signal.Type))
+		fmt.Printf("  相关FVG: %s %.2f-%.2f\n", 
+			getFVGTypeName(signal.FVG.Type),
+			signal.FVG.LowerBound, 
+			signal.FVG.UpperBound)
+		fmt.Printf("  建议动作: %s\n", signal.Action)
+		fmt.Printf("  入场价: %.2f\n", signal.Entry)
+		fmt.Printf("  止损价: %.2f\n", signal.StopLoss)
+		fmt.Printf("  止盈价: %.2f\n", signal.TakeProfit)
+		fmt.Printf("  风险收益比: 1:%.2f\n", signal.RiskReward)
+		fmt.Printf("  置信度: %.1f%%\n", signal.Confidence)
+		fmt.Printf("  信号强度: %.1f\n", signal.Strength)
+		fmt.Printf("  描述: %s\n", signal.Description)
+	}
+}
+
+// demonstrateFVGUtilities 演示FVG辅助功能
+func demonstrateFVGUtilities(analyzer *FVGAnalyzer, fvgData *FVGData, currentPrice float64) {
+	fmt.Printf("\n=== FVG辅助功能演示 ===\n")
+
+	// 查找最近的FVG
+	nearestFVGs := analyzer.FindNearestFVGs(fvgData, currentPrice, 0.05) // 5%范围内
+	fmt.Printf("当前价格%.2f附近的FVG (5%%范围内): %d个\n", currentPrice, len(nearestFVGs))
+	for i, fvg := range nearestFVGs {
+		distance := analyzer.calculateDistanceToFVG(fvg, currentPrice)
+		fmt.Printf("  %d. %s %.2f-%.2f (距离: %.2f%%)\n", 
+			i+1,
+			getFVGTypeName(fvg.Type),
+			fvg.LowerBound, 
+			fvg.UpperBound,
+			distance*100)
+	}
+
+	// 按类型获取FVG
+	bullishFVGs := analyzer.GetFVGsByType(fvgData, BullishFVG)
+	bearishFVGs := analyzer.GetFVGsByType(fvgData, BearishFVG)
+	fmt.Printf("\n活跃看涨FVG: %d个, 活跃看跌FVG: %d个\n", len(bullishFVGs), len(bearishFVGs))
+
+	// 获取最强FVG
+	strongestFVGs := analyzer.GetStrongestFVGs(fvgData, 3)
+	fmt.Printf("最强的3个FVG:\n")
+	for i, fvg := range strongestFVGs {
+		fmt.Printf("  %d. %s %.2f-%.2f (强度: %.1f, 质量: %s)\n", 
+			i+1,
+			getFVGTypeName(fvg.Type),
+			fvg.LowerBound, 
+			fvg.UpperBound,
+			fvg.Strength,
+			getFVGQualityName(fvg.Quality))
+	}
+}
+
+// compareFVGResults 比较两个FVG分析结果
+func compareFVGResults(result1, result2 *FVGData, name1, name2 string) {
+	fmt.Printf("\n=== FVG分析结果对比: %s vs %s ===\n", name1, name2)
+
+	// 比较FVG数量
+	fmt.Printf("总FVG数量: %s=%d, %s=%d\n", 
+		name1, len(result1.BullishFVGs)+len(result1.BearishFVGs),
+		name2, len(result2.BullishFVGs)+len(result2.BearishFVGs))
+
+	fmt.Printf("活跃FVG数量: %s=%d, %s=%d\n", 
+		name1, len(result1.ActiveFVGs),
+		name2, len(result2.ActiveFVGs))
+
+	// 比较统计指标
+	if result1.Statistics != nil && result2.Statistics != nil {
+		fmt.Printf("平均强度: %s=%.1f, %s=%.1f\n",
+			name1, result1.Statistics.AvgFVGStrength,
+			name2, result2.Statistics.AvgFVGStrength)
+
+		fmt.Printf("成功率: %s=%.1f%%, %s=%.1f%%\n",
+			name1, result1.Statistics.SuccessRate,
+			name2, result2.Statistics.SuccessRate)
+
+		fmt.Printf("填补率: %s=%.1f%%, %s=%.1f%%\n",
+			name1, result1.Statistics.FillRate,
+			name2, result2.Statistics.FillRate)
+	}
+
+	// 分析哪个配置更适合交易
+	score1 := float64(len(result1.ActiveFVGs))*0.3
+	score2 := float64(len(result2.ActiveFVGs))*0.3
+
+	if result1.Statistics != nil {
+		score1 += result1.Statistics.AvgFVGStrength*0.4 + result1.Statistics.SuccessRate*0.3
+	}
+	if result2.Statistics != nil {
+		score2 += result2.Statistics.AvgFVGStrength*0.4 + result2.Statistics.SuccessRate*0.3
+	}
+
+	if score1 > score2 {
+		fmt.Printf("结论: %s 的FVG识别效果更好\n", name1)
+	} else if score2 > score1 {
+		fmt.Printf("结论: %s 的FVG识别效果更好\n", name2)
+	} else {
+		fmt.Printf("结论: 两种配置效果相近\n")
+	}
+}
+
+// 辅助函数
+func getFVGTypeName(fvgType FVGType) string {
+	switch fvgType {
+	case BullishFVG:
+		return "看涨FVG"
+	case BearishFVG:
+		return "看���FVG"
+	default:
+		return "未知FVG"
+	}
+}
+
+
+
+func getFormationTypeName(formation FormationType) string {
+	switch formation {
+	case FormationBreakout:
+		return "突破形成"
+	case FormationPullback:
+		return "回调形成"
+	case FormationContinuation:
+		return "延续形成"
+	case FormationReversal:
+		return "反转形成"
+	default:
+		return "未知"
+	}
+}
+
+func getFVGSignalTypeName(signalType FVGSignalType) string {
+	switch signalType {
+	case FVGSignalReaction:
+		return "FVG反应"
+	case FVGSignalFillEntry:
+		return "填补入场"
+	case FVGSignalRejection:
+		return "拒绝反弹"
+	case FVGSignalPartialFill:
+		return "部分填补"
+	case FVGSignalBreakthrough:
+		return "突破FVG"
+	default:
+		return "未知信号"
+	}
+}
+
+// RunFVGAnalysis 运行完整的FVG分析
+func RunFVGAnalysis(symbol string, klines []Kline) (*FVGData, []*FVGSignal) {
+	if len(klines) < 5 {
+		fmt.Printf("%s K线数据不足，无法进行FVG分析\n", symbol)
+		return nil, nil
+	}
+
+	fmt.Printf("开始对 %s 进行FVG分析...\n", symbol)
+	
+	// 创建分析器
+	analyzer := NewFVGAnalyzer()
+	
+	// 执行分析
+	fvgData := analyzer.Analyze(klines)
+	if fvgData == nil {
+		fmt.Printf("%s FVG分析失败\n", symbol)
+		return nil, nil
+	}
+
+	// 生成信号
+	currentPrice := klines[len(klines)-1].Close
+	signals := analyzer.GenerateSignals(fvgData, currentPrice)
+
+	fmt.Printf("%s FVG分析完成: 找到 %d 个看涨FVG, %d 个看跌FVG, %d 个活跃FVG, 生成 %d 个信号\n", 
+		symbol, 
+		len(fvgData.BullishFVGs), 
+		len(fvgData.BearishFVGs), 
+		len(fvgData.ActiveFVGs), 
+		len(signals))
+
+	return fvgData, signals
+}
+
+// AnalyzeFVGPerformance 分析FVG性能
+func AnalyzeFVGPerformance(fvgData *FVGData, klines []Kline) {
+	if fvgData == nil || len(klines) == 0 {
+		return
+	}
+
+	fmt.Printf("\n=== FVG性能分析 ===\n")
+
+	// 分析FVG的有效性
+	totalFVGs := len(fvgData.BullishFVGs) + len(fvgData.BearishFVGs)
+	if totalFVGs == 0 {
+		fmt.Println("无FVG数据")
+		return
+	}
+
+	// 统计各种状态的FVG
+	statusCount := make(map[FVGStatus]int)
+	qualityCount := make(map[FVGQuality]int)
+	
+	allFVGs := append(fvgData.BullishFVGs, fvgData.BearishFVGs...)
+	for _, fvg := range allFVGs {
+		statusCount[fvg.Status]++
+		qualityCount[fvg.Quality]++
+	}
+
+	fmt.Printf("状态分布:\n")
+	for status, count := range statusCount {
+		percentage := float64(count) / float64(totalFVGs) * 100
+		fmt.Printf("  %s: %d (%.1f%%)\n", getFVGStatusName(status), count, percentage)
+	}
+
+	fmt.Printf("\n质量分布:\n")
+	for quality, count := range qualityCount {
+		percentage := float64(count) / float64(totalFVGs) * 100
+		fmt.Printf("  %s: %d (%.1f%%)\n", getFVGQualityName(quality), count, percentage)
+	}
+
+	// 计算平均性能指标
+	if fvgData.Statistics != nil {
+		stats := fvgData.Statistics
+		fmt.Printf("\n性能指标:\n")
+		fmt.Printf("  平均宽度: %.3f%%\n", stats.AvgFVGWidth)
+		fmt.Printf("  平均强度: %.1f\n", stats.AvgFVGStrength)
+		fmt.Printf("  填补率: %.1f%%\n", stats.FillRate)
+		fmt.Printf("  成功率: %.1f%%\n", stats.SuccessRate)
+		
+		if stats.AvgFillTime > 0 {
+			fmt.Printf("  平均填补时间: %.1f小时\n", stats.AvgFillTime)
+		}
+
+		// 评估整体质量
+		overallScore := (stats.SuccessRate + (100-stats.FillRate) + stats.AvgFVGStrength) / 3
+		fmt.Printf("  整体评分: %.1f/100\n", overallScore)
+
+		if overallScore >= 80 {
+			fmt.Println("  评级: 优秀 - FVG识别效果很好")
+		} else if overallScore >= 60 {
+			fmt.Println("  评级: 良好 - FVG识别效果不错")
+		} else if overallScore >= 40 {
+			fmt.Println("  评级: 一般 - FVG识别效果中等")
+		} else {
+			fmt.Println("  评级: 较差 - 建议调整参数")
+		}
+	}
+}

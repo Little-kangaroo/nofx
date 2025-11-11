@@ -1,0 +1,550 @@
+package market
+
+import (
+	"fmt"
+	"log"
+	"time"
+)
+
+// ComprehensiveAnalysisExample 综合分析示例
+func ComprehensiveAnalysisExample() {
+	fmt.Println("=== 综合市场分析示例 ===")
+
+	// 1. 生成示例K线数据
+	klines3m := generateSample3MinKlines()
+	klines4h := generateSample4HourKlines()
+	fmt.Printf("生成了 %d 根3分钟K线和 %d 根4小时K线\n", len(klines3m), len(klines4h))
+
+	// 2. 创建综合分析器
+	analyzer := NewComprehensiveAnalyzer()
+	fmt.Println("综合分析器创建成功")
+
+	// 3. 执行综合分析
+	symbol := "BTCUSDT"
+	result := analyzer.Analyze(symbol, klines3m, klines4h)
+	if result == nil {
+		log.Println("综合分析失败")
+		return
+	}
+
+	// 4. 显示分析结果
+	displayComprehensiveResults(result)
+
+	// 5. 演示自定义配置分析
+	customConfig := &ComprehensiveConfig{
+		EnableDowTheory:    true,
+		EnableVPVR:         true,
+		EnableSupplyDemand: true,
+		EnableFVG:          true,
+		WeightDowTheory:    0.4,  // 增加道氏理论权重
+		WeightVPVR:         0.2,  // 减少VPVR权重
+		WeightSupplyDemand: 0.2,  // 减少供需区权重
+		WeightFVG:          0.2,  // FVG权重
+		MinConfidence:      70.0, // 提高最小置信度
+		MaxSignals:         3,    // 减少最大信号数
+	}
+
+	customAnalyzer := NewComprehensiveAnalyzerWithConfig(customConfig)
+	customResult := customAnalyzer.Analyze(symbol, klines3m, klines4h)
+	if customResult != nil {
+		fmt.Println("\n=== 自定义配置分析结果 ===")
+		displayComprehensiveResults(customResult)
+		compareResults(result, customResult, "默认配置", "自定义配置")
+	}
+
+	// 6. 演示实时分析流程
+	demonstrateRealTimeAnalysis(analyzer, symbol)
+}
+
+// generateSample3MinKlines 生成3分钟示例K线数据
+func generateSample3MinKlines() []Kline {
+	klines := make([]Kline, 200)
+	basePrice := 45000.0
+	baseTime := time.Now().UnixMilli() - int64(200*3*60*1000) // 200根3分钟K线
+
+	for i := range klines {
+		// 生成更加细致的价格波动
+		trend := float64(i) * 5        // 缓慢上升趋势
+		noise := float64(i%13-6) * 20  // 随机噪声
+		cycle := float64(i%20-10) * 15 // 周期性波动
+
+		open := basePrice + trend + noise + cycle
+		close := open + float64(i%9-4)*25
+		high := max(open, close) + float64(i%4)*30
+		low := min(open, close) - float64(i%3)*25
+
+		// 确保价格合理
+		if low < open*0.995 {
+			low = open * 0.995
+		}
+		if high > open*1.005 {
+			high = open * 1.005
+		}
+
+		// 成交量模拟
+		baseVolume := 20.0
+		priceChange := abs(close - open)
+		volumeMultiplier := 1.0 + priceChange/open*5
+		volume := baseVolume * volumeMultiplier * (1 + float64(i%6)*0.2)
+
+		klines[i] = Kline{
+			OpenTime:            baseTime + int64(i*3*60*1000),
+			Open:                open,
+			High:                high,
+			Low:                 low,
+			Close:               close,
+			Volume:              volume,
+			CloseTime:           baseTime + int64((i+1)*3*60*1000) - 1,
+			QuoteVolume:         volume * (high + low) / 2,
+			Trades:              int(volume / 2),
+			TakerBuyBaseVolume:  volume * 0.6,
+			TakerBuyQuoteVolume: volume * 0.6 * close,
+		}
+	}
+
+	return klines
+}
+
+// generateSample4HourKlines 生成4小时示例K线数据
+func generateSample4HourKlines() []Kline {
+	klines := make([]Kline, 100)
+	basePrice := 45000.0
+	baseTime := time.Now().UnixMilli() - int64(100*4*3600*1000) // 100根4小时K线
+
+	for i := range klines {
+		var open, high, low, close, volume float64
+
+		// 生成不同的市场阶段
+		switch {
+		case i < 25:
+			// 阶段1: 下跌趋势
+			trend := float64(i) * -80
+			open = basePrice + 2000 + trend + float64(i%5-2)*150
+			close = open + float64(i%7-3)*100 - 200
+
+		case i < 45:
+			// 阶段2: 底部整理（需求区形成）
+			open = basePrice + float64(i%8-4)*100
+			close = open + float64(i%6-3)*80
+
+		case i < 70:
+			// 阶段3: 上涨趋势
+			trend := float64(i-45) * 120
+			open = basePrice + 500 + trend + float64(i%4-2)*120
+			close = open + float64(i%5)*150 + 300
+
+		case i < 85:
+			// 阶段4: 高位整理（供给区形成）
+			open = basePrice + 3500 + float64(i%9-4)*200
+			close = open + float64(i%7-3)*150
+
+		default:
+			// 阶段5: 最近走势
+			trend := float64(i-85) * 100
+			open = basePrice + 3200 + trend + float64(i%6-3)*180
+			close = open + float64(i%8-4)*120
+		}
+
+		// 计算最高价和最低价
+		if close > open {
+			high = max(open, close) + float64(i%5)*100
+			low = min(open, close) - float64(i%4)*80
+		} else {
+			high = max(open, close) + float64(i%4)*80
+			low = min(open, close) - float64(i%5)*100
+		}
+
+		// 成交量与价格变化相关
+		priceChange := abs(close - open)
+		baseVolume := 200.0
+		volumeMultiplier := 1.0 + priceChange/open*10
+		volume = baseVolume * volumeMultiplier * (1 + float64(i%7)*0.3)
+
+		klines[i] = Kline{
+			OpenTime:            baseTime + int64(i*4*3600*1000),
+			Open:                open,
+			High:                high,
+			Low:                 low,
+			Close:               close,
+			Volume:              volume,
+			CloseTime:           baseTime + int64((i+1)*4*3600*1000) - 1,
+			QuoteVolume:         volume * (high + low) / 2,
+			Trades:              int(volume / 20),
+			TakerBuyBaseVolume:  volume * 0.55,
+			TakerBuyQuoteVolume: volume * 0.55 * close,
+		}
+	}
+
+	return klines
+}
+
+// displayComprehensiveResults 显示综合分析结果
+func displayComprehensiveResults(result *ComprehensiveResult) {
+	if result == nil {
+		fmt.Println("无分析结果")
+		return
+	}
+
+	fmt.Printf("\n=== %s 综合分析结果 ===\n", result.Symbol)
+	fmt.Printf("分析时间: %s\n", time.UnixMilli(result.Timestamp).Format("2006-01-02 15:04:05"))
+	fmt.Printf("当前价格: %.2f\n", result.CurrentPrice)
+
+	// 市场结构分析
+	displayMarketStructure(result.MarketStructure)
+
+	// 统一交易信号
+	displayUnifiedSignals(result.UnifiedSignals)
+
+	// 风险评估
+	displayRiskAssessment(result.RiskAssessment)
+
+	// 交易建议
+	displayTradingAdvice(result.TradingAdvice)
+
+	// 各模块分析概要
+	displayModuleSummary(result)
+}
+
+// displayMarketStructure 显示市场结构
+func displayMarketStructure(structure *MarketStructure) {
+	if structure == nil {
+		return
+	}
+
+	fmt.Printf("\n=== 市场结构分析 ===\n")
+	fmt.Printf("趋势方向: %s (强度: %.1f)\n", getTrendDirectionName(structure.TrendDirection), structure.TrendStrength)
+	fmt.Printf("市场阶段: %s\n", getMarketPhaseName(structure.MarketPhase))
+	fmt.Printf("波动性: %.1f\n", structure.Volatility)
+
+	if len(structure.KeyLevels) > 0 {
+		fmt.Printf("\n关键价位 (前5个):\n")
+		count := min(5, len(structure.KeyLevels))
+		for i := 0; i < count; i++ {
+			level := structure.KeyLevels[i]
+			fmt.Printf("  %.2f - %s (强度: %.1f) - %s\n", 
+				level.Price, getLevelTypeName(level.Type), level.Strength, level.Description)
+		}
+	}
+
+	if structure.VolumeProfile != nil {
+		fmt.Printf("\n成交量分布:\n")
+		fmt.Printf("  POC: %.2f, VAH: %.2f, VAL: %.2f\n", 
+			structure.VolumeProfile.POC, structure.VolumeProfile.VAH, structure.VolumeProfile.VAL)
+		fmt.Printf("  当前位置: %s\n", structure.VolumeProfile.CurrentPosition)
+		fmt.Printf("  集中度: %.2f\n", structure.VolumeProfile.Concentration)
+	}
+}
+
+// displayUnifiedSignals 显示统一交易信号
+func displayUnifiedSignals(signals []*UnifiedSignal) {
+	fmt.Printf("\n=== 统一交易信号 ===\n")
+
+	if len(signals) == 0 {
+		fmt.Println("无交易信号")
+		return
+	}
+
+	for i, signal := range signals {
+		fmt.Printf("\n信号 %d (%s优先级):\n", i+1, signal.Priority)
+		fmt.Printf("  类型: %s\n", getUnifiedSignalTypeName(signal.Type))
+		fmt.Printf("  动作: %s\n", signal.Action)
+		fmt.Printf("  入场: %.2f\n", signal.Entry)
+		if signal.StopLoss > 0 {
+			fmt.Printf("  止损: %.2f\n", signal.StopLoss)
+		}
+		if signal.TakeProfit > 0 {
+			fmt.Printf("  止盈: %.2f\n", signal.TakeProfit)
+		}
+		if signal.RiskReward > 0 {
+			fmt.Printf("  风险收益比: 1:%.2f\n", signal.RiskReward)
+		}
+		fmt.Printf("  置信度: %.1f%%\n", signal.Confidence)
+		fmt.Printf("  信号强度: %.1f\n", signal.Strength)
+		fmt.Printf("  描述: %s\n", signal.Description)
+
+		if len(signal.Sources) > 0 {
+			fmt.Printf("  来源: ")
+			for j, source := range signal.Sources {
+				if j > 0 {
+					fmt.Printf(", ")
+				}
+				fmt.Printf("%s(%.1f%%)", getSourceName(source.Source), source.Confidence)
+			}
+			fmt.Println()
+		}
+	}
+}
+
+// displayRiskAssessment 显示风险评估
+func displayRiskAssessment(assessment *RiskAssessment) {
+	if assessment == nil {
+		return
+	}
+
+	fmt.Printf("\n=== 风险评估 ===\n")
+	fmt.Printf("整体风险: %s\n", getRiskLevelName(assessment.OverallRisk))
+	fmt.Printf("趋势风险: %s\n", getRiskLevelName(assessment.TrendRisk))
+	fmt.Printf("波动风险: %s\n", getRiskLevelName(assessment.VolatilityRisk))
+	fmt.Printf("流动性风险: %s\n", getRiskLevelName(assessment.LiquidityRisk))
+	fmt.Printf("建议风险敞口: %.1f%%\n", assessment.RecommendedRisk*100)
+	fmt.Printf("最大仓位: %.1f%%\n", assessment.MaxPositionSize*100)
+	fmt.Printf("建议时间框架: %s\n", assessment.SuggestedTimeFrame)
+
+	if len(assessment.RiskFactors) > 0 {
+		fmt.Printf("风险因素: ")
+		for i, factor := range assessment.RiskFactors {
+			if i > 0 {
+				fmt.Printf(", ")
+			}
+			fmt.Printf("%s", factor)
+		}
+		fmt.Println()
+	}
+}
+
+// displayTradingAdvice 显示交易建议
+func displayTradingAdvice(advice *TradingAdvice) {
+	if advice == nil {
+		return
+	}
+
+	fmt.Printf("\n=== 交易建议 ===\n")
+	fmt.Printf("总体建议: %s (置信度: %.1f%%)\n", advice.OverallAction, advice.Confidence)
+	fmt.Printf("时间周期: %s\n", advice.TimeHorizon)
+
+	if len(advice.ReasoningPoints) > 0 {
+		fmt.Printf("\n推理要点:\n")
+		for i, point := range advice.ReasoningPoints {
+			fmt.Printf("  %d. %s\n", i+1, point)
+		}
+	}
+
+	fmt.Printf("\n策略详情:\n")
+	fmt.Printf("  入场策略: %s\n", advice.EntryStrategy)
+	fmt.Printf("  出场策略: %s\n", advice.ExitStrategy)
+	fmt.Printf("  风险管理: %s\n", advice.RiskManagement)
+
+	if len(advice.AlternativeScenarios) > 0 {
+		fmt.Printf("\n替代方案:\n")
+		for i, scenario := range advice.AlternativeScenarios {
+			fmt.Printf("  %d. %s\n", i+1, scenario)
+		}
+	}
+}
+
+// displayModuleSummary 显示各模块分析概要
+func displayModuleSummary(result *ComprehensiveResult) {
+	fmt.Printf("\n=== 各模块分析概要 ===\n")
+
+	// 道氏理论概要
+	if result.DowTheory != nil {
+		fmt.Printf("道氏理论: ")
+		if result.DowTheory.TrendStrength != nil {
+			fmt.Printf("%s趋势 (强度: %.1f)", 
+				getTrendDirectionName(result.DowTheory.TrendStrength.Direction),
+				result.DowTheory.TrendStrength.Overall)
+			if result.DowTheory.Channel != nil {
+				fmt.Printf(", 通道质量: %.1f", result.DowTheory.Channel.Quality*100)
+			}
+		} else {
+			fmt.Printf("数据不足")
+		}
+		fmt.Println()
+	}
+
+	// VPVR概要
+	if result.VolumeProfile != nil {
+		fmt.Printf("VPVR: POC %.2f", result.VolumeProfile.POC.Price)
+		if result.VolumeProfile.ValueArea != nil {
+			fmt.Printf(", 价值区 %.2f-%.2f", result.VolumeProfile.VAL, result.VolumeProfile.VAH)
+		}
+		fmt.Println()
+	}
+
+	// 供需区概要
+	if result.SupplyDemand != nil && result.SupplyDemand.Statistics != nil {
+		stats := result.SupplyDemand.Statistics
+		fmt.Printf("供需区: %d个活跃区域 (供给区: %d, 需求区: %d), 成功率: %.1f%%\n",
+			len(result.SupplyDemand.ActiveZones),
+			stats.ActiveSupplyZones,
+			stats.ActiveDemandZones,
+			stats.SuccessRate)
+	}
+
+	// FVG概要
+	if result.FairValueGaps != nil && result.FairValueGaps.Statistics != nil {
+		stats := result.FairValueGaps.Statistics
+		fmt.Printf("FVG: %d个活跃缺口 (看涨: %d, 看跌: %d), 成功率: %.1f%%, 平均强度: %.1f\n",
+			len(result.FairValueGaps.ActiveFVGs),
+			stats.ActiveBullishFVGs,
+			stats.ActiveBearishFVGs,
+			stats.SuccessRate,
+			stats.AvgFVGStrength)
+	}
+}
+
+// compareResults 比较两个分析结果
+func compareResults(result1, result2 *ComprehensiveResult, name1, name2 string) {
+	fmt.Printf("\n=== 分析结果对比: %s vs %s ===\n", name1, name2)
+
+	// 比较信号数量
+	fmt.Printf("信号数量: %s=%d, %s=%d\n", 
+		name1, len(result1.UnifiedSignals),
+		name2, len(result2.UnifiedSignals))
+
+	// 比较主要建议
+	if len(result1.UnifiedSignals) > 0 && len(result2.UnifiedSignals) > 0 {
+		fmt.Printf("主要建议: %s=%s(%.1f%%), %s=%s(%.1f%%)\n",
+			name1, result1.UnifiedSignals[0].Action, result1.UnifiedSignals[0].Confidence,
+			name2, result2.UnifiedSignals[0].Action, result2.UnifiedSignals[0].Confidence)
+	}
+
+	// 比较风险评估
+	if result1.RiskAssessment != nil && result2.RiskAssessment != nil {
+		fmt.Printf("整体风险: %s=%s, %s=%s\n",
+			name1, getRiskLevelName(result1.RiskAssessment.OverallRisk),
+			name2, getRiskLevelName(result2.RiskAssessment.OverallRisk))
+	}
+
+	// 比较交易建议置信度
+	if result1.TradingAdvice != nil && result2.TradingAdvice != nil {
+		fmt.Printf("建议置信度: %s=%.1f%%, %s=%.1f%%\n",
+			name1, result1.TradingAdvice.Confidence,
+			name2, result2.TradingAdvice.Confidence)
+	}
+}
+
+// demonstrateRealTimeAnalysis 演示实时分析流程
+func demonstrateRealTimeAnalysis(analyzer *ComprehensiveAnalyzer, symbol string) {
+	fmt.Printf("\n=== 实时分析流程演示 ===\n")
+
+	// 模拟获取实时数据
+	fmt.Println("1. 获取实时K线数据...")
+	klines3m := generateSample3MinKlines()
+	klines4h := generateSample4HourKlines()
+
+	// 执行分析
+	fmt.Println("2. 执行综合分析...")
+	result := analyzer.Analyze(symbol, klines3m, klines4h)
+
+	if result != nil {
+		fmt.Printf("3. 分析完成 - 生成 %d 个信号\n", len(result.UnifiedSignals))
+		
+		// 检查是否有高优先级信号
+		highPriorityCount := 0
+		for _, signal := range result.UnifiedSignals {
+			if signal.Priority == PriorityHigh {
+				highPriorityCount++
+			}
+		}
+
+		if highPriorityCount > 0 {
+			fmt.Printf("4. 发现 %d 个高优先级信号，建议立即关注\n", highPriorityCount)
+		} else {
+			fmt.Println("4. 无高优先级信号，保持常规监控")
+		}
+
+		// 风险提醒
+		if result.RiskAssessment != nil && result.RiskAssessment.OverallRisk == RiskHigh {
+			fmt.Println("⚠️  风险提醒: 当前市场风险较高，请谨慎交易")
+		}
+	} else {
+		fmt.Println("3. 分析失败")
+	}
+}
+
+// 辅助函数
+func getTrendDirectionName(direction TrendDirection) string {
+	switch direction {
+	case TrendUp:
+		return "上升"
+	case TrendDown:
+		return "下降"
+	case TrendFlat:
+		return "横盘"
+	default:
+		return "未知"
+	}
+}
+
+func getMarketPhaseName(phase MarketPhase) string {
+	switch phase {
+	case PhaseAccumulation:
+		return "积累阶段"
+	case PhaseMarkup:
+		return "上涨阶段"
+	case PhaseDistribution:
+		return "分发阶段"
+	case PhaseMarkdown:
+		return "下跌阶段"
+	case PhaseSideways:
+		return "横盘阶段"
+	default:
+		return "未知阶段"
+	}
+}
+
+func getLevelTypeName(levelType LevelType) string {
+	switch levelType {
+	case LevelSupport:
+		return "支撑位"
+	case LevelResistance:
+		return "阻力位"
+	case LevelPOC:
+		return "POC"
+	case LevelVAH:
+		return "VAH"
+	case LevelVAL:
+		return "VAL"
+	default:
+		return "未知"
+	}
+}
+
+func getUnifiedSignalTypeName(signalType UnifiedSignalType) string {
+	switch signalType {
+	case UnifiedSignalTrendFollowing:
+		return "趋势跟随"
+	case UnifiedSignalReversal:
+		return "反转"
+	case UnifiedSignalBreakout:
+		return "突破"
+	case UnifiedSignalSupport:
+		return "支撑"
+	case UnifiedSignalResistance:
+		return "阻力"
+	case UnifiedSignalMeanReversion:
+		return "均值回归"
+	default:
+		return "未知"
+	}
+}
+
+func getRiskLevelName(risk RiskLevel) string {
+	switch risk {
+	case RiskLow:
+		return "低风险"
+	case RiskMedium:
+		return "中等风险"
+	case RiskHigh:
+		return "高风险"
+	default:
+		return "未知"
+	}
+}
+
+func getSourceName(source string) string {
+	switch source {
+	case "dow_theory":
+		return "道氏理论"
+	case "vpvr":
+		return "VPVR"
+	case "supply_demand":
+		return "供需区"
+	case "fvg":
+		return "FVG"
+	default:
+		return source
+	}
+}
+

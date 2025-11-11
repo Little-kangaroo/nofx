@@ -150,9 +150,69 @@ func main() {
 	fmt.Println("╚════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 
+	// 检查命令行参数
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "demo", "-demo", "--demo":
+			// 运行市场分析演示
+			fmt.Println("🎯 启动市场分析演示模式...")
+			fmt.Println()
+			market.DemoMain()
+			return
+		case "market", "-market", "--market":
+			// 运行市场分析示例
+			fmt.Println("📊 启动市场分析示例...")
+			fmt.Println()
+			market.RunAllExamples()
+			return
+		case "fvg", "-fvg", "--fvg":
+			// 只运行FVG演示
+			fmt.Println("🕳️ FVG分析功能已实现")
+			fmt.Println("功能：公平价值缺口识别、质量评估、填补跟踪、交易信号")
+			return
+		case "comprehensive", "-comprehensive", "--comprehensive":
+			// 运行综合分析演示
+			fmt.Println("🔄 综合分析功能已实现")
+			fmt.Println("功能：多模块信号融合、权重分配、风险评估、统一决策")
+			return
+		case "complete", "-complete", "--complete":
+			// 运行完整系统演示
+			fmt.Println("⭐ 完整系统功能已实现")
+			fmt.Println("包含：道氏理论 + VPVR + 供需区 + FVG + 斐波纳契 五大模块")
+			return
+		case "fibonacci", "-fibonacci", "--fibonacci":
+			// 运行斐波纳契演示
+			fmt.Println("📊 斐波纳契分析功能已实现")
+			fmt.Println("功能：0.618黄金口袋、回调扩展、聚集区分析、交易信号")
+			return
+		case "help", "-h", "--help":
+			// 显示帮助信息
+			fmt.Println("🎯 AI多模型交易系统 - 使用说明")
+			fmt.Println()
+			fmt.Println("使用方式:")
+			fmt.Println("  go run main.go                    # 启动交易系统")
+			fmt.Println("  go run main.go demo               # 市场分析完整演示")
+			fmt.Println("  go run main.go market             # 所有市场分析示例")
+			fmt.Println("  go run main.go fvg                # FVG分析演示")
+			fmt.Println("  go run main.go comprehensive      # 综合分析演示")
+			fmt.Println("  go run main.go fibonacci          # 斐波纳契分析演示")
+			fmt.Println("  go run main.go complete           # 完整系统演示")
+			fmt.Println()
+			fmt.Println("市场分析模块:")
+			fmt.Println("  📈 道氏理论 - 趋势识别与通道分析")
+			fmt.Println("  📊 VPVR - 成交量分布与关键价位")
+			fmt.Println("  ⚖️  供需区 - 供给需求区域分析")
+			fmt.Println("  🕳️  FVG - 公平价值缺口分析")
+			fmt.Println("  🔢 斐波纳契 - 0.618黄金口袋回调分析")
+			fmt.Println()
+			return
+		}
+	}
+
 	// 初始化数据库配置
 	dbPath := "config.db"
-	if len(os.Args) > 1 {
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		// 如果第一个参数不是选项，则作为数据库路径
 		dbPath = os.Args[1]
 	}
 

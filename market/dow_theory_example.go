@@ -1,10 +1,8 @@
-package main
+package market
 
 import (
 	"fmt"
 	"time"
-
-	"nofx/market"
 )
 
 func main() {
@@ -13,21 +11,21 @@ func main() {
 	fmt.Println("===================")
 
 	// 获取BTCUSDT的市场数据并进行道氏理论分析
-	data, err := market.Get("BTCUSDT")
+	data, err := Get("BTCUSDT")
 	if err != nil {
 		fmt.Printf("获取市场数据失败: %v\n", err)
 		return
 	}
 
 	// 输出完整的分析结果
-	fmt.Println(market.Format(data))
+	fmt.Println(Format(data))
 
 	// 单独展示道氏理论分析结果
 	if data.DowTheory != nil {
 		fmt.Println("\n=== 详细道氏理论分析 ===")
 		
 		// 显示配置信息
-		config := market.GetDowTheoryConfig()
+		config := GetDowTheoryConfig()
 		fmt.Printf("当前配置:\n")
 		fmt.Printf("- 摆动点识别周期: %d\n", config.SwingPointConfig.LookbackPeriod)
 		fmt.Printf("- 最小强度阈值: %.2f\n", config.SwingPointConfig.MinStrength)
@@ -163,11 +161,11 @@ func main() {
 
 	// 演示配置修改
 	fmt.Println("=== 配置修改演示 ===")
-	newConfig := market.GetDowTheoryConfig()
+	newConfig := GetDowTheoryConfig()
 	newConfig.SwingPointConfig.LookbackPeriod = 7 // 修改摆动点识别周期
 	newConfig.SignalConfig.MinConfidence = 70.0   // 提高最小置信度要求
 	
-	market.UpdateDowTheoryConfig(newConfig)
+	UpdateDowTheoryConfig(newConfig)
 	fmt.Println("配置已更新:")
 	fmt.Printf("- 新的摆动点识别周期: %d\n", newConfig.SwingPointConfig.LookbackPeriod)
 	fmt.Printf("- 新的最小置信度: %.1f%%\n", newConfig.SignalConfig.MinConfidence)

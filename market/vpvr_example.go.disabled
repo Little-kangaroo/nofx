@@ -1,0 +1,306 @@
+package market
+
+import (
+	"fmt"
+	"log"
+	"time"
+)
+
+// VPVRExample VPVR使用示例
+func VPVRExample() {
+	fmt.Println("=== VPVR (Volume Profile Visible Range) 分析示例 ===")
+
+	// 1. 创建模拟K线数据
+	klines := generateSampleKlines()
+	fmt.Printf("生成了 %d 根K线数据\n", len(klines))
+
+	// 2. 创建VPVR分析器
+	analyzer := NewVPVRAnalyzer()
+	fmt.Println("VPVR分析器创建成功")
+
+	// 3. 执行VPVR分析
+	profile := analyzer.Analyze(klines)
+	if profile == nil {
+		log.Println("VPVR分析失败")
+		return
+	}
+
+	// 4. 显示分析结果
+	displayVPVRResults(profile)
+
+	// 5. 生成交易信号
+	currentPrice := klines[len(klines)-1].Close
+	signals := analyzer.GenerateSignals(profile, currentPrice)
+	displayVPVRSignals(signals, currentPrice)
+
+	// 6. 演示自定义配置
+	customConfig := VPVRConfig{
+		TickSize:         0.1,
+		ValueAreaPercent: 0.68,
+		MinVolume:        0.01,
+		TimeFrame:        "1h",
+		ShowBuySell:      true,
+		SmoothingFactor:  2.0,
+	}
+
+	customAnalyzer := NewVPVRAnalyzerWithConfig(customConfig)
+	customProfile := customAnalyzer.Analyze(klines)
+	if customProfile != nil {
+		fmt.Println("\n=== 自定义配置分析结果 ===")
+		displayVPVRResults(customProfile)
+	}
+}
+
+// generateSampleKlines 生成示例K线数据
+func generateSampleKlines() []Kline {
+	klines := make([]Kline, 100)
+	basePrice := 50000.0
+	baseTime := time.Now().UnixMilli() - int64(100*3600*1000) // 100小时前
+
+	for i := range klines {
+		// 生成具有趋势和波动的价格数据
+		trend := float64(i) * 10 // 上升趋势
+		volatility := 1000.0     // 波动性
+		
+		// 添加一些随机性
+		random1 := float64(i%7-3) * 200
+		random2 := float64(i%11-5) * 150
+		
+		open := basePrice + trend + random1
+		close := open + random2
+		high := max(open, close) + float64(i%3)*100
+		low := min(open, close) - float64(i%5)*80
+		
+		// 确保价格合理
+		if low < open*0.95 {
+			low = open * 0.95
+		}
+		if high > open*1.05 {
+			high = open * 1.05
+		}
+
+		// 生成成交量（与价格变化相关）
+		priceChange := abs(close - open)
+		baseVolume := 100.0
+		volumeMultiplier := 1.0 + priceChange/open*10
+		volume := baseVolume * volumeMultiplier * (1 + float64(i%4)*0.5)
+
+		klines[i] = Kline{
+			OpenTime:            baseTime + int64(i*3600*1000),
+			Open:                open,
+			High:                high,
+			Low:                 low,
+			Close:               close,
+			Volume:              volume,
+			CloseTime:           baseTime + int64((i+1)*3600*1000) - 1,
+			QuoteVolume:         volume * (high + low) / 2,
+			Trades:              int(volume / 10),
+			TakerBuyBaseVolume:  volume * 0.6,
+			TakerBuyQuoteVolume: volume * 0.6 * close,
+		}
+	}
+
+	return klines
+}
+
+// displayVPVRResults 显示VPVR分析结果
+func displayVPVRResults(profile *VolumeProfile) {
+	if profile == nil {
+		fmt.Println("无VPVR数据")
+		return
+	}
+
+	fmt.Println("\n=== 成交量分布分析结果 ===")
+
+	// POC信息
+	if profile.POC != nil {
+		fmt.Printf("POC (控制点): %.2f, 成交量: %.2f (%.1f%%)\n",
+			profile.POC.Price,
+			profile.POC.Volume,
+			profile.POC.VolumePercent)
+	}
+
+	// 价值区域信息
+	fmt.Printf("VAH (价值区域高点): %.2f\n", profile.VAH)
+	fmt.Printf("VAL (价值区域低点): %.2f\n", profile.VAL)
+	
+	if profile.ValueArea != nil {
+		fmt.Printf("价值区域宽度: %.2f (%.1f%%的价格范围)\n",
+			profile.ValueArea.PriceRange,
+			profile.ValueArea.PriceRangePercent)
+		fmt.Printf("价值区域成交量: %.1f%%\n", profile.ValueArea.VolumePercent)
+		fmt.Printf("成交量集中度: %.2f\n", profile.ValueArea.Concentration)
+	}
+
+	// 统计信息
+	if profile.Stats != nil {
+		fmt.Printf("\n=== 成交量统计 ===\n")
+		fmt.Printf("总成交量: %.2f\n", profile.Stats.TotalVolume)
+		fmt.Printf("买入成交量: %.2f\n", profile.Stats.TotalBuyVolume)
+		fmt.Printf("卖出成交量: %.2f\n", profile.Stats.TotalSellVolume)
+		fmt.Printf("买卖比: %.2f\n", profile.Stats.BuySellRatio)
+		fmt.Printf("成交量加权平均价: %.2f\n", profile.Stats.AvgPrice)
+		fmt.Printf("价格中位数: %.2f\n", profile.Stats.MedianPrice)
+		fmt.Printf("价格标准差: %.2f\n", profile.Stats.PriceStdDev)
+	}
+
+	// 显示前10个最高成交量级别
+	fmt.Printf("\n=== 前10个最高成交量级别 ===\n")
+	displayTopVolumeLevels(profile.Levels, 10)
+}
+
+// displayTopVolumeLevels 显示成交量最高的价格级别
+func displayTopVolumeLevels(levels []*PriceLevel, count int) {
+	if len(levels) == 0 {
+		return
+	}
+
+	// 按成交量排序
+	sortedLevels := make([]*PriceLevel, len(levels))
+	copy(sortedLevels, levels)
+
+	// 简单选择排序
+	for i := 0; i < len(sortedLevels)-1 && i < count; i++ {
+		maxIdx := i
+		for j := i + 1; j < len(sortedLevels); j++ {
+			if sortedLevels[j].Volume > sortedLevels[maxIdx].Volume {
+				maxIdx = j
+			}
+		}
+		sortedLevels[i], sortedLevels[maxIdx] = sortedLevels[maxIdx], sortedLevels[i]
+	}
+
+	for i := 0; i < min(count, len(sortedLevels)); i++ {
+		level := sortedLevels[i]
+		pocMark := ""
+		if level.IsPOC {
+			pocMark = " [POC]"
+		}
+		vaMark := ""
+		if level.InValueArea {
+			vaMark = " [VA]"
+		}
+
+		fmt.Printf("%d. 价格: %.2f, 成交量: %.2f (%.1f%%), 买卖比: %.2f%s%s\n",
+			i+1,
+			level.Price,
+			level.Volume,
+			level.VolumePercent,
+			level.BuyVolume/max(level.SellVolume, 0.001),
+			pocMark,
+			vaMark)
+	}
+}
+
+// displayVPVRSignals 显示VPVR交易信号
+func displayVPVRSignals(signals []*VPVRSignal, currentPrice float64) {
+	fmt.Printf("\n=== VPVR交易信号 (当前价格: %.2f) ===\n", currentPrice)
+
+	if len(signals) == 0 {
+		fmt.Println("当前无交易信号")
+		return
+	}
+
+	for i, signal := range signals {
+		fmt.Printf("\n信号 %d:\n", i+1)
+		fmt.Printf("  类型: %s\n", signal.Type)
+		fmt.Printf("  关键价位: %.2f\n", signal.Level)
+		fmt.Printf("  信号强度: %.1f\n", signal.Strength)
+		fmt.Printf("  建议动作: %s\n", signal.Action)
+		fmt.Printf("  置信度: %.1f%%\n", signal.Confidence)
+		fmt.Printf("  描述: %s\n", signal.Description)
+	}
+}
+
+// 工具函数
+func max(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// RunVPVRAnalysis 运行完整的VPVR分析
+func RunVPVRAnalysis(symbol string, klines []Kline) (*VolumeProfile, []*VPVRSignal) {
+	if len(klines) == 0 {
+		return nil, nil
+	}
+
+	fmt.Printf("开始对 %s 进行VPVR分析...\n", symbol)
+	
+	// 创建分析器
+	analyzer := NewVPVRAnalyzer()
+	
+	// 执行分析
+	profile := analyzer.Analyze(klines)
+	if profile == nil {
+		fmt.Printf("%s VPVR分析失败\n", symbol)
+		return nil, nil
+	}
+
+	// 生成信号
+	currentPrice := klines[len(klines)-1].Close
+	signals := analyzer.GenerateSignals(profile, currentPrice)
+
+	fmt.Printf("%s VPVR分析完成，生成 %d 个信号\n", symbol, len(signals))
+
+	return profile, signals
+}
+
+// CompareVPVRProfiles 比较两个VPVR分布
+func CompareVPVRProfiles(profile1, profile2 *VolumeProfile, name1, name2 string) {
+	if profile1 == nil || profile2 == nil {
+		fmt.Println("无法比较，缺少VPVR数据")
+		return
+	}
+
+	fmt.Printf("\n=== VPVR分布比较: %s vs %s ===\n", name1, name2)
+
+	// 比较POC
+	fmt.Printf("POC价格: %s=%.2f, %s=%.2f\n", 
+		name1, profile1.POC.Price,
+		name2, profile2.POC.Price)
+
+	// 比较价值区域
+	fmt.Printf("价值区域宽度: %s=%.2f, %s=%.2f\n",
+		name1, profile1.ValueArea.PriceRange,
+		name2, profile2.ValueArea.PriceRange)
+
+	// 比较集中度
+	fmt.Printf("成交量集中度: %s=%.2f, %s=%.2f\n",
+		name1, profile1.ValueArea.Concentration,
+		name2, profile2.ValueArea.Concentration)
+
+	// 比较买卖比
+	fmt.Printf("买卖比: %s=%.2f, %s=%.2f\n",
+		name1, profile1.Stats.BuySellRatio,
+		name2, profile2.Stats.BuySellRatio)
+
+	// 分析哪个分布更有利于交易
+	if profile1.ValueArea.Concentration > profile2.ValueArea.Concentration {
+		fmt.Printf("结论: %s 的成交量更集中，可能有更强的支撑阻力\n", name1)
+	} else {
+		fmt.Printf("结论: %s 的成交量更集中，可能有更强的支撑阻力\n", name2)
+	}
+}

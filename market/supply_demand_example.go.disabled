@@ -1,0 +1,452 @@
+package market
+
+import (
+	"fmt"
+	"log"
+	"time"
+)
+
+// SupplyDemandExample 供需区分析示例
+func SupplyDemandExample() {
+	fmt.Println("=== Supply/Demand Zone Analysis 供需区分析示例 ===")
+
+	// 1. 创建模拟K线数据
+	klines := generateSupplyDemandSampleData()
+	fmt.Printf("生成了 %d 根K线数据\n", len(klines))
+
+	// 2. 创建供需区分析器
+	analyzer := NewSupplyDemandAnalyzer()
+	fmt.Println("供需区分析器创建成功")
+
+	// 3. 执行供需区分析
+	sdData := analyzer.Analyze(klines)
+	if sdData == nil {
+		log.Println("供需区分析失败")
+		return
+	}
+
+	// 4. 显示分析结果
+	displaySupplyDemandResults(sdData)
+
+	// 5. 生成交易信号
+	currentPrice := klines[len(klines)-1].Close
+	signals := analyzer.GenerateSignals(sdData, currentPrice)
+	displaySupplyDemandSignals(signals, currentPrice)
+
+	// 6. 演示辅助功能
+	demonstrateUtilityFunctions(analyzer, sdData, currentPrice)
+
+	// 7. 演示自定义配置
+	customConfig := SDConfig{
+		MinImpulsePercent:  0.025, // 2.5%最小冲击
+		MinBasePercent:     0.008, // 0.8%最小整理
+		MaxBasePercent:     0.025, // 2.5%最大整理
+		MinVolumeFactor:    1.8,   // 1.8倍成交量
+		MaxZoneAge:         40,    // 40根K线
+		MaxTouchCount:      2,     // 最大2次��及
+		BreakoutThreshold:  0.015, // 1.5%突破阈值
+		ConfirmationBars:   3,     // 3根确认K线
+		TimeFrames:         []string{"30m", "1h", "4h"},
+		EnableValidation:   true,
+		QualityThreshold:   0.7,   // 70%质量阈值
+	}
+
+	customAnalyzer := NewSupplyDemandAnalyzerWithConfig(customConfig)
+	customSDData := customAnalyzer.Analyze(klines)
+	if customSDData != nil {
+		fmt.Println("\n=== 自定义配置分析结果 ===")
+		displaySupplyDemandResults(customSDData)
+	}
+}
+
+// generateSupplyDemandSampleData 生成适合供需区分析的示例数据
+func generateSupplyDemandSampleData() []Kline {
+	klines := make([]Kline, 120)
+	basePrice := 45000.0
+	baseTime := time.Now().UnixMilli() - int64(120*3600*1000) // 120小时前
+
+	for i := range klines {
+		var open, high, low, close, volume float64
+
+		// 生成不同的市场阶段来形成供需区
+		switch {
+		case i < 20:
+			// 阶段1: 初始上涨
+			trend := float64(i) * 50
+			open = basePrice + trend + float64(i%3-1)*100
+			close = open + float64(i%5-2)*80 + 150
+			
+		case i < 30:
+			// 阶段2: 整理区域（将形成需求区）
+			open = basePrice + 1000 + float64(i%7-3)*80
+			close = open + float64(i%5-2)*60
+			
+		case i < 45:
+			// 阶段3: 强力上涨（离开需求区）
+			trend := float64(i-30) * 120
+			open = basePrice + 1200 + trend + float64(i%3-1)*100
+			close = open + float64(i%4)*100 + 200
+			
+		case i < 55:
+			// 阶段4: 高位整理（将形成供给区）
+			open = basePrice + 3000 + float64(i%6-2)*120
+			close = open + float64(i%7-3)*80
+			
+		case i < 70:
+			// 阶段5: 强力下跌（离开供给区）
+			trend := float64(i-55) * -150
+			open = basePrice + 3200 + trend + float64(i%4-2)*100
+			close = open + float64(i%5)*(-80) - 200
+			
+		case i < 85:
+			// 阶段6: 低位反弹
+			trend := float64(i-70) * 80
+			open = basePrice + 800 + trend + float64(i%5-2)*100
+			close = open + float64(i%3)*100 + 150
+			
+		case i < 100:
+			// 阶段7: 再次测试供给区
+			trend := float64(i-85) * 100
+			open = basePrice + 2000 + trend + float64(i%4-1)*120
+			close = open + float64(i%6-3)*90
+			
+		default:
+			// 阶段8: 最近的价格行为
+			trend := float64(i-100) * 50
+			open = basePrice + 3000 + trend + float64(i%5-2)*100
+			close = open + float64(i%4-1)*80
+		}
+
+		// 计算最高价和最低价
+		if close > open {
+			high = max(open, close) + float64(i%4)*50
+			low = min(open, close) - float64(i%3)*30
+		} else {
+			high = max(open, close) + float64(i%3)*30
+			low = min(open, close) - float64(i%4)*50
+		}
+
+		// 确保价格合理性
+		if low < open*0.98 {
+			low = open * 0.98
+		}
+		if high > open*1.02 {
+			high = open * 1.02
+		}
+
+		// 生成成交量（价格变化大时成交量大）
+		priceChange := abs(close - open)
+		baseVolume := 50.0
+		volumeMultiplier := 1.0 + priceChange/open*15
+		volume = baseVolume * volumeMultiplier * (1 + float64(i%5)*0.3)
+
+		klines[i] = Kline{
+			OpenTime:            baseTime + int64(i*3600*1000),
+			Open:                open,
+			High:                high,
+			Low:                 low,
+			Close:               close,
+			Volume:              volume,
+			CloseTime:           baseTime + int64((i+1)*3600*1000) - 1,
+			QuoteVolume:         volume * (high + low) / 2,
+			Trades:              int(volume / 8),
+			TakerBuyBaseVolume:  volume * 0.6,
+			TakerBuyQuoteVolume: volume * 0.6 * close,
+		}
+	}
+
+	return klines
+}
+
+// displaySupplyDemandResults 显示供需区分析结果
+func displaySupplyDemandResults(sdData *SupplyDemandData) {
+	if sdData == nil {
+		fmt.Println("无供需区数据")
+		return
+	}
+
+	fmt.Println("\n=== 供需区分析结果 ===")
+
+	// 统计信息
+	if sdData.Statistics != nil {
+		stats := sdData.Statistics
+		fmt.Printf("总供给区: %d, 总需求区: %d\n", stats.TotalSupplyZones, stats.TotalDemandZones)
+		fmt.Printf("活跃供给区: %d, 活跃需求区: %d\n", stats.ActiveSupplyZones, stats.ActiveDemandZones)
+		fmt.Printf("平均区域强度: %.1f, 平均区域宽度: %.2f%%\n", stats.AvgZoneStrength, stats.AvgZoneWidth)
+		fmt.Printf("成功率: %.1f%%, 突破率: %.1f%%, 反应率: %.1f%%\n", 
+			stats.SuccessRate, stats.BreakoutRate, stats.ReactionRate)
+	}
+
+	// 显示活跃供给区
+	fmt.Printf("\n=== 活跃供给区 (%d个) ===\n", len(sdData.SupplyZones))
+	displayZonesByType(sdData.SupplyZones, SupplyZone)
+
+	// 显示活跃需求区
+	fmt.Printf("\n=== 活跃需求区 (%d个) ===\n", len(sdData.DemandZones))
+	displayZonesByType(sdData.DemandZones, DemandZone)
+
+	// 显示最强的区域
+	fmt.Printf("\n=== 最强的5个区域 ===\n")
+	analyzer := NewSupplyDemandAnalyzer()
+	strongestZones := analyzer.GetStrongestZones(sdData, 5)
+	for i, zone := range strongestZones {
+		displayZoneDetail(zone, i+1)
+	}
+}
+
+// displayZonesByType 按类型显示区域
+func displayZonesByType(zones []*SupplyDemandZone, zoneType ZoneType) {
+	activeCount := 0
+	for _, zone := range zones {
+		if zone.IsActive {
+			activeCount++
+		}
+	}
+
+	if activeCount == 0 {
+		fmt.Printf("  无活跃%s\n", getZoneTypeName(zoneType))
+		return
+	}
+
+	count := 0
+	for _, zone := range zones {
+		if zone.IsActive && count < 5 { // 最多显示5个
+			displayZoneDetail(zone, count+1)
+			count++
+		}
+	}
+}
+
+// displayZoneDetail 显示区域详细信息
+func displayZoneDetail(zone *SupplyDemandZone, index int) {
+	fmt.Printf("%d. %s: %.2f-%.2f (中心: %.2f)\n", 
+		index, 
+		getZoneTypeName(zone.Type),
+		zone.LowerBound, 
+		zone.UpperBound, 
+		zone.CenterPrice)
+	fmt.Printf("   强度: %.1f, 质量: %s, 状态: %s\n", 
+		zone.Strength, 
+		zone.Quality, 
+		getZoneStatusName(zone.Status))
+	fmt.Printf("   模式: %s, 宽度: %.2f (%.2f%%)\n", 
+		getPatternTypeName(zone.Origin.PatternType),
+		zone.Width, 
+		zone.WidthPercent)
+	fmt.Printf("   触及次数: %d, 成交量: %.1f\n", 
+		zone.TouchCount, 
+		zone.Volume)
+
+	if zone.VolumeProfile != nil {
+		fmt.Printf("   买卖比: %.2f, 成交量不平衡: %.2f\n", 
+			zone.VolumeProfile.BuyVolume/max(zone.VolumeProfile.SellVolume, 0.001),
+			zone.VolumeProfile.VolumeImbalance)
+	}
+
+	if zone.Validation != nil && zone.Validation.HasReaction {
+		fmt.Printf("   验证: 有反应(强度: %.2f%%)\n", 
+			zone.Validation.ReactionStrength*100)
+	}
+	fmt.Println()
+}
+
+// displaySupplyDemandSignals 显示供需区交易信号
+func displaySupplyDemandSignals(signals []*SDSignal, currentPrice float64) {
+	fmt.Printf("\n=== 供需区交易信号 (当前价格: %.2f) ===\n", currentPrice)
+
+	if len(signals) == 0 {
+		fmt.Println("当前无交易信号")
+		return
+	}
+
+	for i, signal := range signals {
+		fmt.Printf("\n信号 %d:\n", i+1)
+		fmt.Printf("  类型: %s\n", getSignalTypeName(signal.Type))
+		fmt.Printf("  区域: %s %.2f-%.2f\n", 
+			getZoneTypeName(signal.Zone.Type),
+			signal.Zone.LowerBound, 
+			signal.Zone.UpperBound)
+		fmt.Printf("  建议动作: %s\n", signal.Action)
+		fmt.Printf("  入场价: %.2f\n", signal.Entry)
+		fmt.Printf("  止损价: %.2f\n", signal.StopLoss)
+		fmt.Printf("  止盈价: %.2f\n", signal.TakeProfit)
+		fmt.Printf("  风险收益比: %.2f\n", signal.RiskReward)
+		fmt.Printf("  置信度: %.1f%%\n", signal.Confidence)
+		fmt.Printf("  信号强度: %.1f\n", signal.Strength)
+		fmt.Printf("  描述: %s\n", signal.Description)
+	}
+}
+
+// demonstrateUtilityFunctions 演示辅助功能
+func demonstrateUtilityFunctions(analyzer *SupplyDemandAnalyzer, sdData *SupplyDemandData, currentPrice float64) {
+	fmt.Printf("\n=== 辅助功能演示 ===\n")
+
+	// 查找最近的区域
+	nearestZones := analyzer.FindNearestZones(sdData, currentPrice, 0.1) // 10%范围内
+	fmt.Printf("当前价格%.2f附近的区域 (10%%范围内): %d个\n", currentPrice, len(nearestZones))
+	for i, zone := range nearestZones {
+		distance := analyzer.calculateDistanceToZone(zone, currentPrice)
+		fmt.Printf("  %d. %s %.2f-%.2f (距离: %.2f%%)\n", 
+			i+1,
+			getZoneTypeName(zone.Type),
+			zone.LowerBound, 
+			zone.UpperBound,
+			distance*100)
+	}
+
+	// 按类型获取区域
+	supplyZones := analyzer.GetZonesByType(sdData, SupplyZone)
+	demandZones := analyzer.GetZonesByType(sdData, DemandZone)
+	fmt.Printf("\n活跃供给区: %d个, 活跃需求区: %d个\n", len(supplyZones), len(demandZones))
+
+	// 获取最强区域
+	strongestZones := analyzer.GetStrongestZones(sdData, 3)
+	fmt.Printf("最强的3个区域:\n")
+	for i, zone := range strongestZones {
+		fmt.Printf("  %d. %s %.2f-%.2f (强度: %.1f)\n", 
+			i+1,
+			getZoneTypeName(zone.Type),
+			zone.LowerBound, 
+			zone.UpperBound,
+			zone.Strength)
+	}
+}
+
+// 辅助函数
+func getZoneTypeName(zoneType ZoneType) string {
+	switch zoneType {
+	case SupplyZone:
+		return "供给区"
+	case DemandZone:
+		return "需求区"
+	default:
+		return "未知"
+	}
+}
+
+func getZoneStatusName(status ZoneStatus) string {
+	switch status {
+	case StatusFresh:
+		return "新鲜"
+	case StatusTested:
+		return "已测试"
+	case StatusWeakened:
+		return "已弱化"
+	case StatusBroken:
+		return "已突破"
+	case StatusExpired:
+		return "已过期"
+	default:
+		return "未知"
+	}
+}
+
+func getPatternTypeName(pattern PatternType) string {
+	switch pattern {
+	case RallyBaseRally:
+		return "上涨-整理-上涨"
+	case DropBaseDrop:
+		return "下跌-整理-下跌"
+	case RallyBaseDropOB:
+		return "上涨-整理-下跌(OB)"
+	case DropBaseRallyOB:
+		return "下跌-整理-上涨(OB)"
+	case FreshSupply:
+		return "新鲜供给"
+	case FreshDemand:
+		return "新鲜需求"
+	default:
+		return "未知"
+	}
+}
+
+func getSignalTypeName(signalType SDSignalType) string {
+	switch signalType {
+	case SDSignalZoneEntry:
+		return "区域入场"
+	case SDSignalZoneBounce:
+		return "区域反弹"
+	case SDSignalZoneBreakout:
+		return "区域突破"
+	case SDSignalZoneRetest:
+		return "区域回测"
+	case SDSignalFreshZone:
+		return "新鲜区域"
+	default:
+		return "未知"
+	}
+}
+
+// RunSupplyDemandAnalysis 运行完整的供需区分析
+func RunSupplyDemandAnalysis(symbol string, klines []Kline) (*SupplyDemandData, []*SDSignal) {
+	if len(klines) < 20 {
+		fmt.Printf("%s K线数据不足，无法进行供需区分析\n", symbol)
+		return nil, nil
+	}
+
+	fmt.Printf("开始对 %s 进行供需区分析...\n", symbol)
+	
+	// 创建分析器
+	analyzer := NewSupplyDemandAnalyzer()
+	
+	// 执行分析
+	sdData := analyzer.Analyze(klines)
+	if sdData == nil {
+		fmt.Printf("%s 供需区分析失败\n", symbol)
+		return nil, nil
+	}
+
+	// 生成信号
+	currentPrice := klines[len(klines)-1].Close
+	signals := analyzer.GenerateSignals(sdData, currentPrice)
+
+	fmt.Printf("%s 供需区分析完成: 找到 %d 个供给区, %d 个需求区, %d 个活跃区域, 生成 %d 个信号\n", 
+		symbol, 
+		len(sdData.SupplyZones), 
+		len(sdData.DemandZones), 
+		len(sdData.ActiveZones), 
+		len(signals))
+
+	return sdData, signals
+}
+
+// CompareSupplyDemandData 比较两个供需区分析结果
+func CompareSupplyDemandData(data1, data2 *SupplyDemandData, name1, name2 string) {
+	if data1 == nil || data2 == nil {
+		fmt.Println("无法比较，缺少供需区数据")
+		return
+	}
+
+	fmt.Printf("\n=== 供需区分析比较: %s vs %s ===\n", name1, name2)
+
+	// 比较统计数据
+	fmt.Printf("总区域数: %s=%d, %s=%d\n", 
+		name1, len(data1.SupplyZones)+len(data1.DemandZones),
+		name2, len(data2.SupplyZones)+len(data2.DemandZones))
+
+	fmt.Printf("活跃区域数: %s=%d, %s=%d\n", 
+		name1, len(data1.ActiveZones),
+		name2, len(data2.ActiveZones))
+
+	if data1.Statistics != nil && data2.Statistics != nil {
+		fmt.Printf("平均强度: %s=%.1f, %s=%.1f\n", 
+			name1, data1.Statistics.AvgZoneStrength,
+			name2, data2.Statistics.AvgZoneStrength)
+
+		fmt.Printf("成功率: %s=%.1f%%, %s=%.1f%%\n", 
+			name1, data1.Statistics.SuccessRate,
+			name2, data2.Statistics.SuccessRate)
+
+		// 分析哪个更有交易价值
+		score1 := float64(len(data1.ActiveZones))*0.3 + data1.Statistics.AvgZoneStrength*0.4 + data1.Statistics.SuccessRate*0.3
+		score2 := float64(len(data2.ActiveZones))*0.3 + data2.Statistics.AvgZoneStrength*0.4 + data2.Statistics.SuccessRate*0.3
+
+		if score1 > score2 {
+			fmt.Printf("结论: %s 的供需区质量更高，更适合交易\n", name1)
+		} else if score2 > score1 {
+			fmt.Printf("结论: %s 的供需区质量更高，更适合交易\n", name2)
+		} else {
+			fmt.Printf("结论: 两者供需区质量相近\n")
+		}
+	}
+}

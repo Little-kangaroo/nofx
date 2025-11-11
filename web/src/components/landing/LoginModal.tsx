@@ -17,14 +17,7 @@ export default function LoginModal({ onClose, language }: LoginModalProps) {
       exit={{ opacity: 0 }}
       onClick={onClose}
     >
-      <motion.div
-        className='relative max-w-md w-full rounded-2xl p-8'
-        style={{ background: 'var(--brand-dark-gray)', border: '1px solid rgba(240, 185, 11, 0.2)' }}
-        initial={{ scale: 0.9, y: 50 }}
-        animate={{ scale: 1, y: 0 }}
-        exit={{ scale: 0.9, y: 50 }}
-        onClick={(e) => e.stopPropagation()}
-      >
+
         <motion.button onClick={onClose} className='absolute top-4 right-4' style={{ color: 'var(--text-secondary)' }} whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }}>
           <X className='w-6 h-6' />
         </motion.button>

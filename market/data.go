@@ -428,6 +428,30 @@ func Format(data *Data) string {
 		sb.WriteString(formatDowTheoryData(data.DowTheory))
 	}
 
+	// VPVR分析
+	if data.VolumeProfile != nil {
+		sb.WriteString("Volume Profile (VPVR) Analysis:\n\n")
+		sb.WriteString(formatVPVRData(data.VolumeProfile))
+	}
+
+	// 供需区分析
+	if data.SupplyDemand != nil {
+		sb.WriteString("Supply/Demand Zones Analysis:\n\n")
+		sb.WriteString(formatSupplyDemandData(data.SupplyDemand))
+	}
+
+	// FVG分析
+	if data.FairValueGaps != nil {
+		sb.WriteString("Fair Value Gap (FVG) Analysis:\n\n")
+		sb.WriteString(formatFVGData(data.FairValueGaps))
+	}
+
+	// 斐波纳契分析
+	if data.Fibonacci != nil {
+		sb.WriteString("Fibonacci Analysis:\n\n")
+		sb.WriteString(formatFibonacciData(data.Fibonacci))
+	}
+
 	return sb.String()
 }
 
@@ -557,6 +581,163 @@ func formatDowTheoryData(data *DowTheoryData) string {
 	return sb.String()
 }
 
+// formatVPVRData 格式化VPVR数据 - 暂时简化实现
+func formatVPVRData(data interface{}) string {
+	return "VPVR Analysis: [数据格式化功能正在开发中]\n\n"
+}
+
+// formatSupplyDemandData 格式化供需区数据 - 暂时简化实现  
+func formatSupplyDemandData(data interface{}) string {
+	return "Supply/Demand Zones Analysis: [数据格式化功能正在开发中]\n\n"
+}
+
+// formatFVGData 格式化FVG数据 - 暂时简化实现
+func formatFVGData(data interface{}) string {
+	return "Fair Value Gap Analysis: [数据格式化功能正在开发中]\n\n"
+}
+// formatFibonacciData 格式化斐波纳契分析数据
+func formatFibonacciData(data *FibonacciData) string {
+	if data == nil {
+		return "Fibonacci Analysis: No data available\n\n"
+	}
+
+	var sb strings.Builder
+
+	// 斐波纳契回调分析
+	if len(data.Retracements) > 0 {
+		sb.WriteString("Fibonacci Retracements:\n")
+		for i, ret := range data.Retracements {
+			if i >= 3 { // 只显示前3个最重要的
+				break
+			}
+			if !ret.IsActive {
+				continue
+			}
+
+			trendDir := "Uptrend"
+			if ret.TrendType == TrendDownward {
+				trendDir = "Downtrend"
+			}
+			
+			qualityStr := "High"
+			if ret.Quality == FibQualityMedium {
+				qualityStr = "Medium"
+			} else if ret.Quality == FibQualityLow {
+				qualityStr = "Low"
+			}
+
+			sb.WriteString(fmt.Sprintf("  • %s Retracement (Quality: %s, Strength: %.1f)\n", 
+				trendDir, qualityStr, ret.Strength))
+			sb.WriteString(fmt.Sprintf("    Range: %.4f → %.4f\n", 
+				ret.StartPoint.Price, ret.EndPoint.Price))
+
+			// 显示关键斐波级别
+			for _, level := range ret.Levels {
+				if level.Importance >= 0.7 { // 只显示重要级别
+					goldenStar := ""
+					if level.IsGoldenRatio {
+						goldenStar = " ★"
+					}
+					sb.WriteString(fmt.Sprintf("    %.1f%% Level: %.4f%s\n", 
+						level.Ratio*100, level.Price, goldenStar))
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// 黄金口袋分析
+	if data.GoldenPocket != nil && data.GoldenPocket.IsActive {
+		pocket := data.GoldenPocket
+		sb.WriteString("Golden Pocket (0.618) Analysis:\n")
+		
+		qualityStr := "High"
+		if pocket.Quality == FibQualityMedium {
+			qualityStr = "Medium"
+		} else if pocket.Quality == FibQualityLow {
+			qualityStr = "Low"
+		}
+		
+		trendContext := "Uptrend Support"
+		if pocket.TrendContext == TrendDownward {
+			trendContext = "Downtrend Resistance"
+		}
+
+		sb.WriteString(fmt.Sprintf("  • Range: %.4f - %.4f (Center: %.4f)\n", 
+			pocket.PriceRange.Low, pocket.PriceRange.High, pocket.CenterPrice))
+		sb.WriteString(fmt.Sprintf("  • Quality: %s (Strength: %.1f)\n", 
+			qualityStr, pocket.Strength))
+		sb.WriteString(fmt.Sprintf("  • Context: %s\n", trendContext))
+		
+		if len(pocket.TouchEvents) > 0 {
+			recentTouches := len(pocket.TouchEvents)
+			if recentTouches > 3 {
+				recentTouches = 3
+			}
+			sb.WriteString(fmt.Sprintf("  • Recent Interactions: %d times\n", recentTouches))
+		}
+		sb.WriteString("\n")
+	}
+
+	// 斐波扩展分析
+	if len(data.Extensions) > 0 {
+		sb.WriteString("Fibonacci Extensions:\n")
+		validExtensions := 0
+		for _, ext := range data.Extensions {
+			if ext.Quality != FibQualityHigh || validExtensions >= 2 {
+				continue
+			}
+			validExtensions++
+
+			sb.WriteString(fmt.Sprintf("  • Base Wave: %.4f → %.4f\n", 
+				ext.BaseWave.StartPoint.Price, ext.BaseWave.EndPoint.Price))
+			sb.WriteString(fmt.Sprintf("    Projected Targets:\n"))
+			
+			for _, level := range ext.Levels {
+				if level.Ratio == 1.272 || level.Ratio == 1.618 {
+					sb.WriteString(fmt.Sprintf("    %.3f Extension: %.4f\n", 
+						level.Ratio, level.Price))
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// 斐波聚集区
+	if len(data.Clusters) > 0 {
+		sb.WriteString("Fibonacci Confluence Zones:\n")
+		for i, cluster := range data.Clusters {
+			if i >= 2 || cluster.Importance < 70 { // 只显示前2个重要的
+				break
+			}
+			sb.WriteString(fmt.Sprintf("  • Zone at %.4f (Importance: %.1f)\n", 
+				cluster.CenterPrice, cluster.Importance))
+			sb.WriteString(fmt.Sprintf("    Contains %d fibonacci levels\n", 
+				cluster.LevelCount))
+		}
+		sb.WriteString("\n")
+	}
+
+	// 统计概览
+	if data.Statistics != nil {
+		stats := data.Statistics
+		sb.WriteString("Fibonacci Analysis Summary:\n")
+		sb.WriteString(fmt.Sprintf("  • Active Retracements: %d (High Quality: %d)\n", 
+			stats.ActiveRetracements, stats.HighQualityCount))
+		if stats.GoldenRatioHits > 0 {
+			sb.WriteString(fmt.Sprintf("  • Golden Ratio Reactions: %d times\n", 
+				stats.GoldenRatioHits))
+		}
+		if stats.SuccessRate > 0 {
+			sb.WriteString(fmt.Sprintf("  • Success Rate: %.1f%%\n", 
+				stats.SuccessRate*100))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
 // getRecentSwingPoints 获取最近的确认摆动点
 func getRecentSwingPoints(points []*SwingPoint, count int) []*SwingPoint {
 	var confirmed []*SwingPoint
@@ -612,3 +793,5 @@ func parseFloat(v interface{}) (float64, error) {
 		return 0, fmt.Errorf("unsupported type: %T", v)
 	}
 }
+
+

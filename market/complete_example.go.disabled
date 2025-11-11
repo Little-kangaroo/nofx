@@ -1,0 +1,668 @@
+package market
+
+import (
+	"fmt"
+	"log"
+	"time"
+)
+
+// CompleteAnalysisExample 完整的四模块分析示例
+func CompleteAnalysisExample() {
+	fmt.Println("=== 完整市场分析系统示例 ===")
+	fmt.Println("包含: 道氏理论 + VPVR + 供需区 + FVG 四大分析模块")
+
+	// 1. 生成综合示例K线数据
+	klines := generateCompleteAnalysisKlines()
+	fmt.Printf("生成了 %d 根K线数据，包含各种市场结构\n", len(klines))
+
+	// 2. 创建综合分析器
+	analyzer := NewComprehensiveAnalyzer()
+	fmt.Println("综合分析器已创建，包含所有四个分析模块")
+
+	// 3. 执行完整分析
+	symbol := "BTCUSDT"
+	result := analyzer.Analyze(symbol, nil, klines)
+	if result == nil {
+		log.Println("综合分析失败")
+		return
+	}
+
+	// 4. 显示完整分析结果
+	displayCompleteResults(result)
+
+	// 5. 演示权重优化配置
+	optimizedConfig := &ComprehensiveConfig{
+		EnableDowTheory:    true,
+		EnableVPVR:         true,
+		EnableSupplyDemand: true,
+		EnableFVG:          true,
+		WeightDowTheory:    0.35, // 道氏理论作为主要趋势判断
+		WeightVPVR:         0.25, // VPVR提供关键价位
+		WeightSupplyDemand: 0.25, // 供需区提供精确入场点
+		WeightFVG:          0.15, // FVG作为辅助确认
+		MinConfidence:      65.0,
+		MaxSignals:         5,
+	}
+
+	optimizedAnalyzer := NewComprehensiveAnalyzerWithConfig(optimizedConfig)
+	optimizedResult := optimizedAnalyzer.Analyze(symbol, nil, klines)
+	if optimizedResult != nil {
+		fmt.Println("\n" + strings.Repeat("=", 60))
+		fmt.Println("=== 权重优化配置分析结果 ===")
+		displayCompleteResults(optimizedResult)
+		compareAnalysisResults(result, optimizedResult, "默认配置", "优化配置")
+	}
+
+	// 6. 演示实时交易决策流程
+	demonstrateTradingDecisionProcess(analyzer, symbol, klines)
+}
+
+// generateCompleteAnalysisKlines 生成包含所有结构的示例K线
+func generateCompleteAnalysisKlines() []Kline {
+	klines := make([]Kline, 150)
+	basePrice := 50000.0
+	baseTime := time.Now().UnixMilli() - int64(150*4*3600*1000) // 150根4小时K线
+
+	for i := range klines {
+		var open, high, low, close, volume float64
+
+		// 生成复杂的市场结构，包含所有分析要素
+		switch {
+		case i < 20:
+			// 阶段1: 初始下跌（形成供给区）
+			trend := float64(i) * -60
+			open = basePrice + 3000 + trend + float64(i%7-3)*120
+			close = open + float64(i%5-2)*100 - 200
+
+		case i < 35:
+			// 阶段2: 底部整理（需求区形成 + 看涨FVG）
+			open = basePrice + 1800 + float64(i%6-3)*80
+			close = open + float64(i%4-2)*60
+			// 在K线30-32之间创建看涨FVG
+			if i == 30 {
+				high = open + 100
+				low = open - 50
+			} else if i == 31 {
+				// 跳空向上（形成FVG）
+				open = basePrice + 1800 + 400
+				close = open + 300
+				volume = 250 // 高成交量
+			} else if i == 32 {
+				open = basePrice + 1800 + 700
+				close = open + 200
+			}
+
+		case i < 60:
+			// 阶段3: 上涨趋势（道氏理论上升通道）
+			trend := float64(i-35) * 80
+			open = basePrice + 2200 + trend + float64(i%5-2)*100
+			close = open + float64(i%6)*120 + 150
+
+		case i < 75:
+			// 阶段4: 高位整理（供给区形成 + 看跌FVG）
+			open = basePrice + 4200 + float64(i%8-4)*150
+			close = open + float64(i%5-2)*80
+			// 在K线70-72之间创建看跌FVG
+			if i == 70 {
+				high = open + 80
+				low = open - 120
+			} else if i == 71 {
+				// 跳空向下（形成看跌FVG）
+				open = basePrice + 4200 - 300
+				close = open - 250
+				volume = 220 // 高成交量
+			} else if i == 72 {
+				open = basePrice + 4200 - 600
+				close = open - 150
+			}
+
+		case i < 90:
+			// 阶段5: 下跌趋势
+			trend := float64(i-75) * -50
+			open = basePrice + 3600 + trend + float64(i%6-3)*120
+			close = open + float64(i%7-4)*80 - 180
+
+		case i < 110:
+			// 阶段6: 反弹测试（测试供给区和FVG）
+			trend := float64(i-90) * 60
+			open = basePrice + 2800 + trend + float64(i%5-2)*100
+			close = open + float64(i%4)*100 + 120
+
+		case i < 125:
+			// 阶段7: 横盘整理（价值区域形成）
+			open = basePrice + 3200 + float64(i%10-5)*100
+			close = open + float64(i%6-3)*70
+
+		default:
+			// 阶段8: 最新走势（当前市场状态）
+			trend := float64(i-125) * 40
+			open = basePrice + 3100 + trend + float64(i%7-3)*90
+			close = open + float64(i%8-4)*80
+		}
+
+		// 计算最高价和最低价
+		if close > open {
+			if high == 0 {
+				high = max(open, close) + float64(i%4)*60
+			}
+			if low == 0 {
+				low = min(open, close) - float64(i%3)*50
+			}
+		} else {
+			if high == 0 {
+				high = max(open, close) + float64(i%3)*50
+			}
+			if low == 0 {
+				low = min(open, close) - float64(i%4)*60
+			}
+		}
+
+		// 确保价格合理性
+		if low < open*0.98 {
+			low = open * 0.98
+		}
+		if high > open*1.02 {
+			high = open * 1.02
+		}
+
+		// 默认成交量（如果未设置）
+		if volume == 0 {
+			priceChange := abs(close - open)
+			baseVolume := 150.0
+			volumeMultiplier := 1.0 + priceChange/open*8
+			volume = baseVolume * volumeMultiplier * (1 + float64(i%6)*0.25)
+		}
+
+		klines[i] = Kline{
+			OpenTime:            baseTime + int64(i*4*3600*1000),
+			Open:                open,
+			High:                high,
+			Low:                 low,
+			Close:               close,
+			Volume:              volume,
+			CloseTime:           baseTime + int64((i+1)*4*3600*1000) - 1,
+			QuoteVolume:         volume * (high + low) / 2,
+			Trades:              int(volume / 15),
+			TakerBuyBaseVolume:  volume * 0.58,
+			TakerBuyQuoteVolume: volume * 0.58 * close,
+		}
+	}
+
+	return klines
+}
+
+// displayCompleteResults 显示完整分析结果
+func displayCompleteResults(result *ComprehensiveResult) {
+	if result == nil {
+		fmt.Println("无分析结果")
+		return
+	}
+
+	fmt.Printf("\n=== %s 四模块综合分析结果 ===\n", result.Symbol)
+	fmt.Printf("分析时间: %s\n", time.UnixMilli(result.Timestamp).Format("2006-01-02 15:04:05"))
+	fmt.Printf("当前价格: %.2f\n", result.CurrentPrice)
+
+	// 1. 各模块状态概览
+	displayModuleStatus(result)
+
+	// 2. 市场结构分析
+	displayMarketStructure(result.MarketStructure)
+
+	// 3. 关键价位汇总
+	displayKeyLevelsSummary(result.MarketStructure)
+
+	// 4. 统一交易信号
+	displayUnifiedSignals(result.UnifiedSignals)
+
+	// 5. 风险评估
+	displayRiskAssessment(result.RiskAssessment)
+
+	// 6. 最终交易建议
+	displayFinalTradingAdvice(result.TradingAdvice)
+
+	// 7. 详细模块分析
+	displayDetailedModuleAnalysis(result)
+}
+
+// displayModuleStatus 显示各模块状态
+func displayModuleStatus(result *ComprehensiveResult) {
+	fmt.Printf("\n=== 分析模块状态 ===\n")
+
+	// 道氏理论状态
+	if result.DowTheory != nil && result.DowTheory.TrendStrength != nil {
+		fmt.Printf("📈 道氏理论: %s趋势 (强度: %.1f, 质量: %s)\n",
+			getTrendDirectionName(result.DowTheory.TrendStrength.Direction),
+			result.DowTheory.TrendStrength.Overall,
+			getTrendQualityName(result.DowTheory.TrendStrength.Quality))
+	} else {
+		fmt.Printf("📈 道氏理论: 数据不足\n")
+	}
+
+	// VPVR状态
+	if result.VolumeProfile != nil && result.VolumeProfile.POC != nil {
+		fmt.Printf("📊 VPVR: POC %.2f, 价值区 %.2f-%.2f, 集中度 %.2f\n",
+			result.VolumeProfile.POC.Price,
+			result.VolumeProfile.VAL,
+			result.VolumeProfile.VAH,
+			result.VolumeProfile.ValueArea.Concentration)
+	} else {
+		fmt.Printf("📊 VPVR: 数据不足\n")
+	}
+
+	// 供需区状态
+	if result.SupplyDemand != nil && result.SupplyDemand.Statistics != nil {
+		stats := result.SupplyDemand.Statistics
+		fmt.Printf("⚖️  供需区: %d个活跃 (供给:%d, 需求:%d), 成功率: %.1f%%\n",
+			len(result.SupplyDemand.ActiveZones),
+			stats.ActiveSupplyZones,
+			stats.ActiveDemandZones,
+			stats.SuccessRate)
+	} else {
+		fmt.Printf("⚖️  供需区: 数据不足\n")
+	}
+
+	// FVG状态
+	if result.FairValueGaps != nil && result.FairValueGaps.Statistics != nil {
+		stats := result.FairValueGaps.Statistics
+		fmt.Printf("🕳️  FVG: %d个活跃 (看涨:%d, 看跌:%d), 成功率: %.1f%%, 平均强度: %.1f\n",
+			len(result.FairValueGaps.ActiveFVGs),
+			stats.ActiveBullishFVGs,
+			stats.ActiveBearishFVGs,
+			stats.SuccessRate,
+			stats.AvgFVGStrength)
+	} else {
+		fmt.Printf("🕳️  FVG: 数据不足\n")
+	}
+}
+
+// displayKeyLevelsSummary 显示关键价位汇总
+func displayKeyLevelsSummary(structure *MarketStructure) {
+	if structure == nil || len(structure.KeyLevels) == 0 {
+		return
+	}
+
+	fmt.Printf("\n=== 关键价位汇总 (按强度排序) ===\n")
+	
+	// 按强度排序显示前8个关键价位
+	count := minInt(8, len(structure.KeyLevels))
+	for i := 0; i < count; i++ {
+		level := structure.KeyLevels[i]
+		typeIcon := getTypeIcon(level.Type)
+		sourceIcon := getSourceIcon(level.Source)
+		fmt.Printf("%s %s %.2f - %s (强度: %.1f) - %s\n",
+			typeIcon, sourceIcon, level.Price, getLevelTypeName(level.Type),
+			level.Strength, level.Description)
+	}
+}
+
+// displayFinalTradingAdvice 显示最终交易建议
+func displayFinalTradingAdvice(advice *TradingAdvice) {
+	if advice == nil {
+		return
+	}
+
+	fmt.Printf("\n=== 🎯 最终交易建议 ===\n")
+	actionIcon := getActionIcon(advice.OverallAction)
+	confidenceLevel := getConfidenceLevel(advice.Confidence)
+	
+	fmt.Printf("%s 建议动作: %s (%s - %.1f%%)\n", 
+		actionIcon, advice.OverallAction, confidenceLevel, advice.Confidence)
+	fmt.Printf("⏰ 时间周期: %s\n", advice.TimeHorizon)
+
+	if len(advice.ReasoningPoints) > 0 {
+		fmt.Printf("\n💡 核心理由:\n")
+		for i, point := range advice.ReasoningPoints {
+			fmt.Printf("  %d. %s\n", i+1, point)
+		}
+	}
+
+	fmt.Printf("\n📝 操作策略:\n")
+	fmt.Printf("  入场: %s\n", advice.EntryStrategy)
+	fmt.Printf("  出场: %s\n", advice.ExitStrategy)
+	fmt.Printf("  风控: %s\n", advice.RiskManagement)
+
+	if len(advice.AlternativeScenarios) > 0 {
+		fmt.Printf("\n🔄 备选方案:\n")
+		for i, scenario := range advice.AlternativeScenarios {
+			fmt.Printf("  %d. %s\n", i+1, scenario)
+		}
+	}
+}
+
+// displayDetailedModuleAnalysis 显示详细模块分析
+func displayDetailedModuleAnalysis(result *ComprehensiveResult) {
+	fmt.Printf("\n=== 详细模块分析 ===\n")
+
+	// FVG详细分析
+	if result.FairValueGaps != nil && len(result.FairValueGaps.ActiveFVGs) > 0 {
+		fmt.Printf("\n🕳️  活跃FVG详情:\n")
+		for i, fvg := range result.FairValueGaps.ActiveFVGs {
+			if i >= 3 { // 最多显示3个
+				break
+			}
+			typeIcon := "📈"
+			if fvg.Type == BearishFVG {
+				typeIcon = "📉"
+			}
+			fmt.Printf("  %s %s %.2f-%.2f (中心:%.2f, 强度:%.1f, 质量:%s)\n",
+				typeIcon, getFVGTypeName(fvg.Type), fvg.LowerBound, fvg.UpperBound,
+				fvg.CenterPrice, fvg.Strength, getFVGQualityName(fvg.Quality))
+			fmt.Printf("     填补进度: %.1f%%, 触及次数: %d, 状态: %s\n",
+				fvg.FillProgress, fvg.TouchCount, getFVGStatusName(fvg.Status))
+		}
+	}
+
+	// 供需区详细分析
+	if result.SupplyDemand != nil && len(result.SupplyDemand.ActiveZones) > 0 {
+		fmt.Printf("\n⚖️  活跃供需区详情:\n")
+		for i, zone := range result.SupplyDemand.ActiveZones {
+			if i >= 3 { // 最多显示3个
+				break
+			}
+			typeIcon := "🔴"
+			if zone.Type == DemandZone {
+				typeIcon = "🟢"
+			}
+			fmt.Printf("  %s %s %.2f-%.2f (中心:%.2f, 强度:%.1f, 质量:%s)\n",
+				typeIcon, getZoneTypeName(zone.Type), zone.LowerBound, zone.UpperBound,
+				zone.CenterPrice, zone.Strength, getZoneQualityName(zone.Quality))
+			fmt.Printf("     触及次数: %d, 状态: %s\n",
+				zone.TouchCount, getZoneStatusName(zone.Status))
+		}
+	}
+}
+
+// compareAnalysisResults 比较两个分析结果
+func compareAnalysisResults(result1, result2 *ComprehensiveResult, name1, name2 string) {
+	fmt.Printf("\n=== 📊 分析结果对比: %s vs %s ===\n", name1, name2)
+
+	// 信号数量对比
+	fmt.Printf("信号数量: %s=%d, %s=%d\n", 
+		name1, len(result1.UnifiedSignals),
+		name2, len(result2.UnifiedSignals))
+
+	// 主要建议对比
+	if len(result1.UnifiedSignals) > 0 && len(result2.UnifiedSignals) > 0 {
+		fmt.Printf("主要建议: %s=%s(%.1f%%), %s=%s(%.1f%%)\n",
+			name1, result1.UnifiedSignals[0].Action, result1.UnifiedSignals[0].Confidence,
+			name2, result2.UnifiedSignals[0].Action, result2.UnifiedSignals[0].Confidence)
+	}
+
+	// 风险评估对比
+	if result1.RiskAssessment != nil && result2.RiskAssessment != nil {
+		fmt.Printf("风险评估: %s=%s, %s=%s\n",
+			name1, getRiskLevelName(result1.RiskAssessment.OverallRisk),
+			name2, getRiskLevelName(result2.RiskAssessment.OverallRisk))
+	}
+
+	// 各模块活跃数量对比
+	fmt.Printf("\n各模块活跃数量对比:\n")
+	
+	// FVG对比
+	fvg1Count := 0
+	fvg2Count := 0
+	if result1.FairValueGaps != nil {
+		fvg1Count = len(result1.FairValueGaps.ActiveFVGs)
+	}
+	if result2.FairValueGaps != nil {
+		fvg2Count = len(result2.FairValueGaps.ActiveFVGs)
+	}
+	fmt.Printf("  FVG: %s=%d, %s=%d\n", name1, fvg1Count, name2, fvg2Count)
+
+	// 供需区对比
+	sd1Count := 0
+	sd2Count := 0
+	if result1.SupplyDemand != nil {
+		sd1Count = len(result1.SupplyDemand.ActiveZones)
+	}
+	if result2.SupplyDemand != nil {
+		sd2Count = len(result2.SupplyDemand.ActiveZones)
+	}
+	fmt.Printf("  供需区: %s=%d, %s=%d\n", name1, sd1Count, name2, sd2Count)
+}
+
+// demonstrateTradingDecisionProcess 演示交易决策流程
+func demonstrateTradingDecisionProcess(analyzer *ComprehensiveAnalyzer, symbol string, klines []Kline) {
+	fmt.Printf("\n=== 🎯 实时交易决策流程演示 ===\n")
+
+	// 模拟实时价格更新
+	currentPrice := klines[len(klines)-1].Close
+	fmt.Printf("当前价格: %.2f\n", currentPrice)
+
+	// 执行分析
+	fmt.Println("\n1. 📊 执行四模块综合分析...")
+	result := analyzer.Analyze(symbol, nil, klines)
+	
+	if result == nil {
+		fmt.Println("❌ 分析失败")
+		return
+	}
+
+	// 分析结果评估
+	fmt.Printf("2. ✅ 分析完成 - 生成 %d 个统一信号\n", len(result.UnifiedSignals))
+
+	// 信号筛选
+	highPrioritySignals := 0
+	mediumPrioritySignals := 0
+	for _, signal := range result.UnifiedSignals {
+		switch signal.Priority {
+		case PriorityHigh:
+			highPrioritySignals++
+		case PriorityMedium:
+			mediumPrioritySignals++
+		}
+	}
+
+	fmt.Printf("3. 🔍 信号筛选: 高优先级=%d, 中优先级=%d\n", 
+		highPrioritySignals, mediumPrioritySignals)
+
+	// 风险检查
+	fmt.Println("4. ⚠️  风险评估检查...")
+	if result.RiskAssessment != nil {
+		fmt.Printf("   整体风险: %s\n", getRiskLevelName(result.RiskAssessment.OverallRisk))
+		fmt.Printf("   建议风险敞口: %.1f%%\n", result.RiskAssessment.RecommendedRisk*100)
+		fmt.Printf("   最大仓位: %.1f%%\n", result.RiskAssessment.MaxPositionSize*100)
+	}
+
+	// 交易决策
+	fmt.Println("5. 🎯 交易决策:")
+	if highPrioritySignals > 0 {
+		fmt.Printf("   ✅ 发现 %d 个高优先级信号，建议执行交易\n", highPrioritySignals)
+		if len(result.UnifiedSignals) > 0 {
+			signal := result.UnifiedSignals[0]
+			fmt.Printf("   📈 首选信号: %s @ %.2f (置信度: %.1f%%)\n", 
+				signal.Action, signal.Entry, signal.Confidence)
+		}
+	} else if mediumPrioritySignals > 0 {
+		fmt.Printf("   ⚡ 发现 %d 个中优先级信号，建议谨慎观察\n", mediumPrioritySignals)
+	} else {
+		fmt.Printf("   ⏸️  无明确信号，建议保持观望\n")
+	}
+
+	// 风险提醒
+	if result.RiskAssessment != nil && result.RiskAssessment.OverallRisk == RiskHigh {
+		fmt.Println("6. ⚠️  风险提醒: 当前市场风险较高，建议降低仓位或暂停交易")
+	} else {
+		fmt.Println("6. ✅ 风险可控，可按计划执行交易")
+	}
+
+	fmt.Println("\n📋 决策流程完成，建议保存分析结果用于后续监控")
+}
+
+// 辅助函数
+func getTrendQualityName(quality TrendQuality) string {
+	switch quality {
+	case TrendStrong:
+		return "强劲"
+	case TrendModerate:
+		return "中等"
+	case TrendWeak:
+		return "弱势"
+	default:
+		return "未知"
+	}
+}
+
+func getFVGTypeName(fvgType FVGType) string {
+	switch fvgType {
+	case BullishFVG:
+		return "看涨FVG"
+	case BearishFVG:
+		return "看跌FVG"
+	default:
+		return "未知FVG"
+	}
+}
+
+func getFVGQualityName(quality FVGQuality) string {
+	switch quality {
+	case FVQualityHigh:
+		return "高质量"
+	case FVQualityMedium:
+		return "中等"
+	case FVQualityLow:
+		return "低质量"
+	default:
+		return "未知"
+	}
+}
+
+func getFVGStatusName(status FVGStatus) string {
+	switch status {
+	case FVGStatusFresh:
+		return "新鲜"
+	case FVGStatusTested:
+		return "已测试"
+	case FVGStatusPartialFill:
+		return "部分填补"
+	case FVGStatusFilled:
+		return "已填补"
+	case FVGStatusExpired:
+		return "已过期"
+	default:
+		return "未知"
+	}
+}
+
+func getZoneTypeName(zoneType ZoneType) string {
+	switch zoneType {
+	case SupplyZone:
+		return "供给区"
+	case DemandZone:
+		return "需求区"
+	default:
+		return "未知区域"
+	}
+}
+
+func getZoneQualityName(quality ZoneQuality) string {
+	switch quality {
+	case QualityStrong:
+		return "强劲"
+	case QualityGood:
+		return "良好"
+	case QualityModerate:
+		return "中等"
+	case QualityWeak:
+		return "弱势"
+	default:
+		return "未知"
+	}
+}
+
+func getZoneStatusName(status ZoneStatus) string {
+	switch status {
+	case StatusFresh:
+		return "新鲜"
+	case StatusTested:
+		return "已测试"
+	case StatusWeakened:
+		return "已弱化"
+	case StatusBroken:
+		return "已突破"
+	case StatusExpired:
+		return "已过期"
+	default:
+		return "未知"
+	}
+}
+
+func getTypeIcon(levelType LevelType) string {
+	switch levelType {
+	case LevelSupport:
+		return "🟢"
+	case LevelResistance:
+		return "🔴"
+	case LevelPOC:
+		return "🎯"
+	case LevelVAH:
+		return "📊"
+	case LevelVAL:
+		return "📉"
+	default:
+		return "⚪"
+	}
+}
+
+func getSourceIcon(source string) string {
+	switch source {
+	case "dow_theory":
+		return "📈"
+	case "vpvr_poc", "vpvr_vah", "vpvr_val":
+		return "📊"
+	case "supply_zone", "demand_zone":
+		return "⚖️"
+	case "bullish_fvg", "bearish_fvg":
+		return "🕳️"
+	default:
+		return "📍"
+	}
+}
+
+func getActionIcon(action SignalAction) string {
+	switch action {
+	case ActionBuy:
+		return "🚀"
+	case ActionSell:
+		return "📉"
+	case ActionHold:
+		return "⏸️"
+	case ActionClose:
+		return "🔚"
+	default:
+		return "❓"
+	}
+}
+
+func getConfidenceLevel(confidence float64) string {
+	if confidence >= 80 {
+		return "极高置信"
+	} else if confidence >= 70 {
+		return "高置信"
+	} else if confidence >= 60 {
+		return "中等置信"
+	} else {
+		return "低置信"
+	}
+}
+
+func max(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
