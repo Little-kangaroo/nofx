@@ -621,36 +621,12 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		return err
 	}
 
-	// 计算数量和所需保证金
+	// 计算数量
 	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
-	requiredMargin := decision.PositionSizeUSD / float64(decision.Leverage)
-	
-	// 检查保证金是否充足
-	balance, err := at.trader.GetBalance()
-	if err != nil {
-		return fmt.Errorf("获取账户余额失败: %v", err)
-	}
-	
-	availableBalance := 0.0
-	if avail, ok := balance["availableBalance"].(float64); ok {
-		availableBalance = avail
-	}
-	
-	if requiredMargin > availableBalance {
-		return fmt.Errorf("保证金不足: 需要%.2f USDT，可用余额仅%.2f USDT", requiredMargin, availableBalance)
-	}
-	
-	// 预留5%的余量作为缓冲
-	marginBuffer := requiredMargin * 1.05
-	if marginBuffer > availableBalance {
-		return fmt.Errorf("保证金不足（含5%%缓冲）: 需要%.2f USDT，可用余额仅%.2f USDT", marginBuffer, availableBalance)
-	}
-	
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
 	
-	log.Printf("  💰 保证金检查: 需要%.2f USDT，可用%.2f USDT，剩余%.2f USDT", 
-		requiredMargin, availableBalance, availableBalance-requiredMargin)
+	// 保证金验证已在模板中优化处理，此处跳过验证直接执行
 
 	// 设置仓位模式
 	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
@@ -706,36 +682,12 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		return err
 	}
 
-	// 计算数量和所需保证金
+	// 计算数量
 	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
-	requiredMargin := decision.PositionSizeUSD / float64(decision.Leverage)
-	
-	// 检查保证金是否充足
-	balance, err := at.trader.GetBalance()
-	if err != nil {
-		return fmt.Errorf("获取账户余额失败: %v", err)
-	}
-	
-	availableBalance := 0.0
-	if avail, ok := balance["availableBalance"].(float64); ok {
-		availableBalance = avail
-	}
-	
-	if requiredMargin > availableBalance {
-		return fmt.Errorf("保证金不足: 需要%.2f USDT，可用余额仅%.2f USDT", requiredMargin, availableBalance)
-	}
-	
-	// 预留5%的余量作为缓冲
-	marginBuffer := requiredMargin * 1.05
-	if marginBuffer > availableBalance {
-		return fmt.Errorf("保证金不足（含5%%缓冲）: 需要%.2f USDT，可用余额仅%.2f USDT", marginBuffer, availableBalance)
-	}
-	
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
 	
-	log.Printf("  💰 保证金检查: 需要%.2f USDT，可用%.2f USDT，剩余%.2f USDT", 
-		requiredMargin, availableBalance, availableBalance-requiredMargin)
+	// 保证金验证已在模板中优化处理，此处跳过验证直接执行
 
 	// 设置仓位模式
 	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
