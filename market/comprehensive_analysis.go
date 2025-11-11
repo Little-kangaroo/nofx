@@ -589,12 +589,18 @@ func (ca *ComprehensiveAnalyzer) collectFibonacciSignals(fibData *FibonacciData,
 	fibSignals := ca.fibonacciAnalyzer.GenerateSignals(fibData, []Kline{{Close: currentPrice}})
 
 	for _, signal := range fibSignals {
+		// 安全获取第一个止盈目标
+		var takeProfit float64
+		if len(signal.TakeProfit) > 0 {
+			takeProfit = signal.TakeProfit[0]
+		}
+
 		unifiedSignal := &UnifiedSignal{
 			ID:         fmt.Sprintf("fib_%d", time.Now().UnixNano()),
 			Action:     signal.Action,
 			Entry:      signal.EntryPrice,
 			StopLoss:   signal.StopLoss,
-			TakeProfit: signal.TakeProfit[0], // 取第一个止盈目标
+			TakeProfit: takeProfit,
 			RiskReward: signal.RiskReward,
 			Confidence: signal.Confidence,
 			Strength:   signal.Strength,
