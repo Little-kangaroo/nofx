@@ -108,8 +108,6 @@ export default function AboutSection({ language }: AboutSectionProps) {
               />
             </div>
           </div>
-        </div>
-      </div>
     </AnimatedSection>
   )
 }
