@@ -69,9 +69,9 @@ func Get(symbol string) (*Data, error) {
 	// 计算长期数据
 	longerTermData := calculateLongerTermData(klines4h)
 
-	// 道氏理论分析
-	dowAnalyzer := NewDowTheoryAnalyzer()
-	dowTheoryData := dowAnalyzer.Analyze(klines3m, klines4h, currentPrice)
+	// 综合分析（包括道氏理论、VPVR、供需区、FVG、斐波纳契）
+	comprehensiveAnalyzer := NewComprehensiveAnalyzer()
+	comprehensiveResult := comprehensiveAnalyzer.Analyze(symbol, klines3m, klines4h)
 
 	return &Data{
 		Symbol:            symbol,
@@ -85,7 +85,11 @@ func Get(symbol string) (*Data, error) {
 		FundingRate:       fundingRate,
 		IntradaySeries:    intradayData,
 		LongerTermContext: longerTermData,
-		DowTheory:         dowTheoryData,
+		DowTheory:         comprehensiveResult.DowTheory,
+		VolumeProfile:     comprehensiveResult.VolumeProfile,
+		SupplyDemand:      comprehensiveResult.SupplyDemand,
+		FairValueGaps:     comprehensiveResult.FairValueGaps,
+		Fibonacci:         comprehensiveResult.Fibonacci,
 	}, nil
 }
 
@@ -430,19 +434,16 @@ func Format(data *Data) string {
 
 	// VPVR分析
 	if data.VolumeProfile != nil {
-		sb.WriteString("Volume Profile (VPVR) Analysis:\n\n")
 		sb.WriteString(formatVPVRData(data.VolumeProfile))
 	}
 
 	// 供需区分析
 	if data.SupplyDemand != nil {
-		sb.WriteString("Supply/Demand Zones Analysis:\n\n")
 		sb.WriteString(formatSupplyDemandData(data.SupplyDemand))
 	}
 
 	// FVG分析
 	if data.FairValueGaps != nil {
-		sb.WriteString("Fair Value Gap (FVG) Analysis:\n\n")
 		sb.WriteString(formatFVGData(data.FairValueGaps))
 	}
 
@@ -581,19 +582,158 @@ func formatDowTheoryData(data *DowTheoryData) string {
 	return sb.String()
 }
 
-// formatVPVRData 格式化VPVR数据 - 暂时简化实现
-func formatVPVRData(data interface{}) string {
-	return "VPVR Analysis: [数据格式化功能正在开发中]\n\n"
+// formatVPVRData 格式化VPVR数据
+func formatVPVRData(data *VolumeProfile) string {
+	if data == nil {
+		return "VPVR Analysis: No data available\n\n"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Volume Profile Analysis:\n")
+
+	// POC (Point of Control)
+	if data.POC != nil {
+		sb.WriteString(fmt.Sprintf("  Point of Control (POC): %.4f (%.1f%% volume)\n", 
+			data.POC.Price, data.POC.VolumePercent))
+	}
+
+	// Value Area
+	sb.WriteString(fmt.Sprintf("  Value Area: %.4f - %.4f\n", data.VAL, data.VAH))
+	if data.ValueArea != nil {
+		sb.WriteString(fmt.Sprintf("  Value Area Volume: %.1f%%, Concentration: %.2f\n", 
+			data.ValueArea.VolumePercent, data.ValueArea.Concentration))
+	}
+
+	// Volume statistics
+	if data.Stats != nil {
+		sb.WriteString(fmt.Sprintf("  Buy/Sell Ratio: %.2f, Avg Price: %.4f\n", 
+			data.Stats.BuySellRatio, data.Stats.AvgPrice))
+		if data.Stats.MaxLevel != nil {
+			sb.WriteString(fmt.Sprintf("  Highest Volume Level: %.4f\n", data.Stats.MaxLevel.Price))
+		}
+	}
+
+	// Key levels
+	if len(data.Levels) > 0 {
+		sb.WriteString("  High Volume Nodes:\n")
+		count := 0
+		for _, level := range data.Levels {
+			if level.VolumePercent > 5.0 && count < 3 { // Top 3 high volume levels
+				sb.WriteString(fmt.Sprintf("    %.4f (%.1f%% volume)\n", 
+					level.Price, level.VolumePercent))
+				count++
+			}
+		}
+	}
+
+	sb.WriteString("\n")
+	return sb.String()
 }
 
-// formatSupplyDemandData 格式化供需区数据 - 暂时简化实现  
-func formatSupplyDemandData(data interface{}) string {
-	return "Supply/Demand Zones Analysis: [数据格式化功能正在开发中]\n\n"
+// formatSupplyDemandData 格式化供需区数据
+func formatSupplyDemandData(data *SupplyDemandData) string {
+	if data == nil {
+		return "Supply/Demand Zones Analysis: No data available\n\n"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Supply/Demand Zones Analysis:\n")
+
+	// Active zones summary
+	if len(data.ActiveZones) > 0 {
+		supplyCount := 0
+		demandCount := 0
+		for _, zone := range data.ActiveZones {
+			if zone.Type == SupplyZone {
+				supplyCount++
+			} else {
+				demandCount++
+			}
+		}
+		sb.WriteString(fmt.Sprintf("  Active Zones: %d total (%d supply, %d demand)\n", 
+			len(data.ActiveZones), supplyCount, demandCount))
+
+		// Show top zones by strength
+		sb.WriteString("  Key Zones:\n")
+		count := 0
+		for _, zone := range data.ActiveZones {
+			if count >= 3 { // Show top 3 zones
+				break
+			}
+			zoneType := "Demand"
+			if zone.Type == SupplyZone {
+				zoneType = "Supply"
+			}
+			sb.WriteString(fmt.Sprintf("    %s Zone: %.4f-%.4f (Strength: %.1f, Touches: %d)\n", 
+				zoneType, zone.LowerBound, zone.UpperBound, zone.Strength, zone.TouchCount))
+			count++
+		}
+	}
+
+	// Statistics
+	if data.Statistics != nil {
+		sb.WriteString(fmt.Sprintf("  Zone Statistics:\n"))
+		sb.WriteString(fmt.Sprintf("    Success Rate: %.1f%%, Average Strength: %.1f\n", 
+			data.Statistics.SuccessRate, data.Statistics.AvgZoneStrength))
+		sb.WriteString(fmt.Sprintf("    Active Supply: %d, Active Demand: %d\n", 
+			data.Statistics.ActiveSupplyZones, data.Statistics.ActiveDemandZones))
+	}
+
+	sb.WriteString("\n")
+	return sb.String()
 }
 
-// formatFVGData 格式化FVG数据 - 暂时简化实现
-func formatFVGData(data interface{}) string {
-	return "Fair Value Gap Analysis: [数据格式化功能正在开发中]\n\n"
+// formatFVGData 格式化FVG数据
+func formatFVGData(data *FVGData) string {
+	if data == nil {
+		return "Fair Value Gap Analysis: No data available\n\n"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Fair Value Gap (FVG) Analysis:\n")
+
+	// Active FVGs summary
+	if len(data.ActiveFVGs) > 0 {
+		bullishCount := 0
+		bearishCount := 0
+		for _, fvg := range data.ActiveFVGs {
+			if fvg.Type == BullishFVG {
+				bullishCount++
+			} else {
+				bearishCount++
+			}
+		}
+		sb.WriteString(fmt.Sprintf("  Active FVGs: %d total (%d bullish, %d bearish)\n", 
+			len(data.ActiveFVGs), bullishCount, bearishCount))
+
+		// Show key FVGs
+		sb.WriteString("  Key Fair Value Gaps:\n")
+		count := 0
+		for _, fvg := range data.ActiveFVGs {
+			if count >= 3 { // Show top 3 FVGs
+				break
+			}
+			fvgType := "Bullish"
+			if fvg.Type == BearishFVG {
+				fvgType = "Bearish"
+			}
+			sb.WriteString(fmt.Sprintf("    %s FVG: %.4f-%.4f (Strength: %.1f, Status: %s)\n", 
+				fvgType, fvg.LowerBound, fvg.UpperBound, fvg.Strength, fvg.Status))
+			count++
+		}
+	}
+
+	// Statistics
+	if data.Statistics != nil {
+		sb.WriteString("  FVG Statistics:\n")
+		sb.WriteString(fmt.Sprintf("    Fill Rate: %.1f%%, Average Width: %.4f\n", 
+			data.Statistics.FillRate*100, data.Statistics.AvgFVGWidth))
+		sb.WriteString(fmt.Sprintf("    Active Bullish: %d, Active Bearish: %d\n", 
+			data.Statistics.ActiveBullishFVGs, data.Statistics.ActiveBearishFVGs))
+	}
+
+	sb.WriteString("\n")
+	return sb.String()
 }
 // formatFibonacciData 格式化斐波纳契分析数据
 func formatFibonacciData(data *FibonacciData) string {
