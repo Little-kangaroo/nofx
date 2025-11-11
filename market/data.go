@@ -86,6 +86,7 @@ func Get(symbol string) (*Data, error) {
 		IntradaySeries:    intradayData,
 		LongerTermContext: longerTermData,
 		DowTheory:         comprehensiveResult.DowTheory,
+		ChannelAnalysis:   comprehensiveResult.ChannelAnalysis,
 		VolumeProfile:     comprehensiveResult.VolumeProfile,
 		SupplyDemand:      comprehensiveResult.SupplyDemand,
 		FairValueGaps:     comprehensiveResult.FairValueGaps,

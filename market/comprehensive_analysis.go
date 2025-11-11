@@ -9,6 +9,7 @@ import (
 // ComprehensiveAnalyzer 综合市场分析器
 type ComprehensiveAnalyzer struct {
 	dowAnalyzer        *DowTheoryAnalyzer
+	channelAnalyzer    *ChannelAnalyzer
 	vpvrAnalyzer       *VPVRAnalyzer
 	sdAnalyzer         *SupplyDemandAnalyzer
 	fvgAnalyzer        *FVGAnalyzer
@@ -38,6 +39,7 @@ type ComprehensiveResult struct {
 	Timestamp        int64                `json:"timestamp"`         // 分析时间
 	CurrentPrice     float64              `json:"current_price"`     // 当前价格
 	DowTheory        *DowTheoryData       `json:"dow_theory"`        // 道氏理论分析
+	ChannelAnalysis  *ChannelData         `json:"channel_analysis"`  // 通道分析（独立指标）
 	VolumeProfile    *VolumeProfile       `json:"volume_profile"`    // 成交量分布
 	SupplyDemand     *SupplyDemandData    `json:"supply_demand"`     // 供需区分析
 	FairValueGaps    *FVGData             `json:"fair_value_gaps"`   // FVG分析
@@ -202,6 +204,7 @@ var defaultComprehensiveConfig = &ComprehensiveConfig{
 func NewComprehensiveAnalyzer() *ComprehensiveAnalyzer {
 	return &ComprehensiveAnalyzer{
 		dowAnalyzer:       NewDowTheoryAnalyzer(),
+		channelAnalyzer:   NewChannelAnalyzer(),
 		vpvrAnalyzer:      NewVPVRAnalyzer(),
 		sdAnalyzer:        NewSupplyDemandAnalyzer(),
 		fvgAnalyzer:       NewFVGAnalyzer(),
@@ -214,6 +217,7 @@ func NewComprehensiveAnalyzer() *ComprehensiveAnalyzer {
 func NewComprehensiveAnalyzerWithConfig(config *ComprehensiveConfig) *ComprehensiveAnalyzer {
 	return &ComprehensiveAnalyzer{
 		dowAnalyzer:       NewDowTheoryAnalyzer(),
+		channelAnalyzer:   NewChannelAnalyzer(),
 		vpvrAnalyzer:      NewVPVRAnalyzer(),
 		sdAnalyzer:        NewSupplyDemandAnalyzer(),
 		fvgAnalyzer:       NewFVGAnalyzer(),
@@ -250,6 +254,7 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines3m, klines4h []Kli
 	// 执行道氏理论分析
 	if ca.config.EnableDowTheory && len(klines4h) > 20 {
 		result.DowTheory = ca.dowAnalyzer.Analyze(klines3m, klines4h, currentPrice)
+		result.ChannelAnalysis = ca.channelAnalyzer.Analyze(klines4h, currentPrice)
 	}
 
 	// 执行VPVR分析

@@ -16,6 +16,7 @@ type Data struct {
 	IntradaySeries    *IntradayData
 	LongerTermContext *LongerTermData
 	DowTheory         *DowTheoryData // 道氏理论分析数据
+	ChannelAnalysis   *ChannelData // 通道分析数据（独立指标）
 	VolumeProfile     *VolumeProfile // 成交量分布数据
 	SupplyDemand      *SupplyDemandData // 供给需求区数据
 	FairValueGaps     *FVGData // 公平价值缺口数据

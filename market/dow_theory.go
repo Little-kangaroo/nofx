@@ -18,19 +18,29 @@ func NewDowTheoryAnalyzer() *DowTheoryAnalyzer {
 	}
 }
 
-// Analyze 执行完整的道氏理论分析
+// Analyze 执行道氏理论分析（专注趋势识别，不包含通道）
 func (dta *DowTheoryAnalyzer) Analyze(klines3m, klines4h []Kline, currentPrice float64) *DowTheoryData {
-	// 使用4小时数据进行主要分析，3分钟数据用于精确入场点
-	swingPoints := dta.identifySwingPoints(klines4h)
+	// 使用最近300根4小时数据进行主要分析
+	analysisKlines := klines4h
+	if len(klines4h) > 300 {
+		analysisKlines = klines4h[len(klines4h)-300:]
+	}
+	
+	// 使用最近300根3分钟数据进行短期分析
+	shortTermKlines := klines3m
+	if len(klines3m) > 300 {
+		shortTermKlines = klines3m[len(klines3m)-300:]
+	}
+
+	swingPoints := dta.identifySwingPoints(analysisKlines)
 	trendLines := dta.calculateTrendLines(swingPoints)
-	channel := dta.buildParallelChannel(trendLines, swingPoints, currentPrice)
-	trendStrength := dta.assessTrendStrength(klines3m, klines4h, swingPoints, trendLines)
-	tradingSignal := dta.generateTradingSignal(klines3m, currentPrice, channel, trendStrength, trendLines)
+	trendStrength := dta.assessTrendStrength(shortTermKlines, analysisKlines, swingPoints, trendLines)
+	tradingSignal := dta.generateTradingSignal(shortTermKlines, currentPrice, nil, trendStrength, trendLines)
 
 	return &DowTheoryData{
 		SwingPoints:   swingPoints,
 		TrendLines:    trendLines,
-		Channel:       channel,
+		Channel:       nil, // 移除通道计算
 		TrendStrength: trendStrength,
 		TradingSignal: tradingSignal,
 	}
@@ -620,8 +630,8 @@ func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, sw
 	// 计算长期趋势强度（基于4小时数据）
 	longTerm := dta.calculateLongTermStrength(klines4h)
 
-	// 计算整体趋势强度
-	overall := (shortTerm*0.3 + longTerm*0.7)
+	// 计算整体趋势强度（更平衡的权重）
+	overall := (shortTerm*0.4 + longTerm*0.6)
 
 	// 确定趋势方向
 	direction := dta.determineTrendDirection(klines4h, swingPoints)
@@ -830,20 +840,27 @@ func (dta *DowTheoryAnalyzer) calculateRSquared(prices []float64) float64 {
 	return math.Max(0, math.Min(1, rSquared))
 }
 
-// determineTrendDirection 确定趋势方向
+// determineTrendDirection 确定趋势方向（道氏理论标准）
 func (dta *DowTheoryAnalyzer) determineTrendDirection(klines []Kline, swingPoints []*SwingPoint) TrendDirection {
-	if len(klines) < 10 {
+	if len(klines) < 30 {
 		return TrendFlat
 	}
 
-	// 基于价格的整体方向
-	recentKlines := klines[len(klines)-10:]
-	priceDirection := (recentKlines[len(recentKlines)-1].Close - recentKlines[0].Open) / recentKlines[0].Open
+	// 使用更长时间窗口进行趋势判断（50根K线，约8天）
+	windowSize := 50
+	if len(klines) < windowSize {
+		windowSize = len(klines)
+	}
+	recentKlines := klines[len(klines)-windowSize:]
+	
+	// 计算长期价格趋势（提高阈值到5%）
+	longTermChange := (recentKlines[len(recentKlines)-1].Close - recentKlines[0].Open) / recentKlines[0].Open
 
-	// 基于摆动点的方向
+	// 基于摆动点的道氏理论判断（更严格的条件）
 	swingDirection := 0.0
-	if len(swingPoints) >= 4 {
-		recentSwings := swingPoints[len(swingPoints)-4:]
+	if len(swingPoints) >= 6 { // 至少需要6个摆动点
+		// 取最近6个摆动点进行分析
+		recentSwings := swingPoints[len(swingPoints)-6:]
 
 		var recentHighs, recentLows []*SwingPoint
 		for _, swing := range recentSwings {
@@ -854,29 +871,58 @@ func (dta *DowTheoryAnalyzer) determineTrendDirection(klines []Kline, swingPoint
 			}
 		}
 
-		if len(recentHighs) >= 2 {
-			if recentHighs[len(recentHighs)-1].Price > recentHighs[0].Price {
-				swingDirection += 0.5
-			} else {
-				swingDirection -= 0.5
+		// 道氏理论：上升趋势 = 高点逐步抬高 + 低点逐步抬高
+		if len(recentHighs) >= 3 && len(recentLows) >= 3 {
+			// 检查高点趋势
+			highTrend := 0.0
+			for i := 1; i < len(recentHighs); i++ {
+				if recentHighs[i].Price > recentHighs[i-1].Price {
+					highTrend += 1.0
+				} else {
+					highTrend -= 1.0
+				}
 			}
-		}
 
-		if len(recentLows) >= 2 {
-			if recentLows[len(recentLows)-1].Price > recentLows[0].Price {
-				swingDirection += 0.5
+			// 检查低点趋势
+			lowTrend := 0.0
+			for i := 1; i < len(recentLows); i++ {
+				if recentLows[i].Price > recentLows[i-1].Price {
+					lowTrend += 1.0
+				} else {
+					lowTrend -= 1.0
+				}
+			}
+
+			// 道氏理论标准：高点和低点都要同向才确认趋势
+			if highTrend > 0 && lowTrend > 0 {
+				swingDirection = 1.0 // 明确上升
+			} else if highTrend < 0 && lowTrend < 0 {
+				swingDirection = -1.0 // 明确下降
 			} else {
-				swingDirection -= 0.5
+				swingDirection = 0.0 // 趋势不明确
 			}
 		}
 	}
 
-	// 综合判断
-	overallDirection := priceDirection*0.6 + swingDirection*0.4
+	// 移动平均确认
+	ma20 := dta.calculateMA(recentKlines, 20)
+	ma50 := dta.calculateMA(klines, 50)
+	currentPrice := recentKlines[len(recentKlines)-1].Close
+	
+	maDirection := 0.0
+	if currentPrice > ma20 && ma20 > ma50 {
+		maDirection = 0.5
+	} else if currentPrice < ma20 && ma20 < ma50 {
+		maDirection = -0.5
+	}
 
-	if overallDirection > 0.02 {
+	// 综合判断（提高权重给道氏摆动点分析）
+	overallDirection := longTermChange*0.3 + swingDirection*0.5 + maDirection*0.2
+
+	// 提高阈值，减少误判
+	if overallDirection > 0.08 { // 8%以上才认为是上升
 		return TrendUp
-	} else if overallDirection < -0.02 {
+	} else if overallDirection < -0.08 { // 8%以下才认为是下降
 		return TrendDown
 	}
 
@@ -988,7 +1034,7 @@ func (dta *DowTheoryAnalyzer) determineTrendQuality(overall, consistency, volume
 	return TrendWeak
 }
 
-// generateTradingSignal 生成交易信号
+// generateTradingSignal 生成交易信号（基于道氏理论，不包含通道）
 func (dta *DowTheoryAnalyzer) generateTradingSignal(klines3m []Kline, currentPrice float64, channel *ParallelChannel,
 	trendStrength *TrendStrength, trendLines []*TrendLine) *TradingSignal {
 
@@ -1001,12 +1047,10 @@ func (dta *DowTheoryAnalyzer) generateTradingSignal(klines3m []Kline, currentPri
 		}
 	}
 
-	// 检查通道信号
-	if channel != nil && channel.Quality > dta.config.ChannelConfig.QualityThreshold {
-		signal := dta.generateChannelSignal(currentPrice, channel, trendStrength)
-		if signal != nil && signal.Confidence >= dta.config.SignalConfig.MinConfidence {
-			return signal
-		}
+	// 优先基于趋势跟随信号（道氏理论核心）
+	trendSignal := dta.generateTrendFollowingSignal(currentPrice, trendStrength, nil)
+	if trendSignal != nil && trendSignal.Confidence >= dta.config.SignalConfig.MinConfidence {
+		return trendSignal
 	}
 
 	// 检查突破信号
@@ -1015,17 +1059,11 @@ func (dta *DowTheoryAnalyzer) generateTradingSignal(klines3m []Kline, currentPri
 		return breakoutSignal
 	}
 
-	// 检查趋势跟随信号
-	trendSignal := dta.generateTrendFollowingSignal(currentPrice, trendStrength, channel)
-	if trendSignal != nil && trendSignal.Confidence >= dta.config.SignalConfig.MinConfidence {
-		return trendSignal
-	}
-
 	// 默认持有信号
 	return &TradingSignal{
 		Action:      ActionHold,
-		Confidence:  50,
-		Description: "当前无明确交易机会，建议持有观望",
+		Confidence:  30, // 降低默认信心度
+		Description: "趋势不明确，建议观望等待明确信号",
 		Timestamp:   time.Now().UnixMilli(),
 	}
 }
@@ -1184,18 +1222,24 @@ func (dta *DowTheoryAnalyzer) generateBreakoutSignal(klines []Kline, currentPric
 	return nil
 }
 
-// generateTrendFollowingSignal 生成趋势跟随信号
+// generateTrendFollowingSignal 生成趋势跟随信号（道氏理论严格标准）
 func (dta *DowTheoryAnalyzer) generateTrendFollowingSignal(currentPrice float64,
 	trendStrength *TrendStrength, channel *ParallelChannel) *TradingSignal {
 
-	if trendStrength.Quality != TrendStrong || trendStrength.Overall < 70 {
+	// 提高趋势跟随的标准
+	if trendStrength.Quality == TrendWeak || trendStrength.Overall < 75 {
+		return nil
+	}
+
+	// 要求更高的一致性
+	if trendStrength.Consistency < 80 {
 		return nil
 	}
 
 	var signal *TradingSignal
-	confidence := trendStrength.Overall * 0.8
+	confidence := math.Min(trendStrength.Overall * 0.9, 95.0) // 最高95%信心度
 
-	if trendStrength.Direction == TrendUp && trendStrength.Consistency > 70 {
+	if trendStrength.Direction == TrendUp && trendStrength.Consistency >= 80 {
 		stopLoss := currentPrice * 0.97
 		takeProfit := currentPrice * 1.05
 
