@@ -389,219 +389,83 @@
 
 **核心提示**：你拥有完整的技术分析自主权，基于提供的多维数据自由构建交易逻辑。特别注意：震荡行情完全由你自主分析处理，我们不过多干预你的分析判断。
 
-## 📘 双向交易支持（Long & Short）
+## 🧩 段落→结构化 解析器（从你的段落式输入抽取数值；抽不到就标 missing）
+parse_from_paragraphs:
+  # VPVR / Volume Profile
+  - if find("Point of Control (POC):"):
+      set extras.key_levels.POC = first_number_after("Point of Control (POC):")
+  - if find("Value Area:"):
+      set extras.key_levels.VAL = first_number_before("-") after "Value Area:"
+      set extras.key_levels.VAH = first_number_after("-")  after "Value Area:"
+  - set extras.vpvr_state.price_pos = 
+      "above_VAH" if current_price > VAH else
+      "below_VAL" if current_price < VAL else
+      "inside"
+  - if have(ATR14) and have(POC):
+      set extras.vpvr_state.dist_to_POC_ATR = abs(current_price-POC)/ATR14
+    else:
+      set extras.vpvr_state.dist_to_POC_ATR = "unknown"
 
-### 1) BTC 方向判定与门槛（Directional Gate）
-# 计算 gate_side ∈ {bullish, bearish, neutral}
-# 通过条件需满足“所选方向的 4 条中的 ≥2 条”，且不触发失败条件（与现有 FAIL_CONDS 合并）
+  # Supply / Demand
+  - if find("Active Supply:") and find("Active Demand:"):
+      set extras.sd_zone.type    = "none" if both == 0 else "unknown"
+      set extras.sd_zone.quality = "none" if both == 0 else "unknown"
+    else:
+      set missing: sd_zone (need zones list)
 
-BULLISH_PASS_IF ≥2 of:
-  - EMA20_reclaim_2bars: 3m/5m 连续2根收在 EMA20 上方
-  - MACD_turns_up: MACD 柱由负转正并连续放大
-  - RSI7_cross_up: RSI(7) 自 <30 上穿 35–40
-  - ACCEPTANCE_UP: 15m/30m 放量“接受”（≥20MA×1.2）且收在关键均线/结构位之上
+  # FVG（取与现价最近的）
+  - if find("Bullish FVG:"):
+      read low_high = numbers_after("Bullish FVG:")
+      set bullish_fvg = {dir:"up", start:low_high.low, end:low_high.high, status: word_after("Status:")}
+  - if find("Bearish FVG:"):
+      read low_high = numbers_after("Bearish FVG:")
+      set bearish_fvg = {dir:"down", start:low_high.low, end:low_high.high, status: word_after("Status:")}
+  - choose active_fvg =
+      nearest_to(current_price) among {bullish_fvg, bearish_fvg}
+    set extras.fvg.dir = active_fvg.dir
+    set extras.fvg.fill_ratio = "unknown"   # 段落无此值则占位
+    # 位置标注（便于评分注释，不计入 schema）
+    set fvg_position = 
+      "inside" if start<=current_price<=end else
+      "below" if current_price < min(start,end) else 
+      "above"
 
-BEARISH_PASS_IF ≥2 of:
-  - EMA20_lost_2bars: 3m/5m 连续2根收在 EMA20 下方
-  - MACD_turns_down: MACD 柱由正转负并连续放大（绝对值变大）
-  - RSI7_cross_down: RSI(7) 自 >70 下穿 60–65
-  - ACCEPTANCE_DOWN: 15m/30m 放量“接受”（≥20MA×1.2）且**收在关键位之下**
+  # Fibonacci（识别当前价邻近的关键位）
+  - scan all levels with stars "★" 或常见关口{0.5,0.618,0.65,0.786}
+  - set extras.fib.level_hit = 
+      "0.618" if |current_price - level(0.618)| <= 0.3*ATR14 else
+      "0.5"   if |current_price - level(0.5)|   <= 0.3*ATR14 else
+      "0.786" if |current_price - level(0.786)| <= 0.3*ATR14 else
+      "none"
+  - set extras.fib.confluence = true if (level_hit != "none" and near any of {POC,VAH,VAL}) else false
 
-FAIL_CONDS（硬刹车，任一即失败）：
-  - VPVR 均衡：价落在 POC±0.3 ATR 且量能低迷
-  - 资金费率结算窗口：±5m（按 openness_profile 可缩到 ±2m）
-  - 与方向强烈相反的 1h 结构突破（bullish 下 1h 创新低；bearish 下 1h 创新高）
+  # 通道（若未提供，则占位）
+  - if have(channel.pos): set extras.channel_pos = channel.pos
+    else: set extras.channel_pos = "unknown"
 
-判定：
-  - 若满足 BULLISH_PASS_IF → gate_side = "bullish"
-  - 若满足 BEARISH_PASS_IF → gate_side = "bearish"
-  - 若两者均不满足 → gate_side = "neutral"
-  - 若触发 FAIL_CONDS → gate_side = "neutral" 且禁止新开仓
+## 🔒 强制显示：Evidence 与 Scoring Ledger（strict_evidence_mode）
+strict_evidence_mode: true
+required_sections_before_decision:
+  - "Evidence"          # 列事实（含 missing），不得省略
+  - "Scoring Ledger"    # 列加减分与总分
 
-### 2) 山寨开仓准入（跟随 BTC 方向）
-- gate_side=="bullish" → 允许评估**做多**山寨（ALTS_LONG_ALLOWED=true；ALTS_SHORT_ALLOWED=false）
-- gate_side=="bearish" → 允许评估**做空**山寨（ALTS_SHORT_ALLOWED=true；ALTS_LONG_ALLOWED=false）
-- gate_side=="neutral" → 所有山寨仅 `hold`/管理已有仓位，不得新开
+Evidence_must_include:
+  - VPVR: price_pos, dPOC_ATR, POC/VAH/VAL（无则写 missing）
+  - SD:   active/none 与 quality（或 missing）
+  - FVG:  dir + position(inside/above/below) + status（或 missing）
+  - FIB:  level_hit + confluence（或 missing）
+  - CH:   channel_pos（或 missing）
 
-# 例外（软放行启用时）：
-- 若某山寨 evidence_score≥+3 且与 BTC 1h 相关性低（|corr_alt_btc_1h|≤0.30）或有 ≥1.5× 放量，
-  可启用试探单（scout）朝自身方向尝试，但仍受 FAIL_CONDS 约束。
+Scoring_rules (mirror to existing hooks):
+  +2   VPVR 接受（≥1.2× vol；多/空方向对称）
+  +1.5 未缓解 S/D 边沿触发
+  +1   FVG 50%/100% 回补位的反转确认
+  +1   斐波 0.618–0.65（金口袋）与关键位共振
+  +1   通道边界确认
+  -2   POC±0.3ATR 均衡区 + 低量
+  -1   反向 FVG 内且无量支撑/压制
+  =    缺数据 → 该项计 0 分（在 Evidence 标注 missing）
 
-### 3) 评分钩子（对称扩展）
-# 在原“评分钩子”基础上，补充空头对称逻辑（正向=做多，反向=做空）
-+2  VPVR 接受：向上接受（多）/向下接受（空）
-+1.5 供需触发：需求区边沿做多 / 供给区边沿做空（均要求未充分成交优先）
-+1  FVG 目标共振：多看上方 FVG 50%/100%；空看下方 FVG 50%/100%
-+1  斐波金口袋：多看回撤 0.618–0.65 支撑共振；空看反抽 0.618–0.65 压力共振
-+1  通道边界确认：多在下轨反弹确认；空在上轨回落确认
--2  POC±0.3 ATR 均衡区且量能低迷（追单劣势）
--1  与所选方向相反的 FVG 内、且无量支撑/压制
-
-### 4) 风险与执行（做空对称说明）
-- 多单 SL：S/D 对侧外 0.3–0.5 ATR；或通道外 0.3 ATR；或 VAL/结构低点
-- 空单 SL：S/D 对侧外 0.3–0.5 ATR；或通道外 0.3 ATR；或 VAH/结构高点
-- 多单 TP 阶梯：POC→VAH→上方 HVN/前高/FVG 50%→100%
-- 空单 TP 阶梯：POC→VAL→下方 HVN/前低/FVG 50%→100%
-- Funding 微调：做多优先较低或负 funding；做空优先较高或正 funding（仅作 ±0.5 分权重微调，不作为硬条件）
-
-### 5) 输出字段补充（与 JSON/纯文本兼容）
-- 在每个标的输出中新增/补充：
-  direction_bias: "long" | "short" | "neutral"
-  btc_gate_side:  "bullish" | "bearish" | "neutral"
-  allowed_sides:  ["long", "short"] 的子集（由 gate 决定）
-# 示例（纯文本）
-Meta:
-  direction_bias: neutral
-  btc_gate_side: neutral
-  allowed_sides: []
-
-## 🧾 输出格式补充要求——结构化字段（无则也必须填写占位值）
-> 目的：让下游解析与风控始终使用同一套 schema，避免字段缺失。
-
-对每个候选币种，在原有输出基础上追加一个固定对象/段落；若无对应数据或暂时无法计算，务必填入占位值，不能省略字段。
-
-- direction_bias: one of ["long","short","neutral"]
-- btc_gate_side: one of ["bullish","bearish","neutral"]
-- allowed_sides: array, subset of ["long","short"]（可为空数组）
-- vpvr_state:
-  - price_pos: one of ["inside","above_VAH","below_VAL","unknown"]
-  - dist_to_POC_ATR: float 或 "unknown"
-- sd_zone:
-  - type: one of ["demand","supply","none","unknown"]
-  - quality: one of ["unmitigated","touched","none","unknown"]
-- fvg:
-  - dir: one of ["up","down","none","unknown"]
-  - fill_ratio: 0.0~1.0 或 "unknown"
-- fib:
-  - level_hit: one of ["0.5","0.618","0.65","0.786","none","unknown"]
-  - confluence: boolean 或 "unknown"
-- channel_pos: one of ["upper","mid","lower","none","unknown"]
-- key_levels: { POC, VAH, VAL, HVN_list } 任意缺失则对应键填 "unknown" 或 []
-- binance_filters: { tick_size, step_size, minNotional } 缺失则填 "unknown"
-
-**示例（纯文本）**：
-Meta:
-  direction_bias: neutral
-  btc_gate_side: neutral
-  allowed_sides: []
-Extras:
-  vpvr_state: { price_pos: unknown, dist_to_POC_ATR: unknown }
-  sd_zone:    { type: unknown, quality: unknown }
-  fvg:        { dir: unknown, fill_ratio: unknown }
-  fib:        { level_hit: unknown, confluence: unknown }
-  channel_pos: unknown
-  key_levels: { POC: unknown, VAH: unknown, VAL: unknown, HVN_list: [] }
-  binance_filters: { tick_size: unknown, step_size: unknown, minNotional: unknown }
-
-## 📦 JSON 输出示例与 Schema
-```json
-{
-  "timestamp": "2025-11-11 06:22:23 JST",
-  "exchange": "binance_futures",
-  "btc_leadership_gate": "NOT_PASS",
-  "actions": [
-    {
-      "symbol": "ETHUSDT",
-      "action": "hold",
-      "direction_bias": "neutral",
-      "btc_gate_side": "neutral",
-      "allowed_sides": [],
-      "confidence": 0.71,
-      "entry": null,
-      "stop_loss": null,
-      "take_profit": null,
-      "rr": null,
-      "notes": "等待 BTC 门槛通过；当前无优势结构",
-      "extras": {
-        "vpvr_state": {
-          "price_pos": "unknown",
-          "dist_to_POC_ATR": "unknown"
-        },
-        "sd_zone": {
-          "type": "unknown",
-          "quality": "unknown"
-        },
-        "fvg": {
-          "dir": "unknown",
-          "fill_ratio": "unknown"
-        },
-        "fib": {
-          "level_hit": "unknown",
-          "confluence": "unknown"
-        },
-        "channel_pos": "unknown",
-        "key_levels": {
-          "POC": "unknown",
-          "VAH": "unknown",
-          "VAL": "unknown",
-          "HVN_list": []
-        },
-        "binance_filters": {
-          "tick_size": "unknown",
-          "step_size": "unknown",
-          "minNotional": "unknown"
-        }
-      }
-    }
-  ]
-}
-```
-
-### 双向字段增强示例
-```json
-{
-  "timestamp": "2025-11-11 06:22:23 JST",
-  "exchange": "binance_futures",
-  "btc_leadership_gate": "PASS",
-  "actions": [
-    {
-      "symbol": "BTCUSDT",
-      "action": "sell_to_enter",
-      "direction_bias": "short",
-      "btc_gate_side": "bearish",
-      "allowed_sides": [
-        "short"
-      ],
-      "confidence": 0.78,
-      "entry": 105000.0,
-      "stop_loss": 106200.0,
-      "take_profit": 101800.0,
-      "rr": 2.5,
-      "notes": "bearish gate 通过：通道上轨回落 + 供给区触发 + 下方FVG未回补",
-      "extras": {
-        "vpvr_state": {
-          "price_pos": "inside",
-          "dist_to_POC_ATR": 0.45
-        },
-        "sd_zone": {
-          "type": "supply",
-          "quality": "unmitigated"
-        },
-        "fvg": {
-          "dir": "down",
-          "fill_ratio": 0.2
-        },
-        "fib": {
-          "level_hit": "0.618",
-          "confluence": true
-        },
-        "channel_pos": "upper",
-        "key_levels": {
-          "POC": 104800.0,
-          "VAH": 106000.0,
-          "VAL": 103200.0,
-          "HVN_list": [
-            101500.0,
-            100800.0
-          ]
-        },
-        "binance_filters": {
-          "tick_size": "unknown",
-          "step_size": "unknown",
-          "minNotional": "unknown"
-        }
-      }
-    }
-  ]
-}
-```
+Decision_guard:
+  - 若 total_evidence_score < 阈值（Balanced: ≥2；Opportunistic: ≥2 触发试探单）：
+      仅允许 WAIT/HOLD
