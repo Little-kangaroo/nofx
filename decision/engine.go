@@ -502,14 +502,24 @@ func findMatchingBracket(s string, start int) int {
 
 // validateDecision 验证单个决策的有效性
 func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
-	// 验证action
+	// 验证action并标准化动作名称
 	validActions := map[string]bool{
-		"open_long":   true,
-		"open_short":  true,
-		"close_long":  true,
-		"close_short": true,
-		"hold":        true,
-		"wait":        true,
+		"open_long":     true,
+		"open_short":    true,
+		"close_long":    true,
+		"close_short":   true,
+		"hold":          true,
+		"wait":          true,
+		"buy_to_enter":  true,  // 兼容提示词模板中的动作名
+		"sell_to_enter": true,  // 兼容提示词模板中的动作名
+	}
+
+	// 标准化动作名称
+	switch d.Action {
+	case "buy_to_enter":
+		d.Action = "open_long"
+	case "sell_to_enter":
+		d.Action = "open_short"
 	}
 
 	if !validActions[d.Action] {
