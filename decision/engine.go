@@ -542,6 +542,12 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		if d.PositionSizeUSD <= 0 {
 			return fmt.Errorf("仓位大小必须大于0: %.2f", d.PositionSizeUSD)
 		}
+		
+		// 验证保证金是否充足
+		requiredMargin := d.PositionSizeUSD / float64(d.Leverage)
+		if requiredMargin > accountEquity {
+			return fmt.Errorf("保证金不足: 需要%.2f USDT，账户净值仅%.2f USDT", requiredMargin, accountEquity)
+		}
 		// 验证仓位价值上限（加1%容差以避免浮点数精度问题）
 		tolerance := maxPositionValue * 0.01 // 1%容差
 		if d.PositionSizeUSD > maxPositionValue+tolerance {
