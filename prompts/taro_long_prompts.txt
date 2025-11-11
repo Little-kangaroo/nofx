@@ -389,370 +389,103 @@
 
 **核心提示**：你拥有完整的技术分析自主权，基于提供的多维数据自由构建交易逻辑。特别注意：震荡行情完全由你自主分析处理，我们不过多干预你的分析判断。
 
-## 🧩 段落→结构化 解析器（从你的段落式输入抽取数值；抽不到就标 missing）
-parse_from_paragraphs:
-  # VPVR / Volume Profile
-  - if find("Point of Control (POC):"):
-      set extras.key_levels.POC = first_number_after("Point of Control (POC):")
-  - if find("Value Area:"):
-      set extras.key_levels.VAL = first_number_before("-") after "Value Area:"
-      set extras.key_levels.VAH = first_number_after("-")  after "Value Area:"
-  - set extras.vpvr_state.price_pos = 
-      "above_VAH" if current_price > VAH else
-      "below_VAL" if current_price < VAL else
-      "inside"
-  - if have(ATR14) and have(POC):
-      set extras.vpvr_state.dist_to_POC_ATR = abs(current_price-POC)/ATR14
-    else:
-      set extras.vpvr_state.dist_to_POC_ATR = "unknown"
+## 🧨 爆仓保护（硬性，不影响已存在的SL/风控）
+# 目的：延长持仓≠放宽风险；任何时候都保持硬止损在位，并确保强平价距离足够远。
+# 依赖上游或可计算字段：liquidation_price、ATR14、maint_margin_ratio。缺失则跳过对应检查（不影响下单）。
 
-  # Supply / Demand
-  - if find("Active Supply:") and find("Active Demand:"):
-      set extras.sd_zone.type    = "none" if both == 0 else "unknown"
-      set extras.sd_zone.quality = "none" if both == 0 else "unknown"
-    else:
-      set missing: sd_zone (need zones list)
+liq_gap_guard:
+  min_gap_ATR14: 2.0                # 要求 SL 到强平至少 2*ATR14 的安全距离
+  check_on: ["preflight","after_fill"]
+  on_breach: "reduce_qty_or_skip"   # 先减仓；仍不足就跳过
 
-  # FVG（取与现价最近的）
-  - if find("Bullish FVG:"):
-      read low_high = numbers_after("Bullish FVG:")
-      set bullish_fvg = {dir:"up", start:low_high.low, end:low_high.high, status: word_after("Status:")}
-  - if find("Bearish FVG:"):
-      read low_high = numbers_after("Bearish FVG:")
-      set bearish_fvg = {dir:"down", start:low_high.low, end:low_high.high, status: word_after("Status:")}
-  - choose active_fvg =
-      nearest_to(current_price) among {bullish_fvg, bearish_fvg}
-    set extras.fvg.dir = active_fvg.dir
-    set extras.fvg.fill_ratio = "unknown"   # 段落无此值则占位
-    # 位置标注（便于评分注释，不计入 schema）
-    set fvg_position = 
-      "inside" if start<=current_price<=end else
-      "below" if current_price < min(start,end) else 
-      "above"
+hard_stop_policy:
+  place_on_fill_ms: 500
+  order_type: "STOP_MARKET"
+  working_type: "MARK_PRICE"        # 用标记价触发，防止瞬时插针
+  reduce_only: true
+  tif: "GTC"
+  retry: { times: 3, backoff_ms: 400 }
+  never_widen: true                 # 禁止把 SL 朝不利方向外移
 
-  # Fibonacci（识别当前价邻近的关键位）
-  - scan all levels with stars "★" 或常见关口{0.5,0.618,0.65,0.786}
-  - set extras.fib.level_hit = 
-      "0.618" if |current_price - level(0.618)| <= 0.3*ATR14 else
-      "0.5"   if |current_price - level(0.5)|   <= 0.3*ATR14 else
-      "0.786" if |current_price - level(0.786)| <= 0.3*ATR14 else
-      "none"
-  - set extras.fib.confluence = true if (level_hit != "none" and near any of {POC,VAH,VAL}) else false
+stop_watchdog:
+  verify_every_sec: 5
+  require_exists: ["STOP_MARKET_reduceOnly"]
+  if_missing: "market_close_reduceOnly"
+  log_preflight_snapshot: true
 
-  # 通道（若未提供，则占位）
-  - if have(channel.pos): set extras.channel_pos = channel.pos
-    else: set extras.channel_pos = "unknown"
+emergency_kill_switch:
+  trigger_if:
+    - distance_to_liq_ATR14 <= 1.2
+    - maint_margin_ratio >= 0.8
+  action: "market_close_reduceOnly_all"
+  note: "仅在极端异常时触发；与常规SL并行存在"
 
-## 🔒 强制显示：Evidence 与 Scoring Ledger（strict_evidence_mode）
-strict_evidence_mode: true
-required_sections_before_decision:
-  - "Evidence"          # 列事实（含 missing），不得省略
-  - "Scoring Ledger"    # 列加减分与总分
+## ⚙️ 动态杠杆计算（按余额/费用/最小交易量自适应）
+# 目标：根据余额、费用、最小交易量和风险下单量，自动计算每个标的的目标杠杆，最大化“下单成功率”。
+# 与“🛡️ Binance 下单预检 / 失败降级链”联动：动态杠杆先给出合理 L_target，预检仍可降数量/抬杠杆/跳过。
 
-Evidence_must_include:
-  - VPVR: price_pos, dPOC_ATR, POC/VAH/VAL（无则写 missing）
-  - SD:   active/none 与 quality（或 missing）
-  - FVG:  dir + position(inside/above/below) + status（或 missing）
-  - FIB:  level_hit + confluence（或 missing）
-  - CH:   channel_pos（或 missing）
+dynamic_leverage:
+  enabled: true
+  mode: "min_qty"        # 可选：min_qty | risk_qty | auto
+  safety_factor: 1.25    # 安全系数（对 L_min 放大，留冗余）
+  floor: 5               # 杠杆下限
+  ceiling: 20            # 杠杆上限（不超过 filters.max_leverage）
+  respect_liq_guard: true          # 若有强平距离检查，优先保留距离（必要时减仓而非继续抬杠杆）
+  bind_to_preflight: true          # 把计算结果写回 leverage_policy.target，并进入预检流程
 
-Scoring_rules (mirror to existing hooks):
-  +2   VPVR 接受（≥1.2× vol；多/空方向对称）
-  +1.5 未缓解 S/D 边沿触发
-  +1   FVG 50%/100% 回补位的反转确认
-  +1   斐波 0.618–0.65（金口袋）与关键位共振
-  +1   通道边界确认
-  -2   POC±0.3ATR 均衡区 + 低量
-  -1   反向 FVG 内且无量支撑/压制
-  =    缺数据 → 该项计 0 分（在 Evidence 标注 missing）
+# —— 计算逻辑（由模型按此伪代码执行）——
+dynamic_leverage_compute:
+  inputs:
+    - available_balance = B
+    - entry_price = P
+    - qty_risk_from_strategy (可无)
+    - filters: {tick_size, step_size, min_qty, min_notional, max_leverage}
+    - fees_and_buffers: {taker_fee=f, slippage_pct=s, reserve_pct=rp, max_init_margin_pct=mip}
 
-Decision_guard:
-  - 若 total_evidence_score < 阈值（Balanced: ≥2；Opportunistic: ≥2 触发试探单）：
-      仅允许 WAIT/HOLD
+  helpers:
+    - qty_min := max(min_qty, min_notional / P)
+    - notional(q) := P * q * (1 + s)
+    - init_cap := min(B * (1 - rp), B * mip)   # 单笔初始保证金上限
+    - L_min_for(q) := notional(q) / (init_cap - notional(q) * f)
 
-## 🧭 领导力模式开关（无 BTC 领导，逐标的独立判定）
-# 目的：取消“BTC 领导门槛”，改为“每个标的独立判断开仓与多空方向”。
+  modes:
+    - if mode == "min_qty":
+        q0 := qty_min
+    - if mode == "risk_qty" and qty_risk_from_strategy exists:
+        q0 := max(qty_risk_from_strategy, qty_min)
+      else:
+        q0 := qty_min
+    - if mode == "auto":
+        # 先尝试 risk_qty，若 L_min_for(q_risk) 超出 ceiling，则降级为 min_qty
+        if qty_risk_from_strategy exists:
+          if L_min_for(max(qty_risk_from_strategy, qty_min)) <= ceiling:
+            q0 := max(qty_risk_from_strategy, qty_min)
+          else:
+            q0 := qty_min
+        else:
+          q0 := qty_min
 
-leadership_mode: none | btc_leads
-# 默认：none
-# - none：每个标的使用 SYMBOL_GATE 判定（见下）；不再依赖 BTC。
-# - btc_leads：沿用原“BTC 领导门槛 + 山寨准入”逻辑（兼容保留）。
+  compute:
+    - L_min := ceil( safety_factor * L_min_for(q0) )
+    - L_target_raw := clamp(L_min, floor, ceiling, filters.max_leverage)
+    - if respect_liq_guard:
+        # 若可获得 liquidation_price/ATR14，则优先降低数量以满足 liq_gap_guard；
+        # 不再继续抬 L，避免强平距离过近。
+        apply_liq_gap_guard_preference := true
 
-when leadership_mode == "none":
-  ### 1) 每标的方向门槛（SYMBOL_GATE）
-  # 对任意 symbol（含 BTC/ETH/…）独立计算 gate_side ∈ {bullish, bearish, neutral}
-  BULLISH_PASS_IF ≥2 of:
-    - EMA20_reclaim_2bars: 3m/5m 连续2根收在 EMA20 上方
-    - MACD_turns_up: MACD 柱由负转正并连续放大
-    - RSI7_cross_up: RSI(7) 自 <30 上穿 35–40
-    - ACCEPTANCE_UP: 15m/30m 放量“接受”（≥20MA×1.2）且收在关键均线/结构位之上
-  BEARISH_PASS_IF ≥2 of:
-    - EMA20_lost_2bars: 3m/5m 连续2根收在 EMA20 下方
-    - MACD_turns_down: MACD 柱由正转负并连续放大（绝对值变大）
-    - RSI7_cross_down: RSI(7) 自 >70 下穿 60–65
-    - ACCEPTANCE_DOWN: 15m/30m 放量“接受”（≥20MA×1.2）且收在关键位之下)
-  FAIL_CONDS（硬刹车，任一即失败）
-    - VPVR 均衡：价落在 POC±0.3ATR 且量能低迷
-    - 资金费率结算窗口：±{FUNDING_BLOCK_WINDOW}（由 openness_profile 决定）
-    - 与方向强烈相反的 1h 结构突破（多向下：1h 创新低；空向上：1h 创新高）
-  判定：
-    - 满足 BULLISH_PASS_IF → symbol_gate_side="bullish"
-    - 满足 BEARISH_PASS_IF → symbol_gate_side="bearish"
-    - 两者均不满足或触发 FAIL → symbol_gate_side="neutral"
+  bind:
+    - leverage_policy.target := L_target_raw
+    - leverage_policy.max_raise := max(leverage_policy.max_raise or ceiling, L_target_raw)
+    - 在 preflight 中优先使用该 target；若仍无法通过，则按 fallback_chain 处理（先减数量，再抬杠杆至上限，仍不行则跳过）。
 
-  ### 2) 准入与方向
-  allowed_sides :=
-    - ["long"]  if symbol_gate_side=="bullish"
-    - ["short"] if symbol_gate_side=="bearish"
-    - []        if symbol_gate_side=="neutral"
-  # 软放行（若启用）依旧可在证据强且不触发 FAIL 时用试探单突破 neutral（见软放行规则）。
-
-  ### 3) 决策守则
-  - 若 strict_evidence_mode=true：必须先输出 Evidence + Scoring Ledger；
-  - Balanced：若 evidence_score≥2 且 CONF≥0.75 且 RR≥2.0 且 allowed_sides≠[] → 允许开仓；
-  - Opportunistic（试探单）：若 evidence_score≥2 且 CONF≥0.72 且 RR≥1.8 → 允许用 scout_entry；
-  - Conservative：相应提高阈值（如 CONF≥0.85、RR≥2.2）。
-
-when leadership_mode == "btc_leads":
-  # 兼容旧逻辑：维持“BTC 领导门槛 + 山寨准入”。（若你想彻底弃用，可忽略本分支）
-  pass
-
-### 独立判定示例（leadership_mode=none）
-```json
-{
-  "timestamp": "2025-11-11 07:05:27 JST",
-  "exchange": "binance_futures",
-  "leadership_mode": "none",
-  "openness_profile": "Balanced",
-  "actions": [
-    {
-      "symbol": "BTCUSDT",
-      "action": "sell_to_enter",
-      "direction_bias": "short",
-      "symbol_gate_side": "bearish",
-      "confidence": 0.77,
-      "entry": 105000.0,
-      "stop_loss": 106150.0,
-      "take_profit": 101900.0,
-      "rr": 2.4,
-      "evidence_score": 3.0,
-      "use_scout_entry": false,
-      "notes": "SYMBOL_GATE(bearish) 通过：EMA20下方两连、MACD转负放大、15m放量接受。",
-      "extras": {
-        "vpvr_state": {
-          "price_pos": "inside",
-          "dist_to_POC_ATR": 0.55
-        },
-        "sd_zone": {
-          "type": "supply",
-          "quality": "unmitigated"
-        },
-        "fvg": {
-          "dir": "down",
-          "fill_ratio": 0.25
-        },
-        "fib": {
-          "level_hit": "0.618",
-          "confluence": true
-        },
-        "channel_pos": "upper",
-        "key_levels": {
-          "POC": 104800.0,
-          "VAH": 106000.0,
-          "VAL": 103200.0,
-          "HVN_list": [
-            102000.0
-          ]
-        },
-        "binance_filters": {
-          "tick_size": "unknown",
-          "step_size": "unknown",
-          "minNotional": "unknown"
-        }
-      }
-    },
-    {
-      "symbol": "SOLUSDT",
-      "action": "buy_to_enter",
-      "direction_bias": "long",
-      "symbol_gate_side": "bullish",
-      "confidence": 0.76,
-      "entry": 170.4,
-      "stop_loss": 166.9,
-      "take_profit": 177.8,
-      "rr": 2.0,
-      "evidence_score": 2.5,
-      "use_scout_entry": false,
-      "notes": "SYMBOL_GATE(bullish) 通过：EMA20重获两连 + FVG50%回补反转 + 斐波金口袋共振。",
-      "extras": {
-        "vpvr_state": {
-          "price_pos": "inside",
-          "dist_to_POC_ATR": 0.4
-        },
-        "sd_zone": {
-          "type": "demand",
-          "quality": "unmitigated"
-        },
-        "fvg": {
-          "dir": "up",
-          "fill_ratio": 0.45
-        },
-        "fib": {
-          "level_hit": "0.65",
-          "confluence": true
-        },
-        "channel_pos": "lower",
-        "key_levels": {
-          "POC": "unknown",
-          "VAH": "unknown",
-          "VAL": "unknown",
-          "HVN_list": []
-        },
-        "binance_filters": {
-          "tick_size": "unknown",
-          "step_size": "unknown",
-          "minNotional": "unknown"
-        }
-      }
-    }
-  ]
-}
-```
-
-## 🧱 结构优先决策框架（必须参考 VPVR / 供需区 / FVG / 斐波 / 通道）
-# 目标：是否开仓 & 方向判定必须参考结构证据；动量仅作辅助。
-# 适用于 leadership_mode == "none"（逐标的独立判定）。
-
-### A) 结构分（structure_score_*）与击中数（structural_hits_*）
-# 每个模块只在“被触发/被命中”时计入对应方向的结构分；否则 0 分。
-# 同时统计命中数量 structural_hits_long/short，便于设定最低命中数门槛。
-
-STRUCT_LONG_HOOKS:
-  +2  VPVR 接受向上（15m/30m 量≥20MA×1.2，且收在 VAH/关键位之上）
-  +1.5  未缓解 Demand 边沿触发（距离 ≤0.5×ATR）
-  +1  FVG 多头：位于/回踩上行FVG 50%/100% 并出现反转确认
-  +1  斐波金口袋：0.618–0.65 回撤 + 关键位共振（POC/VAH/结构）
-  +1  通道下轨反弹确认；或上破通道后回测接受
-  -2  均衡惩罚：落在 POC±0.3 ATR 且量能低迷（追多劣势）
-
-STRUCT_SHORT_HOOKS（空头对称）：
-  +2  VPVR 接受向下（量≥1.2×且收在 VAL/关键位之下）
-  +1.5  未缓解 Supply 边沿触发（≤0.5×ATR）
-  +1  FVG 空头：位于/反抽下行FVG 50%/100% 并出现反转确认
-  +1  斐波金口袋：反抽至 0.618–0.65 + 压力共振（VAH/结构）
-  +1  通道上轨回落确认；或下破通道后回测接受
-  -2  均衡惩罚（与上面对称）
-
-说明：以上与“📑 指标证据与评分钩子”的加减分一致；可以直接把 evidence_score 视为所选方向的结构分（含惩罚）。
-若需要区分多空两侧的结构分，可在内部同时计算 `structure_score_long/short` 与 `structural_hits_long/short`。
-
-### B) 动量分（momentum_score_*）——仅作辅助，不可单独开仓
-MOMENTUM_LONG:
-  +1  EMA20 重获两连（3m/5m）
-  +1  MACD 柱连续3根上行（可仍为负）或转正
-  +1  RSI7 自<30 上穿≥35
-  +1.5  15m/30m 放量上行“接受”
-
-MOMENTUM_SHORT（对称）：
-  +1  EMA20 失守两连（3m/5m）
-  +1  MACD 柱连续3根下行（可仍为正）或转负
-  +1  RSI7 自>70 下穿≤65
-  +1.5  15m/30m 放量下行“接受”
-
-### C) 方向投票与综合分
-direction_votes:
-  long  += 1 if 结构分_long > 结构分_short
-  short += 1 if 结构分_short > 结构分_long
-  long  += 1 if 动量分_long > 动量分_short
-  short += 1 if 动量分_short > 动量分_long
-
-total_long  = structure_score_long  + 0.8 * momentum_score_long
-total_short = structure_score_short + 0.8 * momentum_score_short
-direction_bias = argmax(total_long, total_short, tie -> neutral)
-
-### D) 硬性守则（Structure-First Guard）
-# 无论动量多强，若缺少结构触发，则禁止开仓。
-openness_profile gates:
-  Opportunistic:
-    structural_min_hits := 1
-    structural_min_score := 1.5
-  Balanced:
-    structural_min_hits := 2
-    structural_min_score := 2.0
-  Conservative:
-    structural_min_hits := 3
-    structural_min_score := 2.5
-
-ENTRY_RULE:
-  - 必须先完成 Evidence & Scoring Ledger；
-  - 选定方向 d ∈ {long, short}：
-      require structural_hits_d ≥ structural_min_hits
-      require structure_score_d ≥ structural_min_score   # 等价于 evidence_score ≥ 门槛
-      require CONF ≥ {0.72, 0.75, 0.85}   # 随模式
-      require RR   ≥ {1.8, 2.0, 2.2}
-  - 若任一不满足 → 仅 WAIT/HOLD；允许输出“观察清单/预触发价格”。
-
-### E) 输出（新增建议字段）
-- structure_score: 对所选方向的结构分（等同 evidence_score 或其子集）
-- momentum_score: 对所选方向的动量分
-- structural_hits: 命中的结构钩子数量（整数）
-- direction_votes: {"long": n1, "short": n2}
-# 注：这些字段为可选增强，便于回测与解释；若不输出，至少保证 evidence_score 已按结构规则计算。
-
-## 👀 观察清单（自动生成）
-# 目标：把可触发入场/加码/减仓的关键结构位自动列成清单，并给出“还差多少”的量化距离。
-# 触发逻辑依赖 VPVR / S&D / FVG / FIB / Channel（结构优先）。
-
-watchlist_generation_rules:
-  inputs_required:
-    - current_price
-    - ATR14（来自 Longer‑term context 的 14‑Period ATR；若缺，用 3‑Period ATR 近似）
-    - VPVR: POC / VAH / VAL（缺则 unknown）
-    - FVG: 每个 active FVG 的 {dir, start, end, status, fill_ratio?}
-    - FIB: 最近一个工作波段的 {0.5, 0.618, 0.65, 0.786}（缺则标 unknown）
-    - Channel: {pos, broken, retest_accept}（缺则 unknown）
-
-  compute_helpers:
-    - dist_abs(p) := |current_price - p|
-    - dist_atr(p) := dist_abs(p) / ATR14
-    - fvg50(fvg) := (fvg.start + fvg.end) / 2
-    - fib_pocket := {0.618, 0.65}（若两者都存在则同时输出两条触发项）
-
-  items_to_emit_per_symbol (示例枚举；不存在则跳过或 price=unknown):
-    - VPVR_POC_break_up:     side=either,  price=POC, cond="上破并在15/30m以≥1.2×量接受"
-    - VPVR_VAL_reject_long:  side=long,    price=VAL, cond="刺破VAL后收回/接受（≥1.2×量）"
-    - VPVR_VAH_reject_short: side=short,   price=VAH, cond="刺穿VAH后收回/接受（≥1.2×量）"
-
-    - FVG50_bull:            side=long,    price=fvg50(bullish_nearest), cond="回踩FVG50并出现反转确认/接受"
-    - FVG100_bull:           side=long,    price=bullish_nearest.start,  cond="完全回补后反转/接受"
-    - FVG50_bear:            side=short,   price=fvg50(bearish_nearest), cond="反抽FVG50后转弱并接受"
-    - FVG100_bear:           side=short,   price=bearish_nearest.end,    cond="完全回补后转弱并接受"
-
-    - FIB_0618_long:         side=long,    price=fib.0_618, cond="与POC/结构位共振，出现反转确认"
-    - FIB_0650_long:         side=long,    price=fib.0_65,  cond="与POC/结构位共振，出现反转确认"
-    - FIB_0618_short:        side=short,   price=fib.0_618, cond="反抽至0.618形成压制并接受"
-    - FIB_0650_short:        side=short,   price=fib.0_65,  cond="反抽至0.65形成压制并接受"
-
-    - CH_lower_rebound:      side=long,    price=channel.lower, cond="下轨反弹确认"
-    - CH_upper_fade:         side=short,   price=channel.upper, cond="上轨回落确认"
-    - CH_break_retest_up:    side=long,    price=channel.break_retest_up,   cond="上破通道后回测接受"
-    - CH_break_retest_down:  side=short,   price=channel.break_retest_down, cond="下破通道后回测接受"
-
-  output_requirements:
-    - 每个 watchlist item 必须包含：label, type, side, price, dist_abs, dist_atr, condition, urgency
-    - urgency := "near" if dist_atr <= 0.3
-                "mid"  if 0.3 < dist_atr <= 0.8
-                "far"  if dist_atr  > 0.8
-    - 若 price 缺失 → price="unknown", dist_*="unknown"
-    - Watchlist 必须按 side 与 urgency 分组排序：先多/空各自的 near → mid → far
-
-# 文本输出模板（示例）
-Watchlist:
-  LONG
-    - FVG50_bull @ 102,783  (Δ=2,268 | 1.60 ATR): 回踩FVG50并出现反转确认/接受
-    - FIB_0.618 @ 100,098   (Δ=4,953 | 3.49 ATR): 与POC/结构位共振，出现反转确认
-  SHORT
-    - FVG50_bear @ 108,729  (Δ=3,679 | 2.60 ATR): 反抽FVG50后转弱并接受
-    - VPVR_VAH_reject @ 110,171 (Δ=5,120 | 3.61 ATR): 刺穿VAH后收回/接受（≥1.2×量）
+# —— 输出回显（写入 actions[].extras.leverage_calc）——
+dynamic_leverage_output_requirements:
+  must_include:
+    - mode_used, safety_factor, floor, ceiling
+    - qty_min, qty_risk_from_strategy
+    - notional_min, init_cap
+    - L_min_minQty, L_min_riskQty (若有)
+    - L_target_raw, clamped: {by_floor, by_ceiling, by_filters_max}
+    - used_in_order: true/false, note
 
 
