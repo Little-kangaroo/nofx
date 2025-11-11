@@ -488,4 +488,176 @@ dynamic_leverage_output_requirements:
     - L_target_raw, clamped: {by_floor, by_ceiling, by_filters_max}
     - used_in_order: true/false, note
 
+## 🛡️ Binance 下单预检（避免 -2019 保证金不足）
+# 目的：在发单前做额度/精度/杠杆/占保证金检查；必要时自动降级（先减数量→再抬杠杆→仍不行跳过）。
+# 适配：Binance USDT-M 线性永续；逐标的独立；与结构优先/观察清单/持仓档位兼容。
+
+binance_preflight:
+  filters:
+    tick_size: "0.1"
+    step_size: "0.001"
+    min_qty: "0.001"
+    min_notional: "5"
+    max_leverage: 50
+
+  fees_and_buffers:
+    taker_fee: 0.0005
+    slippage_pct: 0.0005
+    reserve_pct: 0.20
+    max_init_margin_pct: 0.40
+    mm_buffer: 0.00
+
+  bracket_order_rules:
+    place_after_fill: true
+    reduce_only_for_exit: true
+    hedge_mode_safe: true
+
+  leverage_policy:
+    target: 8
+    auto_raise_to_meet_min_qty: true
+    max_raise: 20
+    margin_type: "ISOLATED"
+
+  rounding:
+    qty: "floor_to_step"
+    price: "round_to_tick"
+
+  fallback_chain:
+    - "reduce_qty_to_balance_limit"
+    - "raise_leverage_within_limit"
+    - "skip_symbol_if_still_below_min_qty"
+
+preflight_compute:
+  inputs:
+    - available_balance
+    - entry_price
+    - qty_risk_from_strategy
+    - filters, fees_and_buffers, leverage_policy, rounding
+  steps:
+    - qty_min := max(min_qty, min_notional / entry_price)
+    - qty_risk := max(qty_risk_from_strategy, qty_min)
+    - qty_round := floor(qty_risk / step_size) * step_size
+    - notional := entry_price * qty_round * (1 + slippage_pct)
+    - init_margin_est := (notional / leverage_target) * (1 + mm_buffer) + notional * taker_fee
+    - balance_cap := available_balance * (1 - reserve_pct)
+    - init_cap := min(balance_cap, available_balance * max_init_margin_pct)
+    - if init_margin_est > init_cap:
+        * qty_max_by_balance := floor( ((init_cap - notional*taker_fee) * leverage_target / entry_price) / step_size ) * step_size
+        * qty_round := min(qty_round, qty_max_by_balance)
+        * if qty_round < qty_min and auto_raise_to_meet_min_qty:
+            - while leverage_target < max_raise and leverage_target < filters.max_leverage:
+                leverage_target += 1
+                notional_min := entry_price * qty_min * (1 + slippage_pct)
+                init_margin_min := (notional_min / leverage_target) * (1 + mm_buffer) + notional_min * taker_fee
+                if init_margin_min <= init_cap:
+                  qty_round := qty_min
+                  break
+            - if qty_round < qty_min: FAIL reason="insufficient_balance_for_min_qty_under_limits"
+    - entry_price_rounded := round_to_tick(entry_price, tick_size)
+    - qty_final := floor_to_step(qty_round, step_size)
+    - PASS: send entry only; after filled, place reduceOnly exits (SL/TP)
+
+preflight_output_requirements:
+  must_include:
+    - available_balance, entry_price_raw, tick_size, step_size, min_qty, min_notional
+    - target_leverage, leverage_used, qty_risk, qty_final
+    - init_margin_est, balance_cap, pass, reason_if_failed
+    - notes: "SL/TP placed after fill with reduceOnly"
+
+## 🧭 持仓管理档位（延长持仓时间）
+position_management_profile: Scalp | Swing | Trend   # 默认：Swing（推荐）
+
+when position_management_profile == "Scalp":
+  be_trigger_R:         0.8
+  be_buffer_ATR:        0.15
+  trail_mode:           "chandelier"
+  trail_start_R:        1.2
+  trail_atr_tf:         "5m"
+  trail_atr_mult:       2.0
+  min_time_in_trade_min: 20
+  ttl_max_hours:        2
+  tp_ladder:            [{R:1.0, pct:0.35}, {R:1.8, pct:0.35}, {R:3.0, pct:0.30}]
+
+when position_management_profile == "Swing":
+  be_trigger_R:         1.5
+  be_buffer_ATR:        0.25
+  trail_mode:           "chandelier"
+  trail_start_R:        2.0
+  trail_atr_tf:         "1h"
+  trail_atr_mult:       3.0
+  min_time_in_trade_min: 60
+  ttl_max_hours:        12
+  tp_ladder:            [{R:1.8, pct:0.20}, {struct:"VAH_or_HVN", pct:0.30}, {R:3.5, pct:0.25}, {ext:"fib_1.272_or_1.618", pct:0.25}]
+
+when position_management_profile == "Trend":
+  be_trigger_R:         2.0
+  be_buffer_ATR:        0.35
+  trail_mode:           "swing"
+  trail_start_R:        3.0
+  trail_atr_tf:         "4h"
+  trail_atr_mult:       4.0
+  min_time_in_trade_min: 180
+  ttl_max_hours:        0
+  tp_ladder:            [{struct:"VAH_or_major_HVN", pct:0.20}, {R:3.0, pct:0.20}, {ext:"fib_1.618", pct:0.20}, {runner:"until_structure_break", pct:0.40}]
+
+## 🧱 组合退出守则（不破结构不清仓）
+exit_requirements:
+  full_exit_need >= 2 of:
+    - structure_break
+    - momentum_flip2
+    - acceptance_against
+    - funding_shock
+  partial_exit_on_momentum_only:
+    - 若仅出现 momentum_flip（单次）但结构仍完好 → 仅减仓 25–35%，保留 runner
+
+## 🎯 结构锚定的持仓管理
+tp_structure_priority:
+  long:  [ "VAH_or_HVN", "bearish_FVG_50_or_100", "fib_ext_1.272", "fib_ext_1.618" ]
+  short: [ "VAL_or_HVN", "bullish_FVG_50_or_100", "fib_ext_1.272", "fib_ext_1.618" ]
+
+trail_rules:
+  chandelier:
+    price_anchor: "close"
+    atr_tf: "${trail_atr_tf}"
+    atr_mult: ${trail_atr_mult}
+    start_after_R: ${trail_start_R}
+  swing:
+    pivot: "last_confirmed_swing"
+    buffer_ATR: ${be_buffer_ATR}
+    start_after_R: ${trail_start_R}
+  vpvr:
+    anchor: "POC/VA_bound"
+    rule:   "仅在反向接受后下移/上移"
+    start_after_R: ${trail_start_R}
+
+hold_through_rules:
+  long_allow:
+    - "回踩上行FVG的50%且无反向接受"
+    - "回踩15m EMA20或0.382FIB 且成交量 < 0.8×均量"
+  short_allow:
+    - "反抽下行FVG的50%且无正向接受"
+    - "反抽15m EMA20或0.382FIB 且成交量 < 0.8×均量"
+
+## 🧩 退出优先级与冲突处置
+exit_priority:
+  order: [ "structure_targets", "profile_trailing", "percent_fallback" ]
+  structure_targets:
+    long:  ["VAH_or_HVN", "bearish_FVG_50_or_100", "fib_ext_1.272", "fib_ext_1.618"]
+    short: ["VAL_or_HVN", "bullish_FVG_50_or_100", "fib_ext_1.272", "fib_ext_1.618"]
+  percent_fallback:
+    enabled: true
+    rules:
+      - { pnl_pct: "1-3",  retrace_pct: 0.50 }
+      - { pnl_pct: "3-5",  retrace_pct: 0.25 }
+      - { pnl_pct: "5-8",  retrace_pct: 0.30 }
+      - { pnl_pct: "8-15", retrace_pct: 0.30 }
+      - { pnl_pct: ">15",  retrace_pct: 0.50 }
+  notes: "当结构目标或追踪有效时，百分比回撤仅作兜底。"
+
+## 🔒 标的独立判定（硬约束）
+symbol_independent_gate:
+  leadership_mode: "none"   # 不以 BTC 门槛否决其他标的
+  rules:
+    - "每个标的独立判断多空与是否开仓；BTC 仅可作为情绪/相关性参考，不得一票否决。"
+    - "若结构/接受信号已满足，本标的可独立开仓，不等待 BTC 通过任何门槛。"
 
