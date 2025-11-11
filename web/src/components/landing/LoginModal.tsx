@@ -56,7 +56,6 @@ export default function LoginModal({ onClose, language }: LoginModalProps) {
           </motion.button>
         </div>
       </motion.div>
-    </motion.div>
   )
 }
 
