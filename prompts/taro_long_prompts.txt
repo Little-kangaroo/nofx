@@ -488,176 +488,98 @@ dynamic_leverage_output_requirements:
     - L_target_raw, clamped: {by_floor, by_ceiling, by_filters_max}
     - used_in_order: true/false, note
 
-## 🛡️ Binance 下单预检（避免 -2019 保证金不足）
-# 目的：在发单前做额度/精度/杠杆/占保证金检查；必要时自动降级（先减数量→再抬杠杆→仍不行跳过）。
-# 适配：Binance USDT-M 线性永续；逐标的独立；与结构优先/观察清单/持仓档位兼容。
+## 🧪 思维链输出强制要素（结构证据/持仓执行/风控回显）
+# 目的：保证模型在“思维链/分析”中**必然**引用结构锚点（VPVR/供需区/FVG/斐波/通道），并对照持仓与风控回显。
 
-binance_preflight:
-  filters:
-    tick_size: "0.1"
-    step_size: "0.001"
-    min_qty: "0.001"
-    min_notional: "5"
-    max_leverage: 50
+chain_of_thought_requirements:
+  sections_order: ["performance_review","position_analysis","structure_evidence","execution_vs_profile","risk_controls_echo","decision"]
+  performance_review:
+    must_include:
+      - "夏普/近期盈亏/持仓数与收益"
+  position_analysis:
+    must_include:
+      - "当前持仓明细（入场价/现价/浮盈亏/持仓时长）"
+      - "多周期趋势（3m/15m/1h/4h），并给出 4h EMA20 vs EMA50 的**方向判定**（以数值比较为准）"
+      - "量能 vs 均量"
+  structure_evidence:
+    must_include:
+      - "VPVR：POC/VAH/VAL；|price-POC|/ATR14；是否出现“VAH上方/VAL下方接受”（量能≥1.2×均量）"
+      - "供需区：{type: supply/demand, level, status: active/tested/broken, quality}"
+      - "FVG：{dir: bull/bear, 区间: a-b, status: filled_50/filled_100/untested}，是否作为回踩/反抽锚点"
+      - "斐波：最近 swing[…→…] 的 0.382/0.618 回撤与 1.272/1.618 扩展**就近目标**"
+      - "通道：{位置: 上/中/下轨, 斜率, 是否触发反向接受}"
+  execution_vs_profile:
+    notes: "对照当前 position_management_profile（Scalp/Swing/Trend）进行检查"
+    must_include:
+      - "最小持仓时间 min_time_in_trade_min 是否达成（✅/❌）"
+      - "保本触发：当前R vs be_trigger_R"
+      - "追踪启动：trail_mode / trail_start_R / ATR参数，是否已满足（✅/❌）"
+      - "结构优先 TP 顺序：VAH/HVN → 反向FVG50/100 → Fib 1.272/1.618（给出最近目标价）"
+      - "仅动量钝化且结构完好 → 仅部分减仓（25–35%），保留 runner"
+  risk_controls_echo:
+    must_include:
+      - "preflight：qty_final / leverage_used / init_margin_est / balance_cap / pass / reason_if_failed"
+      - "leverage_calc：L_target_raw / clamped 状态"
+      - "liq_gap_check：distance_to_liq_ATR14 vs min_gap；动作 reduce_qty_or_skip/ok"
+      - "stop_watchdog_status：SL 存在性与纠偏"
+  decision:
+    must_include:
+      - "本标的决策：keep / partial_exit / close，并给出下一触发条件（结构或动量/接受）"
 
-  fees_and_buffers:
-    taker_fee: 0.0005
-    slippage_pct: 0.0005
-    reserve_pct: 0.20
-    max_init_margin_pct: 0.40
-    mm_buffer: 0.00
+consistency_checks:
+  - "当‘4h EMA20>EMA50(…)’与数值不一致时，按数值判定，并在思维链里标注已矫正。"
+  - "若‘保证金使用率’与 preflight.init_margin_est/balance_cap 不一致，以 preflight 为准，并在思维链里标注来源。"
 
-  bracket_order_rules:
-    place_after_fill: true
-    reduce_only_for_exit: true
-    hedge_mode_safe: true
+## 🧪 思维链最小示例模板（用于回归测试）
+# 用法：当你做自动化回归/单测时，可用本段作为“最小可见字段”的快照基准，只断言关键键名是否出现。
 
-  leverage_policy:
-    target: 8
-    auto_raise_to_meet_min_qty: true
-    max_raise: 20
-    margin_type: "ISOLATED"
+示例_思维链文本:
+  |
+    ## 思维链（最小示例）
 
-  rounding:
-    qty: "floor_to_step"
-    price: "round_to_tick"
+    **performance_review**
+    - 夏普: {{sharpe}} | 账户盈亏: {{pnl_pct}} | 持仓数: {{pos_count}}
 
-  fallback_chain:
-    - "reduce_qty_to_balance_limit"
-    - "raise_leverage_within_limit"
-    - "skip_symbol_if_still_below_min_qty"
+    **position_analysis**
+    - 当前持仓: {{symbol}} {{side}} 入场{{entry}} 现价{{price}} 浮盈亏{{pnl}} 持仓{{hold_min}}分钟
+    - 多周期趋势: 3m={{t3m}} 15m={{t15m}} 1h={{t1h}} 4h EMA20={{h4_ema20}} vs EMA50={{h4_ema50}} → 方向={{h4_trend}}
+    - 量能: 当前={{vol_now}} vs 均量={{vol_avg}}
 
-preflight_compute:
-  inputs:
-    - available_balance
-    - entry_price
-    - qty_risk_from_strategy
-    - filters, fees_and_buffers, leverage_policy, rounding
-  steps:
-    - qty_min := max(min_qty, min_notional / entry_price)
-    - qty_risk := max(qty_risk_from_strategy, qty_min)
-    - qty_round := floor(qty_risk / step_size) * step_size
-    - notional := entry_price * qty_round * (1 + slippage_pct)
-    - init_margin_est := (notional / leverage_target) * (1 + mm_buffer) + notional * taker_fee
-    - balance_cap := available_balance * (1 - reserve_pct)
-    - init_cap := min(balance_cap, available_balance * max_init_margin_pct)
-    - if init_margin_est > init_cap:
-        * qty_max_by_balance := floor( ((init_cap - notional*taker_fee) * leverage_target / entry_price) / step_size ) * step_size
-        * qty_round := min(qty_round, qty_max_by_balance)
-        * if qty_round < qty_min and auto_raise_to_meet_min_qty:
-            - while leverage_target < max_raise and leverage_target < filters.max_leverage:
-                leverage_target += 1
-                notional_min := entry_price * qty_min * (1 + slippage_pct)
-                init_margin_min := (notional_min / leverage_target) * (1 + mm_buffer) + notional_min * taker_fee
-                if init_margin_min <= init_cap:
-                  qty_round := qty_min
-                  break
-            - if qty_round < qty_min: FAIL reason="insufficient_balance_for_min_qty_under_limits"
-    - entry_price_rounded := round_to_tick(entry_price, tick_size)
-    - qty_final := floor_to_step(qty_round, step_size)
-    - PASS: send entry only; after filled, place reduceOnly exits (SL/TP)
+    **structure_evidence**
+    - VPVR: POC={{poc}}, VAH={{vah}}, VAL={{val}} | |price-POC|/ATR14={{dist_poc_atr}} | 接受={{accept_flag}} (vol={{vol_ratio}}x)
+    - 供需区: type={{sd_type}}, level={{sd_level}}, status={{sd_status}}, quality={{sd_quality}}
+    - FVG: dir={{fvg_dir}}, a-b={{fvg_a}}-{{fvg_b}}, status={{fvg_status}}, fill_ratio={{fvg_fill}}
+    - 斐波: swing={{sw_a}}→{{sw_b}} | 0.382={{fib382}} 0.618={{fib618}} | ext 1.272={{ext1272}} 1.618={{ext1618}}
+    - 通道: pos={{channel_pos}}, slope={{channel_slope}}, 反向接受={{channel_acceptance}}
 
-preflight_output_requirements:
-  must_include:
-    - available_balance, entry_price_raw, tick_size, step_size, min_qty, min_notional
-    - target_leverage, leverage_used, qty_risk, qty_final
-    - init_margin_est, balance_cap, pass, reason_if_failed
-    - notes: "SL/TP placed after fill with reduceOnly"
+    **execution_vs_profile**
+    - 档位={{pm_profile}} | min_time_in_trade_min={{min_time}} → 达成={{reached_min_time}}
+    - 保本阈值={{be_trigger_R}}R | 当前R={{current_R}} → 触发={{be_triggered}}
+    - 追踪: mode={{trail_mode}} start_R={{trail_start_R}} ATR_TF={{trail_atr_tf}} ×{{trail_atr_mult}} → 生效={{trail_on}}
+    - 结构优先TP: 最近目标={{next_struct_target}}（类型={{target_type}}）
 
-## 🧭 持仓管理档位（延长持仓时间）
-position_management_profile: Scalp | Swing | Trend   # 默认：Swing（推荐）
+    **risk_controls_echo**
+    - preflight: qty_final={{qty_final}}, lev={{leverage_used}}, init_margin_est={{init_margin_est}}, cap={{balance_cap}}, pass={{pf_pass}}, reason={{pf_reason}}
+    - leverage_calc: L_target_raw={{L_target_raw}}, clamped={{clamped}}
+    - liq_gap_check: d_liq_ATR14={{d_liq_atr}}, min_gap={{min_gap}}, action={{liq_action}}, pass={{liq_pass}}
+    - stop_watchdog_status: sl_exists={{sl_exists}}, corrective_action={{sw_action}}
 
-when position_management_profile == "Scalp":
-  be_trigger_R:         0.8
-  be_buffer_ATR:        0.15
-  trail_mode:           "chandelier"
-  trail_start_R:        1.2
-  trail_atr_tf:         "5m"
-  trail_atr_mult:       2.0
-  min_time_in_trade_min: 20
-  ttl_max_hours:        2
-  tp_ladder:            [{R:1.0, pct:0.35}, {R:1.8, pct:0.35}, {R:3.0, pct:0.30}]
+    **decision**
+    - 决策={{decision}}（keep/partial_exit/close）| 下一触发条件={{next_trigger}}（结构/动量/接受）
 
-when position_management_profile == "Swing":
-  be_trigger_R:         1.5
-  be_buffer_ATR:        0.25
-  trail_mode:           "chandelier"
-  trail_start_R:        2.0
-  trail_atr_tf:         "1h"
-  trail_atr_mult:       3.0
-  min_time_in_trade_min: 60
-  ttl_max_hours:        12
-  tp_ladder:            [{R:1.8, pct:0.20}, {struct:"VAH_or_HVN", pct:0.30}, {R:3.5, pct:0.25}, {ext:"fib_1.272_or_1.618", pct:0.25}]
+单测_断言建议（正则或包含匹配即可，忽略数值细节）:
+  - r"4h EMA20=.* vs EMA50=.*"
+  - r"VPVR:\s*POC="
+  - r"FVG:\s*dir="
+  - r"斐波:\s*swing="
+  - r"通道:\s*pos="
+  - r"preflight:\s*qty_final="
+  - r"leverage_calc:\s*L_target_raw="
+  - r"liq_gap_check:\s*d_liq_ATR14="
+  - r"stop_watchdog_status:\s*sl_exists="
+  - r"min_time_in_trade_min|min_time=|持仓\d+分钟"
 
-when position_management_profile == "Trend":
-  be_trigger_R:         2.0
-  be_buffer_ATR:        0.35
-  trail_mode:           "swing"
-  trail_start_R:        3.0
-  trail_atr_tf:         "4h"
-  trail_atr_mult:       4.0
-  min_time_in_trade_min: 180
-  ttl_max_hours:        0
-  tp_ladder:            [{struct:"VAH_or_major_HVN", pct:0.20}, {R:3.0, pct:0.20}, {ext:"fib_1.618", pct:0.20}, {runner:"until_structure_break", pct:0.40}]
-
-## 🧱 组合退出守则（不破结构不清仓）
-exit_requirements:
-  full_exit_need >= 2 of:
-    - structure_break
-    - momentum_flip2
-    - acceptance_against
-    - funding_shock
-  partial_exit_on_momentum_only:
-    - 若仅出现 momentum_flip（单次）但结构仍完好 → 仅减仓 25–35%，保留 runner
-
-## 🎯 结构锚定的持仓管理
-tp_structure_priority:
-  long:  [ "VAH_or_HVN", "bearish_FVG_50_or_100", "fib_ext_1.272", "fib_ext_1.618" ]
-  short: [ "VAL_or_HVN", "bullish_FVG_50_or_100", "fib_ext_1.272", "fib_ext_1.618" ]
-
-trail_rules:
-  chandelier:
-    price_anchor: "close"
-    atr_tf: "${trail_atr_tf}"
-    atr_mult: ${trail_atr_mult}
-    start_after_R: ${trail_start_R}
-  swing:
-    pivot: "last_confirmed_swing"
-    buffer_ATR: ${be_buffer_ATR}
-    start_after_R: ${trail_start_R}
-  vpvr:
-    anchor: "POC/VA_bound"
-    rule:   "仅在反向接受后下移/上移"
-    start_after_R: ${trail_start_R}
-
-hold_through_rules:
-  long_allow:
-    - "回踩上行FVG的50%且无反向接受"
-    - "回踩15m EMA20或0.382FIB 且成交量 < 0.8×均量"
-  short_allow:
-    - "反抽下行FVG的50%且无正向接受"
-    - "反抽15m EMA20或0.382FIB 且成交量 < 0.8×均量"
-
-## 🧩 退出优先级与冲突处置
-exit_priority:
-  order: [ "structure_targets", "profile_trailing", "percent_fallback" ]
-  structure_targets:
-    long:  ["VAH_or_HVN", "bearish_FVG_50_or_100", "fib_ext_1.272", "fib_ext_1.618"]
-    short: ["VAL_or_HVN", "bullish_FVG_50_or_100", "fib_ext_1.272", "fib_ext_1.618"]
-  percent_fallback:
-    enabled: true
-    rules:
-      - { pnl_pct: "1-3",  retrace_pct: 0.50 }
-      - { pnl_pct: "3-5",  retrace_pct: 0.25 }
-      - { pnl_pct: "5-8",  retrace_pct: 0.30 }
-      - { pnl_pct: "8-15", retrace_pct: 0.30 }
-      - { pnl_pct: ">15",  retrace_pct: 0.50 }
-  notes: "当结构目标或追踪有效时，百分比回撤仅作兜底。"
-
-## 🔒 标的独立判定（硬约束）
-symbol_independent_gate:
-  leadership_mode: "none"   # 不以 BTC 门槛否决其他标的
-  rules:
-    - "每个标的独立判断多空与是否开仓；BTC 仅可作为情绪/相关性参考，不得一票否决。"
-    - "若结构/接受信号已满足，本标的可独立开仓，不等待 BTC 通过任何门槛。"
+一致性_提示:
+  - "若 4h EMA20 与 EMA50 的文本描述与数值对不上，按数值改写并在输出中标注 '已矫正'。"
+  - "保证金使用率以 preflight 为准：init_margin_est / balance_cap。"
 
