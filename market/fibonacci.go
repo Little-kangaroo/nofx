@@ -300,8 +300,8 @@ func (fa *FibonacciAnalyzer) evaluateVolumeConfirmation(startIdx, endIdx int, kl
 }
 
 // calculateTouchCounts 计算各级别的触及次数
-func (fa *FibonacciAnalyzer) calculateTouchCounts(levels []FibLevel, klines []Kline, startIdx, endIdx int) map[float64]int {
-	touchCount := make(map[float64]int)
+func (fa *FibonacciAnalyzer) calculateTouchCounts(levels []FibLevel, klines []Kline, startIdx, endIdx int) map[string]int {
+	touchCount := make(map[string]int)
 	tolerance := fa.config.TouchSensitivity
 	
 	// 只检查趋势形成后的价格行为
@@ -313,7 +313,8 @@ func (fa *FibonacciAnalyzer) calculateTouchCounts(levels []FibLevel, klines []Kl
 			if abs(candle.Low-level.Price)/level.Price <= tolerance ||
 			   abs(candle.High-level.Price)/level.Price <= tolerance ||
 			   (candle.Low <= level.Price && candle.High >= level.Price) {
-				touchCount[level.Ratio]++
+				ratioKey := fmt.Sprintf("%.3f", level.Ratio)
+				touchCount[ratioKey]++
 			}
 		}
 	}

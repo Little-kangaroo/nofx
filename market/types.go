@@ -16,6 +16,11 @@ type Data struct {
 	IntradaySeries    *IntradayData
 	LongerTermContext *LongerTermData
 	
+	// 中期时间框架数据
+	MediumTerm15m *MediumTermData
+	MediumTerm30m *MediumTermData
+	MediumTerm1h  *MediumTermData
+	
 	// 多时间框架技术分析数据
 	MultiTimeframeAnalysis *MultiTimeframeAnalysis `json:"multi_timeframe_analysis"`
 	
@@ -128,6 +133,21 @@ type LongerTermData struct {
 	AverageVolume float64
 	MACDValues    []float64
 	RSI14Values   []float64
+}
+
+// MediumTermData 中期数据(15m/30m/1h时间框架)
+type MediumTermData struct {
+	Timeframe     string    // 时间框架标识
+	EMA20         float64   // 20期EMA
+	EMA50         float64   // 50期EMA
+	CurrentMACD   float64   // 当前MACD
+	CurrentRSI7   float64   // 当前RSI7
+	CurrentRSI14  float64   // 当前RSI14
+	ATR14         float64   // 14期ATR
+	CurrentVolume float64   // 当前成交量
+	AverageVolume float64   // 平均成交量
+	MACDValues    []float64 // MACD序列
+	RSI14Values   []float64 // RSI14序列
 }
 
 // Binance API 响应结构
@@ -902,7 +922,7 @@ type FibRetracement struct {
 	Strength     float64        `json:"strength"`      // 强度评分
 	Age          int            `json:"age"`           // 存在时间
 	IsActive     bool           `json:"is_active"`     // 是否活跃
-	TouchCount   map[float64]int `json:"touch_count"`  // 各级别触及次数
+	TouchCount   map[string]int `json:"touch_count"`  // 各级别触及次数（价格作为字符串键）
 	CreatedAt    int64          `json:"created_at"`    // 创建时间
 }
 

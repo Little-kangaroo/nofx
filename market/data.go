@@ -88,6 +88,11 @@ func Get(symbol string) (*Data, error) {
 	// 计算长期数据
 	longerTermData := calculateLongerTermData(klines4h)
 
+	// 计算其他时间框架的基础指标
+	mediumTermData15m := calculateMediumTermData(klines15m, "15m")
+	mediumTermData30m := calculateMediumTermData(klines30m, "30m")
+	mediumTermData1h := calculateMediumTermData(klines1h, "1h")
+
 	// 多时间框架综合分析（包括道氏理论、VPVR、供需区、FVG、斐波纳契、通道分析）
 	comprehensiveAnalyzer := NewComprehensiveAnalyzer()
 	comprehensiveResult := comprehensiveAnalyzer.AnalyzeMultiTimeframe(symbol, klines3m, klines15m, klines30m, klines1h, klines4h)
@@ -113,6 +118,9 @@ func Get(symbol string) (*Data, error) {
 		FundingRate:             fundingRate,
 		IntradaySeries:          intradayData,
 		LongerTermContext:       longerTermData,
+		MediumTerm15m:           mediumTermData15m,
+		MediumTerm30m:           mediumTermData30m,
+		MediumTerm1h:            mediumTermData1h,
 		MultiTimeframeAnalysis:  multiTimeframeAnalysis,
 		// 向前兼容的单一分析结果（基于4小时）
 		DowTheory:               comprehensiveResult.DowTheory,
@@ -515,6 +523,9 @@ func FormatAsStructuredData(data *Data) string {
 				"funding_rate":     data.FundingRate,
 				"intraday_series":  data.IntradaySeries,
 				"longer_term_context": data.LongerTermContext,
+				"medium_term_15m":  data.MediumTerm15m,
+				"medium_term_30m":  data.MediumTerm30m,
+				"medium_term_1h":   data.MediumTerm1h,
 			},
 			// 多时间框架技术分析
 			"多时间框架分析": symbolData,
@@ -1250,6 +1261,66 @@ func GetSingleSymbolAnalysis(symbol string) (map[string]interface{}, error) {
 	}
 	
 	return symbolData, nil
+}
+
+// CalculateMediumTermData 计算中期时间框架数据(15m/30m/1h) - 导出供测试使用
+func CalculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
+	return calculateMediumTermData(klines, timeframe)
+}
+
+// calculateMediumTermData 计算中期时间框架数据(15m/30m/1h)
+func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
+	if len(klines) == 0 {
+		return &MediumTermData{Timeframe: timeframe}
+	}
+
+	data := &MediumTermData{
+		Timeframe:   timeframe,
+		MACDValues:  make([]float64, 0, 10),
+		RSI14Values: make([]float64, 0, 10),
+	}
+
+	// 计算EMA
+	data.EMA20 = calculateEMA(klines, 20)
+	data.EMA50 = calculateEMA(klines, 50)
+
+	// 计算当前指标
+	data.CurrentMACD = calculateMACD(klines)
+	data.CurrentRSI7 = calculateRSI(klines, 7)
+	data.CurrentRSI14 = calculateRSI(klines, 14)
+
+	// 计算ATR
+	data.ATR14 = calculateATR(klines, 14)
+
+	// 计算成交量
+	if len(klines) > 0 {
+		data.CurrentVolume = klines[len(klines)-1].Volume
+		// 计算平均成交量
+		sum := 0.0
+		for _, k := range klines {
+			sum += k.Volume
+		}
+		data.AverageVolume = sum / float64(len(klines))
+	}
+
+	// 计算MACD和RSI序列（最近10个数据点）
+	start := len(klines) - 10
+	if start < 0 {
+		start = 0
+	}
+
+	for i := start; i < len(klines); i++ {
+		if i >= 25 {
+			macd := calculateMACD(klines[:i+1])
+			data.MACDValues = append(data.MACDValues, macd)
+		}
+		if i >= 14 {
+			rsi14 := calculateRSI(klines[:i+1], 14)
+			data.RSI14Values = append(data.RSI14Values, rsi14)
+		}
+	}
+
+	return data
 }
 
 
