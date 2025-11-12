@@ -155,12 +155,15 @@ func fetchMarketDataForContext(ctx *Context) error {
 		positionSymbols[pos.Symbol] = true
 	}
 
+	log.Printf("🔍 [DEBUG] 开始获取%d个币种的市场数据", len(symbolSet))
 	for symbol := range symbolSet {
+		log.Printf("🔍 [DEBUG] 正在获取 %s 的市场数据...", symbol)
 		data, err := market.Get(symbol)
 		if err != nil {
-			// 单个币种失败不影响整体，只记录错误
+			log.Printf("❌ [ERROR] 获取 %s 市场数据失败: %v", symbol, err)
 			continue
 		}
+		log.Printf("✅ [DEBUG] 成功获取 %s 的市场数据，当前价格: %.4f", symbol, data.CurrentPrice)
 
 		// ⚠️ 流动性过滤：持仓价值低于15M USD的币种不做（多空都不做）
 		// 持仓价值 = 持仓量 × 当前价格
@@ -197,6 +200,10 @@ func fetchMarketDataForContext(ctx *Context) error {
 		}
 	}
 
+	log.Printf("🔍 [DEBUG] fetchMarketDataForContext完成，最终MarketDataMap大小: %d", len(ctx.MarketDataMap))
+	for symbol := range ctx.MarketDataMap {
+		log.Printf("🔍 [DEBUG] MarketDataMap包含币种: %s", symbol)
+	}
 	return nil
 }
 
@@ -512,8 +519,8 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		"close_short":   true,
 		"hold":          true,
 		"wait":          true,
-		"buy_to_enter":  true,  // 兼容提示词模板中的动作名
-		"sell_to_enter": true,  // 兼容提示词模板中的动作名
+		"buy_to_enter":  true, // 兼容提示词模板中的动作名
+		"sell_to_enter": true, // 兼容提示词模板中的动作名
 	}
 
 	// 标准化动作名称
@@ -544,7 +551,7 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		if d.PositionSizeUSD <= 0 {
 			return fmt.Errorf("仓位大小必须大于0: %.2f", d.PositionSizeUSD)
 		}
-		
+
 		// 保证金验证移动到执行阶段（auto_trader.go），此处只���证逻辑合理性
 		// 因为决策阶段的账户净值可能不是最新的可用余额
 		// 验证仓位价值上限（加1%容差以避免浮点数精度问题）
