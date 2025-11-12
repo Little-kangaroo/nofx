@@ -12,18 +12,37 @@ import (
 
 // Get 获取指定代币的市场数据
 func Get(symbol string) (*Data, error) {
-	var klines3m, klines4h []Kline
+	var klines3m, klines15m, klines30m, klines1h, klines4h []Kline
 	var err error
 	// 标准化symbol
 	symbol = Normalize(symbol)
-	// 获取3分钟K线数据 (最近10个)
-	klines3m, err = WSMonitorCli.GetCurrentKlines(symbol, "3m") // 多获取一些用于计算
+	
+	// 获取3分钟K线数据
+	klines3m, err = WSMonitorCli.GetCurrentKlines(symbol, "3m")
 	if err != nil {
 		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
 	}
 
-	// 获取4小时K线数据 (最近10个)
-	klines4h, err = WSMonitorCli.GetCurrentKlines(symbol, "4h") // 多获取用于计算指标
+	// 获取15分钟K线数据
+	klines15m, err = WSMonitorCli.GetCurrentKlines(symbol, "15m")
+	if err != nil {
+		return nil, fmt.Errorf("获取15分钟K线失败: %v", err)
+	}
+
+	// 获取30分钟K线数据
+	klines30m, err = WSMonitorCli.GetCurrentKlines(symbol, "30m")
+	if err != nil {
+		return nil, fmt.Errorf("获取30分钟K线失败: %v", err)
+	}
+
+	// 获取1小时K线数据
+	klines1h, err = WSMonitorCli.GetCurrentKlines(symbol, "1h")
+	if err != nil {
+		return nil, fmt.Errorf("获取1小时K线失败: %v", err)
+	}
+
+	// 获取4小时K线数据
+	klines4h, err = WSMonitorCli.GetCurrentKlines(symbol, "4h")
 	if err != nil {
 		return nil, fmt.Errorf("获取4小时K线失败: %v", err)
 	}
@@ -69,28 +88,39 @@ func Get(symbol string) (*Data, error) {
 	// 计算长期数据
 	longerTermData := calculateLongerTermData(klines4h)
 
-	// 综合分析（包括道氏理论、VPVR、供需区、FVG、斐波纳契）
+	// 多时间框架综合分析（包括道氏理论、VPVR、供需区、FVG、斐波纳契、通道分析）
 	comprehensiveAnalyzer := NewComprehensiveAnalyzer()
-	comprehensiveResult := comprehensiveAnalyzer.Analyze(symbol, klines3m, klines4h)
+	comprehensiveResult := comprehensiveAnalyzer.AnalyzeMultiTimeframe(symbol, klines3m, klines15m, klines30m, klines1h, klines4h)
+
+	// 执行多时间框架分析
+	multiTimeframeAnalysis := comprehensiveAnalyzer.AnalyzeAllTimeframes(symbol, currentPrice, map[string][]Kline{
+		"3m":  klines3m,
+		"15m": klines15m,
+		"30m": klines30m,
+		"1h":  klines1h,
+		"4h":  klines4h,
+	})
 
 	return &Data{
-		Symbol:            symbol,
-		CurrentPrice:      currentPrice,
-		PriceChange1h:     priceChange1h,
-		PriceChange4h:     priceChange4h,
-		CurrentEMA20:      currentEMA20,
-		CurrentMACD:       currentMACD,
-		CurrentRSI7:       currentRSI7,
-		OpenInterest:      oiData,
-		FundingRate:       fundingRate,
-		IntradaySeries:    intradayData,
-		LongerTermContext: longerTermData,
-		DowTheory:         comprehensiveResult.DowTheory,
-		ChannelAnalysis:   comprehensiveResult.ChannelAnalysis,
-		VolumeProfile:     comprehensiveResult.VolumeProfile,
-		SupplyDemand:      comprehensiveResult.SupplyDemand,
-		FairValueGaps:     comprehensiveResult.FairValueGaps,
-		Fibonacci:         comprehensiveResult.Fibonacci,
+		Symbol:                  symbol,
+		CurrentPrice:            currentPrice,
+		PriceChange1h:           priceChange1h,
+		PriceChange4h:           priceChange4h,
+		CurrentEMA20:            currentEMA20,
+		CurrentMACD:             currentMACD,
+		CurrentRSI7:             currentRSI7,
+		OpenInterest:            oiData,
+		FundingRate:             fundingRate,
+		IntradaySeries:          intradayData,
+		LongerTermContext:       longerTermData,
+		MultiTimeframeAnalysis:  multiTimeframeAnalysis,
+		// 向前兼容的单一分析结果（基于4小时）
+		DowTheory:               comprehensiveResult.DowTheory,
+		ChannelAnalysis:         comprehensiveResult.ChannelAnalysis,
+		VolumeProfile:           comprehensiveResult.VolumeProfile,
+		SupplyDemand:            comprehensiveResult.SupplyDemand,
+		FairValueGaps:           comprehensiveResult.FairValueGaps,
+		Fibonacci:               comprehensiveResult.Fibonacci,
 	}, nil
 }
 
@@ -454,6 +484,11 @@ func Format(data *Data) string {
 		sb.WriteString(formatFibonacciData(data.Fibonacci))
 	}
 
+	// 多时间框架分析总结
+	if data.MultiTimeframeAnalysis != nil {
+		sb.WriteString(formatMultiTimeframeAnalysis(data.MultiTimeframeAnalysis))
+	}
+
 	return sb.String()
 }
 
@@ -736,6 +771,86 @@ func formatFVGData(data *FVGData) string {
 	sb.WriteString("\n")
 	return sb.String()
 }
+
+// formatMultiTimeframeAnalysis 格式化多时间框架分析
+func formatMultiTimeframeAnalysis(data *MultiTimeframeAnalysis) string {
+	if data == nil {
+		return "Multi-Timeframe Analysis: No data available\n\n"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Multi-Timeframe Technical Analysis Summary:\n")
+
+	// 总体趋势一致性
+	if data.Summary != nil {
+		sb.WriteString(fmt.Sprintf("  Overall Trend: %s (Consistency: %.1f%%)\n",
+			strings.Title(data.Summary.OverallTrend), data.Summary.TrendConsistency*100))
+		sb.WriteString(fmt.Sprintf("  Signal Confidence: %.1f%%\n",
+			data.Summary.SignalConfidence*100))
+
+		// 时间框架一致性
+		if len(data.Summary.TimeframeAlignment) > 0 {
+			sb.WriteString("  Timeframe Alignment: ")
+			alignedCount := 0
+			for _, aligned := range data.Summary.TimeframeAlignment {
+				if aligned {
+					alignedCount++
+				}
+			}
+			sb.WriteString(fmt.Sprintf("%d/%d timeframes aligned\n", alignedCount, len(data.Summary.TimeframeAlignment)))
+		}
+
+		// 关键价位统计
+		if data.Summary.KeyLevels != nil {
+			supportCount := len(data.Summary.KeyLevels.SupportLevels)
+			resistanceCount := len(data.Summary.KeyLevels.ResistanceLevels)
+			pivotCount := len(data.Summary.KeyLevels.PivotLevels)
+			if supportCount+resistanceCount+pivotCount > 0 {
+				sb.WriteString(fmt.Sprintf("  Key Levels: %d support, %d resistance, %d pivot points\n",
+					supportCount, resistanceCount, pivotCount))
+			}
+		}
+
+		// 交易信号
+		if len(data.Summary.TradingSignals) > 0 {
+			sb.WriteString(fmt.Sprintf("  Cross-Timeframe Signals: %d active\n", len(data.Summary.TradingSignals)))
+			for i, signal := range data.Summary.TradingSignals {
+				if i >= 2 { // 只显示前2个最重要的信号
+					break
+				}
+				sb.WriteString(fmt.Sprintf("    %d. %s signal (Confidence: %.1f%%, Timeframe: %s)\n",
+					i+1, strings.ToUpper(string(signal.PrimaryAction)), signal.Confidence, signal.Timeframe))
+			}
+		}
+
+		// 风险评估
+		if data.Summary.RiskAssessment != nil {
+			sb.WriteString(fmt.Sprintf("  Risk Assessment: %s (Max Position: %.1f%%)\n",
+				strings.Title(data.Summary.RiskAssessment.OverallRisk), 
+				data.Summary.RiskAssessment.MaxPositionSize*100))
+			if data.Summary.RiskAssessment.ConflictingSignals > 0 {
+				sb.WriteString(fmt.Sprintf("  Conflicting Signals: %d detected\n",
+					data.Summary.RiskAssessment.ConflictingSignals))
+			}
+		}
+	}
+
+	// 各时间框架可靠性
+	if len(data.Timeframes) > 0 {
+		sb.WriteString("\n  Timeframe Reliability Scores:\n")
+		timeframeOrder := []string{"3m", "15m", "30m", "1h", "4h"}
+		for _, tf := range timeframeOrder {
+			if tfData, exists := data.Timeframes[tf]; exists {
+				sb.WriteString(fmt.Sprintf("    %s: %.1f%% (Weight: %.1f%%)\n",
+					tf, tfData.Reliability*100, tfData.Weight*100))
+			}
+		}
+	}
+
+	sb.WriteString("\n")
+	return sb.String()
+}
+
 // formatFibonacciData 格式化斐波纳契分析数据
 func formatFibonacciData(data *FibonacciData) string {
 	if data == nil {

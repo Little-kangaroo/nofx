@@ -15,12 +15,92 @@ type Data struct {
 	FundingRate       float64
 	IntradaySeries    *IntradayData
 	LongerTermContext *LongerTermData
+	
+	// 多时间框架技术分析数据
+	MultiTimeframeAnalysis *MultiTimeframeAnalysis `json:"multi_timeframe_analysis"`
+	
+	// 向前兼容的单一分析结果（基于4小时）
 	DowTheory         *DowTheoryData // 道氏理论分析数据
 	ChannelAnalysis   *ChannelData // 通道分析数据（独立指标）
 	VolumeProfile     *VolumeProfile // 成交量分布数据
 	SupplyDemand      *SupplyDemandData // 供给需求区数据
 	FairValueGaps     *FVGData // 公平价值缺口数据
 	Fibonacci         *FibonacciData // 斐波纳契分析数据
+}
+
+// MultiTimeframeAnalysis 多时间框架分析结果
+type MultiTimeframeAnalysis struct {
+	Timeframes map[string]*TimeframeAnalysis `json:"timeframes"` // 各时间框架的分析结果
+	Summary    *AnalysisSummary              `json:"summary"`    // 多时间框架综合总结
+}
+
+// TimeframeAnalysis 单一时间框架分析结果
+type TimeframeAnalysis struct {
+	Timeframe       string            `json:"timeframe"`        // 时间框架（3m, 15m, 30m, 1h, 4h）
+	DowTheory       *DowTheoryData    `json:"dow_theory"`       // 道氏理论分析
+	ChannelAnalysis *ChannelData      `json:"channel_analysis"` // 通道分析
+	VolumeProfile   *VolumeProfile    `json:"volume_profile"`   // 成交量分布
+	SupplyDemand    *SupplyDemandData `json:"supply_demand"`    // 供需区分析
+	FairValueGaps   *FVGData          `json:"fair_value_gaps"`  // FVG分析
+	Fibonacci       *FibonacciData    `json:"fibonacci"`        // 斐波纳契分析
+	Weight          float64           `json:"weight"`           // 时间框架权重
+	Reliability     float64           `json:"reliability"`      // 可���性评分
+}
+
+// AnalysisSummary 多时间框架综合分析总结
+type AnalysisSummary struct {
+	OverallTrend      string                    `json:"overall_trend"`       // 总体趋势方向
+	TrendConsistency  float64                   `json:"trend_consistency"`   // 趋势一致性评分
+	SignalConfidence  float64                   `json:"signal_confidence"`   // 信号置信度
+	TimeframeAlignment map[string]bool          `json:"timeframe_alignment"` // 各时间框架趋势一致性
+	KeyLevels         *MultiTimeframeLevels     `json:"key_levels"`          // 关键价位汇总
+	TradingSignals    []*MultiTimeframeSignal   `json:"trading_signals"`     // 多时间框架交易信号
+	RiskAssessment    *MultiTimeframeRisk       `json:"risk_assessment"`     // 风险评估
+}
+
+// MultiTimeframeLevels 多时间框架关键价位
+type MultiTimeframeLevels struct {
+	SupportLevels    []LevelInfo `json:"support_levels"`    // 支撑位
+	ResistanceLevels []LevelInfo `json:"resistance_levels"` // 阻力位
+	PivotLevels      []LevelInfo `json:"pivot_levels"`      // 关键转折点
+}
+
+// LevelInfo 价位信息
+type LevelInfo struct {
+	Price       float64  `json:"price"`       // 价格
+	Strength    float64  `json:"strength"`    // 强度
+	Sources     []string `json:"sources"`     // 来源（哪些分析方法识别）
+	Timeframes  []string `json:"timeframes"`  // 哪些时间框架确认
+	Type        string   `json:"type"`        // 类型（support/resistance/pivot）
+	Confidence  float64  `json:"confidence"`  // 置信度
+}
+
+// MultiTimeframeSignal 多时间框架交易信号
+type MultiTimeframeSignal struct {
+	ID              string                    `json:"id"`               // 信号ID
+	PrimaryAction   SignalAction             `json:"primary_action"`   // 主要动作
+	Confidence      float64                  `json:"confidence"`       // 综合置信度
+	TimeframeVotes  map[string]SignalAction  `json:"timeframe_votes"`  // 各时间框架的投票
+	SignalSources   []string                 `json:"signal_sources"`   // 信号来源
+	EntryPrice      float64                  `json:"entry_price"`      // 建议入场价
+	StopLoss        float64                  `json:"stop_loss"`        // 止损价
+	TakeProfitLevels []float64               `json:"take_profit_levels"` // 止盈价格梯度
+	RiskReward      float64                  `json:"risk_reward"`      // 风险收益比
+	Timeframe       string                   `json:"timeframe"`        // 主导时间框架
+	Description     string                   `json:"description"`      // 信号描述
+	Timestamp       int64                    `json:"timestamp"`        // 生成时间
+}
+
+// MultiTimeframeRisk 多时间框架风险评估
+type MultiTimeframeRisk struct {
+	OverallRisk       string             `json:"overall_risk"`        // 总体风险等级
+	TimeframeRisks    map[string]string  `json:"timeframe_risks"`     // 各时间框架风险
+	ConflictingSignals int               `json:"conflicting_signals"` // 冲突信号数量
+	VolatilityRisk    string             `json:"volatility_risk"`     // 波动性风险
+	TrendRisk         string             `json:"trend_risk"`          // 趋势风险
+	LiquidityRisk     string             `json:"liquidity_risk"`      // 流动性风险
+	RecommendedExposure float64          `json:"recommended_exposure"` // 建议风险敞口
+	MaxPositionSize   float64            `json:"max_position_size"`   // 最大仓位
 }
 
 // OIData Open Interest数据

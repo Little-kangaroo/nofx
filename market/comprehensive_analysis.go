@@ -226,7 +226,69 @@ func NewComprehensiveAnalyzerWithConfig(config *ComprehensiveConfig) *Comprehens
 	}
 }
 
-// Analyze 执行综合市场分析
+// AnalyzeMultiTimeframe 执行多时间框架综合分析
+func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines3m, klines15m, klines30m, klines1h, klines4h []Kline) *ComprehensiveResult {
+	if len(klines3m) == 0 && len(klines4h) == 0 {
+		return nil
+	}
+
+	currentPrice := 0.0
+	timestamp := time.Now().UnixMilli()
+
+	// 确定当前价格
+	if len(klines4h) > 0 {
+		currentPrice = klines4h[len(klines4h)-1].Close
+		timestamp = klines4h[len(klines4h)-1].CloseTime
+	} else if len(klines3m) > 0 {
+		currentPrice = klines3m[len(klines3m)-1].Close
+		timestamp = klines3m[len(klines3m)-1].CloseTime
+	}
+
+	result := &ComprehensiveResult{
+		Symbol:       symbol,
+		Timestamp:    timestamp,
+		CurrentPrice: currentPrice,
+		Config:       ca.config,
+	}
+
+	// 执行多时间框架分析
+	multiTimeframeAnalysis := ca.AnalyzeAllTimeframes(symbol, currentPrice, map[string][]Kline{
+		"3m":  klines3m,
+		"15m": klines15m,
+		"30m": klines30m,
+		"1h":  klines1h,
+		"4h":  klines4h,
+	})
+
+	// 向前兼容：提取4小时分析作为单一结果
+	if tf4h, exists := multiTimeframeAnalysis.Timeframes["4h"]; exists {
+		result.DowTheory = tf4h.DowTheory
+		result.ChannelAnalysis = tf4h.ChannelAnalysis
+		result.VolumeProfile = tf4h.VolumeProfile
+		result.SupplyDemand = tf4h.SupplyDemand
+		result.FairValueGaps = tf4h.FairValueGaps
+		result.Fibonacci = tf4h.Fibonacci
+	}
+
+	// 生成统一信号
+	result.UnifiedSignals = ca.generateUnifiedSignals(result, currentPrice)
+
+	// 分析市场结构
+	result.MarketStructure = ca.analyzeMarketStructure(result)
+
+	// 评估风险
+	result.RiskAssessment = ca.assessRisk(result)
+
+	// 生成交易建议
+	result.TradingAdvice = ca.generateTradingAdvice(result)
+
+	// 将多时间框架分析添加到结果中（需要在ComprehensiveResult中添加该字段）
+	// result.MultiTimeframeAnalysis = multiTimeframeAnalysis
+
+	return result
+}
+
+// Analyze 执行综合市场分析（向前兼容）
 func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines3m, klines4h []Kline) *ComprehensiveResult {
 	if len(klines3m) == 0 && len(klines4h) == 0 {
 		return nil
@@ -1253,4 +1315,477 @@ func (ca *ComprehensiveAnalyzer) generateTradingAdvice(result *ComprehensiveResu
 	return advice
 }
 
+// AnalyzeAllTimeframes 分析所有时间框架
+func (ca *ComprehensiveAnalyzer) AnalyzeAllTimeframes(symbol string, currentPrice float64, klinesMap map[string][]Kline) *MultiTimeframeAnalysis {
+	timeframes := []string{"3m", "15m", "30m", "1h", "4h"}
+	weights := map[string]float64{
+		"3m":  0.1,  // 短期噪音较多，权重较低
+		"15m": 0.15, // 短期趋势
+		"30m": 0.2,  // 中短期趋势
+		"1h":  0.25, // 中期趋势
+		"4h":  0.3,  // 长期趋势，权重最高
+	}
 
+	analysis := &MultiTimeframeAnalysis{
+		Timeframes: make(map[string]*TimeframeAnalysis),
+	}
+
+	// 分析每个时间框架
+	for _, tf := range timeframes {
+		klines, exists := klinesMap[tf]
+		if !exists || len(klines) < 10 {
+			continue
+		}
+
+		tfAnalysis := ca.analyzeSingleTimeframe(tf, klines, currentPrice, weights[tf])
+		analysis.Timeframes[tf] = tfAnalysis
+	}
+
+	// 生成综合总结
+	analysis.Summary = ca.generateAnalysisSummary(analysis.Timeframes, currentPrice)
+
+	return analysis
+}
+
+// analyzeSingleTimeframe 分析单一时间框架
+func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe string, klines []Kline, currentPrice, weight float64) *TimeframeAnalysis {
+	tfAnalysis := &TimeframeAnalysis{
+		Timeframe: timeframe,
+		Weight:    weight,
+	}
+
+	// 根据时间框架确定最小数据要求
+	minDataPoints := ca.getMinDataPoints(timeframe)
+	if len(klines) < minDataPoints {
+		tfAnalysis.Reliability = 0.0
+		return tfAnalysis
+	}
+
+	// 执行各种分析
+	if ca.config.EnableDowTheory {
+		// 道氏理论需要3m和当前时间框架的数据
+		if timeframe == "3m" {
+			tfAnalysis.DowTheory = ca.dowAnalyzer.Analyze(klines, klines, currentPrice)
+		} else {
+			// 对于其他时间框架，使用当前数据
+			tfAnalysis.DowTheory = ca.dowAnalyzer.Analyze(klines, klines, currentPrice)
+		}
+	}
+
+	// 通道分析
+	tfAnalysis.ChannelAnalysis = ca.channelAnalyzer.Analyze(klines, currentPrice)
+
+	// VPVR分析
+	if ca.config.EnableVPVR {
+		tfAnalysis.VolumeProfile = ca.vpvrAnalyzer.Analyze(klines)
+	}
+
+	// 供需区分析
+	if ca.config.EnableSupplyDemand {
+		tfAnalysis.SupplyDemand = ca.sdAnalyzer.Analyze(klines)
+	}
+
+	// FVG分析
+	if ca.config.EnableFVG {
+		tfAnalysis.FairValueGaps = ca.fvgAnalyzer.Analyze(klines)
+	}
+
+	// 斐波纳契分析
+	if ca.config.EnableFibonacci {
+		tfAnalysis.Fibonacci = ca.fibonacciAnalyzer.Analyze(klines)
+	}
+
+	// 计算可靠性评分
+	tfAnalysis.Reliability = ca.calculateTimeframeReliability(tfAnalysis, timeframe, len(klines))
+
+	return tfAnalysis
+}
+
+// getMinDataPoints 获取时间框架的最小数据要求
+func (ca *ComprehensiveAnalyzer) getMinDataPoints(timeframe string) int {
+	switch timeframe {
+	case "3m":
+		return 100 // 5小时数据
+	case "15m":
+		return 80  // 20小时数据
+	case "30m":
+		return 60  // 30小时数据
+	case "1h":
+		return 48  // 48小时数据
+	case "4h":
+		return 20  // 80小时数据
+	default:
+		return 50
+	}
+}
+
+// calculateTimeframeReliability 计算时间框架可靠性
+func (ca *ComprehensiveAnalyzer) calculateTimeframeReliability(tfAnalysis *TimeframeAnalysis, timeframe string, dataPoints int) float64 {
+	reliability := 0.0
+
+	// 基础数据充足性评分
+	minPoints := ca.getMinDataPoints(timeframe)
+	dataScore := min(float64(dataPoints)/float64(minPoints), 1.0)
+	reliability += dataScore * 0.3
+
+	// 分析质量评分
+	qualityScore := 0.0
+	analysisCount := 0
+
+	if tfAnalysis.DowTheory != nil && tfAnalysis.DowTheory.TrendStrength != nil {
+		qualityScore += tfAnalysis.DowTheory.TrendStrength.Overall / 100
+		analysisCount++
+	}
+
+	if tfAnalysis.ChannelAnalysis != nil {
+		qualityScore += tfAnalysis.ChannelAnalysis.Quality
+		analysisCount++
+	}
+
+	if tfAnalysis.VolumeProfile != nil && tfAnalysis.VolumeProfile.ValueArea != nil {
+		qualityScore += tfAnalysis.VolumeProfile.ValueArea.Concentration / 3.0 // 标准化到0-1
+		analysisCount++
+	}
+
+	if analysisCount > 0 {
+		reliability += (qualityScore / float64(analysisCount)) * 0.5
+	}
+
+	// 时间框架权重调整
+	reliability += tfAnalysis.Weight * 0.2
+
+	return min(reliability, 1.0)
+}
+
+// generateAnalysisSummary 生成多时间框架综合总结
+func (ca *ComprehensiveAnalyzer) generateAnalysisSummary(timeframes map[string]*TimeframeAnalysis, currentPrice float64) *AnalysisSummary {
+	summary := &AnalysisSummary{
+		TimeframeAlignment: make(map[string]bool),
+		KeyLevels: &MultiTimeframeLevels{
+			SupportLevels:    []LevelInfo{},
+			ResistanceLevels: []LevelInfo{},
+			PivotLevels:      []LevelInfo{},
+		},
+		TradingSignals: []*MultiTimeframeSignal{},
+		RiskAssessment: &MultiTimeframeRisk{
+			TimeframeRisks: make(map[string]string),
+		},
+	}
+
+	// 分析趋势一致性
+	trendVotes := make(map[string]int) // up, down, flat
+	totalWeight := 0.0
+
+	for tf, analysis := range timeframes {
+		if analysis.DowTheory != nil && analysis.DowTheory.TrendStrength != nil {
+			direction := string(analysis.DowTheory.TrendStrength.Direction)
+			trendVotes[direction]++
+			totalWeight += analysis.Weight
+
+			// 记录趋势一致性
+			summary.TimeframeAlignment[tf] = true // 简化判断，后续可完善
+		}
+	}
+
+	// 确定总体趋势
+	maxVotes := 0
+	for trend, votes := range trendVotes {
+		if votes > maxVotes {
+			maxVotes = votes
+			summary.OverallTrend = trend
+		}
+	}
+
+	// 计算趋势一致性评分
+	if len(timeframes) > 0 {
+		summary.TrendConsistency = float64(maxVotes) / float64(len(timeframes))
+	}
+
+	// 收集关键价位
+	ca.collectKeyLevels(timeframes, summary.KeyLevels, currentPrice)
+
+	// 生成多时间框架交易信号
+	summary.TradingSignals = ca.generateMultiTimeframeSignals(timeframes, currentPrice)
+
+	// 评估风险
+	summary.RiskAssessment = ca.assessMultiTimeframeRisk(timeframes)
+
+	// 计算信号置信度
+	summary.SignalConfidence = ca.calculateSignalConfidence(timeframes, summary.TrendConsistency)
+
+	return summary
+}
+
+// collectKeyLevels 收集多时间框架关键价位
+func (ca *ComprehensiveAnalyzer) collectKeyLevels(timeframes map[string]*TimeframeAnalysis, levels *MultiTimeframeLevels, currentPrice float64) {
+	levelMap := make(map[float64]*LevelInfo) // 价格 -> 级别信息
+
+	for tf, analysis := range timeframes {
+		// 从通道分析收集支撑阻力位
+		if analysis.ChannelAnalysis != nil && analysis.ChannelAnalysis.ActiveChannel != nil {
+			channel := analysis.ChannelAnalysis.ActiveChannel
+			
+			// 上轨作为阻力位
+			if channel.UpperLine != nil {
+				currentTime := float64(time.Now().UnixMilli())
+				upperPrice := channel.UpperLine.Slope*currentTime + channel.UpperLine.Intercept
+				ca.addOrUpdateLevel(levelMap, upperPrice, "resistance", "channel_"+tf, tf, channel.Quality)
+			}
+			
+			// 下轨作为支撑位
+			if channel.LowerLine != nil {
+				currentTime := float64(time.Now().UnixMilli())
+				lowerPrice := channel.LowerLine.Slope*currentTime + channel.LowerLine.Intercept
+				ca.addOrUpdateLevel(levelMap, lowerPrice, "support", "channel_"+tf, tf, channel.Quality)
+			}
+		}
+
+		// 从VPVR分析收集关键价位
+		if analysis.VolumeProfile != nil {
+			if analysis.VolumeProfile.POC != nil {
+				ca.addOrUpdateLevel(levelMap, analysis.VolumeProfile.POC.Price, "pivot", "vpvr_poc_"+tf, tf, analysis.VolumeProfile.POC.VolumePercent/100)
+			}
+			ca.addOrUpdateLevel(levelMap, analysis.VolumeProfile.VAH, "resistance", "vpvr_vah_"+tf, tf, 0.8)
+			ca.addOrUpdateLevel(levelMap, analysis.VolumeProfile.VAL, "support", "vpvr_val_"+tf, tf, 0.8)
+		}
+
+		// 从斐波纳契分析收集关键价位
+		if analysis.Fibonacci != nil && analysis.Fibonacci.GoldenPocket != nil && analysis.Fibonacci.GoldenPocket.IsActive {
+			pocket := analysis.Fibonacci.GoldenPocket
+			levelType := "support"
+			if pocket.TrendContext == TrendDownward {
+				levelType = "resistance"
+			}
+			ca.addOrUpdateLevel(levelMap, pocket.CenterPrice, levelType, "fib_golden_"+tf, tf, pocket.Strength/100)
+		}
+	}
+
+	// 将收集的价位分类到支撑、阻力、枢轴点
+	for _, level := range levelMap {
+		switch level.Type {
+		case "support":
+			levels.SupportLevels = append(levels.SupportLevels, *level)
+		case "resistance":
+			levels.ResistanceLevels = append(levels.ResistanceLevels, *level)
+		case "pivot":
+			levels.PivotLevels = append(levels.PivotLevels, *level)
+		}
+	}
+}
+
+// addOrUpdateLevel 添加或更新价位信息
+func (ca *ComprehensiveAnalyzer) addOrUpdateLevel(levelMap map[float64]*LevelInfo, price float64, levelType, source, timeframe string, strength float64) {
+	// 价格容差（0.1%）
+	tolerance := price * 0.001
+	
+	// 查找是否有接近的价位
+	var existingPrice float64 = -1
+	for existingP := range levelMap {
+		if abs(existingP-price) <= tolerance {
+			existingPrice = existingP
+			break
+		}
+	}
+
+	if existingPrice > 0 {
+		// 更新现有价位
+		level := levelMap[existingPrice]
+		level.Sources = append(level.Sources, source)
+		level.Timeframes = append(level.Timeframes, timeframe)
+		level.Strength += strength
+		level.Confidence = min(level.Confidence+0.2, 1.0) // 多时间框架确认增加置信度
+	} else {
+		// 添加新价位
+		levelMap[price] = &LevelInfo{
+			Price:      price,
+			Strength:   strength,
+			Sources:    []string{source},
+			Timeframes: []string{timeframe},
+			Type:       levelType,
+			Confidence: 0.5, // 初始置信度
+		}
+	}
+}
+
+// generateMultiTimeframeSignals 生成多时间框架交易信号
+func (ca *ComprehensiveAnalyzer) generateMultiTimeframeSignals(timeframes map[string]*TimeframeAnalysis, currentPrice float64) []*MultiTimeframeSignal {
+	var signals []*MultiTimeframeSignal
+
+	// 收集各时间框架的信号投票
+	actionVotes := make(map[SignalAction]map[string]float64) // action -> timeframe -> weight
+	actionVotes[ActionBuy] = make(map[string]float64)
+	actionVotes[ActionSell] = make(map[string]float64)
+	actionVotes[ActionHold] = make(map[string]float64)
+
+	for tf, analysis := range timeframes {
+		// 从道氏理论获取信号
+		if analysis.DowTheory != nil && analysis.DowTheory.TradingSignal != nil {
+			signal := analysis.DowTheory.TradingSignal
+			actionVotes[signal.Action][tf] = analysis.Weight * (signal.Confidence / 100)
+		}
+
+		// 从通道分析获取信号
+		if analysis.ChannelAnalysis != nil {
+			action := ca.getChannelSignal(analysis.ChannelAnalysis, currentPrice)
+			if action != ActionHold {
+				actionVotes[action][tf] += analysis.Weight * analysis.ChannelAnalysis.Quality
+			}
+		}
+	}
+
+	// 计算综合信号
+	for action, votes := range actionVotes {
+		if len(votes) == 0 {
+			continue
+		}
+
+		totalWeight := 0.0
+		for _, weight := range votes {
+			totalWeight += weight
+		}
+
+		if totalWeight > 0.3 { // 最低阈值
+			signal := &MultiTimeframeSignal{
+				ID:            fmt.Sprintf("mtf_%s_%d", action, time.Now().Unix()),
+				PrimaryAction: action,
+				Confidence:    min(totalWeight, 1.0) * 100,
+				TimeframeVotes: make(map[string]SignalAction),
+				SignalSources: []string{"multi_timeframe_consensus"},
+				EntryPrice:    currentPrice,
+				Timeframe:     ca.getDominantTimeframe(votes, timeframes),
+				Timestamp:     time.Now().Unix(),
+			}
+
+			// 设置投票详情
+			for tf := range votes {
+				signal.TimeframeVotes[tf] = action
+			}
+
+			signals = append(signals, signal)
+		}
+	}
+
+	return signals
+}
+
+// getChannelSignal 从通道分析获取交易信号
+func (ca *ComprehensiveAnalyzer) getChannelSignal(channelAnalysis *ChannelData, currentPrice float64) SignalAction {
+	if channelAnalysis == nil || channelAnalysis.ActiveChannel == nil {
+		return ActionHold
+	}
+
+	switch channelAnalysis.CurrentPosition {
+	case "lower":
+		if channelAnalysis.Direction == "up" {
+			return ActionBuy // 上升通道下轨买入
+		}
+	case "upper":
+		if channelAnalysis.Direction == "down" {
+			return ActionSell // 下降通道上轨卖出
+		}
+	case "break_up":
+		return ActionBuy // 向上突破
+	case "break_down":
+		return ActionSell // 向下突破
+	}
+
+	return ActionHold
+}
+
+// getDominantTimeframe 获取主导时间框架
+func (ca *ComprehensiveAnalyzer) getDominantTimeframe(votes map[string]float64, timeframes map[string]*TimeframeAnalysis) string {
+	maxWeight := 0.0
+	dominantTf := "4h" // 默认
+
+	for tf, weight := range votes {
+		if analysis, exists := timeframes[tf]; exists {
+			adjustedWeight := weight * analysis.Reliability
+			if adjustedWeight > maxWeight {
+				maxWeight = adjustedWeight
+				dominantTf = tf
+			}
+		}
+	}
+
+	return dominantTf
+}
+
+// assessMultiTimeframeRisk 评估多时间框架风险
+func (ca *ComprehensiveAnalyzer) assessMultiTimeframeRisk(timeframes map[string]*TimeframeAnalysis) *MultiTimeframeRisk {
+	risk := &MultiTimeframeRisk{
+		TimeframeRisks: make(map[string]string),
+	}
+
+	riskScores := []float64{}
+	conflictCount := 0
+
+	for tf, analysis := range timeframes {
+		// 评估单个时间框架风险
+		tfRisk := "medium"
+		riskScore := 0.5
+
+		if analysis.DowTheory != nil && analysis.DowTheory.TrendStrength != nil {
+			consistency := analysis.DowTheory.TrendStrength.Consistency
+			if consistency > 70 {
+				tfRisk = "low"
+				riskScore = 0.3
+			} else if consistency < 40 {
+				tfRisk = "high"
+				riskScore = 0.8
+			}
+		}
+
+		risk.TimeframeRisks[tf] = tfRisk
+		riskScores = append(riskScores, riskScore)
+	}
+
+	// 计算总体风险
+	avgRisk := 0.0
+	for _, score := range riskScores {
+		avgRisk += score
+	}
+	if len(riskScores) > 0 {
+		avgRisk /= float64(len(riskScores))
+	}
+
+	if avgRisk < 0.4 {
+		risk.OverallRisk = "low"
+		risk.RecommendedExposure = 0.03 // 3%
+		risk.MaxPositionSize = 0.15     // 15%
+	} else if avgRisk < 0.7 {
+		risk.OverallRisk = "medium"
+		risk.RecommendedExposure = 0.02 // 2%
+		risk.MaxPositionSize = 0.10     // 10%
+	} else {
+		risk.OverallRisk = "high"
+		risk.RecommendedExposure = 0.01 // 1%
+		risk.MaxPositionSize = 0.05     // 5%
+	}
+
+	risk.ConflictingSignals = conflictCount
+	return risk
+}
+
+// calculateSignalConfidence 计算信号置信度
+func (ca *ComprehensiveAnalyzer) calculateSignalConfidence(timeframes map[string]*TimeframeAnalysis, trendConsistency float64) float64 {
+	confidence := trendConsistency * 0.4 // 趋势一致性占40%
+
+	// 分析质量占30%
+	qualitySum := 0.0
+	qualityCount := 0
+	for _, analysis := range timeframes {
+		if analysis.Reliability > 0 {
+			qualitySum += analysis.Reliability
+			qualityCount++
+		}
+	}
+	if qualityCount > 0 {
+		confidence += (qualitySum / float64(qualityCount)) * 0.3
+	}
+
+	// 数据充足性占30%
+	dataScore := min(float64(len(timeframes))/5.0, 1.0) // 最多5个时间框架
+	confidence += dataScore * 0.3
+
+	return min(confidence, 1.0)
+}
