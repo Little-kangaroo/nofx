@@ -369,11 +369,14 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 	}
 
 	// 保存到数据库
+	log.Printf("📝 准备保存交易员到数据库: %s (用户: %s)", req.Name, userID)
 	err := s.database.CreateTrader(trader)
 	if err != nil {
+		log.Printf("❌ 数据库保存交易员失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("创建交易员失败: %v", err)})
 		return
 	}
+	log.Printf("✅ 交易员已成功保存到数据库")
 
 	// 立即将新交易员加载到TraderManager中
 	err = s.traderManager.LoadUserTraders(s.database, userID)

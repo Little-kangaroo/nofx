@@ -89,15 +89,19 @@ func (tm *TraderManager) LoadTradersFromDatabase(database *config.Database) erro
 
 	// 解析默认币种列表
 	var defaultCoins []string
+	log.Printf("🔍 系统配置 - 默认币种原始数据: '%s'", defaultCoinsStr)
 	if defaultCoinsStr != "" {
 		if err := json.Unmarshal([]byte(defaultCoinsStr), &defaultCoins); err != nil {
 			log.Printf("⚠️ 解析默认币种配置失败: %v，使用硬编码默认币种", err)
 			defaultCoins = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
+		} else {
+			log.Printf("✓ 成功解析数据库默认币种: %v (数量: %d)", defaultCoins, len(defaultCoins))
 		}
 	} else {
 		log.Printf("⚠️ 数据库中没有默认币种配置，使用硬编码默认币种")
 		defaultCoins = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
 	}
+	log.Printf("📋 最终使用的默认币种列表: %v (数量: %d)", defaultCoins, len(defaultCoins))
 
 	// 为每个交易员获取AI模型和交易所配置
 	for _, traderCfg := range allTraders {
@@ -206,6 +210,9 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 	// 如果没有指定交易币种，使用默认币种
 	if len(tradingCoins) == 0 {
 		tradingCoins = defaultCoins
+		log.Printf("🔍 [%s] 交易员无自定义币种，使用默认币种: %v", traderCfg.Name, defaultCoins)
+	} else {
+		log.Printf("🔍 [%s] 使用交易员自定义币种: %v", traderCfg.Name, tradingCoins)
 	}
 
 	// 根据交易员配置决定是否使用信号源
@@ -282,7 +289,23 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 	}
 
 	tm.traders[traderCfg.ID] = at
+	
+	// 详细输出交易员配置信息
 	log.Printf("✓ Trader '%s' (%s + %s) 已加载到内存", traderCfg.Name, aiModelCfg.Provider, exchangeCfg.ID)
+	log.Printf("  📋 交易员详细信息:")
+	log.Printf("     ID: %s", traderCfg.ID)
+	log.Printf("     用户: %s", traderCfg.UserID)
+	log.Printf("     AI模型: %s (启用: %v)", aiModelCfg.ID, aiModelCfg.Enabled)
+	log.Printf("     交易所: %s (启用: %v)", exchangeCfg.ID, exchangeCfg.Enabled)
+	log.Printf("     初始资金: %.2f USDT", traderCfg.InitialBalance)
+	log.Printf("     扫描间隔: %d分钟", traderCfg.ScanIntervalMinutes)
+	log.Printf("     杠杆配置: BTC/ETH=%dx, 山寨币=%dx", traderCfg.BTCETHLeverage, traderCfg.AltcoinLeverage)
+	log.Printf("     交易币种: '%s'", traderCfg.TradingSymbols)
+	log.Printf("     信号源: CoinPool=%v, OITop=%v", traderCfg.UseCoinPool, traderCfg.UseOITop)
+	log.Printf("     仓位模式: %s", map[bool]string{true: "全仓", false: "逐仓"}[traderCfg.IsCrossMargin])
+	log.Printf("     系统模板: %s", traderCfg.SystemPromptTemplate)
+	log.Printf("     最终币种列表: %v (数量: %d)", tradingCoins, len(tradingCoins))
+	log.Printf("     默认币种列表: %v (数量: %d)", defaultCoins, len(defaultCoins))
 	return nil
 }
 
@@ -313,6 +336,9 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 	// 如果没有指定交易币种，使用默认币种
 	if len(tradingCoins) == 0 {
 		tradingCoins = defaultCoins
+		log.Printf("🔍 [%s] 交易员无自定义币种，使用默认币种: %v", traderCfg.Name, defaultCoins)
+	} else {
+		log.Printf("🔍 [%s] 使用交易员自定义币种: %v", traderCfg.Name, tradingCoins)
 	}
 
 	// 根据交易员配置决定是否使用信号源
@@ -388,7 +414,23 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 	}
 
 	tm.traders[traderCfg.ID] = at
+	
+	// 详细输出交易员配置信息
 	log.Printf("✓ Trader '%s' (%s + %s) 已添加", traderCfg.Name, aiModelCfg.Provider, exchangeCfg.ID)
+	log.Printf("  📋 交易员详细信息:")
+	log.Printf("     ID: %s", traderCfg.ID)
+	log.Printf("     用户: %s", traderCfg.UserID)
+	log.Printf("     AI模型: %s (启用: %v)", aiModelCfg.ID, aiModelCfg.Enabled)
+	log.Printf("     交易所: %s (启用: %v)", exchangeCfg.ID, exchangeCfg.Enabled)
+	log.Printf("     初始资金: %.2f USDT", traderCfg.InitialBalance)
+	log.Printf("     扫描间隔: %d分钟", traderCfg.ScanIntervalMinutes)
+	log.Printf("     杠杆配置: BTC/ETH=%dx, 山寨币=%dx", traderCfg.BTCETHLeverage, traderCfg.AltcoinLeverage)
+	log.Printf("     交易币种: '%s'", traderCfg.TradingSymbols)
+	log.Printf("     信号源: CoinPool=%v, OITop=%v", traderCfg.UseCoinPool, traderCfg.UseOITop)
+	log.Printf("     仓位模式: %s", map[bool]string{true: "全仓", false: "逐仓"}[traderCfg.IsCrossMargin])
+	log.Printf("     系统模板: %s", traderCfg.SystemPromptTemplate)
+	log.Printf("     最终币种列表: %v (数量: %d)", tradingCoins, len(tradingCoins))
+	log.Printf("     默认币种列表: %v (数量: %d)", defaultCoins, len(defaultCoins))
 	return nil
 }
 
@@ -758,15 +800,19 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 
 	// 解析默认币种列表
 	var defaultCoins []string
+	log.Printf("🔍 系统配置 - 默认币种原始数据: '%s'", defaultCoinsStr)
 	if defaultCoinsStr != "" {
 		if err := json.Unmarshal([]byte(defaultCoinsStr), &defaultCoins); err != nil {
 			log.Printf("⚠️ 解析默认币种配置失败: %v，使用硬编码默认币种", err)
 			defaultCoins = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
+		} else {
+			log.Printf("✓ 成功解析数据库默认币种: %v (数量: %d)", defaultCoins, len(defaultCoins))
 		}
 	} else {
 		log.Printf("⚠️ 数据库中没有默认币种配置，使用硬编码默认币种")
 		defaultCoins = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
 	}
+	log.Printf("📋 最终使用的默认币种列表: %v (数量: %d)", defaultCoins, len(defaultCoins))
 
 	// 为每个交易员获取AI模型和交易所配置
 	for _, traderCfg := range traders {
@@ -865,6 +911,9 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 	// 如果没有指定交易币种，使用默认币种
 	if len(tradingCoins) == 0 {
 		tradingCoins = defaultCoins
+		log.Printf("🔍 [%s] 交易员无自定义币种，使用默认币种: %v", traderCfg.Name, defaultCoins)
+	} else {
+		log.Printf("🔍 [%s] 使用交易员自定义币种: %v", traderCfg.Name, tradingCoins)
 	}
 
 	// 根据交易员配置决定是否使用信号源
@@ -935,6 +984,22 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 	}
 
 	tm.traders[traderCfg.ID] = at
+	
+	// 详细输出交易员配置信息
 	log.Printf("✓ Trader '%s' (%s + %s) 已为用户加载到内存", traderCfg.Name, aiModelCfg.Provider, exchangeCfg.ID)
+	log.Printf("  📋 交易员详细信息:")
+	log.Printf("     ID: %s", traderCfg.ID)
+	log.Printf("     用户: %s", traderCfg.UserID)
+	log.Printf("     AI模型: %s (启用: %v)", aiModelCfg.ID, aiModelCfg.Enabled)
+	log.Printf("     交易所: %s (启用: %v)", exchangeCfg.ID, exchangeCfg.Enabled)
+	log.Printf("     初始资金: %.2f USDT", traderCfg.InitialBalance)
+	log.Printf("     扫描间隔: %d分钟", traderCfg.ScanIntervalMinutes)
+	log.Printf("     杠杆配置: BTC/ETH=%dx, 山寨币=%dx", traderCfg.BTCETHLeverage, traderCfg.AltcoinLeverage)
+	log.Printf("     交易币种: '%s'", traderCfg.TradingSymbols)
+	log.Printf("     信号源: CoinPool=%v, OITop=%v", traderCfg.UseCoinPool, traderCfg.UseOITop)
+	log.Printf("     仓位模式: %s", map[bool]string{true: "全仓", false: "逐仓"}[traderCfg.IsCrossMargin])
+	log.Printf("     系统模板: %s", traderCfg.SystemPromptTemplate)
+	log.Printf("     最终币种列表: %v (数量: %d)", tradingCoins, len(tradingCoins))
+	log.Printf("     默认币种列表: %v (数量: %d)", defaultCoins, len(defaultCoins))
 	return nil
 }

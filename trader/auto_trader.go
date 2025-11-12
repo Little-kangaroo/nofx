@@ -1017,6 +1017,7 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 
 // getCandidateCoins 获取交易员的候选币种列表
 func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
+	log.Printf("🔍 [%s] getCandidateCoins: tradingCoins=%v, defaultCoins=%v", at.name, at.tradingCoins, at.defaultCoins)
 	if len(at.tradingCoins) == 0 {
 		// 使用数据库配置的默认币种列表
 		var candidateCoins []decision.CandidateCoin
@@ -1083,12 +1084,30 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 		// 使用自定义币种列表
 		var candidateCoins []decision.CandidateCoin
 		for _, coin := range at.tradingCoins {
+			// 跳过空字符串
+			if strings.TrimSpace(coin) == "" {
+				continue
+			}
 			// 确保币种格式正确（转为大写USDT交易对）
 			symbol := normalizeSymbol(coin)
 			candidateCoins = append(candidateCoins, decision.CandidateCoin{
 				Symbol:  symbol,
 				Sources: []string{"custom"}, // 标记为自定义来源
 			})
+		}
+
+		// 如果自定义币种列表处理后为空，使用硬编码默认币种
+		if len(candidateCoins) == 0 {
+			log.Printf("⚠️ [%s] 自定义币种处理后为空，使用硬编码默认币种", at.name)
+			hardcodedCoins := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
+			for _, coin := range hardcodedCoins {
+				candidateCoins = append(candidateCoins, decision.CandidateCoin{
+					Symbol:  coin,
+					Sources: []string{"hardcoded"}, // 标记为硬编码来源
+				})
+			}
+			log.Printf("📋 [%s] 使用硬编码默认币种: %d个币种 %v", at.name, len(candidateCoins), hardcodedCoins)
+			return candidateCoins, nil
 		}
 
 		log.Printf("📋 [%s] 使用自定义币种: %d个币种 %v",

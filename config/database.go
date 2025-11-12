@@ -37,6 +37,11 @@ func NewDatabase(dbPath string) (*Database, error) {
 		return nil, fmt.Errorf("初始化默认数据失败: %w", err)
 	}
 
+	// 验证数据库表结构
+	if err := database.verifyTableStructure(); err != nil {
+		log.Printf("⚠️ 数据库表结构验证失败: %v", err)
+	}
+
 	return database, nil
 }
 
@@ -105,10 +110,7 @@ func (d *Database) createTables() error {
 			use_coin_pool BOOLEAN DEFAULT 0,
 			use_oi_top BOOLEAN DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-			FOREIGN KEY (ai_model_id) REFERENCES ai_models(id),
-			FOREIGN KEY (exchange_id) REFERENCES exchanges(id)
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 
 		// 用户表
@@ -215,6 +217,66 @@ func (d *Database) createTables() error {
 	}
 
 	return nil
+}
+
+// verifyTableStructure 验证数据库表结构
+func (d *Database) verifyTableStructure() error {
+	log.Printf("🔍 验证数据库表结构...")
+	
+	// 验证traders表的列
+	rows, err := d.db.Query("PRAGMA table_info(traders)")
+	if err != nil {
+		return fmt.Errorf("获取traders表信息失败: %w", err)
+	}
+	defer rows.Close()
+	
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull int
+		var defaultValue interface{}
+		var pk int
+		
+		err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk)
+		if err != nil {
+			continue
+		}
+		columns[name] = true
+	}
+	
+	// 检查必需的列
+	requiredColumns := []string{
+		"id", "user_id", "name", "ai_model_id", "exchange_id", "initial_balance",
+		"scan_interval_minutes", "is_running", "btc_eth_leverage", "altcoin_leverage",
+		"trading_symbols", "use_coin_pool", "use_oi_top", "custom_prompt",
+		"override_base_prompt", "system_prompt_template", "is_cross_margin",
+	}
+	
+	missing := []string{}
+	for _, col := range requiredColumns {
+		if !columns[col] {
+			missing = append(missing, col)
+		}
+	}
+	
+	if len(missing) > 0 {
+		log.Printf("⚠️ traders表缺少列: %v", missing)
+		log.Printf("📋 现有列: %v", getKeys(columns))
+	} else {
+		log.Printf("✅ traders表结构完整")
+	}
+	
+	return nil
+}
+
+// getKeys 获取map的键列表
+func getKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // initDefaultData 初始化默认数据
@@ -780,11 +842,75 @@ func (d *Database) CreateExchange(userID, id, name, typ string, enabled bool, ap
 
 // CreateTrader 创建交易员
 func (d *Database) CreateTrader(trader *TraderRecord) error {
-	_, err := d.db.Exec(`
-		INSERT INTO traders (id, user_id, name, ai_model_id, exchange_id, initial_balance, scan_interval_minutes, is_running, btc_eth_leverage, altcoin_leverage, trading_symbols, use_coin_pool, use_oi_top, custom_prompt, override_base_prompt, system_prompt_template, is_cross_margin)
+	log.Printf("🆕 正在创建交易员: ID=%s, Name=%s, UserID=%s", trader.ID, trader.Name, trader.UserID)
+	log.Printf("   AI模型: %s, 交易所: %s", trader.AIModelID, trader.ExchangeID)
+	log.Printf("   杠杆: BTC/ETH=%d, 山寨币=%d", trader.BTCETHLeverage, trader.AltcoinLeverage)
+	log.Printf("   交易币种: '%s'", trader.TradingSymbols)
+	
+	// 检查外键约束 - 验证用户是否存在
+	var userExists bool
+	err := d.db.QueryRow("SELECT 1 FROM users WHERE id = ?", trader.UserID).Scan(&userExists)
+	if err != nil {
+		log.Printf("⚠️ 用户 %s 不存在，但继续创建交易员（可能使用管理员模式）", trader.UserID)
+	}
+	
+	// 检查AI模型是否存在（更宽松的检查）
+	var aiModelExists bool
+	err = d.db.QueryRow("SELECT 1 FROM ai_models WHERE id = ? AND user_id = ?", trader.AIModelID, trader.UserID).Scan(&aiModelExists)
+	if err != nil {
+		log.Printf("⚠️ AI模型 %s 对用户 %s 不存在，尝试查找通用模型", trader.AIModelID, trader.UserID)
+		// 检查是否是通用模型（default用户的模型）
+		err = d.db.QueryRow("SELECT 1 FROM ai_models WHERE provider = ?", trader.AIModelID).Scan(&aiModelExists)
+		if err != nil {
+			log.Printf("⚠️ 未找到匹配的AI模型: %s", trader.AIModelID)
+		}
+	}
+	
+	// 检查交易所是否存在（更宽松的检查）
+	var exchangeExists bool
+	err = d.db.QueryRow("SELECT 1 FROM exchanges WHERE id = ? AND user_id = ?", trader.ExchangeID, trader.UserID).Scan(&exchangeExists)
+	if err != nil {
+		log.Printf("⚠️ 交易所 %s 对用户 %s 不存在，尝试查找通用交易所", trader.ExchangeID, trader.UserID)
+		// 检查是否是通用交易所（default用户的交易所）
+		err = d.db.QueryRow("SELECT 1 FROM exchanges WHERE id = ?", trader.ExchangeID).Scan(&exchangeExists)
+		if err != nil {
+			log.Printf("⚠️ 未找到匹配的交易所: %s", trader.ExchangeID)
+		}
+	}
+	
+	result, err := d.db.Exec(`
+		INSERT INTO traders (
+			id, user_id, name, ai_model_id, exchange_id, initial_balance, 
+			scan_interval_minutes, is_running, btc_eth_leverage, altcoin_leverage, 
+			trading_symbols, use_coin_pool, use_oi_top, custom_prompt, 
+			override_base_prompt, system_prompt_template, is_cross_margin
+		)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, trader.ID, trader.UserID, trader.Name, trader.AIModelID, trader.ExchangeID, trader.InitialBalance, trader.ScanIntervalMinutes, trader.IsRunning, trader.BTCETHLeverage, trader.AltcoinLeverage, trader.TradingSymbols, trader.UseCoinPool, trader.UseOITop, trader.CustomPrompt, trader.OverrideBasePrompt, trader.SystemPromptTemplate, trader.IsCrossMargin)
-	return err
+	`, trader.ID, trader.UserID, trader.Name, trader.AIModelID, trader.ExchangeID, 
+		trader.InitialBalance, trader.ScanIntervalMinutes, trader.IsRunning, 
+		trader.BTCETHLeverage, trader.AltcoinLeverage, trader.TradingSymbols, 
+		trader.UseCoinPool, trader.UseOITop, trader.CustomPrompt, 
+		trader.OverrideBasePrompt, trader.SystemPromptTemplate, trader.IsCrossMargin)
+	
+	if err != nil {
+		log.Printf("❌ 创建交易员失败: %v", err)
+		log.Printf("   可能原因: 1)表结构不完整 2)外键约束失败 3)字段值无效")
+		return err
+	}
+	
+	rowsAffected, _ := result.RowsAffected()
+	log.Printf("✅ 交易员创建成功，影响行数: %d", rowsAffected)
+	
+	// 验证数据是否真的插入了
+	var verifyID string
+	err = d.db.QueryRow("SELECT id FROM traders WHERE id = ?", trader.ID).Scan(&verifyID)
+	if err != nil {
+		log.Printf("⚠️ 验证失败: 创建的交易员在数据库中找不到: %v", err)
+	} else {
+		log.Printf("✅ 验证成功: 交易员 %s 已存在于数据库中", verifyID)
+	}
+	
+	return nil
 }
 
 // GetTraders 获取用户的交易员
