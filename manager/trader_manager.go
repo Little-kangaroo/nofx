@@ -91,9 +91,12 @@ func (tm *TraderManager) LoadTradersFromDatabase(database *config.Database) erro
 	var defaultCoins []string
 	if defaultCoinsStr != "" {
 		if err := json.Unmarshal([]byte(defaultCoinsStr), &defaultCoins); err != nil {
-			log.Printf("⚠️ 解析默认币种配置失败: %v，使用空列表", err)
-			defaultCoins = []string{}
+			log.Printf("⚠️ 解析默认币种配置失败: %v，使用硬编码默认币种", err)
+			defaultCoins = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
 		}
+	} else {
+		log.Printf("⚠️ 数据库中没有默认币种配置，使用硬编码默认币种")
+		defaultCoins = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
 	}
 
 	// 为每个交易员获取AI模型和交易所配置
@@ -757,9 +760,12 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 	var defaultCoins []string
 	if defaultCoinsStr != "" {
 		if err := json.Unmarshal([]byte(defaultCoinsStr), &defaultCoins); err != nil {
-			log.Printf("⚠️ 解析默认币种配置失败: %v，使用空列表", err)
-			defaultCoins = []string{}
+			log.Printf("⚠️ 解析默认币种配置失败: %v，使用硬编码默认币种", err)
+			defaultCoins = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
 		}
+	} else {
+		log.Printf("⚠️ 数据库中没有默认币种配置，使用硬编码默认币种")
+		defaultCoins = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
 	}
 
 	// 为每个交易员获取AI模型和交易所配置

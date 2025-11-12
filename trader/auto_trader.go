@@ -1039,7 +1039,17 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 
 			mergedPool, err := pool.GetMergedCoinPool(ai500Limit)
 			if err != nil {
-				return nil, fmt.Errorf("获取合并币种池失败: %w", err)
+				log.Printf("⚠️ 获取合并币种池失败: %v，使用硬编码默认币种", err)
+				// 使用硬编码默认币种作为最后的fallback
+				hardcodedCoins := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
+				for _, coin := range hardcodedCoins {
+					candidateCoins = append(candidateCoins, decision.CandidateCoin{
+						Symbol:  coin,
+						Sources: []string{"hardcoded"}, // 标记为硬编码来源
+					})
+				}
+				log.Printf("📋 [%s] 使用硬编码默认币种: %d个币种 %v", at.name, len(candidateCoins), hardcodedCoins)
+				return candidateCoins, nil
 			}
 
 			// 构建候选币种列表（包含来源信息）
@@ -1049,6 +1059,20 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 					Symbol:  symbol,
 					Sources: sources, // "ai500" 和/或 "oi_top"
 				})
+			}
+
+			// 如果AI500+OI Top都没有返回币种，使用硬编码默认币种
+			if len(candidateCoins) == 0 {
+				log.Printf("⚠️ AI500+OI Top返回空列表，使用硬编码默认币种")
+				hardcodedCoins := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
+				for _, coin := range hardcodedCoins {
+					candidateCoins = append(candidateCoins, decision.CandidateCoin{
+						Symbol:  coin,
+						Sources: []string{"hardcoded"}, // 标记为硬编码来源
+					})
+				}
+				log.Printf("📋 [%s] 使用硬编码默认币种: %d个币种 %v", at.name, len(candidateCoins), hardcodedCoins)
+				return candidateCoins, nil
 			}
 
 			log.Printf("📋 [%s] 数据库无默认币种配置，使用AI500+OI Top: AI500前%d + OI_Top20 = 总计%d个候选币种",
