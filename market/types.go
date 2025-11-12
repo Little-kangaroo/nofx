@@ -990,6 +990,7 @@ const (
 	ReactionRejection                  // 拒绝
 )
 
+
 // FibSignal 斐波纳契交易信号
 type FibSignal struct {
 	ID           string           `json:"id"`
