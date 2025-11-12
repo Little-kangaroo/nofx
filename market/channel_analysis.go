@@ -1,6 +1,7 @@
 package market
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -438,10 +439,9 @@ func (ca *ChannelAnalyzer) createChannel(line1, line2 *TrendLine, currentPrice f
 	}
 
 	// 计算通道年龄
-	age := time.Now().UnixMilli() - math.Min(
-		upperLine.Points[0].Time,
-		lowerLine.Points[0].Time,
-	)
+	upperTime := float64(upperLine.Points[0].Time)
+	lowerTime := float64(lowerLine.Points[0].Time)
+	age := time.Now().UnixMilli() - int64(math.Min(upperTime, lowerTime))
 
 	return &Channel{
 		UpperLine:  upperLine,

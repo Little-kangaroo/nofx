@@ -1253,3 +1253,4 @@ func (ca *ComprehensiveAnalyzer) generateTradingAdvice(result *ComprehensiveResu
 	return advice
 }
 
+
