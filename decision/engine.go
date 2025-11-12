@@ -126,8 +126,10 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 
 // fetchMarketDataForContext 为上下文中的所有币种获取市场数据和OI数据
 func fetchMarketDataForContext(ctx *Context) error {
+	log.Printf("🔍 [DEBUG] fetchMarketDataForContext开始，候选币种数量: %d", len(ctx.CandidateCoins))
 	ctx.MarketDataMap = make(map[string]*market.Data)
 	ctx.OITopDataMap = make(map[string]*OITopData)
+	log.Printf("🔍 [DEBUG] MarketDataMap已初始化")
 
 	// 收集所有需要获取数据的币种
 	symbolSet := make(map[string]bool)
