@@ -1050,4 +1050,168 @@ func parseFloat(v interface{}) (float64, error) {
 	}
 }
 
+// GetMultiSymbolAnalysis 获取多个币种的多时间框架分析数据
+func GetMultiSymbolAnalysis(symbols []string) (map[string]map[string]interface{}, error) {
+	result := make(map[string]map[string]interface{})
+	
+	for _, symbol := range symbols {
+		// 标准化symbol
+		normalizedSymbol := Normalize(symbol)
+		
+		// 获取市场数据
+		data, err := Get(normalizedSymbol)
+		if err != nil {
+			fmt.Printf("获取%s市场数据失败: %v\n", normalizedSymbol, err)
+			continue
+		}
+		
+		// 构建时间框架数据
+		symbolData := map[string]interface{}{
+			"3m": map[string]interface{}{
+				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "dow_theory"),
+				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "channel_analysis"),
+				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "volume_profile"),
+				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "supply_demand"),
+				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "fair_value_gaps"),
+				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "fibonacci"),
+			},
+			"15m": map[string]interface{}{
+				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "dow_theory"),
+				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "channel_analysis"),
+				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "volume_profile"),
+				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "supply_demand"),
+				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fair_value_gaps"),
+				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fibonacci"),
+			},
+			"30m": map[string]interface{}{
+				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "dow_theory"),
+				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "channel_analysis"),
+				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "volume_profile"),
+				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "supply_demand"),
+				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fair_value_gaps"),
+				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fibonacci"),
+			},
+			"1h": map[string]interface{}{
+				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "dow_theory"),
+				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "channel_analysis"),
+				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "volume_profile"),
+				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "supply_demand"),
+				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fair_value_gaps"),
+				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fibonacci"),
+			},
+			"4h": map[string]interface{}{
+				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "dow_theory"),
+				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "channel_analysis"),
+				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "volume_profile"),
+				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "supply_demand"),
+				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fair_value_gaps"),
+				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fibonacci"),
+			},
+		}
+		
+		result[normalizedSymbol] = symbolData
+	}
+	
+	return result, nil
+}
+
+// extractTimeframeData 从多时间框架分析中提取特定时间框架的特定分析类型数据
+func extractTimeframeData(multiTimeframeAnalysis *MultiTimeframeAnalysis, timeframe, analysisType string) interface{} {
+	if multiTimeframeAnalysis == nil || multiTimeframeAnalysis.Timeframes == nil {
+		return map[string]interface{}{}
+	}
+	
+	timeframeData, exists := multiTimeframeAnalysis.Timeframes[timeframe]
+	if !exists || timeframeData == nil {
+		return map[string]interface{}{}
+	}
+	
+	switch analysisType {
+	case "dow_theory":
+		if timeframeData.DowTheory != nil {
+			return timeframeData.DowTheory
+		}
+	case "channel_analysis":
+		if timeframeData.ChannelAnalysis != nil {
+			return timeframeData.ChannelAnalysis
+		}
+	case "volume_profile":
+		if timeframeData.VolumeProfile != nil {
+			return timeframeData.VolumeProfile
+		}
+	case "supply_demand":
+		if timeframeData.SupplyDemand != nil {
+			return timeframeData.SupplyDemand
+		}
+	case "fair_value_gaps":
+		if timeframeData.FairValueGaps != nil {
+			return timeframeData.FairValueGaps
+		}
+	case "fibonacci":
+		if timeframeData.Fibonacci != nil {
+			return timeframeData.Fibonacci
+		}
+	}
+	
+	return map[string]interface{}{}
+}
+
+// GetSingleSymbolAnalysis 获取单个币种的多时间框架分析数据
+func GetSingleSymbolAnalysis(symbol string) (map[string]interface{}, error) {
+	// 标准化symbol
+	normalizedSymbol := Normalize(symbol)
+	
+	// 获取市场数据
+	data, err := Get(normalizedSymbol)
+	if err != nil {
+		return nil, fmt.Errorf("获取%s市场数据失败: %v", normalizedSymbol, err)
+	}
+	
+	// 构建时间框架数据
+	symbolData := map[string]interface{}{
+		"3m": map[string]interface{}{
+			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "dow_theory"),
+			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "channel_analysis"),
+			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "volume_profile"),
+			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "supply_demand"),
+			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "fair_value_gaps"),
+			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "fibonacci"),
+		},
+		"15m": map[string]interface{}{
+			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "dow_theory"),
+			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "channel_analysis"),
+			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "volume_profile"),
+			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "supply_demand"),
+			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fair_value_gaps"),
+			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fibonacci"),
+		},
+		"30m": map[string]interface{}{
+			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "dow_theory"),
+			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "channel_analysis"),
+			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "volume_profile"),
+			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "supply_demand"),
+			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fair_value_gaps"),
+			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fibonacci"),
+		},
+		"1h": map[string]interface{}{
+			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "dow_theory"),
+			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "channel_analysis"),
+			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "volume_profile"),
+			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "supply_demand"),
+			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fair_value_gaps"),
+			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fibonacci"),
+		},
+		"4h": map[string]interface{}{
+			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "dow_theory"),
+			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "channel_analysis"),
+			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "volume_profile"),
+			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "supply_demand"),
+			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fair_value_gaps"),
+			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fibonacci"),
+		},
+	}
+	
+	return symbolData, nil
+}
+
 
