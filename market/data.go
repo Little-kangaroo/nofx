@@ -492,6 +492,44 @@ func Format(data *Data) string {
 	return sb.String()
 }
 
+// FormatAsStructuredData 将市场数据格式化为结构化格式（你想要的格式）
+func FormatAsStructuredData(data *Data) string {
+	// ��取单币种的多时间框架分析数据
+	symbolData, err := GetSingleSymbolAnalysis(data.Symbol)
+	if err != nil {
+		return fmt.Sprintf("获取%s结构化数据失败: %v", data.Symbol, err)
+	}
+	
+	// 创建完整的数据结构，包含基础指标和多时间框架分析
+	result := map[string]interface{}{
+		data.Symbol: map[string]interface{}{
+			// 基础市场指标 (保持原有格式)
+			"基础指标": map[string]interface{}{
+				"current_price":    data.CurrentPrice,
+				"current_ema20":    data.CurrentEMA20,
+				"current_macd":     data.CurrentMACD,
+				"current_rsi7":     data.CurrentRSI7,
+				"price_change_1h":  data.PriceChange1h,
+				"price_change_4h":  data.PriceChange4h,
+				"open_interest":    data.OpenInterest,
+				"funding_rate":     data.FundingRate,
+				"intraday_series":  data.IntradaySeries,
+				"longer_term_context": data.LongerTermContext,
+			},
+			// 多时间框架技术分析
+			"多时间框架分析": symbolData,
+		},
+	}
+	
+	// 序列化为JSON
+	jsonData, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("JSON序列化失败: %v", err)
+	}
+	
+	return string(jsonData)
+}
+
 // formatFloatSlice 格式化float64切片为字符串
 func formatFloatSlice(values []float64) string {
 	strValues := make([]string, len(values))
