@@ -311,27 +311,32 @@ func main() {
 		log.Fatalf("❌ 加载交易员失败: %v", err)
 	}
 
-	// 获取数据库中的所有交易员配置（用于显示，使用default用户）
-	traders, err := database.GetTraders("default")
-	if err != nil {
-		log.Fatalf("❌ 获取交易员列表失败: %v", err)
-	}
-
-	// 显示加载的交易员信息
+	// 显示加载的交易员信息（从TraderManager获取实际加载的交易员）
 	fmt.Println()
-	fmt.Println("🤖 数据库中的AI交易员配置:")
-	if len(traders) == 0 {
+	fmt.Println("🤖 已加载的AI交易员配置:")
+	
+	allTraders := traderManager.GetAllTraders()
+	if len(allTraders) == 0 {
 		fmt.Println("  • 暂无配置的交易员，请通过Web界面创建")
 	} else {
-		for _, trader := range traders {
-			status := "停止"
-			if trader.IsRunning {
-				status = "运行中"
+		for _, at := range allTraders {
+			status := at.GetStatus()
+			runningStatus := "停止"
+			if running, ok := status["is_running"].(bool); ok && running {
+				runningStatus = "运行中"
 			}
+			
+			// 安全获取初始余额
+			initialBalance := 0.0
+			if balance, ok := status["initial_balance"].(float64); ok {
+				initialBalance = balance
+			}
+			
 			fmt.Printf("  • %s (%s + %s) - 初始资金: %.0f USDT [%s]\n",
-				trader.Name, strings.ToUpper(trader.AIModelID), strings.ToUpper(trader.ExchangeID),
-				trader.InitialBalance, status)
+				at.GetName(), strings.ToUpper(at.GetAIModel()), strings.ToUpper(at.GetExchange()),
+				initialBalance, runningStatus)
 		}
+		fmt.Printf("  ✓ 总计已加载 %d 个交易员到内存\n", len(allTraders))
 	}
 
 	fmt.Println()
