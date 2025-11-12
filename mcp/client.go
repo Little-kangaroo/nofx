@@ -196,10 +196,22 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持
 	// 我们通过强化 prompt 和后处理来确保 JSON 格式正确
 
+	// 打印请求参数（脱敏）
+	log.Printf("📤 [MCP] AI请求参数:")
+	log.Printf("   Model: %s", client.Model)
+	log.Printf("   Temperature: 0.5")
+	log.Printf("   Max Tokens: 2000")
+	log.Printf("   Messages Count: %d", len(messages))
+	if systemPrompt != "" {
+		log.Printf("   System Prompt Length: %d chars", len(systemPrompt))
+	}
+	log.Printf("   User Prompt Length: %d chars", len(userPrompt))
+
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
 		return "", fmt.Errorf("序列化请求失败: %w", err)
 	}
+	log.Printf("📤 [MCP] JSON请求体大小: %d bytes", len(jsonData))
 
 	// 创建HTTP请求
 	var url string

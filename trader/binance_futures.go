@@ -31,6 +31,21 @@ type FuturesTrader struct {
 
 // NewFuturesTrader 创建合约交易器
 func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
+	// 打印API配置信息（脱敏）
+	maskedApiKey := ""
+	if len(apiKey) > 8 {
+		maskedApiKey = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+	} else {
+		maskedApiKey = "***"
+	}
+	maskedSecretKey := ""
+	if len(secretKey) > 8 {
+		maskedSecretKey = secretKey[:4] + "..." + secretKey[len(secretKey)-4:]
+	} else {
+		maskedSecretKey = "***"
+	}
+	log.Printf("🔧 [Binance] API配置: APIKey=%s, SecretKey=%s", maskedApiKey, maskedSecretKey)
+
 	client := futures.NewClient(apiKey, secretKey)
 	return &FuturesTrader{
 		client:        client,
@@ -52,6 +67,7 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 
 	// 缓存过期或不存在，调用API
 	log.Printf("🔄 缓存过期，正在调用币安API获取账户余额...")
+	log.Printf("🌐 [Binance API] 调用: NewGetAccountService().Do()")
 	account, err := t.client.NewGetAccountService().Do(context.Background())
 	if err != nil {
 		log.Printf("❌ 币安API调用失败: %v", err)
@@ -91,8 +107,10 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 
 	// 缓存过期或不存在，调用API
 	log.Printf("🔄 缓存过期，正在调用币安API获取持仓信息...")
+	log.Printf("🌐 [Binance API] 调用: NewGetPositionRiskService().Do()")
 	positions, err := t.client.NewGetPositionRiskService().Do(context.Background())
 	if err != nil {
+		log.Printf("❌ 币安API获取持仓失败: %v", err)
 		return nil, fmt.Errorf("获取持仓失败: %w", err)
 	}
 
@@ -194,6 +212,7 @@ func (t *FuturesTrader) SetLeverage(symbol string, leverage int) error {
 	}
 
 	// 切换杠杆
+	log.Printf("🌐 [Binance API] 调用: NewChangeLeverageService() - Symbol=%s, Leverage=%d", symbol, leverage)
 	_, err = t.client.NewChangeLeverageService().
 		Symbol(symbol).
 		Leverage(leverage).
@@ -238,6 +257,7 @@ func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) 
 	}
 
 	// 创建市价买入订单
+	log.Printf("🌐 [Binance API] 调用: NewCreateOrderService() - Symbol=%s, Side=BUY, PositionSide=LONG, Type=MARKET, Quantity=%s", symbol, quantityStr)
 	order, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeBuy).
@@ -281,6 +301,7 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 	}
 
 	// 创建市价卖出订单
+	log.Printf("🌐 [Binance API] 调用: NewCreateOrderService() - Symbol=%s, Side=SELL, PositionSide=SHORT, Type=MARKET, Quantity=%s", symbol, quantityStr)
 	order, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeSell).

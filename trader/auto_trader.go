@@ -629,7 +629,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
-	
+
 	// 保证金验证已在模板中优化处理，此处跳过验证直接执行
 
 	// 设置仓位模式
@@ -690,7 +690,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
-	
+
 	// 保证金验证已在模板中优化处理，此处跳过验证直接执行
 
 	// 设置仓位模式
@@ -1021,27 +1021,39 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 
 // getCandidateCoins 获取交易员的候选币种列表
 func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
-	log.Printf("🔍 [%s] getCandidateCoins: tradingCoins=%v (长度:%d), defaultCoins=%v (长度:%d)", 
+	log.Printf("🔍 [%s] getCandidateCoins开始: tradingCoins=%v (长度:%d), defaultCoins=%v (长度:%d)",
 		at.name, at.tradingCoins, len(at.tradingCoins), at.defaultCoins, len(at.defaultCoins))
+	log.Printf("🔍 [%s] tradingCoins详细: %+v", at.name, at.tradingCoins)
+	log.Printf("🔍 [%s] defaultCoins详细: %+v", at.name, at.defaultCoins)
+
 	if len(at.tradingCoins) == 0 {
+		log.Printf("🔍 [%s] 条件判断: len(at.tradingCoins) == 0 为true，进入默认币种逻辑", at.name)
 		// 使用数据库配置的默认币种列表
 		var candidateCoins []decision.CandidateCoin
 
 		if len(at.defaultCoins) > 0 {
+			log.Printf("🔍 [%s] 条件判断: len(at.defaultCoins) > 0 为true，开始处理%d个默认币种", at.name, len(at.defaultCoins))
 			// 使用数据库中配置的默认币种
-			for _, coin := range at.defaultCoins {
+			for i, coin := range at.defaultCoins {
+				log.Printf("🔍 [%s] 处理第%d个币种: '%s'", at.name, i+1, coin)
 				symbol := normalizeSymbol(coin)
+				log.Printf("🔍 [%s] 标准化后: '%s'", at.name, symbol)
 				if symbol != "" { // 跳过空币种
 					candidateCoins = append(candidateCoins, decision.CandidateCoin{
 						Symbol:  symbol,
 						Sources: []string{"default"}, // 标记为数据库默认币种
 					})
+					log.Printf("🔍 [%s] 成功添加币种: %s", at.name, symbol)
+				} else {
+					log.Printf("⚠️ [%s] 币种标准化后为空，跳过: '%s'", at.name, coin)
 				}
 			}
 			log.Printf("📋 [%s] 使用数据库默认币种: %d个币种 %v",
 				at.name, len(candidateCoins), at.defaultCoins)
+			log.Printf("🔍 [%s] 最终candidateCoins: %+v", at.name, candidateCoins)
 			return candidateCoins, nil
 		} else {
+			log.Printf("🔍 [%s] 条件判断: len(at.defaultCoins) > 0 为false，defaultCoins为空！", at.name)
 			// 如果数据库中没有配置默认币种，则使用AI500+OI Top作为fallback
 			const ai500Limit = 20 // AI500取前20个评分最高的币种
 
@@ -1129,7 +1141,7 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 func normalizeSymbol(symbol string) string {
 	// 转为大写并去除空格
 	symbol = strings.ToUpper(strings.TrimSpace(symbol))
-	
+
 	// 如果是空字符串，返回空（避免生成无效的"USDT"）
 	if symbol == "" {
 		log.Printf("⚠️ normalizeSymbol: 传入空币种符号")
