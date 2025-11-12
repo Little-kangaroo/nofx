@@ -249,7 +249,7 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, erro
 		if err != nil {
 			return nil, fmt.Errorf("获取%v分钟K线失败: %v", _time, err)
 		}
-		return klines, fmt.Errorf("symbol不存在")
+		return klines, nil
 	}
 	return value.([]Kline), nil
 }
