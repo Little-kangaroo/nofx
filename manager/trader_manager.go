@@ -207,12 +207,11 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		}
 	}
 
-	// 如果没有指定交易币种，使用默认币种
+	// 记录币种使用情况（但不修改tradingCoins，让AutoTrader自己决定）
 	if len(tradingCoins) == 0 {
-		tradingCoins = defaultCoins
-		log.Printf("🔍 [%s] 交易员无自定义币种，使用默认币种: %v", traderCfg.Name, defaultCoins)
+		log.Printf("🔍 [%s] 交易员无自定义币种，AutoTrader将使用默认币种: %v", traderCfg.Name, defaultCoins)
 	} else {
-		log.Printf("🔍 [%s] 使用交易员自定义币种: %v", traderCfg.Name, tradingCoins)
+		log.Printf("🔍 [%s] 交易员有自定义币种: %v", traderCfg.Name, tradingCoins)
 	}
 
 	// 根据交易员配置决定是否使用信号源
@@ -333,12 +332,11 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		}
 	}
 
-	// 如果没有指定交易币种，使用默认币种
+	// 记录币种使用情况（但不修改tradingCoins，让AutoTrader自己决定）
 	if len(tradingCoins) == 0 {
-		tradingCoins = defaultCoins
-		log.Printf("🔍 [%s] 交易员无自定义币种，使用默认币种: %v", traderCfg.Name, defaultCoins)
+		log.Printf("🔍 [%s] 交易员无自定义币种，AutoTrader将使用默认币种: %v", traderCfg.Name, defaultCoins)
 	} else {
-		log.Printf("🔍 [%s] 使用交易员自定义币种: %v", traderCfg.Name, tradingCoins)
+		log.Printf("🔍 [%s] 交易员有自定义币种: %v", traderCfg.Name, tradingCoins)
 	}
 
 	// 根据交易员配置决定是否使用信号源
@@ -908,12 +906,11 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 		}
 	}
 
-	// 如果没有指定交易币种，使用默认币种
+	// 记录币种使用情况（但不修改tradingCoins，让AutoTrader自己决定）
 	if len(tradingCoins) == 0 {
-		tradingCoins = defaultCoins
-		log.Printf("🔍 [%s] 交易员无自定义币种，使用默认币种: %v", traderCfg.Name, defaultCoins)
+		log.Printf("🔍 [%s] 交易员无自定义币种，AutoTrader将使用默认币种: %v", traderCfg.Name, defaultCoins)
 	} else {
-		log.Printf("🔍 [%s] 使用交易员自定义币种: %v", traderCfg.Name, tradingCoins)
+		log.Printf("🔍 [%s] 交易员有自定义币种: %v", traderCfg.Name, tradingCoins)
 	}
 
 	// 根据交易员配置决定是否使用信号源

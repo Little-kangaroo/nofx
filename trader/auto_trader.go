@@ -198,6 +198,10 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		systemPromptTemplate = "default" // 默认使用 default 模板
 	}
 
+	// 调试信息：检查传入的币种配置
+	log.Printf("🔧 [%s] 创建AutoTrader - DefaultCoins: %v (长度:%d)", config.Name, config.DefaultCoins, len(config.DefaultCoins))
+	log.Printf("🔧 [%s] 创建AutoTrader - TradingCoins: %v (长度:%d)", config.Name, config.TradingCoins, len(config.TradingCoins))
+
 	return &AutoTrader{
 		id:                    config.ID,
 		name:                  config.Name,
@@ -1017,7 +1021,8 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 
 // getCandidateCoins 获取交易员的候选币种列表
 func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
-	log.Printf("🔍 [%s] getCandidateCoins: tradingCoins=%v, defaultCoins=%v", at.name, at.tradingCoins, at.defaultCoins)
+	log.Printf("🔍 [%s] getCandidateCoins: tradingCoins=%v (长度:%d), defaultCoins=%v (长度:%d)", 
+		at.name, at.tradingCoins, len(at.tradingCoins), at.defaultCoins, len(at.defaultCoins))
 	if len(at.tradingCoins) == 0 {
 		// 使用数据库配置的默认币种列表
 		var candidateCoins []decision.CandidateCoin
@@ -1026,10 +1031,12 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 			// 使用数据库中配置的默认币种
 			for _, coin := range at.defaultCoins {
 				symbol := normalizeSymbol(coin)
-				candidateCoins = append(candidateCoins, decision.CandidateCoin{
-					Symbol:  symbol,
-					Sources: []string{"default"}, // 标记为数据库默认币种
-				})
+				if symbol != "" { // 跳过空币种
+					candidateCoins = append(candidateCoins, decision.CandidateCoin{
+						Symbol:  symbol,
+						Sources: []string{"default"}, // 标记为数据库默认币种
+					})
+				}
 			}
 			log.Printf("📋 [%s] 使用数据库默认币种: %d个币种 %v",
 				at.name, len(candidateCoins), at.defaultCoins)
@@ -1081,7 +1088,7 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 			return candidateCoins, nil
 		}
 	} else {
-		// 使用自定义币种列表
+		// 使用自��义币种列表
 		var candidateCoins []decision.CandidateCoin
 		for _, coin := range at.tradingCoins {
 			// 跳过空字符串
@@ -1090,10 +1097,12 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 			}
 			// 确保币种格式正确（转为大写USDT交易对）
 			symbol := normalizeSymbol(coin)
-			candidateCoins = append(candidateCoins, decision.CandidateCoin{
-				Symbol:  symbol,
-				Sources: []string{"custom"}, // 标记为自定义来源
-			})
+			if symbol != "" { // 再次检查，防止normalizeSymbol返回空
+				candidateCoins = append(candidateCoins, decision.CandidateCoin{
+					Symbol:  symbol,
+					Sources: []string{"custom"}, // 标记为自定义来源
+				})
+			}
 		}
 
 		// 如果自定义币种列表处理后为空，使用硬编码默认币种
@@ -1118,8 +1127,14 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 
 // normalizeSymbol 标准化币种符号（确保以USDT结尾）
 func normalizeSymbol(symbol string) string {
-	// 转为大写
+	// 转为大写并去除空格
 	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	
+	// 如果是空字符串，返回空（避免生成无效的"USDT"）
+	if symbol == "" {
+		log.Printf("⚠️ normalizeSymbol: 传入空币种符号")
+		return ""
+	}
 
 	// 确保以USDT结尾
 	if !strings.HasSuffix(symbol, "USDT") {
