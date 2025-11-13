@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -213,6 +214,9 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	}
 	log.Printf("📤 [MCP] JSON请求体大小: %d bytes", len(jsonData))
 
+	// 写入详细参数到文件用于调试
+	writeAPICallDetailsToFile(systemPrompt, userPrompt, requestBody, jsonData)
+
 	// 创建HTTP请求
 	var url string
 	if client.UseFullURL {
@@ -299,4 +303,54 @@ func isRetryableError(err error) bool {
 		}
 	}
 	return false
+}
+
+// writeAPICallDetailsToFile 将AI API调用的详细参数写入文件用于调试
+func writeAPICallDetailsToFile(systemPrompt, userPrompt string, requestBody map[string]interface{}, jsonData []byte) {
+	// 使用时间戳创建文件名
+	timestamp := time.Now().Format("20060102_150405")
+	filename := fmt.Sprintf("ai_api_call_%s.txt", timestamp)
+	
+	file, err := os.Create(filename)
+	if err != nil {
+		log.Printf("⚠️  无法创建AI API调试文件: %v", err)
+		return
+	}
+	defer file.Close()
+	
+	// 写入详细信息
+	fmt.Fprintf(file, "=== AI API 调用详细参数 ===\n")
+	fmt.Fprintf(file, "时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(file, "JSON请求体大小: %d bytes\n\n", len(jsonData))
+	
+	// 请求配置
+	fmt.Fprintf(file, "--- 请求配置 ---\n")
+	if model, ok := requestBody["model"]; ok {
+		fmt.Fprintf(file, "模型: %s\n", model)
+	}
+	if temp, ok := requestBody["temperature"]; ok {
+		fmt.Fprintf(file, "Temperature: %v\n", temp)
+	}
+	if maxTokens, ok := requestBody["max_tokens"]; ok {
+		fmt.Fprintf(file, "Max Tokens: %v\n", maxTokens)
+	}
+	
+	// System Prompt
+	fmt.Fprintf(file, "\n--- System Prompt (%d 字符) ---\n", len(systemPrompt))
+	fmt.Fprintf(file, "%s\n", systemPrompt)
+	
+	// User Prompt
+	fmt.Fprintf(file, "\n--- User Prompt (%d 字符) ---\n", len(userPrompt))
+	fmt.Fprintf(file, "%s\n", userPrompt)
+	
+	// 完整JSON请求体
+	fmt.Fprintf(file, "\n--- 完整JSON请求体 ---\n")
+	var prettyJSON bytes.Buffer
+	if err := json.Indent(&prettyJSON, jsonData, "", "  "); err == nil {
+		fmt.Fprintf(file, "%s\n", prettyJSON.String())
+	} else {
+		fmt.Fprintf(file, "%s\n", string(jsonData))
+	}
+	
+	log.Printf("📝 AI API调用参数已写入文件: %s", filename)
 }
