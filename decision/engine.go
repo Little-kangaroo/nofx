@@ -401,7 +401,7 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 	cotTrace := extractCoTTrace(aiResponse)
 
 	// 2. 提取JSON决策列表
-	decisions, err := extractDecisions(aiResponse)
+	decisions, err := extractDecisionsWithContext(aiResponse, accountEquity, btcEthLeverage, altcoinLeverage)
 	if err != nil {
 		return &FullDecision{
 			CoTTrace:  cotTrace,
@@ -437,7 +437,41 @@ func extractCoTTrace(response string) string {
 	return strings.TrimSpace(response)
 }
 
-// extractDecisions 提取JSON决策列表
+// extractDecisionsWithContext 提取JSON决策列表（带账户上下文）
+func extractDecisionsWithContext(response string, accountEquity float64, btcEthLeverage, altcoinLeverage int) ([]Decision, error) {
+	// 直接查找JSON数组 - 找第一个完整的JSON数组
+	arrayStart := strings.Index(response, "[")
+	if arrayStart == -1 {
+		return nil, fmt.Errorf("无法找到JSON数组起始")
+	}
+
+	// 从 [ 开始，匹配括号找到对应的 ]
+	arrayEnd := findMatchingBracket(response, arrayStart)
+	if arrayEnd == -1 {
+		return nil, fmt.Errorf("无法找到JSON数组结束")
+	}
+
+	jsonContent := strings.TrimSpace(response[arrayStart : arrayEnd+1])
+
+	// 🔧 修复常见的JSON格式错误：缺少引号的字段值
+	jsonContent = fixMissingQuotes(jsonContent)
+
+	// 先检查JSON内容是否是有效的决策数组格式
+	if !isValidDecisionArray(jsonContent) {
+		return nil, fmt.Errorf("AI返回的JSON格式无效，不是决策数组格式\nJSON内容: %s", jsonContent)
+	}
+
+	// 尝试解析为标准Decision格式
+	var decisions []Decision
+	if err := json.Unmarshal([]byte(jsonContent), &decisions); err == nil {
+		return decisions, nil
+	}
+
+	// 如果标准格式解析失败，尝试解析AI返回的复杂格式
+	return parseComplexAIDecisions(jsonContent, accountEquity)
+}
+
+// extractDecisions 提取JSON决策列表（兼容性保留）
 func extractDecisions(response string) ([]Decision, error) {
 	// 直接查找JSON数组 - 找第一个完整的JSON数组
 	arrayStart := strings.Index(response, "[")
@@ -463,11 +497,12 @@ func extractDecisions(response string) ([]Decision, error) {
 	}
 
 	// 如果标准格式解析失败，尝试解析AI返回的复杂格式
-	return parseComplexAIDecisions(jsonContent)
+	// 注意：这是兼容性函数，使用默认账户净值
+	return parseComplexAIDecisions(jsonContent, 100.0) // 使用100 USDT作为默认账户净值
 }
 
 // parseComplexAIDecisions 解析AI返回的复杂格式并转换为标准Decision
-func parseComplexAIDecisions(jsonContent string) ([]Decision, error) {
+func parseComplexAIDecisions(jsonContent string, accountEquity float64) ([]Decision, error) {
 	// 定义AI返回的复杂格式结构
 	var complexDecisions []struct {
 		Symbol     string `json:"symbol"`
@@ -544,10 +579,10 @@ func parseComplexAIDecisions(jsonContent string) ([]Decision, error) {
 				decision.TakeProfit = complex.TakeProfit[0]
 			}
 
-			// 根据风险计算仓位大小（简化版本）
+			// 根据风险计算仓位大小，同时应用风控限制
 			if complex.Positioning.RiskPerTrade > 0 && complex.Entry.Price > 0 && complex.StopLoss > 0 {
-				// 假设账户净值为1000 USDT（这里可以从context获取，但我们简化处理）
-				riskAmount := 1000 * complex.Positioning.RiskPerTrade
+				// 使用实际账户净值
+				riskAmount := accountEquity * complex.Positioning.RiskPerTrade
 				priceDistance := 0.0
 				if decision.Action == "open_long" {
 					priceDistance = (complex.Entry.Price - complex.StopLoss) / complex.Entry.Price
@@ -560,10 +595,24 @@ func parseComplexAIDecisions(jsonContent string) ([]Decision, error) {
 				}
 			}
 
-			// 如果没有计算出仓位大小，使用默认值
-			if decision.PositionSizeUSD <= 0 {
-				decision.PositionSizeUSD = 500.0 // 默认500 USDT
-				decision.RiskUSD = 50.0          // 默认风险50 USDT
+			// 应用风控限制：山寨币最多1.5倍账户净值，BTC/ETH最多10倍
+			var maxPositionSize float64
+			if decision.Symbol == "BTCUSDT" || decision.Symbol == "ETHUSDT" {
+				maxPositionSize = accountEquity * 10.0 // BTC/ETH最多10倍
+			} else {
+				maxPositionSize = accountEquity * 1.5 // 山寨币最多1.5倍
+			}
+
+			// 如果计算出的仓位过大，或者没有计算出仓位，使用安全的默认值
+			if decision.PositionSizeUSD <= 0 || decision.PositionSizeUSD > maxPositionSize {
+				// 使用账户净值的80%作为基础仓位，确保不超过限制
+				basePosition := accountEquity * 0.8
+				if decision.Symbol == "BTCUSDT" || decision.Symbol == "ETHUSDT" {
+					decision.PositionSizeUSD = min(basePosition*5, maxPositionSize) // BTC/ETH用5倍基础仓位
+				} else {
+					decision.PositionSizeUSD = min(basePosition, maxPositionSize) // 山寨币用1倍基础仓位
+				}
+				decision.RiskUSD = accountEquity * 0.02 // 风险控制在2%
 			}
 		}
 
@@ -571,6 +620,37 @@ func parseComplexAIDecisions(jsonContent string) ([]Decision, error) {
 	}
 
 	return decisions, nil
+}
+
+// isValidDecisionArray 检查JSON是否是有效的决策数组格式
+func isValidDecisionArray(jsonContent string) bool {
+	// 去除首尾空格
+	jsonContent = strings.TrimSpace(jsonContent)
+	
+	// 必须以[]括起来
+	if !strings.HasPrefix(jsonContent, "[") || !strings.HasSuffix(jsonContent, "]") {
+		return false
+	}
+	
+	// 检查是否为空数组
+	if jsonContent == "[]" {
+		return true
+	}
+	
+	// 检查是否是纯数字数组（如[3292.86,3624.165]）
+	var numbers []float64
+	if err := json.Unmarshal([]byte(jsonContent), &numbers); err == nil {
+		// 这是一个数字数组，不是决策数组
+		return false
+	}
+	
+	// 检查是否包含决策对象的基本字段
+	// 至少应该包含 "symbol" 字段
+	if !strings.Contains(jsonContent, `"symbol"`) && !strings.Contains(jsonContent, `symbol`) {
+		return false
+	}
+	
+	return true
 }
 
 // fixMissingQuotes 替换中文引号为英文引号（避免输入法自动转换）
