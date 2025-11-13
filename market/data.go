@@ -541,6 +541,326 @@ func FormatAsStructuredData(data *Data) string {
 	return string(jsonData)
 }
 
+// FormatAsCompactData 精简版市场数据格式化（供AI交易员使用）
+// 只包含计算出的关键指标结果，不包含原始K线数据和详细序列
+func FormatAsCompactData(data *Data) string {
+	// 重新获取K线数据用于超级趋势计算
+	symbol := data.Symbol
+	klines3m, _ := WSMonitorCli.GetCurrentKlines(symbol, "3m")
+	klines15m, _ := WSMonitorCli.GetCurrentKlines(symbol, "15m") 
+	klines30m, _ := WSMonitorCli.GetCurrentKlines(symbol, "30m")
+	klines1h, _ := WSMonitorCli.GetCurrentKlines(symbol, "1h")
+	klines4h, _ := WSMonitorCli.GetCurrentKlines(symbol, "4h")
+	
+	timeframeKlines := map[string][]Kline{
+		"3m":  klines3m,
+		"15m": klines15m,
+		"30m": klines30m,
+		"1h":  klines1h,
+		"4h":  klines4h,
+	}
+	
+	result := map[string]interface{}{
+		data.Symbol: map[string]interface{}{
+			"基础指标": map[string]interface{}{
+				"price": data.CurrentPrice,
+				"ema20": data.CurrentEMA20,
+				"macd":  data.CurrentMACD,
+				"rsi7":  data.CurrentRSI7,
+				"change_1h": data.PriceChange1h,
+				"change_4h": data.PriceChange4h,
+				"funding_rate": data.FundingRate,
+				"oi_latest": func() float64 {
+					if data.OpenInterest != nil {
+						return data.OpenInterest.Latest
+					}
+					return 0
+				}(),
+			},
+			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
+		},
+	}
+	
+	jsonData, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("精简JSON序列化失败: %v", err)
+	}
+	
+	return string(jsonData)
+}
+
+// extractCompactMultiTimeframeAnalysis 提取精简的多时间框架分析数据
+func extractCompactMultiTimeframeAnalysis(data *Data) map[string]interface{} {
+	result := make(map[string]interface{})
+	
+	if data.MultiTimeframeAnalysis == nil || data.MultiTimeframeAnalysis.Timeframes == nil {
+		return result
+	}
+	
+	timeframes := []string{"3m", "15m", "30m", "1h", "4h"}
+	
+	for _, tf := range timeframes {
+		tfData, exists := data.MultiTimeframeAnalysis.Timeframes[tf]
+		if !exists || tfData == nil {
+			continue
+		}
+		
+		result[tf] = map[string]interface{}{
+			"道氏理论数据": extractCompactDowTheory(tfData.DowTheory),
+			"通道数据": extractCompactChannelAnalysis(tfData.ChannelAnalysis),
+			"VPVR数据": extractCompactVPVR(tfData.VolumeProfile),
+			"供需区数据": extractCompactSupplyDemand(tfData.SupplyDemand),
+			"FVG数据": extractCompactFVG(tfData.FairValueGaps),
+			"斐波纳契数据": extractCompactFibonacci(tfData.Fibonacci),
+		}
+	}
+	
+	return result
+}
+
+// extractCompactDowTheory 提取道氏理论的关键结果
+func extractCompactDowTheory(data *DowTheoryData) map[string]interface{} {
+	if data == nil {
+		return map[string]interface{}{}
+	}
+	
+	result := map[string]interface{}{
+		"trend_direction": "unknown",
+		"trend_strength": 0.0,
+		"signal_confidence": 0.0,
+		"supertrend": map[string]interface{}{
+			"direction": "unknown",
+			"current_line": 0.0,
+			"upper_line": 0.0,
+			"lower_line": 0.0,
+		},
+	}
+	
+	if data.TrendStrength != nil {
+		result["trend_direction"] = data.TrendStrength.Direction
+		result["trend_strength"] = data.TrendStrength.Overall
+		result["signal_confidence"] = data.TrendStrength.Consistency
+	}
+	
+	return result
+}
+
+// extractCompactChannelAnalysis 提取通道分析的关键结果
+func extractCompactChannelAnalysis(data *ChannelData) map[string]interface{} {
+	if data == nil {
+		return map[string]interface{}{}
+	}
+	
+	result := map[string]interface{}{
+		"channel_direction": data.Direction,
+		"channel_width": data.Quality * 100,
+		"current_position": data.CurrentPosition,
+	}
+	
+	if data.ActiveChannel != nil {
+		result["channel_width"] = data.ActiveChannel.Width * 100
+	}
+	
+	return result
+}
+
+// extractCompactVPVR 提取VPVR的关键结果
+func extractCompactVPVR(data *VolumeProfile) map[string]interface{} {
+	if data == nil {
+		return map[string]interface{}{}
+	}
+	
+	result := map[string]interface{}{
+		"poc_price": 0.0,
+		"value_area_high": data.VAH,
+		"value_area_low": data.VAL,
+	}
+	
+	if data.POC != nil {
+		result["poc_price"] = data.POC.Price
+	}
+	
+	return result
+}
+
+// extractCompactSupplyDemand 提取供需区的关键结果
+func extractCompactSupplyDemand(data *SupplyDemandData) map[string]interface{} {
+	if data == nil {
+		return map[string]interface{}{}
+	}
+	
+	result := map[string]interface{}{
+		"total_zones": len(data.ActiveZones),
+		"supply_zones": []map[string]interface{}{},
+		"demand_zones": []map[string]interface{}{},
+		"zone_stats": map[string]interface{}{
+			"avg_strength": 0.0,
+			"supply_count": 0,
+			"demand_count": 0,
+		},
+	}
+	
+	if len(data.ActiveZones) == 0 {
+		return result
+	}
+	
+	var supplyZones, demandZones []map[string]interface{}
+	var strengthSum float64
+	var supplyCount, demandCount int
+	
+	// 按强度排序并提取重要的供需区
+	for _, zone := range data.ActiveZones {
+		strengthSum += zone.Strength
+		
+		zoneInfo := map[string]interface{}{
+			"price_range": map[string]float64{
+				"low":  zone.LowerBound,
+				"high": zone.UpperBound,
+			},
+			"strength": zone.Strength,
+			"touches": zone.TouchCount,
+			"status": zone.Status,
+		}
+		
+		if zone.Type == SupplyZone {
+			supplyZones = append(supplyZones, zoneInfo)
+			supplyCount++
+		} else if zone.Type == DemandZone {
+			demandZones = append(demandZones, zoneInfo)
+			demandCount++
+		}
+	}
+	
+	// 只保留强度最高的前3个供给区和需求区
+	if len(supplyZones) > 3 {
+		// 按强度排序，保留前3个最强的
+		sortZonesByStrength(supplyZones)
+		supplyZones = supplyZones[:3]
+	}
+	
+	if len(demandZones) > 3 {
+		// 按强度排序，保留前3个最强的
+		sortZonesByStrength(demandZones)
+		demandZones = demandZones[:3]
+	}
+	
+	result["supply_zones"] = supplyZones
+	result["demand_zones"] = demandZones
+	result["zone_stats"] = map[string]interface{}{
+		"avg_strength": strengthSum / float64(len(data.ActiveZones)),
+		"supply_count": supplyCount,
+		"demand_count": demandCount,
+	}
+	
+	return result
+}
+
+// sortZonesByStrength 按强度对供需区进行降序排序
+func sortZonesByStrength(zones []map[string]interface{}) {
+	for i := 0; i < len(zones)-1; i++ {
+		for j := i + 1; j < len(zones); j++ {
+			strength1 := zones[i]["strength"].(float64)
+			strength2 := zones[j]["strength"].(float64)
+			if strength1 < strength2 {
+				zones[i], zones[j] = zones[j], zones[i]
+			}
+		}
+	}
+}
+
+// extractCompactFVG 提取FVG的关键结果
+func extractCompactFVG(data *FVGData) map[string]interface{} {
+	if data == nil {
+		return map[string]interface{}{}
+	}
+	
+	result := map[string]interface{}{
+		"active_gaps": len(data.ActiveFVGs),
+		"nearest_gap": 0.0,
+		"gap_type": "unknown",
+	}
+	
+	if len(data.ActiveFVGs) > 0 {
+		// 取第一个活跃的FVG作为最近的
+		fvg := data.ActiveFVGs[0]
+		result["nearest_gap"] = (fvg.LowerBound + fvg.UpperBound) / 2
+		if fvg.Type == BullishFVG {
+			result["gap_type"] = "bullish"
+		} else if fvg.Type == BearishFVG {
+			result["gap_type"] = "bearish"
+		} else {
+			result["gap_type"] = "neutral"
+		}
+	}
+	
+	return result
+}
+
+// extractCompactFibonacci 提取斐波纳契的关键结果
+func extractCompactFibonacci(data *FibonacciData) map[string]interface{} {
+	if data == nil {
+		return map[string]interface{}{}
+	}
+	
+	result := map[string]interface{}{
+		"active_retracements": 0,
+		"levels": map[string]float64{},
+		"trend_direction": "unknown",
+	}
+	
+	// 找到最活跃的回调级别并输出所有重要级别
+	if len(data.Retracements) > 0 {
+		activeCount := 0
+		for _, ret := range data.Retracements {
+			if ret.IsActive {
+				activeCount++
+				// 设置趋势方向
+				if ret.TrendType == TrendUpward {
+					result["trend_direction"] = "upward"
+				} else if ret.TrendType == TrendDownward {
+					result["trend_direction"] = "downward"
+				}
+				
+				// 提取所有重要的斐波纳契级别
+				levels := make(map[string]float64)
+				for _, level := range ret.Levels {
+					if level.Importance >= 0.5 { // 只包含重要性>=50%的级别
+						ratioKey := fmt.Sprintf("fib_%.3f", level.Ratio)
+						levels[ratioKey] = level.Price
+					}
+				}
+				
+				// 如果找到级别，使用第一个活跃回调的级别
+				if len(levels) > 0 && len(result["levels"].(map[string]float64)) == 0 {
+					result["levels"] = levels
+				}
+				
+				break // 只使用第一个活跃的回调
+			}
+		}
+		result["active_retracements"] = activeCount
+	}
+	
+	// 如果没有活跃的回调，尝试从扩展级别获取
+	if len(result["levels"].(map[string]float64)) == 0 && len(data.Extensions) > 0 {
+		for _, ext := range data.Extensions {
+			if ext.Quality == FibQualityHigh {
+				levels := make(map[string]float64)
+				for _, level := range ext.Levels {
+					ratioKey := fmt.Sprintf("ext_%.3f", level.Ratio)
+					levels[ratioKey] = level.Price
+				}
+				if len(levels) > 0 {
+					result["levels"] = levels
+					break
+				}
+			}
+		}
+	}
+	
+	return result
+}
+
 // formatFloatSlice 格式化float64切片为字符串
 func formatFloatSlice(values []float64) string {
 	strValues := make([]string, len(values))
@@ -1323,4 +1643,122 @@ func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 	return data
 }
 
+
+
+// SuperTrendResult 超级趋势计算结果
+type SuperTrendResult struct {
+	Direction   string  // "bullish" or "bearish"
+	CurrentLine float64 // 当前趋势线价格
+	UpperLine   float64 // 上轨价格
+	LowerLine   float64 // 下轨价格
+}
+
+// calculateSupertrend 计算超级趋势线
+func calculateSupertrend(klines []Kline, atrPeriod int, factor float64) SuperTrendResult {
+	result := SuperTrendResult{
+		Direction:   "unknown",
+		CurrentLine: 0.0,
+		UpperLine:   0.0,
+		LowerLine:   0.0,
+	}
+	
+	if len(klines) < atrPeriod {
+		return result
+	}
+	
+	// 计算ATR
+	atr := calculateATR(klines, atrPeriod)
+	if atr == 0 {
+		return result
+	}
+	
+	// 获取最新的K线数据
+	latest := klines[len(klines)-1]
+	hl2 := (latest.High + latest.Low) / 2 // 中位价
+	
+	// 计算上轨和下轨
+	upperLine := hl2 + (factor * atr)
+	lowerLine := hl2 - (factor * atr)
+	
+	// 判断当前趋势方向
+	var direction string
+	var currentLine float64
+	
+	if latest.Close > lowerLine {
+		// 价格在下轨之上，多头趋势
+		direction = "bullish"
+		currentLine = lowerLine
+	} else if latest.Close < upperLine {
+		// 价格在上轨之下，空头趋势  
+		direction = "bearish"
+		currentLine = upperLine
+	} else {
+		// 价格在上下轨之间，方向不明确
+		direction = "sideways"
+		currentLine = hl2
+	}
+	
+	result.Direction = direction
+	result.CurrentLine = currentLine
+	result.UpperLine = upperLine
+	result.LowerLine = lowerLine
+	
+	return result
+}
+
+// extractCompactMultiTimeframeAnalysisWithSupertrend 提取包含超级趋势的多时间框架分析
+func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKlines map[string][]Kline) map[string]interface{} {
+	result := make(map[string]interface{})
+	
+	if data.MultiTimeframeAnalysis == nil || data.MultiTimeframeAnalysis.Timeframes == nil {
+		return result
+	}
+	
+	timeframes := []string{"3m", "15m", "30m", "1h", "4h"}
+	
+	for _, tf := range timeframes {
+		tfData, exists := data.MultiTimeframeAnalysis.Timeframes[tf]
+		if !exists || tfData == nil {
+			continue
+		}
+		
+		// 计算该时间框架的超级趋势线
+		klines := timeframeKlines[tf]
+		supertrend := calculateSupertrend(klines, 20, 5.0)
+		
+		result[tf] = map[string]interface{}{
+			"道氏理论数据": extractCompactDowTheoryWithSupertrend(tfData.DowTheory, supertrend),
+			"通道数据": extractCompactChannelAnalysis(tfData.ChannelAnalysis),
+			"VPVR数据": extractCompactVPVR(tfData.VolumeProfile),
+			"供需区数据": extractCompactSupplyDemand(tfData.SupplyDemand),
+			"FVG数据": extractCompactFVG(tfData.FairValueGaps),
+			"斐波纳契数据": extractCompactFibonacci(tfData.Fibonacci),
+		}
+	}
+	
+	return result
+}
+
+// extractCompactDowTheoryWithSupertrend 提取包含超级趋势的道氏理论数据
+func extractCompactDowTheoryWithSupertrend(data *DowTheoryData, supertrend SuperTrendResult) map[string]interface{} {
+	result := map[string]interface{}{
+		"trend_direction": "unknown",
+		"trend_strength": 0.0,
+		"signal_confidence": 0.0,
+		"supertrend": map[string]interface{}{
+			"direction": supertrend.Direction,
+			"current_line": supertrend.CurrentLine,
+			"upper_line": supertrend.UpperLine,
+			"lower_line": supertrend.LowerLine,
+		},
+	}
+	
+	if data != nil && data.TrendStrength != nil {
+		result["trend_direction"] = data.TrendStrength.Direction
+		result["trend_strength"] = data.TrendStrength.Overall
+		result["signal_confidence"] = data.TrendStrength.Consistency
+	}
+	
+	return result
+}
 

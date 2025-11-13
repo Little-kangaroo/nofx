@@ -341,9 +341,9 @@ func buildUserPrompt(ctx *Context) string {
 				pos.EntryPrice, pos.MarkPrice, pos.UnrealizedPnLPct,
 				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
 
-			// 使用FormatAsStructuredData输出结构化市场数据
+			// 使用FormatAsCompactData输出精简市场数据
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
-				sb.WriteString(market.FormatAsStructuredData(marketData))
+				sb.WriteString(market.FormatAsCompactData(marketData))
 				sb.WriteString("\n")
 			}
 		}
@@ -368,9 +368,9 @@ func buildUserPrompt(ctx *Context) string {
 			sourceTags = " (OI_Top持仓增长)"
 		}
 
-		// 使用FormatAsStructuredData输出结构化市场数据
+		// 使用FormatAsCompactData输出精简市场数据
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
-		sb.WriteString(market.FormatAsStructuredData(marketData))
+		sb.WriteString(market.FormatAsCompactData(marketData))
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
