@@ -29,7 +29,15 @@ func NewSupplyDemandAnalyzerWithConfig(config SDConfig) *SupplyDemandAnalyzer {
 // Analyze 分析K线数据识别供需区
 func (sda *SupplyDemandAnalyzer) Analyze(klines []Kline) *SupplyDemandData {
 	if len(klines) < 10 {
-		return nil
+		// 返回空数据结构而不是nil，避免后续处理报错
+		return &SupplyDemandData{
+			SupplyZones:  []*SupplyDemandZone{},
+			DemandZones:  []*SupplyDemandZone{},
+			ActiveZones:  []*SupplyDemandZone{},
+			Config:       &sda.config,
+			Statistics:   &SDStatistics{},
+			LastAnalysis: time.Now().UnixMilli(),
+		}
 	}
 
 	var supplyZones []*SupplyDemandZone
@@ -47,6 +55,24 @@ func (sda *SupplyDemandAnalyzer) Analyze(klines []Kline) *SupplyDemandData {
 
 	// 筛选活跃区域
 	activeZones := sda.filterActiveZones(allZones)
+	
+	// 如果复杂模式识别没有找到足够的区域，使用简单的高低点方法作为补充
+	if len(activeZones) < 2 {
+		backupZones := sda.identifyBasicZones(klines)
+		for _, zone := range backupZones {
+			if !sda.isZoneOverlapping(zone, allZones) {
+				allZones = append(allZones, zone)
+				if zone.IsActive {
+					activeZones = append(activeZones, zone)
+				}
+				if zone.Type == SupplyZone {
+					supplyZones = append(supplyZones, zone)
+				} else {
+					demandZones = append(demandZones, zone)
+				}
+			}
+		}
+	}
 
 	// 计算统计信息
 	stats := sda.calculateStatistics(supplyZones, demandZones, activeZones)
@@ -1299,4 +1325,136 @@ func (sda *SupplyDemandAnalyzer) GetStrongestZones(sdData *SupplyDemandData, cou
 	}
 
 	return zones[:count]
+}
+
+// identifyBasicZones 识别基础供需区（基于近期高低点的简单方法）
+func (sda *SupplyDemandAnalyzer) identifyBasicZones(klines []Kline) []*SupplyDemandZone {
+	var zones []*SupplyDemandZone
+	
+	if len(klines) < 20 {
+		return zones
+	}
+	
+	// 寻找近期重要高低点
+	recentPeriod := 20 // 最近20根K线
+	start := len(klines) - recentPeriod
+	if start < 0 {
+		start = 0
+	}
+	
+	// 找到最高点和最低点
+	var highestIndex, lowestIndex int
+	highest := klines[start].High
+	lowest := klines[start].Low
+	
+	for i := start; i < len(klines); i++ {
+		if klines[i].High > highest {
+			highest = klines[i].High
+			highestIndex = i
+		}
+		if klines[i].Low < lowest {
+			lowest = klines[i].Low
+			lowestIndex = i
+		}
+	}
+	
+	// 创建供给区（基于最高点）
+	if highestIndex > start+2 && highestIndex < len(klines)-2 {
+		supplyUpper := klines[highestIndex].High
+		supplyLower := klines[highestIndex].Low
+		
+		// 扩展供给区边界（包含邻近K线）
+		for i := highestIndex-1; i <= highestIndex+1 && i < len(klines); i++ {
+			if i >= 0 {
+				if klines[i].High > supplyUpper {
+					supplyUpper = klines[i].High
+				}
+				if klines[i].Low < supplyLower {
+					supplyLower = klines[i].Low
+				}
+			}
+		}
+		
+		zone := &SupplyDemandZone{
+			ID:           fmt.Sprintf("basic_supply_%d", highestIndex),
+			Type:         SupplyZone,
+			UpperBound:   supplyUpper,
+			LowerBound:   supplyLower,
+			CenterPrice:  (supplyUpper + supplyLower) / 2,
+			Width:        supplyUpper - supplyLower,
+			WidthPercent: (supplyUpper - supplyLower) / supplyLower * 100,
+			Origin: &ZoneOrigin{
+				KlineIndex:    highestIndex,
+				PatternType:   FreshSupply,
+				ImpulseMove:   0.015, // 1.5%默认冲击
+				ImpulseVolume: klines[highestIndex].Volume,
+				TimeFrame:     "basic",
+				Confirmation:  false,
+			},
+			Status:       StatusFresh,
+			CreationTime: klines[highestIndex].OpenTime,
+			IsActive:     true,
+			IsBroken:     false,
+			Strength:     60.0, // 中等强度
+			Quality:      QualityModerate,
+		}
+		
+		zones = append(zones, zone)
+	}
+	
+	// 创建需求区（基于最低点）
+	if lowestIndex > start+2 && lowestIndex < len(klines)-2 {
+		demandUpper := klines[lowestIndex].High
+		demandLower := klines[lowestIndex].Low
+		
+		// 扩展需求区边界（包含邻近K线）
+		for i := lowestIndex-1; i <= lowestIndex+1 && i < len(klines); i++ {
+			if i >= 0 {
+				if klines[i].High > demandUpper {
+					demandUpper = klines[i].High
+				}
+				if klines[i].Low < demandLower {
+					demandLower = klines[i].Low
+				}
+			}
+		}
+		
+		zone := &SupplyDemandZone{
+			ID:           fmt.Sprintf("basic_demand_%d", lowestIndex),
+			Type:         DemandZone,
+			UpperBound:   demandUpper,
+			LowerBound:   demandLower,
+			CenterPrice:  (demandUpper + demandLower) / 2,
+			Width:        demandUpper - demandLower,
+			WidthPercent: (demandUpper - demandLower) / demandLower * 100,
+			Origin: &ZoneOrigin{
+				KlineIndex:    lowestIndex,
+				PatternType:   FreshDemand,
+				ImpulseMove:   0.015, // 1.5%默认冲击
+				ImpulseVolume: klines[lowestIndex].Volume,
+				TimeFrame:     "basic",
+				Confirmation:  false,
+			},
+			Status:       StatusFresh,
+			CreationTime: klines[lowestIndex].OpenTime,
+			IsActive:     true,
+			IsBroken:     false,
+			Strength:     60.0, // 中等强度
+			Quality:      QualityModerate,
+		}
+		
+		zones = append(zones, zone)
+	}
+	
+	return zones
+}
+
+// isZoneOverlapping 检查新区域是否与现有区域重叠
+func (sda *SupplyDemandAnalyzer) isZoneOverlapping(newZone *SupplyDemandZone, existingZones []*SupplyDemandZone) bool {
+	for _, existing := range existingZones {
+		if sda.zonesOverlap(newZone, existing) {
+			return true
+		}
+	}
+	return false
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -612,9 +613,15 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 	timeframes := []string{"3m", "15m", "30m", "1h", "4h"}
 	for _, tf := range timeframes {
 		klines, exists := timeframeKlines[tf]
-		if !exists || len(klines) == 0 {
+		if !exists {
+			log.Printf("⚠️ [基础指标] %s时间框架数据不存在", tf)
 			continue
 		}
+		if len(klines) == 0 {
+			log.Printf("⚠️ [基础指标] %s时间框架K线数据为空", tf)
+			continue
+		}
+		log.Printf("✓ [基础指标] %s时间框架: %d条K线数据", tf, len(klines))
 		
 		tfData := map[string]interface{}{}
 		

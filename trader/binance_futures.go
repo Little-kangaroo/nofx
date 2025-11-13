@@ -486,19 +486,14 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		posSide = futures.PositionSideTypeShort
 	}
 
-	// 格式化数量
-	quantityStr, err := t.FormatQuantity(symbol, quantity)
-	if err != nil {
-		return err
-	}
-
-	_, err = t.client.NewCreateOrderService().
+	// 🔧 修复止损订单：使用ClosePosition时不需要设置Quantity
+	// ClosePosition(true) 会自动平掉整个仓位，quantity参数会被忽略
+	_, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.OrderTypeStopMarket).
 		StopPrice(fmt.Sprintf("%.8f", stopPrice)).
-		Quantity(quantityStr).
 		WorkingType(futures.WorkingTypeContractPrice).
 		ClosePosition(true).
 		Do(context.Background())
@@ -524,19 +519,14 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		posSide = futures.PositionSideTypeShort
 	}
 
-	// 格式化数量
-	quantityStr, err := t.FormatQuantity(symbol, quantity)
-	if err != nil {
-		return err
-	}
-
-	_, err = t.client.NewCreateOrderService().
+	// 🔧 修复止盈订单：使用ClosePosition时不需要设置Quantity
+	// ClosePosition(true) 会自动平掉整个仓位，quantity参数会被忽略
+	_, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.OrderTypeTakeProfitMarket).
 		StopPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
-		Quantity(quantityStr).
 		WorkingType(futures.WorkingTypeContractPrice).
 		ClosePosition(true).
 		Do(context.Background())
