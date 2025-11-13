@@ -437,6 +437,7 @@ func extractCoTTrace(response string) string {
 	return strings.TrimSpace(response)
 }
 
+
 // extractDecisionsWithContext 提取JSON决策列表（带账户上下文）
 func extractDecisionsWithContext(response string, accountEquity float64, btcEthLeverage, altcoinLeverage int) ([]Decision, error) {
 	// 直接查找JSON数组 - 找第一个完整的JSON数组
@@ -447,11 +448,16 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 
 	// 从 [ 开始，匹配括号找到对应的 ]
 	arrayEnd := findMatchingBracket(response, arrayStart)
+	var jsonContent string
 	if arrayEnd == -1 {
-		return nil, fmt.Errorf("无法找到JSON数组结束")
+		// 尝试修复不完整的JSON
+		jsonContent = tryFixIncompleteJSON(response[arrayStart:])
+		if jsonContent == "" {
+			return nil, fmt.Errorf("无法找到JSON数组结束，且无法自动修复\nJSON片段: %s", response[arrayStart:min(arrayStart+200, len(response))])
+		}
+	} else {
+		jsonContent = strings.TrimSpace(response[arrayStart : arrayEnd+1])
 	}
-
-	jsonContent := strings.TrimSpace(response[arrayStart : arrayEnd+1])
 
 	// 🔧 修复常见的JSON格式错误：缺少引号的字段值
 	jsonContent = fixMissingQuotes(jsonContent)
@@ -467,7 +473,13 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 		return decisions, nil
 	}
 
-	// 如果标准格式解析失败，尝试解析AI返回的复杂格式
+	// 如果标准格式解析失败，尝试解析混合格式（AI可能返回标准格式但某些字段类型不匹配）
+	mixedDecisions, mixedErr := parseMixedFormatDecisions(jsonContent, accountEquity)
+	if mixedErr == nil {
+		return mixedDecisions, nil
+	}
+
+	// 如果混合格式也失败，尝试解析AI返回的复杂格式
 	return parseComplexAIDecisions(jsonContent, accountEquity)
 }
 
@@ -499,6 +511,68 @@ func extractDecisions(response string) ([]Decision, error) {
 	// 如果标准格式解析失败，尝试解析AI返回的复杂格式
 	// 注意：这是兼容性函数，使用默认账户净值
 	return parseComplexAIDecisions(jsonContent, 100.0) // 使用100 USDT作为默认账户净值
+}
+
+
+// parseMixedFormatDecisions 解析混合格式决策（标准格式但某些字段类型不匹配）
+func parseMixedFormatDecisions(jsonContent string, accountEquity float64) ([]Decision, error) {
+	// 定义灵活的决策结构，允许take_profit既可以是数字也可以是数组
+	var mixedDecisions []struct {
+		Symbol          string      `json:"symbol"`
+		Action          string      `json:"action"`
+		Leverage        int         `json:"leverage,omitempty"`
+		PositionSizeUSD float64     `json:"position_size_usd,omitempty"`
+		StopLoss        float64     `json:"stop_loss,omitempty"`
+		TakeProfit      interface{} `json:"take_profit,omitempty"` // 允许数字或数组
+		Confidence      int         `json:"confidence,omitempty"`
+		RiskUSD         float64     `json:"risk_usd,omitempty"`
+		Reasoning       string      `json:"reasoning"`
+	}
+
+	// 解析混合格式
+	if err := json.Unmarshal([]byte(jsonContent), &mixedDecisions); err != nil {
+		return nil, fmt.Errorf("混合格式JSON解析失败: %w", err)
+	}
+
+	// 转换为标准Decision格式
+	var decisions []Decision
+	for _, mixed := range mixedDecisions {
+		decision := Decision{
+			Symbol:          mixed.Symbol,
+			Action:          mixed.Action,
+			Leverage:        mixed.Leverage,
+			PositionSizeUSD: mixed.PositionSizeUSD,
+			StopLoss:        mixed.StopLoss,
+			Confidence:      mixed.Confidence,
+			RiskUSD:         mixed.RiskUSD,
+			Reasoning:       mixed.Reasoning,
+		}
+
+		// 处理take_profit字段的类型变换
+		if mixed.TakeProfit != nil {
+			switch tp := mixed.TakeProfit.(type) {
+			case float64:
+				// 单个数字
+				decision.TakeProfit = tp
+			case []interface{}:
+				// 数组，取第一个
+				if len(tp) > 0 {
+					if firstTP, ok := tp[0].(float64); ok {
+						decision.TakeProfit = firstTP
+					}
+				}
+			case []float64:
+				// float64数组，取第一个
+				if len(tp) > 0 {
+					decision.TakeProfit = tp[0]
+				}
+			}
+		}
+
+		decisions = append(decisions, decision)
+	}
+
+	return decisions, nil
 }
 
 // parseComplexAIDecisions 解析AI返回的复杂格式并转换为标准Decision
@@ -608,9 +682,9 @@ func parseComplexAIDecisions(jsonContent string, accountEquity float64) ([]Decis
 				// 使用账户净值的80%作为基础仓位，确保不超过限制
 				basePosition := accountEquity * 0.8
 				if decision.Symbol == "BTCUSDT" || decision.Symbol == "ETHUSDT" {
-					decision.PositionSizeUSD = min(basePosition*5, maxPositionSize) // BTC/ETH用5倍基础仓位
+					decision.PositionSizeUSD = minFloat(basePosition*5, maxPositionSize) // BTC/ETH用5倍基础仓位
 				} else {
-					decision.PositionSizeUSD = min(basePosition, maxPositionSize) // 山寨币用1倍基础仓位
+					decision.PositionSizeUSD = minFloat(basePosition, maxPositionSize) // 山寨币用1倍基础仓位
 				}
 				decision.RiskUSD = accountEquity * 0.02 // 风险控制在2%
 			}
@@ -620,6 +694,67 @@ func parseComplexAIDecisions(jsonContent string, accountEquity float64) ([]Decis
 	}
 
 	return decisions, nil
+}
+
+// tryFixIncompleteJSON 尝试修复不完整的JSON数组
+func tryFixIncompleteJSON(jsonFragment string) string {
+	jsonFragment = strings.TrimSpace(jsonFragment)
+	
+	// 如果不是以[开始，返回空
+	if !strings.HasPrefix(jsonFragment, "[") {
+		return ""
+	}
+	
+	// 检查是否是��单的缺少]的情况
+	openCount := strings.Count(jsonFragment, "[")
+	closeCount := strings.Count(jsonFragment, "]")
+	
+	if openCount > closeCount {
+		// 尝试添加缺失的]
+		needed := openCount - closeCount
+		for i := 0; i < needed; i++ {
+			jsonFragment += "]"
+		}
+		
+		// 验证修复后的JSON是否有效
+		var test []interface{}
+		if err := json.Unmarshal([]byte(jsonFragment), &test); err == nil {
+			return jsonFragment
+		}
+	}
+	
+	// 尝试查找最后一个完整的对象
+	lastBrace := strings.LastIndex(jsonFragment, "}")
+	if lastBrace == -1 {
+		return ""
+	}
+	
+	// 截取到最后一个完整对象，然后添加]
+	fixedJSON := jsonFragment[:lastBrace+1] + "]"
+	
+	// 验证修复后的JSON是否有效
+	var test []interface{}
+	if err := json.Unmarshal([]byte(fixedJSON), &test); err == nil {
+		return fixedJSON
+	}
+	
+	return ""
+}
+
+// min 返回两个int中较小的值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// minFloat 返回两个float64中较小的值
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // isValidDecisionArray 检查JSON是否是有效的决策数组格式

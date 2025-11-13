@@ -562,21 +562,7 @@ func FormatAsCompactData(data *Data) string {
 	
 	result := map[string]interface{}{
 		data.Symbol: map[string]interface{}{
-			"基础指标": map[string]interface{}{
-				"price": data.CurrentPrice,
-				"ema20": data.CurrentEMA20,
-				"macd":  data.CurrentMACD,
-				"rsi7":  data.CurrentRSI7,
-				"change_1h": data.PriceChange1h,
-				"change_4h": data.PriceChange4h,
-				"funding_rate": data.FundingRate,
-				"oi_latest": func() float64 {
-					if data.OpenInterest != nil {
-						return data.OpenInterest.Latest
-					}
-					return 0
-				}(),
-			},
+			"基础指标": calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
 		},
 	}
@@ -587,6 +573,92 @@ func FormatAsCompactData(data *Data) string {
 	}
 	
 	return string(jsonData)
+}
+
+// calculateMultiTimeframeBasicIndicators 计算多时间框架基础指标
+func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[string][]Kline) map[string]interface{} {
+	result := make(map[string]interface{})
+	
+	// 全局指标（不依赖时间框架）
+	result["price"] = data.CurrentPrice
+	result["funding_rate"] = data.FundingRate
+	result["oi_latest"] = func() float64 {
+		if data.OpenInterest != nil {
+			return data.OpenInterest.Latest
+		}
+		return 0
+	}()
+	
+	// 价格变化（基于3分钟K线计算）
+	if klines3m, exists := timeframeKlines["3m"]; exists && len(klines3m) > 0 {
+		// 1小时价格变化 = 20个3分钟K线前的价格
+		if len(klines3m) >= 21 {
+			price1hAgo := klines3m[len(klines3m)-21].Close
+			if price1hAgo > 0 {
+				result["change_1h"] = ((data.CurrentPrice - price1hAgo) / price1hAgo) * 100
+			}
+		}
+	}
+	
+	// 4小时价格变化（基于4小时K线计算）
+	if klines4h, exists := timeframeKlines["4h"]; exists && len(klines4h) >= 2 {
+		price4hAgo := klines4h[len(klines4h)-2].Close
+		if price4hAgo > 0 {
+			result["change_4h"] = ((data.CurrentPrice - price4hAgo) / price4hAgo) * 100
+		}
+	}
+	
+	// 各时间框架的基础指标
+	timeframes := []string{"3m", "15m", "30m", "1h", "4h"}
+	for _, tf := range timeframes {
+		klines, exists := timeframeKlines[tf]
+		if !exists || len(klines) == 0 {
+			continue
+		}
+		
+		tfData := map[string]interface{}{}
+		
+		// EMA20
+		if len(klines) >= 20 {
+			tfData["ema20"] = calculateEMA(klines, 20)
+		}
+		
+		// MACD
+		if len(klines) >= 26 {
+			tfData["macd"] = calculateMACD(klines)
+		}
+		
+		// RSI7 和 RSI14
+		if len(klines) >= 8 {
+			tfData["rsi7"] = calculateRSI(klines, 7)
+		}
+		if len(klines) >= 15 {
+			tfData["rsi14"] = calculateRSI(klines, 14)
+		}
+		
+		// ATR14
+		if len(klines) >= 15 {
+			tfData["atr14"] = calculateATR(klines, 14)
+		}
+		
+		// 成交量
+		if len(klines) > 0 {
+			tfData["volume"] = klines[len(klines)-1].Volume
+			// 平均成交量
+			sum := 0.0
+			for _, k := range klines {
+				sum += k.Volume
+			}
+			tfData["avg_volume"] = sum / float64(len(klines))
+		}
+		
+		// 只有当有数据时才添加到结果中
+		if len(tfData) > 0 {
+			result[tf] = tfData
+		}
+	}
+	
+	return result
 }
 
 // extractCompactMultiTimeframeAnalysis 提取精简的多时间框架分析数据

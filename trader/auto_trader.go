@@ -9,6 +9,7 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/pool"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -628,6 +629,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	// 计算数量
 	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
+	// 暂时使用市场价格，执行后会更新为实际成交价
 	actionRecord.Price = marketData.CurrentPrice
 
 	// 保证金验证已在模板中优化处理，此处跳过验证直接执行
@@ -651,6 +653,14 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 
 	log.Printf("  ✓ 开仓成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
 
+	// 🔧 重要修复：获取实际成交价格
+	// 等待订单确认后获取真实的持仓信息来确定实际成交价
+	time.Sleep(2 * time.Second) // 等待订单确认
+	if actualPrice := at.getActualFillPrice(decision.Symbol, "long"); actualPrice > 0 {
+		actionRecord.Price = actualPrice
+		log.Printf("  📊 实际开仓价格: %.4f (原请求价格: %.4f)", actualPrice, marketData.CurrentPrice)
+	}
+
 	// 记录开仓时间
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
@@ -664,6 +674,30 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	}
 
 	return nil
+}
+
+// getActualFillPrice 获取实际成交价格（通过持仓信息获取）
+func (at *AutoTrader) getActualFillPrice(symbol, side string) float64 {
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		log.Printf("  ⚠️ 获取持仓信息失败: %v", err)
+		return 0
+	}
+
+	for _, pos := range positions {
+		if pos["symbol"] == symbol && pos["side"] == side {
+			if entryPrice, ok := pos["entryPrice"].(float64); ok && entryPrice > 0 {
+				return entryPrice
+			}
+			if entryPrice, ok := pos["entryPrice"].(string); ok {
+				if price, err := strconv.ParseFloat(entryPrice, 64); err == nil && price > 0 {
+					return price
+				}
+			}
+		}
+	}
+	
+	return 0
 }
 
 // executeOpenShortWithRecord 执行开空仓并记录详细信息
@@ -689,6 +723,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	// 计算数量
 	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
+	// 暂时使用市场价格，执行后会更新为实际成交价
 	actionRecord.Price = marketData.CurrentPrice
 
 	// 保证金验证已在模板中优化处理，此处跳过验证直接执行
@@ -712,6 +747,14 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 
 	log.Printf("  ✓ 开仓成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
 
+	// 🔧 重要修复：获取实际成交价格
+	// 等待订单确认后获取真实的持仓信息来确定实际成交价
+	time.Sleep(2 * time.Second) // 等待订单确认
+	if actualPrice := at.getActualFillPrice(decision.Symbol, "short"); actualPrice > 0 {
+		actionRecord.Price = actualPrice
+		log.Printf("  📊 实际开仓价格: %.4f (原请求价格: %.4f)", actualPrice, marketData.CurrentPrice)
+	}
+
 	// 记录开仓时间
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
@@ -731,12 +774,22 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  🔄 平多仓: %s", decision.Symbol)
 
-	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
-	if err != nil {
-		return err
+	// 🔧 重要修复：获取更准确的市场价格用于平仓
+	// 先尝试多次获取市场价格来获得更精确的即时价格
+	var actualMarketPrice float64
+	for i := 0; i < 3; i++ {
+		if marketData, err := market.Get(decision.Symbol); err == nil {
+			actualMarketPrice = marketData.CurrentPrice
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	actionRecord.Price = marketData.CurrentPrice
+	
+	if actualMarketPrice == 0 {
+		return fmt.Errorf("无法获取市场价格")
+	}
+	
+	actionRecord.Price = actualMarketPrice
 
 	// 平仓
 	order, err := at.trader.CloseLong(decision.Symbol, 0) // 0 = 全部平仓
@@ -749,7 +802,7 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 		actionRecord.OrderID = orderID
 	}
 
-	log.Printf("  ✓ 平仓成功")
+	log.Printf("  ✓ 平仓成功，平仓价格: %.4f", actualMarketPrice)
 	return nil
 }
 
@@ -757,12 +810,22 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  🔄 平空仓: %s", decision.Symbol)
 
-	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
-	if err != nil {
-		return err
+	// 🔧 重要修复：获取更准确的市场价格用于平仓
+	// 先尝试多次获取市场价格来获得更精确的即时价格
+	var actualMarketPrice float64
+	for i := 0; i < 3; i++ {
+		if marketData, err := market.Get(decision.Symbol); err == nil {
+			actualMarketPrice = marketData.CurrentPrice
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	actionRecord.Price = marketData.CurrentPrice
+	
+	if actualMarketPrice == 0 {
+		return fmt.Errorf("无法获取市场价格")
+	}
+	
+	actionRecord.Price = actualMarketPrice
 
 	// 平仓
 	order, err := at.trader.CloseShort(decision.Symbol, 0) // 0 = 全部平仓
@@ -775,7 +838,7 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 		actionRecord.OrderID = orderID
 	}
 
-	log.Printf("  ✓ 平仓成功")
+	log.Printf("  ✓ 平仓成功，平仓价格: %.4f", actualMarketPrice)
 	return nil
 }
 
