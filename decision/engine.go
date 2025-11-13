@@ -454,15 +454,120 @@ func extractDecisions(response string) ([]Decision, error) {
 	jsonContent := strings.TrimSpace(response[arrayStart : arrayEnd+1])
 
 	// 🔧 修复常见的JSON格式错误：缺少引号的字段值
-	// 匹配: "reasoning": 内容"}  或  "reasoning": 内容}  (没有引号)
-	// 修复为: "reasoning": "内容"}
-	// 使用简单的字符串扫描而不是正则表达式
 	jsonContent = fixMissingQuotes(jsonContent)
 
-	// 解析JSON
+	// 尝试解析为标准Decision格式
 	var decisions []Decision
-	if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-		return nil, fmt.Errorf("JSON解析失败: %w\nJSON内容: %s", err, jsonContent)
+	if err := json.Unmarshal([]byte(jsonContent), &decisions); err == nil {
+		return decisions, nil
+	}
+
+	// 如果标准格式解析失败，尝试解析AI返回的复杂格式
+	return parseComplexAIDecisions(jsonContent)
+}
+
+// parseComplexAIDecisions 解析AI返回的复杂格式并转换为标准Decision
+func parseComplexAIDecisions(jsonContent string) ([]Decision, error) {
+	// 定义AI返回的复杂格式结构
+	var complexDecisions []struct {
+		Symbol     string `json:"symbol"`
+		Open       bool   `json:"open"`
+		Side       string `json:"side"`
+		Playbook   string `json:"playbook"`
+		Entry      struct {
+			Type      string  `json:"type"`
+			Price     float64 `json:"price"`
+			Tolerance float64 `json:"tolerance"`
+		} `json:"entry"`
+		StopLoss   float64   `json:"stop_loss"`
+		TakeProfit []float64 `json:"take_profit"` // 注意这是数组
+		MinRR      float64   `json:"min_rr"`
+		Confluence float64   `json:"confluence_score"`
+		Confidence int       `json:"confidence"`
+		Positioning struct {
+			RiskPerTrade    float64 `json:"risk_per_trade"`
+			LeverageHint    int     `json:"leverage_hint"`
+			SizeSafeguard   string  `json:"size_safeguard"`
+		} `json:"positioning"`
+		Routing struct {
+			PostOnly     bool   `json:"post_only"`
+			TimeInForce  string `json:"time_in_force"`
+		} `json:"routing"`
+		Reason            string   `json:"reason"`
+		InsufficientData  []string `json:"insufficient_data"`
+	}
+
+	// 解析复杂格式
+	if err := json.Unmarshal([]byte(jsonContent), &complexDecisions); err != nil {
+		return nil, fmt.Errorf("复杂格式JSON解析失败: %w\nJSON内容: %s", err, jsonContent)
+	}
+
+	// 转换为标准Decision格式
+	var decisions []Decision
+	for _, complex := range complexDecisions {
+		decision := Decision{
+			Symbol:     complex.Symbol,
+			Confidence: complex.Confidence,
+			Reasoning:  complex.Reason,
+		}
+
+		// 转换动作类型
+		if !complex.Open {
+			// 不开仓，判断为hold或wait
+			if complex.Side == "hold" {
+				decision.Action = "hold"
+			} else {
+				decision.Action = "wait"
+			}
+		} else {
+			// 开仓
+			if complex.Side == "long" {
+				decision.Action = "open_long"
+			} else if complex.Side == "short" {
+				decision.Action = "open_short"
+			} else {
+				decision.Action = "wait"
+			}
+		}
+
+		// 对于开仓决策，填充详细信息
+		if decision.Action == "open_long" || decision.Action == "open_short" {
+			decision.Leverage = complex.Positioning.LeverageHint
+			if decision.Leverage <= 0 {
+				decision.Leverage = 5 // 默认5倍杠杆
+			}
+			
+			decision.StopLoss = complex.StopLoss
+			
+			// 取第一个止盈价格
+			if len(complex.TakeProfit) > 0 {
+				decision.TakeProfit = complex.TakeProfit[0]
+			}
+
+			// 根据风险计算仓位大小（简化版本）
+			if complex.Positioning.RiskPerTrade > 0 && complex.Entry.Price > 0 && complex.StopLoss > 0 {
+				// 假设账户净值为1000 USDT（这里可以从context获取，但我们简化处理）
+				riskAmount := 1000 * complex.Positioning.RiskPerTrade
+				priceDistance := 0.0
+				if decision.Action == "open_long" {
+					priceDistance = (complex.Entry.Price - complex.StopLoss) / complex.Entry.Price
+				} else {
+					priceDistance = (complex.StopLoss - complex.Entry.Price) / complex.Entry.Price
+				}
+				if priceDistance > 0 {
+					decision.PositionSizeUSD = riskAmount / priceDistance
+					decision.RiskUSD = riskAmount
+				}
+			}
+
+			// 如果没有计算出仓位大小，使用默认值
+			if decision.PositionSizeUSD <= 0 {
+				decision.PositionSizeUSD = 500.0 // 默认500 USDT
+				decision.RiskUSD = 50.0          // 默认风险50 USDT
+			}
+		}
+
+		decisions = append(decisions, decision)
 	}
 
 	return decisions, nil
