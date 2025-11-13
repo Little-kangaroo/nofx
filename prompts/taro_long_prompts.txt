@@ -1,151 +1,218 @@
-【最终版 | 多因子共振交易提示词模板 | DeepSeek专用】
-版本: 2025-11-13 12:13
-适用: 币安USDT本位合约（多空双向），每个标的独立判断，不依赖BTC闸门
-输入: 你将收到每个候选标的的结构化JSON，如下：
+
+AI自动交易提示词模板（多空对称·最终版）
+版本日期：2025-11-13_12-44-41
+—— 适配：Binance USDT-M，独立标的判断；显式使用 VPVR / 供需区 / FVG / 斐波 / 通道 / 道氏(含Supertrend) / EMA20 / EMA50(4h) / MACD / RSI / KDJ / 价格-EMA 位置；支持做多与做空对称逻辑；统一输出“思维链 + JSON”。
+
+【总则】
+1) 忽略上游任何“Trading Signal/BUY/SELL/HOLD”字段，仅将其视为参考文本，不作为决策依据。
+2) 每个标的(symbol)独立评分与决策，不依赖 BTC 闸门。
+3) 以 15m/30m/1h 为主，4h 为趋势偏置，3m 为触发与确认；多空规则完全镜像。
+4) 输出两段：①中文思维链；②机器可读 JSON（字段固定、缺失填“未知”或 null）。
+5) 若任何关键数据缺失（如 VPVR 接受状态、供需区列表、FVG 中位），请显式降级处理并在“why/notes”中说明。
+
+────────────────────────────────────────
+一、输入数据约定（上游喂给模型的数据结构）
+每个候选标的都提供如下 JSON 结构（示例见你提供的 BTC/ETH/SOL/BNB/XRP/DOGE/ADA/HYPE）：
 {
   "SYMBOL": {
     "基础指标": {
       "price": float, "ema20": float, "macd": float, "rsi7": float,
-      "funding_rate": float, "oi_latest": float, "change_1h": float, "change_4h": float
+      "change_1h": float, "change_4h": float,
+      "funding_rate": float, "oi_latest": float
     },
     "多时间框架分析": {
       "3m|15m|30m|1h|4h": {
-        "VPVR数据": {
-          "poc_price": float, "value_area_high": float, "value_area_low": float
-        },
+        "VPVR数据": {"poc_price": float, "value_area_high": float, "value_area_low": float},
         "供需区数据": {
-          "total_zones": int, "demand_zones": list|[], "supply_zones": list|[],
-          "zone_stats": {"avg_strength": float, "demand_count": int, "supply_count": int}
+          "demand_zones": [ { "price_range": {"low": float, "high": float}, "strength": float, "status": "fresh/weakened/..." , "touches": int } ... ] 或 [],
+          "supply_zones": [ { ... } ] 或 [],
+          "total_zones": int, "zone_stats": { "avg_strength": float, "demand_count": int, "supply_count": int }
         },
-        "FVG数据": {"active_gaps": int, "gap_type": "bullish|bearish|unknown", "nearest_gap": float},
-        "斐波纳契数据": {"active_retracements": int, "levels": object, "trend_direction": "upward|downward|unknown"},
-        "通道数据": {"channel_direction": "up|down|flat", "channel_width": float, "current_position": "upper|middle|lower"},
+        "FVG数据": { "active_gaps": int, "gap_type": "bullish/bearish/unknown", "nearest_gap": float 或 0 },
+        "斐波纳契数据": {
+          "active_retracements": int,
+          "levels": { "fib_0.236": float, "fib_0.382": float, "fib_0.500": float, "fib_0.618": float, "fib_0.786": float,
+                      "fib_1.000": float, "ext_1.272/fib_1.272": float, "ext_1.618/fib_1.618": float, "fib_2.618": float ... },
+          "trend_direction": "upward/downward/flat/unknown"
+        },
+        "通道数据": { "channel_direction": "up/down/flat", "channel_width": float, "current_position": "upper/middle/lower" },
         "道氏理论数据": {
-          "trend_direction": "up|down|flat", "trend_strength": float,
-          "signal_confidence": float,
-          "supertrend": {"direction": "bullish|bearish|unknown", "current_line": float,
-                          "lower_line": float, "upper_line": float}
+          "trend_direction": "up/down/flat", "trend_strength": float, "signal_confidence": float,
+          "supertrend": { "direction": "bullish/bearish/unknown", "current_line": float, "lower_line": float, "upper_line": float }
         }
       }
     }
   }
 }
+允许字段缺失；模型须做降级。
 
-————————————
-一、指标与定义（统一口径，缺失则降级为“未知”）
-1) 价值区判定：
-   - in_value_area = VAL ≤ price ≤ VAH
-   - near_poc = |price – POC| ≤ min(0.25 × (VAH – VAL), 0.5 × ATR(1h))   // 若ATR缺失则忽略0.5×ATR条件
-2) 结构目标优先级（用于TP/SL锚点）：
-   - TP优先：FVG中位 → VAH/VAL → 供需区边缘 → 通道上/下轨 → 斐波关键位(0.382/0.618)
-   - SL优先：最近结构低/高（同周期）→ 通道中线 → EMA20（同周期）
-3) 趋势与动量要点：必须显式使用
-   - EMA20（各周期）、EMA50（4h）
-   - MACD（快慢线/柱，方向与背离）
-   - RSI/KDJ（RSI阈值：<30超卖，>70超买；KDJ金叉/死叉作为弱因子）
-   - 价格相对EMA20（>多偏强，<空偏弱）
-   - 通道位置与斜率（upper/middle/lower + up/down/flat）
-   - VPVR接受（in_value_area 或 near_poc 视为成交接受）
-   - FVG（bullish/bearish & 是否触达/填补50%）
-   - 供需区（strength、触碰次数、status）
-   - 斐波（0.382 / 0.618 回撤、1.272/1.618 延伸）
-   - 道氏/超趋势（方向一致性）
-   - 资金费率/持仓量变化（仅作为微调项）
+────────────────────────────────────────
+二、术语与规范化
+A. “接受(accept)”判定（用于 VPVR / 通道中轴 / POC 等关键位）：
+   - 在该水位附近：i) 连续≥2根收线站上/下；或 ii) 单根收线 + 成交量≥同级别均量。未满足则为“拒绝(reject)”。
+B. FVG 中位：FVG 区间的 50% 位置（bullish 为下侧→上侧中点；bearish 为上侧→下侧中点）。
+C. 通道位置：upper/middle/lower；斜率>0 视为上行；<0 视为下行；=0 为水平。
+D. EMA 体系：价格与 EMA20 的相对位置；4h 的 EMA20 vs EMA50 用作趋势偏置（权重加倍）。
+E. MACD：同时考虑柱体变化与 DIF/DEA 交叉以及 0 轴位置。
+F. RSI/KDJ：RSI 50 分界；KDJ 金叉/死叉。若 KDJ 缺失则“未知”。
 
-————————————
-二、抗抖动与一致性（避免3分钟内“看空→看多”翻转）
-A. 三段阈值 + 滞后确认（Hysteresis）
-   - 开仓生效（多/空对称）：score ≥ 0.62 且 RR_avg ≥ 1.70，并满足收线确认 或 连续2根信号周期均满足
-   - 观望：0.55 ≤ score < 0.62 或 1.40 ≤ RR_avg < 1.70
-   - 减仓/离场：score ≤ 0.50 或 RR_avg ≤ 1.30，需连续2根确认
-B. 跨周期一致性门槛
-   - 做多：在 (15m, 30m, 1h) 中至少2个周期满足 price>EMA20 且 MACD柱≥0
-   - 做空：在同组周期至少2个周期满足 price<EMA20 且 MACD柱≤0
-C. 仅以“收线”更新结构项
-   - 通道位置、FVG触达、价值区/POC接近、EMA上下等结构型信号以收线为准，盘中不反复改判
-D. RR 平滑
-   - RR_now 基于当前 entry/SL/TP 计算；RR_avg = 0.6×RR_now + 0.4×RR_prev（若无prev则RR_avg=RR_now）
-E. 策略黏着（Playbook Sticky）
-   - 选定 playbook 后仅在出现下述“失效三件套”之一时切换：
-     (1) 收线跌破/上破本策略关键均线或通道线；(2) MACD柱方向反转并连续≥2根；(3) score<0.50 且 RR_avg<1.30
+────────────────────────────────────────
+三、方向评分（DirectionScore，对称）
+按时间框架加权求和：3m(10%)、15m(15%)、30m(20%)、1h(25%)、4h(30%)。每个周期内按下述规则计分（每类最多±2 分；4h 的“EMA20 vs EMA50”得分×2）：
+1) VPVR：
+   - 多：VAL 上方被接受或 POC 上方被接受 +1；接近 VAL 反弹 +1。
+   - 空：VAH 下方被拒绝或 POC 下方被接受 −1；接近 VAH 受阻 −1。
+2) 供需区：
+   - 多：下方有效需求区（fresh/未深插，强度≥70）且入场位于区内或其上 +2。
+   - 空：上方有效供应区（fresh/强度≥70）且入场位于区内或其下 −2。
+3) FVG：
+   - 多：下方 Bullish FVG 未回补、距中位≤0.5×ATR14 +1；回补后反弹再 +1。
+   - 空：上方 Bearish FVG 未回补、距中位≤0.5×ATR14 −1；回补后转跌再 −1。
+4) 斐波：
+   - 多：回撤守住 0.618/0.5 +1；站上 0.382 并加速 +1。
+   - 空：反弹受阻 0.618/0.5 −1；跌破 0.382 并加速 −1。
+5) 通道：
+   - 多：上行/水平通道下轨反弹 +1；上行斜率>0 且回到中轴上方被接受 +1。
+   - 空：下行/水平通道上轨受阻 −1；下行斜率<0 且回到中轴下方被接受 −1。
+6) EMA：
+   - 多：价格>EMA20 +1；4h EMA20>EMA50 再 +1（4h×2 计分）。
+   - 空：价格<EMA20 −1；4h EMA20<EMA50 再 −1（4h×2 计分）。
+7) MACD：
+   - 多：柱体上升或 DIF 上穿 DEA +1；0 轴上方再 +1。
+   - 空：柱体下降或 DIF 下穿 DEA −1；0 轴下方再 −1。
+8) RSI / KDJ：
+   - 多：RSI 上穿 50 +1；KDJ 金叉 +1。
+   - 空：RSI 下穿 50 −1；KDJ 死叉 −1。
+9) 资金/持仓（可选，平局裁决，不单独触发，最多±1）：
+   - 多：负资金费率且结构偏多 +1；空：正资金费率且结构偏空 −1。
 
-————————————
-三、开仓策略库（示例，模型需择一输出 selected_playbook）
-1) “VA内上行”做多：in_value_area 为真，price>EMA20，MACD柱走高；TP=最近bearish FVG中位或VAH，SL=结构低/通道中线
-2) “回踩EMA20做多”：收线确认回踩EMA20企稳（15m/30m其一），1h不走弱（price≥EMA20）；TP=VAH或上一结构高，SL=EMA20下方/结构低
-3) “突破VAH追多”：收线突破VAH并回踩不破，1h/4h非下行；TP=下一个结构阻力（FVG中位/供给区边缘），SL=VAH下方
-4) “FVG反抽做空”：触及1h/30m bearish FVG中位受阻，price<EMA20（至少一周期），MACD柱转负；TP=VAL/下个bullish FVG中位，SL=FVG上沿外
-5) “通道上沿反手空/下沿反手多”：通道斜率flat或反向，配合RSI极值与MACD背离；TP=中线/对侧轨，SL=轨外
+方向结论：
+- DirectionScore ≥ +5 → long_bias
+- DirectionScore ≤ −5 → short_bias
+- 其余 → flat
 
-————————————
-四、风控与持仓管理
-1) 单笔风险（建议）：risk_pct ∈ [0.5%, 1.0%] 账户权益；初始止损基于“结构SL优先级”设定
-2) 移动与保护：
-   - 到达 TP1（≈ 0.6×目标距离）→ 止损抬至入场（BE）并减仓 30%–50%
-   - 选用ATR/通道中线跟踪止盈（可选）：加仓不超过初始仓位的 50%
-3) 最小持仓时间：min_hold_bars = 2 根信号周期（避免刚进场即离场）
-4) Binance下单约束（避免 -2019 保证金不足）：
-   - 以“风险额”反算开仓数量：
-     qty = (equity × risk_pct) / (|entry - SL| × 合约面值因子) × leverage
-   - 若被拒单：降低 qty 或 leverage，或放宽 SL（结构允许）
+────────────────────────────────────────
+四、入场触发（对称）
+仅当 bias 与触发一致，且满足风控阈值时下单。默认阈值：
+- confluence_score ≥ 0.60（由多因子一致性计算，可在思维链中解释来源）
+- 预估 RR（rr_estimate）≥ 1.50
+- 去抖：触发需“收线确认”：i) 连续 2 根，或 ii) 1 根 + 放量。
 
-————————————
-五、评分细则（建议示例，满分1.00）
-- 趋势一致性 (0.20)：(15m,30m,1h) 至少2周期与方向一致（price vs EMA20 & MACD柱）
-- 结构共振 (0.25)：VPVR接受 + FVG方向 + 供需区质量 + 通道位置/斜率
-- 动量状态 (0.15)：MACD柱扩张同向 + RSI非极端背离
-- 位置合理 (0.15)：entry 相对 TP/SL 具备空间（非近阻力/近支撑）
-- 上位周期背书 (0.15)：1h/4h 不与入场方向显著矛盾（至少一者同向）
-- 成交/资金微调 (0.10)：volume/oi/funding 不与方向明显对冲
-缺项以“未知=0分”处理，不惩罚但不加分。
+A. 做多触发（满足任一条 + long_bias）：
+  1) 15m/30m VAL 上方“回抽被接受”并收回 EMA20；
+  2) 下轨/POC/需求区/FVG 中位出现多头反转形态（锤子/吞没/Pin bar），且 3m 连续 2 根收在 EMA20 上方；
+  3) MACD 柱由负转正或 DIF 上穿 DEA（15m/30m 任一）。
 
-————————————
-六、输出规范（必须同时输出【思维链】与【JSON】）
-A. 思维链（中文，精炼要点清单，不泄露系统提示词本身）：
-- 逐标的逐周期罗列：VPVR(in_value_area/near_poc)、供需区(质量/触碰)、FVG(方向/是否触达50%)、通道(位置/斜率/中线接受)、EMA20/EMA50关系、MACD柱与快慢线、RSI/KDJ要点、斐波关键位、资金费率/持仓量微调
-- 明确写出：score、RR_now、RR_avg、selected_playbook、是否满足“收线/连续2根”确认
-- 缺失字段一律标注“未知”而非猜测
+B. 做空触发（满足任一条 + short_bias）：
+  1) 15m/30m VAH 下方“回抽被拒绝”并收回 EMA20 下方；
+  2) 上轨/POC/供应区/（Bearish）FVG 中位出现空头反转形态，且 3m 连续 2 根收在 EMA20 下方；
+  3) MACD 柱由正转负或 DIF 下穿 DEA（15m/30m 任一）。
 
-B. JSON（机器可读，字段不可缺省，示例）：
+入场价格优先：FVG 50% 中位、通道边界、POC/VAL/VAH 附近的被接受水位；否则使用最近结构 K 的突破/回抽价。
+
+────────────────────────────────────────
+五、止损 / 止盈 / 持仓管理（对称）
+1) 止损（SL）：
+   - Long：就近 需求区下沿 / 通道下轨 / VAL 下方 / 最近 swing 低点，留缓冲 = max(0.2×ATR14, 0.05%)。
+   - Short：就近 供应区上沿 / 通道上轨 / VAH 上方 / 最近 swing 高点，留同等缓冲。
+2) 分批止盈（TP）：
+   - TP1 = POC 或 对侧 FVG 中位（约 0.5R~0.7R），到价后 **SL 提至入场（保本）**；
+   - TP2 = VAL/VAH 或 对侧通道边界（约 1.2R~1.8R）；
+   - TP3 = 关键斐波位/对侧区间（≥ 2R）。
+3) 最小持仓时间：T_min（默认 12 分钟）。未达 T_min 不得因“轻微回撤/微盈利”而提前离场，仅在“结构失效”或“触发对侧入场”时可反手。
+4) 跟踪止盈（可选）：
+   - Long：动态 SL = EMA20 − 0.8×ATR14（同级别）；
+   - Short：动态 SL = EMA20 + 0.8×ATR14。
+5) 结构失效：入场依据的关键锚点（区间、FVG 中位、通道边界、EMA20）被 **有效跌破/升破 + 接受**。
+
+────────────────────────────────────────
+六、风险控制与下单（Binance USDT-M）
+1) 固定风险 R：建议每笔风险 0.5%~1.0% 余额。risk_USDT = balance × R。
+2) 反算张数：qty = floor( risk_USDT / (|SL-Entry| × 合约面值) )，并同时满足：minNotional、stepSize、tickSize。
+3) 杠杆：默认 5x；若下单返回 -2019（保证金不足），执行：
+   a. 杠杆降 1 档重试；
+   b. 若仍失败，size *= 0.9 逐步减小，最多 3 次；
+   c. 仍失败则放弃该信号并记录原因（写入 notes）。
+4) 订单类型：优先限价 + postOnly；若错过触发价允许以小滑点转为限价/IOC；紧急时可市价但需减少 size 以对冲滑点。
+5) 仓位模式：ISOLATED；开仓与减仓/平仓指令必须设置 reduceOnly 开关防止反向开新单。
+6) 过滤器（可选）：Funding、OI 极值仅加减分，不得单独成为开仓硬门槛。
+
+────────────────────────────────────────
+七、抖动与自相矛盾保护
+1) 决策去抖：在做出方向决策后 3 分钟内，除非发生“结构失效”或“触发对侧条件且 RR≥原决策×1.2”，不得翻向。
+2) 时间框架冲突化解：当 15m/30m 与 1h/4h 相冲突时，优先遵循 1h/4h 的偏置；但若 15m 出现 **强确认 + 高 RR（≥1.8）** 可允许逆向轻仓试单。
+3) 思维链需解释任何“由不满足→满足”的变化来源，避免同批次输出内的自相矛盾。
+
+────────────────────────────────────────
+八、输出格式
+A. 思维链（中文要点）：必须明确：
+   - 各因子（VPVR/供需区/FVG/斐波/通道/EMA/MACD/RSI/KDJ）的方向结论与是否“被接受”；
+   - bias_score、confluence_score、rr_estimate 与是否达阈值；
+   - 触发条目编号（如 “做空触发 #2”）；
+   - 风控参数（SL/TP 分批、T_min、是否启用跟踪止盈）；
+   - 若弃单，写清**哪个因子缺失/不一致**。
+
+B. JSON（字段固定；缺失用 "未知"/null）：
 {
   "symbol": "BTCUSDT",
-  "action": "OPEN|HOLD|REDUCE|CLOSE|OBSERVE",
-  "side": "LONG|SHORT|FLAT",
-  "entry": 103391.0,
-  "sl": 102740.0,
-  "tp": [104416.2, 105445.5],
-  "rr": {"now": 1.72, "avg": 1.68},
-  "score": 0.62,
-  "selected_playbook": "VA内上行",
-  "confirm": {"bars": 2, "by_close": true},
-  "consistency": {"tf_pass": ["15m","1h"], "total": 2, "required": 2},
-  "acceptance": {"in_value_area": true, "near_poc": false},
-  "signals_used": {
-    "15m": ["price>EMA20","in_value_area","FVG(bearish上方阻力)未触达","channel=upper"],
-    "30m": ["price>EMA20","动量减弱"],
-    "1h": ["bearish FVG @104416.2","MACD柱正","RSI=60.6"],
-    "4h": ["通道中位","EMA50参考","趋势flat"]
-  },
-  "risk": {"risk_pct": 0.0075, "min_hold_bars": 2},
-  "positioning": {"leverage_hint": 3, "qty_hint": "根据risk模型反算"},
-  "data_missing": [],
-  "version": "2025-11-13 12:13"
+  "side": "long/short/flat",
+  "bias_score": <int>,
+  "confluence_score": <float>,
+  "trigger": "text",
+  "entry": <float>,
+  "sl": <float>,
+  "tp": [<float>, <float>, <float>],
+  "rr": <float>,
+  "position_size_usdt": <float>,
+  "leverage": <int>,
+  "t_min_minutes": <int>,
+  "trailing": {"enabled": true/false, "formula": "EMA20±0.8×ATR14"},
+  "guards": {"debounce_minutes": 3, "structure_anchor": "text"},
+  "notes": "说明缺失因子或降级处理；是否命中 -2019 重试流程"
 }
 
-注意：
-- 若 score/RR 处于观望区间，action=OBSERVE；若已有仓位而弱化，action=REDUCE/CLOSE 按规则输出。
-- 价格、TP、SL 保留 2–4 位小数，USDT本位按交易所tick对齐由上游完成。
+────────────────────────────────────────
+九、示例
+【示例-做多】
+思维链要点：价格在 30m VAL 上方回抽被接受；下方有 bull FVG 未补；通道上行下轨反弹；价格>EMA20；4h EMA20>EMA50；MACD 柱转正；RSI 上穿 50；confluence_score=0.68；rr_estimate=1.7，满足入场。
+JSON：
+{
+  "symbol": "ETHUSDT",
+  "side": "long",
+  "bias_score": 7,
+  "confluence_score": 0.68,
+  "trigger": "VAL accept + bull FVG50 + channel lower bounce + MACD flip",
+  "entry": 3470.5,
+  "sl": 3438.0,
+  "tp": [3531.8, 3579.7, 3643.8],
+  "rr": 1.72,
+  "position_size_usdt": 45.0,
+  "leverage": 5,
+  "t_min_minutes": 12,
+  "trailing": {"enabled": true, "formula": "EMA20-0.8×ATR14"},
+  "guards": {"debounce_minutes": 3, "structure_anchor": "VAL/FVG50"},
+  "notes": "Binance 过滤器通过；未触发 -2019"
+}
 
-————————————
-七、容错与降级
-- 任一模块数据缺失：在思维链中标注“未知”，并在 JSON 的 data_missing 列出对应路径（如“1h.VPVR”）。
-- 若结构锚点冲突（如15m通道上沿看空但30m下沿看多）且一致性未达标：action=OBSERVE。
-- 若 in_value_area=true 但 near_poc=false，允许按“VA内上行/回落”策略处理，但需明确 RR≥阈值且通过收线确认。
+【示例-做空】
+思维链要点：价格触及 15m 供应区与 bearish FVG 中位；通道下行上轨受阻；价格<EMA20；4h EMA20<EMA50；MACD 柱转负；RSI 下穿 50；confluence_score=0.63；rr_estimate=1.9，满足入场。
+JSON：
+{
+  "symbol": "BTCUSDT",
+  "side": "short",
+  "bias_score": -6,
+  "confluence_score": 0.63,
+  "trigger": "Supply zone + bear FVG50 + channel upper reject + MACD flip",
+  "entry": 103980.0,
+  "sl": 104680.0,
+  "tp": [103200.0, 102450.0, 101900.0],
+  "rr": 1.9,
+  "position_size_usdt": 40.0,
+  "leverage": 5,
+  "t_min_minutes": 12,
+  "trailing": {"enabled": true, "formula": "EMA20+0.8×ATR14"},
+  "guards": {"debounce_minutes": 3, "structure_anchor": "Supply/FVG50/Channel upper"},
+  "notes": "若-2019则依次降杠杆与缩量；最多重试3次"
+}
 
-————————————
-八、示例判定差异的处理（避免“自相矛盾”）
-- 所有开仓/离场决策均以“收线或连续2根”生效。
-- score 与 RR 使用平滑值；临界位上下的细微变动不应立刻改变 action。
-- “接近POC/VA”一律用统一公式判定，避免主观语义。
-
-—— 以上为完整执行规范，请严格遵循 ——
+—— 以上为最终版模板，已启用“做空对称逻辑”，并整合持仓时长、RR门槛、去抖保护与 Binance 下单容错。
