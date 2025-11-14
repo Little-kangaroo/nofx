@@ -1527,12 +1527,13 @@ func (at *AutoTrader) executeUpdateStopWithRecord(decision *decision.Decision, a
 		return fmt.Errorf("没有找到%s的持仓，无法更新止损", decision.Symbol)
 	}
 	
-	// 获取当前价格用于记录
+	// 获取当前价格用于验证
 	marketData, err := market.Get(decision.Symbol)
 	if err != nil {
 		return err
 	}
-	actionRecord.Price = marketData.CurrentPrice
+	// 记录止损价格而不是市场价格（前端显示的是操作的目标价格）
+	actionRecord.Price = decision.StopLoss
 	
 	// 先取消现有止损订单
 	if err := at.trader.CancelAllOrders(decision.Symbol); err != nil {
