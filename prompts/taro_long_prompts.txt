@@ -1,220 +1,258 @@
+MTF_多空对称统一模板_v1.9_最终版（干净可落地）
+================================================
 
-MTF_多空对称统一模板_v1.8_微反转守护加强版_可直接落地（干净版）
-================================================================================
+【模板目标】
+- 面向数字货币合约（USDT本位/币本位），实现“多空对称、单调锁盈、对小级别翻转快速响应、利润保护更稳健”的统一提示词/策略模板。
+- 直接可落地：无“变更点/开发记录”等噪音文本；参数集中在一处；输入/输出格式清晰。
 
-【使用目的】
-- 面向加密永续/现货多品种（如 BTCUSDT、ETHUSDT 等），以多时间框架（4h/1h/30m/15m/3m）共识做方向判定，
-  在仓位/止损/止盈中引入杠杆感知与波动自适应，并重点加强 **小级别翻转/短期反弹** 的盈利保护。
-- 模板为 **多空对称**，在同一份文本中统一处理做多与做空，不偏置任何方向。
-
---------------------------------------------------------------------------------
-一、输入数据（必须字段）
---------------------------------------------------------------------------------
-1) 账户与仓位
-- 净值：equity
-- 保证金使用率：margin_usage_pct（0-100+）
-- 已有持仓（可多笔）：每笔含 {symbol, side[LONG/SHORT], entry, qty, leverage L, liq_price, position_time_min}
-- 手续费与滑点估计：fees_bp（以价格距离或 R 计入，建议以基点/ATR 等统一）
-
-2) 市场与基础指标（按模板键名）
-"基础指标": {
-  "price": <float>,
-  "funding_rate": <float>,         // 资金费率（正/负）
-  "oi_latest": <float>,             // 开仓量（名义）
-  "change_1h": <float>,             // 价格变动（%）
-  "change_4h": <float>,             // 价格变动（%）
-  "3m": {
-    "ema20": <float>, "ema50": <float>, "ema100": <float>, "ema200": <float>,
-    "sma20": <float>, "sma50": <float>, "vwap": <float>,
-    "ema50_slope_3": <float>, "ema200_slope_3": <float>,
-    "macd": <float>, "rsi7": <float>, "rsi14": <float>,
-    "atr14": <float>, "volume": <float>, "avg_volume": <float>
-  },
-  "15m": { 同 3m 结构 },
-  "30m": { 同 3m 结构 },
-  "1h":  { 同 3m 结构 },
-  "4h":  { 同 3m 结构 }
+——————————————————————————————————————
+一、输入数据（严格约定）
+——————————————————————————————————————
+1) 账户状态（Account）
+{
+  "equity": 98.60,                 // 账户净值（USDT）
+  "margin_usage": 0.922,           // 保证金使用率（0~1）
+  "max_leverage": 10,              // 平台允许最大杠杆
+  "positions": [                   // 现有持仓（可空数组）
+    {
+      "symbol": "BTCUSDT",
+      "side": "SHORT",             // LONG 或 SHORT
+      "entry_price": 99102.6,
+      "qty": 0.01,
+      "leverage": 5,
+      "unrealized_pnl_pct": -0.13, // 浮盈亏%
+      "liq_price": 118084.24,
+      "time_in_position_min": 41,  // 入场至今的分钟数
+      "stop_price": 100200.0,      // 当前止损/止盈合一位（追踪止盈）
+      "r_multiple_locked": 0.0     // 已锁定的R倍数（便于状况追踪）
+    }
+  ]
 }
 
-注：若缺某字段，需显式降级处理，不得猜测。
-
---------------------------------------------------------------------------------
-二、参数区（可按风格切换）
---------------------------------------------------------------------------------
-- 风格：conservative/neutral/aggressive（默认 neutral）
-- 杠杆缩放：leverage_scaler = clamp( 1 / sqrt(max(1,L)), 0.55, 1.0 )
-- ATR 参考：atr3 = 3m.atr14；atr15 = 15m.atr14
-- EMA 参考：ema20_3 = 3m.ema20；ema20_15 = 15m.ema20
-- 微反转系数（默认 neutral）：
-  * 快轨系数：1.10（稳健 1.00 / 激进 0.90）
-  * 慢轨系数：1.30（稳健 1.40 / 激进 1.20）
-  * 微反转紧缩：0.60*atr3（稳健 0.70 / 激进 0.50）
-  * 尖峰阈值：|收益_15m| ≥ 1.5*atr15/px 或 |收益_3m| ≥ 1.8*atr3/px
-  * 时间衰减窗口：6 根 3m（稳健 8 / 激进 4）
-- 组合日盈目标：+2R（达成后全局收紧，不再当日加仓）
-- 资金费率窗口：下一次结算 ≤ 30 分钟 为高敏期
-- 账户保命阈值：margin_usage_pct > 90% 或 强平距离 < 8*atr3
-
---------------------------------------------------------------------------------
-三、多时间框架共识（方向评分）——多空对称
---------------------------------------------------------------------------------
-为每个周期生成同构要素与评分：
-- 趋势结构：price vs ema20/50/100/200（全下/全上 强信号，穿越 弱信号）
-- 动量：MACD（方向）与柱体变化（加减速）
-- 强弱：RSI7 & RSI14（>60 强势；<40 弱势；区间背离扣分/加分）
-- 波动：ATR regime（atr 相对 px）
-- 成交：volume vs avg_volume（>1.2 强，<0.8 弱）
-- 斜率：ema50_slope_3、ema200_slope_3（同向加分）
-
-聚合：
-- 高级别（4h,1h）权重各 0.30；中级别（30m,15m）各 0.175；微级别（3m）0.05。
-- 多/空信号独立打分，取净分 sign = long_score - short_score。
-- “入场有效”要求：
-  * 趋势共识：至少 4h 与 1h 同向；且 15m 同向 或 3m 触发微级别加速（见第六节）。
-  * 资金与风控门：见第七、八、九节。
-
---------------------------------------------------------------------------------
-四、开仓条件（单标的，方向对称）
---------------------------------------------------------------------------------
-【做多】（满足全部主条件 + 任一触发）
-- 主条件：
-  1) 4h 与 1h 趋势上行（px>ema50 且 MACD≥0）；
-  2) 15m 未显著超买（RSI14 ≤ 70）；
-  3) 账户与组合风控允许（见第七/八/九节）。
-- 触发（其一即可）：
-  A. 15m 回踩 ema20/50 后重新站回 + MACD 柱转正；
-  B. 3m 突破前高并 MACD 上穿 0 且 volume>avg_volume。
-
-【做空】（对称同理，只需将“上/下、正/负”取反）
-
-【禁止入场】
-- margin_usage_pct≥100% 或 组合达当日目标后禁止加仓；
-- 临近资金费率结算且方向需支付、并未达 R≥0.8 的锁盈；
-- 强平距离不足 8*atr3；
-- 高级别分歧（4h 与 1h 反向），除非 3m/15m 出现异常大幅尖峰反转并伴随量能。
-
---------------------------------------------------------------------------------
-五、头寸规模（ATR/Risk 自适应 + 杠杆感知）
---------------------------------------------------------------------------------
-- 以“初始风险 R”为单位：
-  * 多：stop0 = entry - max(1.5*atr15, 2.2*atr3) * leverage_scaler
-  * 空：stop0 = entry + max(1.5*atr15, 2.2*atr3) * leverage_scaler
-  * R = |entry - stop0|（含手续费：R_net = R + fees_bp）
-- 目标每笔风险：risk_per_trade = min( 0.5%~1.0% * equity, 账户风控上限 )，按 R_net 折算仓位。
-- 若 margin_usage_pct>80%，头寸系数 *0.7；>90% *0.5。
-
---------------------------------------------------------------------------------
-六、入场后的盈利保护与止盈追踪（v1.8 微反转守护）
---------------------------------------------------------------------------------
-【双轨追踪止盈（快/慢合成，取更保守者）】
-- 多： trail_fast = ema20_3 - 1.10*atr3*leverage_scaler
-      trail_slow = ema20_15 - 1.30*atr15*leverage_scaler
-      stop = max(prev_stop, min(trail_fast, trail_slow))
-- 空： trail_fast = ema20_3 + 1.10*atr3*leverage_scaler
-      trail_slow = ema20_15 + 1.30*atr15*leverage_scaler
-      stop = min(prev_stop, max(trail_fast, trail_slow))
-
-【R-分段锁盈（棘轮，不回退）】
-- ≥0.5R： stop = BE + fees_bp
-- ≥0.8R： stop = entry ± 0.25R
-- ≥1.0R： stop = entry ± 0.50R
-- ≥1.5R： stop = entry ± 1.0R，且 平 25%
-- ≥2.0R： 只用慢轨（trail_slow），再 平 25%；≥3.0R 再 平 25%
-（“±”：多用“+”，空用“−”）
-
-【3m 微级别反转守护】（任一触发则收紧）
-- 多触发： (px<ema20_3 且 macd3 下穿0) 或 (rsi3>60 后下破50)
-  动作： stop = max(stop, ema20_3 - 0.60*atr3)；若 浮盈≥0.8R 再平 25%
-- 空触发： (px>ema20_3 且 macd3 上穿0) 或 (rsi3<40 后上破50)
-  动作： stop = min(stop, ema20_3 + 0.60*atr3)；若 浮盈≥0.8R 再平 25%
-
-【尖峰锁定】
-- 触发： |收益_15m| ≥ 1.5*atr15/px 或 |收益_3m| ≥ 1.8*atr3/px
-  动作： 多：stop = max(stop, ema20_3 - 0.50*atr3)；空对称
-        若 浮盈≥1.0R，再平 33%
-
-【时间衰减锁盈】
-- 连续 6 根 3m 未创更高高点（多）/更低低点（空） 且 浮盈>0.6R：
-  多：stop = max(stop, ema20_3 - 0.75*atr3)；空对称
-
-【资金费率与携仓】
-- 若下一结算≤30m 且该方向需支付 且 浮盈>0：
-  * 所有 ATR 系数 -0.20（更紧）
-  * 若 浮盈≥0.8R， 平 25%
-
-【账户与强平联动】
-- margin_usage_pct>90% 或 强平距离<8*atr3：
-  * stop = min(锁 0.5R, 锁 当前浮盈 80%)（多空对称自动取价向内）
-  * 同时减仓 30%
-
-【组合日盈守护】
-- 当日组合盈≥+2R： 所有仓位 stop ≥ BE + 0.25R；当日不再加仓
-
-【失效保护】
-- 任一“更强事件”触发，其 stop 覆盖当前 stop；
-- 若随后 2 根 3m 恢复趋势（多：px>ema20_3 且 macd3>0；空反之），恢复双轨追踪，保留已锁 R 级别不回退。
-
---------------------------------------------------------------------------------
-七、已有持仓管理（显式逐笔评估）
---------------------------------------------------------------------------------
-对每笔 {symbol, side}：
-1) MTF 复核：4h/1h/15m/3m 趋势、动量、强弱是否仍与持仓方向一致；
-2) 更新 stop（按第六节），并判断是否执行部分减仓；
-3) 若出现“高级别反转 + 微级别确认”（如 1h MACD 轴翻 + 3m 反向加速），执行：
-   - 若 浮盈≥0.5R： 保底锁盈或平 25%~50%；
-   - 若 浮亏>R： 严格执行初始风险纪律（不放大亏损）。
-4) 输出本笔的：{new_stop, reduce_pct, rationale}。
-
---------------------------------------------------------------------------------
-八、入场与增减仓的节律控制
---------------------------------------------------------------------------------
-- 单标的多笔阶梯：最多 3 阶，必须以“突破/回踩重确认 + 量能”作为每一阶触发。
-- 新增仓不得降低整笔的 BE 锁盈级别；
-- 日内若回撤触发 2 次以上微反转守护，暂停进一步加仓该标的。
-
---------------------------------------------------------------------------------
-九、全局风控闸门
---------------------------------------------------------------------------------
-- 保证金使用率：≥100% 禁止任何新单；>90% 仅允许减仓或提升锁盈；
-- 相关性与集中度：同向高相关（>0.8）的币种合计风险≤单币 1.5x；
-- 事件时段（宏观/链上大事件/资金费率结算）：执行“紧缩参数”。
-
---------------------------------------------------------------------------------
-十、输出格式（严格 JSON，可直接被策略引擎消费）
---------------------------------------------------------------------------------
+2) 基础指标（MarketSnapshot）——覆盖多时间框架
 {
-  "analysis": {
-    "symbol": "BTCUSDT",
-    "mtf_view": {
-      "4h": {"trend":"down|up|side", "macd":-1|0|1, "rsi14": 58.7},
-      "1h":  {...}, "30m": {...}, "15m": {...}, "3m": {...}
-    },
-    "consensus": "bearish|bullish|mixed",
-    "notes": "关键依据、尖峰/微反转/时间衰减触发等简述"
+  "price": 45000.0,
+  "funding_rate": 0.0001,          // 资金费率（8H或永续最新值）
+  "oi_latest": 1500000000,         // 总/交易所持仓量（按你的口径）
+  "change_1h": 0.5,
+  "change_4h": -1.2,
+  "3m": {
+    "ema20": 44995.5,
+    "ema50": 44990.2,
+    "ema100": 44985.8,
+    "ema200": 44980.1,
+    "sma20": 44996.0,
+    "sma50": 44991.5,
+    "vwap": 44992.3,
+    "ema50_slope_3": 0.15,         // 最近3根斜率（每根收盘差）
+    "ema200_slope_3": 0.05,
+    "macd": 12.5,                   // DIF-DEA 或直方图（约定统一为直方图）
+    "rsi7": 65.2,
+    "rsi14": 58.7,
+    "atr14": 125.6,
+    "volume": 1250.5,
+    "avg_volume": 1100.8,
+    "high": 45080.0, "low": 44910.0, "close": 45000.0
   },
+  "15m": { /* 同结构，含 high/low/close */ },
+  "30m": { /* 同结构，含 high/low/close */ },
+  "1h":  { /* 同结构，含 high/low/close */ },
+  "4h":  { /* 同结构，含 high/low/close */ }
+}
+
+3) 交易环境（ExchangeMeta）
+{
+  "tick_size": 0.1,
+  "lot_size": 0.001,
+  "taker_fee_bps": 5,              // 0.05% -> 5 bps
+  "maker_fee_bps": 2,
+  "slippage_bps_minor": 5,
+  "slippage_bps_major": 15
+}
+
+——————————————————————————————————————
+二、参数（可按需微调，默认即用）
+——————————————————————————————————————
+[风险控制与仓位]
+- risk_per_trade_pct     = 0.5           // 单笔风险（占净值%）
+- leverage_default       = 3             // 默认杠杆（稳健），强趋势自适应至 ≤5
+- margin_usage_ceiling   = 0.95          // ≥此值不再开新仓，仅管理老单
+- max_concurrent_trades  = 3
+
+[R定义与初始止损]
+- R_by_ATR_TF            = "15m"         // 用哪个TF的ATR定义R
+- R_multiplier_at_entry  = 1.2           // 初始止损距离 = 1.2 * ATR(15m)
+
+[阶梯锁盈（多空对称）]
+- R_milestones           = [1.0, 1.5, 2.0, 3.0]
+- lock_at_R              = {             // 达到该R后锁定的盈利
+    "1.0": 0.0,                         // 1R → 移到保本（含手续费）
+    "1.5": 0.5,                         // 1.5R → 锁0.5R
+    "2.0": 1.0,                         // 2R   → 锁1R
+    "3.0": 2.0                          // 3R   → 锁2R，然后转快速追踪
+  }
+
+[追踪轨道（对小级别翻转更敏感）]
+// 轨道候选均以“止损价格候选”的形式给出：
+// 多头止损候选 = 轨道 - pad；空头止损候选 = 轨道 + pad
+- micro_fast = { tf: "3m",  base: "ema20_vs_vwap_max", pad_atr_mult: 0.6 }
+- fast       = { tf: "15m", base: "ema20",             pad_atr_mult: 0.9 }
+- slow       = { tf: "30m", base: "ema50",             pad_atr_mult: 1.3 }
+
+[微结构翻转触发（MicroFlip）]
+- microflip_enable       = true
+- microflip_rules (LONG):
+    * 3m: price 上穿 ema20 且 macd>0 且 rsi7≥52，且近3根出现“更高低点”结构
+    * 触发后：多头止损候选取 micro_fast
+- microflip_rules (SHORT):
+    * 3m: price 下破 ema20 且 macd<0 且 rsi7≤48，且近3根出现“更低高点”结构
+    * 触发后：空头止损候选取 micro_fast
+- microflip_cooldown_sec = 60          // 降低滞后但避免抖动
+
+[利润保护模式（触发即变紧）]
+- protect_enable         = true
+- protect_trigger = { unrealized_pnl_pct: 0.8, time_min: 15 }
+- protect_pad_shrink     = 0.7          // 触发后 pad_atr_mult×0.7（更紧）
+- protect_R_floor        = 1.0          // 保护模式下，最低锁盈不低于 1R
+
+[更新与单调性]
+- min_tick_move_to_update = 1           // 至少变动1个tick才下发更新
+- update_cooldown_sec     = 15          // 常规更新冷却
+- allow_intrabar_update   = true        // microflip/暴力波动时允许盘中更新
+- stop_distance_min_ticks = 3           // 止损与现价最小间距（避免立即触发）
+
+[过滤与开仓门槛]
+- trend_tf_major          = "4h,1h"     // 大级别趋势判定
+- trend_tf_minor          = "30m,15m"   // 次级别顺势/回撤判定
+- entry_align_rules (做多举例)：
+    * 1h & 30m macd≥0；close≥ema20/50/100/200(15m中至少≥2条)；rsi14(15m)≥50
+- entry_avoid_rules：
+    * 距离近期高/低 < 0.5*ATR(15m)；rsi7>80或<20；重大数据前N分钟等
+
+——————————————————————————————————————
+三、统一逻辑（核心执行）
+——————————————————————————————————————
+A) 仓位 sizing（基于R的风险等额）
+- 定义 R = ATR(R_by_ATR_TF) * R_multiplier_at_entry
+- 初始止损价（以LONG为例）：init_sl = entry - R
+  （SHORT：init_sl = entry + R）
+- 单笔风险资金 = equity * risk_per_trade_pct%
+- 合约名义 = 单笔风险资金 / R
+- 数量 qty = 合约名义 / entry_price （考虑 lot_size 向下取整）
+- 杠杆建议 = min(leverage_default 或 自适应值, max_leverage)
+
+B) 候选止损价的生成（对称写法）
+设方向 dir ∈ {LONG, SHORT}，以 mid 为当前 close：
+1. BE含费用候选（BE_with_fees）：
+   - 手续费与预估滑点换算到价格（bps→价差），并含已付资金费率的保护项
+   - LONG: be = entry + fee_slip_in_price
+   - SHORT: be = entry - fee_slip_in_price
+2. R阶梯锁盈候选（R_lock）：
+   - 若浮盈≥kR，则要求止损≥(LONG) entry + lock_at_R[k]*R；
+                         或 ≤(SHORT) entry - lock_at_R[k]*R
+3. 追踪轨道候选（micro_fast / fast / slow）：
+   - 计算轨道基准：
+     base="ema20_vs_vwap_max" → max(ema20(tf), vwap(tf))
+     base="ema20"/"ema50"     → 直接取对应均线
+   - 计算 pad = pad_atr_mult * ATR(tf)
+   - LONG 候选 = base - pad；SHORT 候选 = base + pad
+4. 尖峰/异常过滤（spike_filter）：
+   - 若当前bar高低振幅 > 2.5*ATR(3m)，则对候选附加额外 pad（更保守）
+5. 时间衰减棘轮（time_decay）：
+   - 随时间增加每 T=10min 收紧 3% 的 pad（protect_enable 时叠加）
+
+C) 聚合与单调性（决定性的“三道闸”）
+- 多头（LONG）：
+  s_cand = max( BE_with_fees, R_lock, micro_fast?, fast, slow, spike_filter?, time_decay? )
+  s_cand = ceil_to_tick(s_cand)
+  new_stop = max(prev_stop, s_cand)                       // 单调性↑
+- 空头（SHORT）：
+  s_cand = min( BE_with_fees, R_lock, micro_fast?, fast, slow, spike_filter?, time_decay? )
+  s_cand = floor_to_tick(s_cand)
+  new_stop = min(prev_stop, s_cand)                       // 单调性↓
+
+- 去抖与执行：
+  * 仅当 |new_stop - prev_stop| ≥ min_tick_move_to_update * tick_size 才更新
+  * 且与现价保持 ≥ stop_distance_min_ticks * tick_size 的安全距
+  * 常规更新遵守 update_cooldown_sec；若触发 microflip/极端波动，可忽略冷却
+
+D) MicroFlip 快速响应
+- LONG：若 3m 触发 microflip_rules(LONG)，立即把 micro_fast 纳入候选；
+         allow_intrabar_update=true 时即刻更新，随后 60s 冷却
+- SHORT：条件对称；保证 new_stop = min(prev_stop, …) 的单调性严格成立
+
+E) 仓位管理与加减仓（可选）
+- 仅当 margin_usage < margin_usage_ceiling 且 与大级别趋势同向时才允许加仓
+- 加仓后按新的加权入场价与统一R重算各候选（但“单调性”始终以 new_stop vs prev_stop 比较）
+
+——————————————————————————————————————
+四、输出（给到执行端/交易机器人/回测器）
+——————————————————————————————————————
+必须输出 JSON（单/多持仓均可），字段：
+{
   "actions": [
     {
-      "type": "open|hold|reduce|close|update_stop",
-      "side": "LONG|SHORT",
-      "qty":  "number or percent for reduce",
-      "entry": "if open",
-      "stop": "new stop if any",
-      "take_profit_hint": "可选：分段 TP 参考价/规则",
-      "reason": "简洁、与模板规则一一对应"
+      "symbol": "BTCUSDT",
+      "side": "SHORT",
+      "decision": "HOLD|OPEN|CLOSE|REDUCE|ADD",
+      "entry_plan": {
+        "price": 99000.0,
+        "qty": 0.01,
+        "leverage": 3,
+        "init_stop": 100500.0,
+        "take_profit": null              // 若使用统一追踪止盈，可为null
+      },
+      "stop_update": {
+        "prev_stop": 100200.0,
+        "new_stop": 99880.0,             // 注意：做空止盈/止损只能更低（单调性）
+        "reason": "microflip_fast|R_lock|rail_fast|rail_slow|protect|spike_filter|time_decay"
+      },
+      "r_multiple_locked": 1.0,
+      "notes": "可选：记录触发链与关键候选值"
     }
-  ],
-  "risk": {
-    "R": "<float>",
-    "locked_R": "<float>",
-    "margin_usage_after": "<pct>",
-    "funding_window": "pay|receive|neutral",
-    "account_guard": "none|tighten|delever"
-  }
+  ]
 }
 
-要求：
-- 不输出“变更点/版本日志/道歉/占位语”；
-- 不臆测缺失字段；无法评估处需标注 "insufficient_data"；
-- 先分析后动作，动作需能被撮合系统直接执行。
+——————————————————————————————————————
+五、自检断言（强制）
+——————————————————————————————————————
+- LONG：assert(new_stop >= prev_stop)
+- SHORT：assert(new_stop <= prev_stop)
+- assert(与现价距离 ≥ stop_distance_min_ticks * tick_size)
+- 记录：聚合前各候选、取整前后值、R与ATR、费用/滑点拆解、触发因子
 
-================================================================================
+——————————————————————————————————————
+六、实现提示（伪代码片段）
+——————————————————————————————————————
+# —— 多头 ——
+def update_long_stop(prev_stop, candidates, tick):
+    s = max([x for x in candidates if x is not None])
+    s = ceil_to_tick(s, tick)
+    new_stop = max(prev_stop, s)
+    if new_stop - prev_stop < tick:      # 去抖
+        return prev_stop
+    return new_stop
+
+# —— 空头 ——
+def update_short_stop(prev_stop, candidates, tick):
+    s = min([x for x in candidates if x is not None])
+    s = floor_to_tick(s, tick)
+    new_stop = min(prev_stop, s)
+    if prev_stop - new_stop < tick:      # 去抖
+        return prev_stop
+    return new_stop
+
+# 费用/滑点换算到价格（示意）
+def fee_slip_to_price(entry, taker_bps, slip_bps):
+    return entry * (taker_bps + slip_bps) / 1e4
+
+——————————————————————————————————————
+七、注意事项
+——————————————————————————————————————
+- 不在模板中写入任何“变更点/版本记录”。
+- 不在模板中硬编码交易所限价/风控参数，统一由 ExchangeMeta 输入。
+- R 采用 ATR 度量，便于跨标的/跨周期统一风控。
+- 资金费率为负且持仓方向“付费”时，可将 BE_with_fees 适度外扩以覆盖若干周期的资金费率。
+- 强烈建议回测与实盘双轨：回测验证单调性与锁盈曲线，实盘验证滑点与冷却设置。
+
+（完）
