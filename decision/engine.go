@@ -477,6 +477,12 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 	// 尝试解析为标准Decision格式
 	var decisions []Decision
 	if err := json.Unmarshal([]byte(jsonContent), &decisions); err == nil {
+		// 调试日志：打印解析后的决策内容
+		log.Printf("🔍 [调试] 成功解析AI决策，数量: %d", len(decisions))
+		for i, d := range decisions {
+			log.Printf("🔍 [调试] 决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f, TakeProfit=%.6f", 
+				i+1, d.Symbol, d.Action, d.StopLoss, d.TakeProfit)
+		}
 		return decisions, nil
 	}
 

@@ -646,13 +646,22 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, act
 func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  📈 开多仓: %s", decision.Symbol)
 
-	// ⚠️ 关键：检查是否已有同币种同方向持仓，如果有则拒绝开仓（防止仓位叠加超限）
+	// 🔍 智能仓位管理：检查是否可以加仓（最多3阶梯）
 	positions, err := at.trader.GetPositions()
 	if err == nil {
+		longPositionCount := 0
 		for _, pos := range positions {
 			if pos["symbol"] == decision.Symbol && pos["side"] == "long" {
-				return fmt.Errorf("❌ %s 已有多仓，拒绝开仓以防止仓位叠加超限。如需换仓，请先给出 close_long 决策", decision.Symbol)
+				longPositionCount++
 			}
+		}
+		
+		// 检查是否超过最大阶梯数（3阶）
+		if longPositionCount >= 3 {
+			log.Printf("  ⚠️ %s 已达最大持仓阶梯数（3阶），跳过加仓。如需调整仓位，请先减仓", decision.Symbol)
+			return nil
+		} else if longPositionCount > 0 {
+			log.Printf("  📊 %s 当前持有%d阶多仓，准备执行第%d阶加仓", decision.Symbol, longPositionCount, longPositionCount+1)
 		}
 	}
 
@@ -758,13 +767,22 @@ func (at *AutoTrader) getActualFillPrice(symbol, side string) float64 {
 func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  📉 开空仓: %s", decision.Symbol)
 
-	// ⚠️ 关键：检查是否已有同币种同方向持仓，如果有则拒绝开仓（防止仓位叠加超限）
+	// 🔍 智能仓位管理：检查是否可以加仓（最多3阶梯）
 	positions, err := at.trader.GetPositions()
 	if err == nil {
+		shortPositionCount := 0
 		for _, pos := range positions {
 			if pos["symbol"] == decision.Symbol && pos["side"] == "short" {
-				return fmt.Errorf("❌ %s 已有空仓，拒绝开仓以防止仓位叠加超限。如需换仓，请先给出 close_short 决策", decision.Symbol)
+				shortPositionCount++
 			}
+		}
+		
+		// 检查是否超过最大阶梯数（3阶）
+		if shortPositionCount >= 3 {
+			log.Printf("  ⚠️ %s 已达最大持仓阶梯数（3阶），跳过加仓。如需调整仓位，请先减仓", decision.Symbol)
+			return nil
+		} else if shortPositionCount > 0 {
+			log.Printf("  📊 %s 当前持有%d阶空仓，准备执行第%d阶加仓", decision.Symbol, shortPositionCount, shortPositionCount+1)
 		}
 	}
 
@@ -1503,21 +1521,42 @@ func (at *AutoTrader) executeUpdateStopWithRecord(decision *decision.Decision, a
 		log.Printf("  ⚠ 取消现有订单失败: %v", err)
 	}
 	
+	// 调试日志：打印AI传递的止损价格
+	log.Printf("  🔍 [调试] AI传递的止损价格: %.6f", decision.StopLoss)
+	log.Printf("  🔍 [调试] 当前市场价格: %.6f", marketData.CurrentPrice)
+	
+	// 验证止损价格的合理性
+	if decision.StopLoss <= 0 {
+		return fmt.Errorf("止损价格无效: %.6f (必须大于0)", decision.StopLoss)
+	}
+	
 	// 根据持仓方向设置新的止损
 	if hasLong {
 		actionRecord.Quantity = longQuantity
+		// 多仓：止损价格应该低于当前价格
+		if decision.StopLoss >= marketData.CurrentPrice {
+			log.Printf("  ⚠️ [警告] 多仓止损价格(%.6f)应低于当前价格(%.6f)", decision.StopLoss, marketData.CurrentPrice)
+			return fmt.Errorf("多仓止损价格(%.2f)应低于当前价格(%.2f)", decision.StopLoss, marketData.CurrentPrice)
+		}
+		log.Printf("  🔄 设置多仓止损: 数量=%.4f, 止损价格=%.6f", longQuantity, decision.StopLoss)
 		if err := at.trader.SetStopLoss(decision.Symbol, "LONG", longQuantity, decision.StopLoss); err != nil {
 			return fmt.Errorf("设置多仓止损失败: %w", err)
 		}
-		log.Printf("  ✓ 更新多仓止损成功: %.2f", decision.StopLoss)
+		log.Printf("  ✓ 更新多仓止���成功: %.6f", decision.StopLoss)
 	}
 	
 	if hasShort {
 		actionRecord.Quantity = shortQuantity
+		// 空仓：止损价格应该高于当前价格
+		if decision.StopLoss <= marketData.CurrentPrice {
+			log.Printf("  ⚠️ [警告] 空仓止损价格(%.6f)应高于当前价格(%.6f)", decision.StopLoss, marketData.CurrentPrice)
+			return fmt.Errorf("空仓止损价格(%.2f)应高于当前价格(%.2f)", decision.StopLoss, marketData.CurrentPrice)
+		}
+		log.Printf("  🔄 设置空仓止损: 数量=%.4f, 止损价格=%.6f", shortQuantity, decision.StopLoss)
 		if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", shortQuantity, decision.StopLoss); err != nil {
 			return fmt.Errorf("设置空仓止损失败: %w", err)
 		}
-		log.Printf("  ✓ 更新空仓止损成功: %.2f", decision.StopLoss)
+		log.Printf("  ✓ 更新空仓止损成功: %.6f", decision.StopLoss)
 	}
 	
 	return nil
