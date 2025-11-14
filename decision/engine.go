@@ -978,36 +978,54 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			return fmt.Errorf("止损和止盈必须大于0")
 		}
 
-		// 验证止损止盈的合理性
+		// 验证止损止盈的合理性和价格方向
+		// 获取当前市价作为入场价参考
+		marketData, err := market.Get(d.Symbol)
+		var currentPrice float64 = 50000.0 // 默认价格，防止获取失败
+		if err == nil {
+			currentPrice = marketData.CurrentPrice
+		}
+		
 		if d.Action == "open_long" {
-			if d.StopLoss >= d.TakeProfit {
-				return fmt.Errorf("做多时止损价必须小于止盈价")
+			// 做多：止损 < 入场价 < 止盈
+			if d.StopLoss >= currentPrice {
+				return fmt.Errorf("做多时止损价(%.2f)必须低于当前价格(%.2f)", d.StopLoss, currentPrice)
 			}
-		} else {
+			if d.TakeProfit <= currentPrice {
+				return fmt.Errorf("做多时止盈价(%.2f)必须高于当前价格(%.2f)", d.TakeProfit, currentPrice)
+			}
+			if d.StopLoss >= d.TakeProfit {
+				return fmt.Errorf("做多时止损价(%.2f)必须小于止盈价(%.2f)", d.StopLoss, d.TakeProfit)
+			}
+		} else if d.Action == "open_short" {
+			// 做空：止盈 < 入场价 < 止损
+			if d.TakeProfit >= currentPrice {
+				return fmt.Errorf("做空时止盈价(%.2f)必须低于当前价格(%.2f)", d.TakeProfit, currentPrice)
+			}
+			if d.StopLoss <= currentPrice {
+				return fmt.Errorf("做空时止损价(%.2f)必须高于当前价格(%.2f)", d.StopLoss, currentPrice)
+			}
 			if d.StopLoss <= d.TakeProfit {
-				return fmt.Errorf("做空时止损价必须大于止盈价")
+				return fmt.Errorf("做空时止损价(%.2f)必须大于止盈价(%.2f)", d.StopLoss, d.TakeProfit)
 			}
 		}
 
 		// 验证风险回报比（必须≥1:3）
-		// 计算入场价（假设当前市价）
-		var entryPrice float64
-		if d.Action == "open_long" {
-			// 做多：入场价在止损和止盈之间
-			entryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2 // 假设在20%位置入场
-		} else {
-			// 做空：入场价在止损和止盈之间
-			entryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2 // 假设在20%位置入场
-		}
+		// 使用当前市价作为入场价
+		entryPrice := currentPrice
 
 		var riskPercent, rewardPercent, riskRewardRatio float64
 		if d.Action == "open_long" {
+			// 做多：风险 = (入场价 - 止损价) / 入场价
+			//       收益 = (止盈价 - 入场价) / 入场价
 			riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
 			rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
 			if riskPercent > 0 {
 				riskRewardRatio = rewardPercent / riskPercent
 			}
-		} else {
+		} else if d.Action == "open_short" {
+			// 做空：风险 = (止损价 - 入场价) / 入场价
+			//       收益 = (入场价 - 止盈价) / 入场价
 			riskPercent = (d.StopLoss - entryPrice) / entryPrice * 100
 			rewardPercent = (entryPrice - d.TakeProfit) / entryPrice * 100
 			if riskPercent > 0 {
