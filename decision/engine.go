@@ -7,6 +7,7 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/pool"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -486,14 +487,174 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 		return decisions, nil
 	}
 
-	// 如果标准格式解析失败，尝试解析混合格式（AI可能返回标准格式但某些字段类型不匹配）
+	// 如果标准格式解析失败，尝试解析taro格式（使用actions数组和"stop"字段）
+	taroDecisions, taroErr := parseTaroFormatDecisions(jsonContent)
+	if taroErr == nil {
+		log.Printf("🔍 [调试] 成功解析taro格式决策，数量: %d", len(taroDecisions))
+		for i, d := range taroDecisions {
+			log.Printf("🔍 [调试] taro决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f", 
+				i+1, d.Symbol, d.Action, d.StopLoss)
+		}
+		return taroDecisions, nil
+	}
+
+	// 如果taro格式失败，尝试解析混合格式（AI可能返回标准格式但某些字段类型不匹配）
 	mixedDecisions, mixedErr := parseMixedFormatDecisions(jsonContent, accountEquity)
 	if mixedErr == nil {
 		return mixedDecisions, nil
 	}
 
-	// 如果混合格式也失败，尝试解析AI返回的复杂格式
+	// 如��混合格式也失败，尝试解析AI返回的复杂格式
 	return parseComplexAIDecisions(jsonContent, accountEquity)
+}
+
+// parseTaroFormatDecisions 解析taro格式决策（使用actions数组和\"stop\"字段）
+func parseTaroFormatDecisions(jsonContent string) ([]Decision, error) {
+	// 定义taro格式的决策结构
+	var taroResponse struct {
+		Analysis struct {
+			Symbol   string `json:"symbol"`
+			MtfView  interface{} `json:"mtf_view"`
+			Consensus string `json:"consensus"`
+			Notes    string `json:"notes"`
+		} `json:"analysis"`
+		Actions []struct {
+			Type         string  `json:"type"`          // "open|hold|reduce|close|update_stop"
+			Side         string  `json:"side"`          // "LONG|SHORT"
+			Qty          interface{} `json:"qty"`       // "number or percent for reduce" - 可能是字符串或数字
+			Entry        interface{} `json:"entry"`     // "if open" - 可能是字符串或数字
+			Stop         interface{} `json:"stop"`      // "new stop if any" - 关键字段，可能是字符串或数字
+			TakeProfitHint string `json:"take_profit_hint"` // "可选：分段 TP 参考价/规则"
+			Reason       string  `json:"reason"`        // "简洁、与模板规则一一对应"
+		} `json:"actions"`
+	}
+
+	// 解析taro格式
+	if err := json.Unmarshal([]byte(jsonContent), &taroResponse); err != nil {
+		return nil, fmt.Errorf("taro格式JSON解析失败: %w", err)
+	}
+
+	// 从analysis中获取symbol
+	symbol := taroResponse.Analysis.Symbol
+	if symbol == "" {
+		// 如果analysis中没有symbol，尝试使用默认的BTCUSDT
+		symbol = "BTCUSDT"
+		log.Printf("⚠️ taro格式中未找到symbol，使用默认值: %s", symbol)
+	}
+
+	// 转换为标准Decision格式
+	var decisions []Decision
+	for _, action := range taroResponse.Actions {
+		decision := Decision{
+			Symbol:    symbol,
+			Action:    convertTaroActionToStandard(action.Type),
+			Reasoning: action.Reason,
+		}
+
+		// 处理stop字段 -> StopLoss字段（关键修复）
+		if action.Stop != nil {
+			var stopPrice float64
+			switch v := action.Stop.(type) {
+			case string:
+				if v != "" && v != "new stop if any" { // 跳过模板占位符
+					if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+						stopPrice = parsed
+					}
+				}
+			case float64:
+				stopPrice = v
+			case int:
+				stopPrice = float64(v)
+			}
+			if stopPrice > 0 {
+				decision.StopLoss = stopPrice
+				log.Printf("🔍 [调试] taro格式解析: stop='%v' -> StopLoss=%.6f", action.Stop, stopPrice)
+			}
+		}
+
+		// 处理side字段来确定具体的动作
+		if action.Side == "LONG" {
+			if decision.Action == "open" {
+				decision.Action = "open_long"
+			} else if decision.Action == "close" {
+				decision.Action = "close_long"
+			}
+		} else if action.Side == "SHORT" {
+			if decision.Action == "open" {
+				decision.Action = "open_short"
+			} else if decision.Action == "close" {
+				decision.Action = "close_short"
+			}
+		}
+
+		// 处理qty字段
+		if action.Qty != nil {
+			var quantity float64
+			switch v := action.Qty.(type) {
+			case string:
+				if v != "" && v != "number or percent for reduce" { // 跳过模板占位符
+					if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+						quantity = parsed
+					}
+				}
+			case float64:
+				quantity = v
+			case int:
+				quantity = float64(v)
+			}
+			if quantity > 0 {
+				// 这里可能需要根据上下文判断是数量还是USD金额
+				// 暂时假设是USD金额
+				decision.PositionSizeUSD = quantity
+			}
+		}
+
+		// 处理entry字段
+		if action.Entry != nil {
+			switch v := action.Entry.(type) {
+			case string:
+				if v != "" && v != "if open" { // 跳过模板占位符
+					if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+						// 可以用于验证或记录，但Decision结构中没有EntryPrice字段
+						_ = parsed
+					}
+				}
+			case float64, int:
+				// 处理数字类型的entry价格
+			}
+		}
+
+		// 只有有效的决策才添加到列表中
+		if decision.Action != "" && decision.Action != "wait" {
+			decisions = append(decisions, decision)
+		}
+	}
+
+	log.Printf("🔍 [调试] taro格式解析完成，共解析出%d个有效决策", len(decisions))
+	for i, d := range decisions {
+		log.Printf("🔍 [调试] 决策#%d: Action=%s, Symbol=%s, StopLoss=%.6f", 
+			i+1, d.Action, d.Symbol, d.StopLoss)
+	}
+
+	return decisions, nil
+}
+
+// convertTaroActionToStandard 转换taro动作名称为标准格式
+func convertTaroActionToStandard(taroAction string) string {
+	switch taroAction {
+	case "open":
+		return "open" // 需要结合side字段确定方向
+	case "hold":
+		return "hold"
+	case "reduce":
+		return "reduce"
+	case "close":
+		return "close" // 需要结合side字段确定方向
+	case "update_stop":
+		return "update_stop"
+	default:
+		return "wait" // 未知动作默认为wait
+	}
 }
 
 // extractDecisions 提取JSON决策列表（兼容性保留）
@@ -1054,6 +1215,42 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			d.Action = "wait"
 			d.Reasoning = fmt.Sprintf("风险回报比过低(%.2f:1)，最低要求%.1f:1，暂时观望 [风险:%.2f%% 收益:%.2f%%]",
 				riskRewardRatio, minRiskRewardRatio, riskPercent, rewardPercent)
+		}
+	}
+
+	// 验证update_stop和update_stop_loss动作必须提供止损价格
+	if d.Action == "update_stop" || d.Action == "update_stop_loss" {
+		if d.StopLoss <= 0 {
+			return fmt.Errorf("update_stop动作必须提供有效的止损价格，当前为: %.6f", d.StopLoss)
+		}
+		
+		// 获取当前市价用于合理性验证
+		marketData, err := market.Get(d.Symbol)
+		if err == nil {
+			currentPrice := marketData.CurrentPrice
+			// 基本的合理性检查：止损价格不应该偏离当前价格太远（50%以内）
+			maxDeviation := currentPrice * 0.5
+			if d.StopLoss > currentPrice+maxDeviation || d.StopLoss < currentPrice-maxDeviation {
+				return fmt.Errorf("止损价格(%.2f)偏离当前价格(%.2f)过远，请检查", d.StopLoss, currentPrice)
+			}
+		}
+	}
+
+	// 验证update_take_profit动作必须提供止盈价格
+	if d.Action == "update_take_profit" {
+		if d.TakeProfit <= 0 {
+			return fmt.Errorf("update_take_profit动作必须提供有效的止盈价格，当前为: %.6f", d.TakeProfit)
+		}
+		
+		// 获取当前市价用于合理性验证
+		marketData, err := market.Get(d.Symbol)
+		if err == nil {
+			currentPrice := marketData.CurrentPrice
+			// 基本的合理性检查：止盈价格不应该偏离当前价格太远（100%以内）
+			maxDeviation := currentPrice * 1.0
+			if d.TakeProfit > currentPrice+maxDeviation || d.TakeProfit < currentPrice-maxDeviation {
+				return fmt.Errorf("止盈价格(%.2f)偏离当前价格(%.2f)过远，请检查", d.TakeProfit, currentPrice)
+			}
 		}
 	}
 

@@ -474,7 +474,7 @@ func (t *FuturesTrader) CalculatePositionSize(balance, riskPercent, price float6
 }
 
 // SetStopLoss 设置止损单
-func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
+func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) (int64, error) {
 	var side futures.SideType
 	var posSide futures.PositionSideType
 
@@ -488,7 +488,7 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 
 	// 🔧 修复止损订单：使用ClosePosition时不需要设置Quantity
 	// ClosePosition(true) 会自动平掉整个仓位，quantity参数会被忽略
-	_, err := t.client.NewCreateOrderService().
+	response, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
@@ -499,11 +499,11 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		Do(context.Background())
 
 	if err != nil {
-		return fmt.Errorf("设置止损失败: %w", err)
+		return 0, fmt.Errorf("设置止损失败: %w", err)
 	}
 
 	log.Printf("  止损价设置: %.4f", stopPrice)
-	return nil
+	return response.OrderID, nil
 }
 
 // SetTakeProfit 设置止盈单

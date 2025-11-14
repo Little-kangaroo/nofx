@@ -15,6 +15,17 @@ import (
 	"time"
 )
 
+// PendingStopOrder 待确认的止损单
+type PendingStopOrder struct {
+	Symbol      string    `json:"symbol"`       // 币种
+	Side        string    `json:"side"`         // 方向 long/short 
+	OrderID     int64     `json:"order_id"`     // 止损单ID
+	StopPrice   float64   `json:"stop_price"`   // 止损价格
+	Quantity    float64   `json:"quantity"`     // 数量
+	CreateTime  time.Time `json:"create_time"`  // 创建时间
+	OriginalAction string `json:"original_action"` // 原始动作 (update_stop)
+}
+
 // AutoTraderConfig 自动交易配置（简化版 - AI全权决策）
 type AutoTraderConfig struct {
 	// Trader标识
@@ -100,6 +111,7 @@ type AutoTrader struct {
 	startTime             time.Time        // 系统启动时间
 	callCount             int              // AI调用次数
 	positionFirstSeenTime map[string]int64 // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
+	pendingStopOrders     map[string]*PendingStopOrder // 待确认的止损单
 }
 
 // NewAutoTrader 创建自动交易器
@@ -222,6 +234,7 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		callCount:             0,
 		isRunning:             false,
 		positionFirstSeenTime: make(map[string]int64),
+		pendingStopOrders:     make(map[string]*PendingStopOrder),
 	}, nil
 }
 
@@ -712,7 +725,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 
 	// 设置止损止盈（依赖交易所防重复机制）
 	// 注：币安等交易所会自动处理重复止损止盈订单，这里直接设置
-	if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
+	if _, err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
 		// 如果错误提到"已存在"或"duplicate"，不视为错误
 		errStr := strings.ToLower(err.Error())
 		if strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "already exists") || strings.Contains(errStr, "已存在") {
@@ -833,7 +846,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 
 	// 设置止损止盈（依赖交易所防重复机制）
 	// 注：币安等交易所会自动处理重复止损止盈订单，这里直接设置
-	if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
+	if _, err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
 		// 如果错误提到"已存在"或"duplicate"，不视为错误
 		errStr := strings.ToLower(err.Error())
 		if strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "already exists") || strings.Contains(errStr, "已存在") {
@@ -1539,10 +1552,28 @@ func (at *AutoTrader) executeUpdateStopWithRecord(decision *decision.Decision, a
 			return fmt.Errorf("多仓止损价格(%.2f)应低于当前价格(%.2f)", decision.StopLoss, marketData.CurrentPrice)
 		}
 		log.Printf("  🔄 设置多仓止损: 数量=%.4f, 止损价格=%.6f", longQuantity, decision.StopLoss)
-		if err := at.trader.SetStopLoss(decision.Symbol, "LONG", longQuantity, decision.StopLoss); err != nil {
+		orderID, err := at.trader.SetStopLoss(decision.Symbol, "LONG", longQuantity, decision.StopLoss)
+		if err != nil {
 			return fmt.Errorf("设置多仓止损失败: %w", err)
 		}
-		log.Printf("  ✓ 更新多仓止���成功: %.6f", decision.StopLoss)
+		
+		// 记录待确认的止损单
+		pendingOrder := &PendingStopOrder{
+			Symbol:         decision.Symbol,
+			Side:           "long",
+			OrderID:        orderID,
+			StopPrice:      decision.StopLoss,
+			Quantity:       longQuantity,
+			CreateTime:     time.Now(),
+			OriginalAction: decision.Action,
+		}
+		
+		pendingKey := fmt.Sprintf("%s_long_stop", decision.Symbol)
+		at.pendingStopOrders[pendingKey] = pendingOrder
+		
+		actionRecord.OrderID = orderID
+		log.Printf("  ✓ 更新多仓止损成功: %.6f (订单ID: %d)", decision.StopLoss, orderID)
+		log.Printf("  📋 已记录待确认止损单: %s", pendingKey)
 	}
 	
 	if hasShort {
@@ -1553,10 +1584,28 @@ func (at *AutoTrader) executeUpdateStopWithRecord(decision *decision.Decision, a
 			return fmt.Errorf("空仓止损价格(%.2f)应高于当前价格(%.2f)", decision.StopLoss, marketData.CurrentPrice)
 		}
 		log.Printf("  🔄 设置空仓止损: 数量=%.4f, 止损价格=%.6f", shortQuantity, decision.StopLoss)
-		if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", shortQuantity, decision.StopLoss); err != nil {
+		orderID, err := at.trader.SetStopLoss(decision.Symbol, "SHORT", shortQuantity, decision.StopLoss)
+		if err != nil {
 			return fmt.Errorf("设置空仓止损失败: %w", err)
 		}
-		log.Printf("  ✓ 更新空仓止损成功: %.6f", decision.StopLoss)
+		
+		// 记录待确认的止损单
+		pendingOrder := &PendingStopOrder{
+			Symbol:         decision.Symbol,
+			Side:           "short",
+			OrderID:        orderID,
+			StopPrice:      decision.StopLoss,
+			Quantity:       shortQuantity,
+			CreateTime:     time.Now(),
+			OriginalAction: decision.Action,
+		}
+		
+		pendingKey := fmt.Sprintf("%s_short_stop", decision.Symbol)
+		at.pendingStopOrders[pendingKey] = pendingOrder
+		
+		actionRecord.OrderID = orderID
+		log.Printf("  ✓ 更新空仓止损成功: %.6f (订单ID: %d)", decision.StopLoss, orderID)
+		log.Printf("  📋 已记录待确认止损单: %s", pendingKey)
 	}
 	
 	return nil

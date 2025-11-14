@@ -890,7 +890,7 @@ func (t *AsterTrader) GetMarketPrice(symbol string) (float64, error) {
 }
 
 // SetStopLoss 设置止损
-func (t *AsterTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
+func (t *AsterTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) (int64, error) {
 	side := "SELL"
 	if positionSide == "SHORT" {
 		side = "BUY"
@@ -899,17 +899,17 @@ func (t *AsterTrader) SetStopLoss(symbol string, positionSide string, quantity, 
 	// 格式化价格和数量到正确精度
 	formattedPrice, err := t.formatPrice(symbol, stopPrice)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	formattedQty, err := t.formatQuantity(symbol, quantity)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// 获取精度信息
 	prec, err := t.getPrecision(symbol)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// 转换为字符串，使用正确的精度格式
@@ -926,8 +926,28 @@ func (t *AsterTrader) SetStopLoss(symbol string, positionSide string, quantity, 
 		"timeInForce":  "GTC",
 	}
 
-	_, err = t.request("POST", "/fapi/v3/order", params)
-	return err
+	responseBytes, err := t.request("POST", "/fapi/v3/order", params)
+	if err != nil {
+		return 0, err
+	}
+	
+	// 解析JSON响应
+	var response map[string]interface{}
+	if err := json.Unmarshal(responseBytes, &response); err != nil {
+		return 0, fmt.Errorf("解析订单响应失败: %w", err)
+	}
+	
+	// 提取订单ID
+	var orderID int64
+	if orderIDValue, exists := response["orderId"]; exists {
+		if idFloat, ok := orderIDValue.(float64); ok {
+			orderID = int64(idFloat)
+		} else if idInt, ok := orderIDValue.(int64); ok {
+			orderID = idInt
+		}
+	}
+	
+	return orderID, nil
 }
 
 // SetTakeProfit 设置止盈

@@ -524,7 +524,7 @@ func (t *HyperliquidTrader) GetMarketPrice(symbol string) (float64, error) {
 }
 
 // SetStopLoss 设置止损单
-func (t *HyperliquidTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
+func (t *HyperliquidTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) (int64, error) {
 	coin := convertSymbolToHyperliquid(symbol)
 
 	isBuy := positionSide == "SHORT" // 空仓止损=买入，多仓止损=卖出
@@ -551,13 +551,19 @@ func (t *HyperliquidTrader) SetStopLoss(symbol string, positionSide string, quan
 		ReduceOnly: true,
 	}
 
-	_, err := t.exchange.Order(t.ctx, order, nil)
+	response, err := t.exchange.Order(t.ctx, order, nil)
 	if err != nil {
-		return fmt.Errorf("设置止损失败: %w", err)
+		return 0, fmt.Errorf("设置止损失败: %w", err)
+	}
+
+	// 提取订单ID
+	var orderID int64
+	if response.Resting != nil {
+		orderID = response.Resting.Oid
 	}
 
 	log.Printf("  止损价设置: %.4f", roundedStopPrice)
-	return nil
+	return orderID, nil
 }
 
 // SetTakeProfit 设置止盈单

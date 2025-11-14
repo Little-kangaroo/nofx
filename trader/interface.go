@@ -31,7 +31,7 @@ type Trader interface {
 	GetMarketPrice(symbol string) (float64, error)
 
 	// SetStopLoss 设置止损单
-	SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error
+	SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) (int64, error)
 
 	// SetTakeProfit 设置止盈单
 	SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error
