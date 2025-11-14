@@ -494,7 +494,7 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 		log.Printf("⚠️ [调试] taro格式解析失败: %v，尝试标准格式", taroErr)
 	}
 
-	// 尝试解析为标准Decision格式
+	// 尝试解析为标准Decision格式（增强版，支持taro字段名）
 	var decisions []Decision
 	if err := json.Unmarshal([]byte(jsonContent), &decisions); err == nil {
 		// 调试日志：打印解析后的决策内容
@@ -503,6 +503,10 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 			log.Printf("🔍 [调试] 决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f, TakeProfit=%.6f", 
 				i+1, d.Symbol, d.Action, d.StopLoss, d.TakeProfit)
 		}
+		
+		// 🔧 增强处理：检查是否有taro格式的字段需要转换
+		decisions = enhanceDecisionsWithTaroFields(jsonContent, decisions)
+		
 		return decisions, nil
 	}
 	log.Printf("⚠️ [调试] 标准格式解析失败，尝试其他格式")
@@ -1278,4 +1282,74 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	}
 
 	return nil
+}
+
+// enhanceDecisionsWithTaroFields 增强决策解析，处理taro字段名（如stop字段）
+func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []Decision {
+	// 解析原始JSON以获取taro格式字段
+	var rawDecisions []map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonContent), &rawDecisions); err != nil {
+		log.Printf("⚠️ [调试] 无法解析JSON为通用格式，跳过taro字段增强: %v", err)
+		return decisions
+	}
+	
+	if len(rawDecisions) != len(decisions) {
+		log.Printf("⚠️ [调试] 原始JSON和解析后决策数量不匹配，跳过增强")
+		return decisions
+	}
+	
+	log.Printf("🔧 [调试] 开始增强决策，检查taro字段...")
+	
+	for i := 0; i < len(decisions); i++ {
+		rawDecision := rawDecisions[i]
+		decision := &decisions[i]
+		
+		// 检查并处理stop字段 -> StopLoss
+		if stopValue, exists := rawDecision["stop"]; exists && decision.StopLoss == 0 {
+			var stopPrice float64
+			switch v := stopValue.(type) {
+			case string:
+				if v != "" && v != "new stop if any" {
+					if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+						stopPrice = parsed
+					}
+				}
+			case float64:
+				stopPrice = v
+			case int:
+				stopPrice = float64(v)
+			}
+			
+			if stopPrice > 0 {
+				decision.StopLoss = stopPrice
+				log.Printf("🔧 [调试] 增强决策#%d: 发现stop字段=%.6f，设置StopLoss=%.6f", 
+					i+1, stopValue, stopPrice)
+			}
+		}
+		
+		// 检查并处理take_profit字段的其他格式
+		if tpValue, exists := rawDecision["take_profit"]; exists && decision.TakeProfit == 0 {
+			var tpPrice float64
+			switch v := tpValue.(type) {
+			case string:
+				if v != "" {
+					if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+						tpPrice = parsed
+					}
+				}
+			case float64:
+				tpPrice = v
+			case int:
+				tpPrice = float64(v)
+			}
+			
+			if tpPrice > 0 {
+				decision.TakeProfit = tpPrice
+				log.Printf("🔧 [调试] 增强决策#%d: 发现take_profit字段=%.6f", i+1, tpPrice)
+			}
+		}
+	}
+	
+	log.Printf("🔧 [调试] 决策增强完成")
+	return decisions
 }
