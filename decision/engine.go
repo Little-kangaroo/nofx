@@ -906,19 +906,25 @@ func findMatchingBracket(s string, start int) int {
 func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
 	// 验证action并标准化动作名称
 	validActions := map[string]bool{
-		"open_long":     true,
-		"open_short":    true,
-		"close_long":    true,
-		"close_short":   true,
-		"reduce":        true, // 减仓操作
-		"reduce_long":   true, // 减多仓
-		"reduce_short":  true, // 减空仓
-		"hold":          true,
-		"wait":          true,
-		"buy_to_enter":  true, // 兼容提示词模板中的动作名
-		"sell_to_enter": true, // 兼容提示词模板中的动作名
-		"buy":           true, // 兼容简单的买入指令
-		"sell":          true, // 兼容简单的卖出指令
+		"open_long":           true,
+		"open_short":          true,
+		"close_long":          true,
+		"close_short":         true,
+		"reduce":              true, // 减仓操作
+		"reduce_long":         true, // 减多仓
+		"reduce_short":        true, // 减空仓
+		"update_stop":         true, // 更新止损（taro模板）
+		"update_stop_loss":    true, // 更新止损（adaptive模板）
+		"update_take_profit":  true, // 更新止盈
+		"partial_close":       true, // 部分平仓
+		"open":                true, // 通用开仓（需要结合side判断）
+		"close":               true, // 通用平仓
+		"hold":                true,
+		"wait":                true,
+		"buy_to_enter":        true, // 兼容提示词模板中的动作名
+		"sell_to_enter":       true, // 兼容提示词模板中的动作名
+		"buy":                 true, // 兼容简单的买入指令
+		"sell":                true, // 兼容简单的卖出指令
 	}
 
 	// 标准化动作名称
