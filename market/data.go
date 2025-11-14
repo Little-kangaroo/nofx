@@ -247,6 +247,66 @@ func calculateATR(klines []Kline, period int) float64 {
 	return atr
 }
 
+// calculateSMA 计算简单移动平均线
+func calculateSMA(klines []Kline, period int) float64 {
+	if len(klines) < period {
+		return 0
+	}
+	
+	sum := 0.0
+	for i := len(klines) - period; i < len(klines); i++ {
+		sum += klines[i].Close
+	}
+	
+	return sum / float64(period)
+}
+
+// calculateVWAP 计算成交量加权平均价
+func calculateVWAP(klines []Kline) float64 {
+	if len(klines) == 0 {
+		return 0
+	}
+	
+	var volumeWeightedSum float64
+	var totalVolume float64
+	
+	for _, kline := range klines {
+		typicalPrice := (kline.High + kline.Low + kline.Close) / 3
+		volumeWeightedSum += typicalPrice * kline.Volume
+		totalVolume += kline.Volume
+	}
+	
+	if totalVolume == 0 {
+		return 0
+	}
+	
+	return volumeWeightedSum / totalVolume
+}
+
+// calculateEMASlope 计算EMA斜率（连续N根K线的变化率）
+func calculateEMASlope(klines []Kline, period int, lookback int) float64 {
+	if len(klines) < period+lookback {
+		return 0
+	}
+	
+	// 计算当前EMA值
+	currentEMA := calculateEMA(klines, period)
+	
+	// 计算lookback根K线前的EMA值
+	prevKlines := klines[:len(klines)-lookback]
+	if len(prevKlines) < period {
+		return 0
+	}
+	prevEMA := calculateEMA(prevKlines, period)
+	
+	// 计算斜率（变化率）
+	if prevEMA == 0 {
+		return 0
+	}
+	
+	return ((currentEMA - prevEMA) / prevEMA) * 100
+}
+
 // calculateIntradaySeries 计算日内系列数据
 func calculateIntradaySeries(klines []Kline) *IntradayData {
 	data := &IntradayData{
@@ -623,13 +683,55 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		}
 		log.Printf("✓ [基础指标] %s时间框架: %d条K线数据", tf, len(klines))
 		
+		// 记录哪些指标可以计算
+		availableIndicators := []string{}
+		if len(klines) >= 20 { availableIndicators = append(availableIndicators, "EMA20/SMA20") }
+		if len(klines) >= 50 { availableIndicators = append(availableIndicators, "EMA50/SMA50") }
+		if len(klines) >= 100 { availableIndicators = append(availableIndicators, "EMA100") }
+		if len(klines) >= 200 { availableIndicators = append(availableIndicators, "EMA200") }
+		if len(klines) >= 53 { availableIndicators = append(availableIndicators, "EMA50斜率") }
+		if len(klines) >= 203 { availableIndicators = append(availableIndicators, "EMA200斜率") }
+		log.Printf("✓ [基础指标] %s可计算指标: %v", tf, availableIndicators)
+		
 		tfData := map[string]interface{}{}
 		
-		// EMA20
+		// === 移动平均线指标 ===
+		// EMA系列
 		if len(klines) >= 20 {
 			tfData["ema20"] = calculateEMA(klines, 20)
 		}
+		if len(klines) >= 50 {
+			tfData["ema50"] = calculateEMA(klines, 50)
+		}
+		if len(klines) >= 100 {
+			tfData["ema100"] = calculateEMA(klines, 100)
+		}
+		if len(klines) >= 200 {
+			tfData["ema200"] = calculateEMA(klines, 200)
+		}
 		
+		// SMA系列
+		if len(klines) >= 20 {
+			tfData["sma20"] = calculateSMA(klines, 20)
+		}
+		if len(klines) >= 50 {
+			tfData["sma50"] = calculateSMA(klines, 50)
+		}
+		
+		// VWAP (成交量加权平均价)
+		if len(klines) > 0 {
+			tfData["vwap"] = calculateVWAP(klines)
+		}
+		
+		// === EMA斜率指标 (3根K线回看期) ===
+		if len(klines) >= 53 { // 50 + 3
+			tfData["ema50_slope_3"] = calculateEMASlope(klines, 50, 3)
+		}
+		if len(klines) >= 203 { // 200 + 3
+			tfData["ema200_slope_3"] = calculateEMASlope(klines, 200, 3)
+		}
+		
+		// === 原有指标保持不变 ===
 		// MACD
 		if len(klines) >= 26 {
 			tfData["macd"] = calculateMACD(klines)
@@ -648,7 +750,7 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 			tfData["atr14"] = calculateATR(klines, 14)
 		}
 		
-		// 成交量
+		// === 成交量指标 ===
 		if len(klines) > 0 {
 			tfData["volume"] = klines[len(klines)-1].Volume
 			// 平均成交量

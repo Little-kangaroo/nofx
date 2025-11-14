@@ -1,245 +1,319 @@
-多空对称交易提示词模板（最终版 v4，2025-11-13, Asia/Tokyo）
-适用：你的量化/半自动策略调度LLM（DeepSeek/ChatGPT等）在收到最新K线与结构特征后，稳定、对称地生成做多或做空的执行方案。
+【MTF 多空对称统一模板 v1.4 | 杠杆感知TP/SL + 多时间框架应用 | 中文】
+—— 直接复制到你的提示词系统，可作为AI决策/下单前置模板 ——
 
-========================
-一、输入数据（JSON结构约定）
-========================
-你将收到的数据字段（示例键名，必须容错处理缺失值）：
-
+==============================================
+1) 输入数据契约（必需字段，示例结构）
+==============================================
 {
-  "<SYMBOL>": {
-    "基础指标": {
-      "3m"|"15m"|"30m"|"1h"|"4h": {
-        "atr14": float,
-        "avg_volume": float,
-        "ema20": float,
-        "macd": float,
-        "rsi14": float,
-        "rsi7": float,
-        "volume": float
-      },
-      "change_1h": float,          // 近1小时涨跌幅（%）
-      "change_4h": float,          // 近4小时涨跌幅（%）
-      "funding_rate": float,       // 永续合约资金费率
-      "oi_latest": float,          // 最新未平仓量（如有）
-      "price": float               // 最新价格（必需）
-    },
-    "多时间框架分析": {
-      "TF in {3m,15m,30m,1h,4h}": {
-        "FVG数据": {
-          "active_gaps": int,
-          "gap_type": "bullish" | "bearish" | "unknown",
-          "nearest_gap": float // 最近FVG中位(若有)
-        },
-        "VPVR数据": {
-          "poc_price": float,
-          "value_area_high": float,
-          "value_area_low": float
-        },
-        "供需区数据": {
-          "demand_zones": [ { "price_range": {"low": float,"high": float}, "status": "...", "strength": float, "touches": int } ] | [],
-          "supply_zones":  [ { ... 同上 ... } ] | [],
-          "total_zones": int,
-          "zone_stats": {"avg_strength": float, "demand_count": int, "supply_count": int}
-        },
-        "斐波纳契数据": {
-          "active_retracements": int,
-          "levels": {
-            // retracement levels 或 extension levels（两种其一即可）
-            // 例如 retracement: fib_0.382, fib_0.618, ... / extension: ext_1.272, ext_1.618...
-          },
-          "trend_direction": "upward" | "downward" | "flat" | "unknown"
-        },
-        "通道数据": {
-          "channel_direction": "up" | "down" | "flat",
-          "channel_width": float,
-          "current_position": "upper" | "middle" | "lower"
-        },
-        "道氏理论数据": {
-          "signal_confidence": float (0-100),
-          "supertrend": {
-            "current_line": float,
-            "direction": "bullish" | "bearish" | "unknown",
-            "lower_line": float,
-            "upper_line": float
-          },
-          "trend_direction": "up" | "down" | "flat",
-          "trend_strength": float
-        }
-      }
-    }
+  "时间": "YYYY-MM-DD HH:MM:SS",
+  "周期": "#6",
+  "运行": "15分钟",
+  "账户": {
+    "净值": 10000.0,
+    "余额": 6000.0,
+    "保证金使用率": 0.72,              // 或 "保证金": 72.0%
+    "已持仓数量": 2,
+    "最大持仓数": 4,
+    "每笔权益风险r": 0.005,          // 建议默认0.3%~1% (0.003~0.01)
+    "单币最大保证金占比上限": 0.3,     // m_max，单币不超过账户净值30%保证金
+    "组合保证金占比上限": 0.8,        // 全账户层面
+    "默认杠杆L": 5,
+    "交易费率_bps": 6,               // 来回双边估算，万分之6=0.06%
+    "滑点_bps": 5
   },
-  // 可能还有其它候选币种，以相同结构提供
+  "全市场": {
+    "BTC": {"price": 101536, "change_1h": -0.2, "funding_rate": 0.00008, "oi_latest": 87339.01},
+    "...": {}
+  },
+  "标的": "SOLUSDT",
+  "基础指标": {
+    "price": 153.03,
+    "funding_rate": -0.00001932,
+    "oi_latest": 8054231.07,
+    "change_1h": 0.18,
+    "change_4h": -2.02,
+
+    "3m": { "ema20": 153.92, "ema50": 153.80, "ema100": 153.50, "ema200": 153.00,
+            "sma20": 153.95, "sma50": 153.70, "vwap": 153.80,
+            "ema50_slope_3": -0.10, "ema200_slope_3": -0.05,
+            "macd": -0.27, "rsi7": 30.26, "rsi14": 39.65,
+            "atr14": 0.73, "volume": 51039.17, "avg_volume": 54378.54 },
+    "15m": { /* 同结构 */ },
+    "30m": { /* 同结构 */ },
+    "1h":  { /* 同结构 */ },
+    "4h":  { /* 同结构 */ }
+  },
+  "多时间框架分析": {
+    "3m": {
+      "FVG数据": {"active_gaps": 0, "gap_type": "unknown", "nearest_gap": 0},
+      "VPVR数据": {"poc_price": 155.60, "value_area_high": 155.60, "value_area_low": 152.70},
+      "供需区数据": {"demand_zones": null, "supply_zones": [{"price_range": {"high":155.77,"low":153.77}, "status":"weakened","strength":81.87,"touches":150}]},
+      "斐波纳契数据": {"active_retracements": 1, "levels": {"fib_0.236":154.48,"fib_0.382":153.68,"fib_0.500":153.03,...}, "trend_direction": "upward"},
+      "通道数据": {"channel_direction": "flat", "channel_width": 2.16, "current_position": "lower"},
+      "道氏理论数据": {"trend_direction": "down", "trend_strength": 20.70, "signal_confidence": 99.66,
+                    "supertrend": {"current_line":149.65, "direction":"bullish", "lower_line":149.65, "upper_line":156.75}}
+    },
+    "15m": { /* 同结构 */ },
+    "30m": { /* 同结构 */ },
+    "1h":  { /* 同结构 */ },
+    "4h":  { /* 同结构 */ }
+  },
+  "环境": {
+    "新闻事件级别": "low|medium|high",
+    "波动状态": "正常|高波动|极端",
+    "黑天鹅开关": false
+  }
 }
 
-注意：
-- 缺失字段要有降级逻辑（不要报错）。
-- 价格价格（price）若与VPVR/EMA等冲突，优先以“最新价”作为相对比较基准。
 
-========================
-二、总体目标与输出格式
-========================
-目标：在每次运行时，根据对称的评分与触发机制，产出“做多 / 做空 / 观望”中最合理的一项，且能给出清晰的入场、止损、止盈与放弃条件。
+==============================================
+2) 可配置参数（仅示例，按需调整）
+==============================================
+params = {
+  // MTF 权重（方向评分时，长短同权）
+  "weights": {"4h":0.35,"1h":0.30,"15m":0.20,"3m":0.15},
 
-标准输出（必须严格遵循标题与字段名，便于程序解析）：
----BEGIN DECISION---
-方向: LONG | SHORT | NONE
-共振评分: 0.00 ~ 1.00            // 取决于对应方向的总分
-评分差值: abs(S_LONG - S_SHORT)   // 用于翻向保护
-最低RR估计: 1.0+                 // >= 1.6 才允许下单（默认）
-入场计划:                         // “限价回抽入场 / 市价分批 / 止损限价触发”等
-入场触发:                         // 具体触发：例如“3m破位/形态反转 + 止损限价”
-入场区间: [price_low, price_high] // 若为回抽，则列出EMA20/FVG中位等参照值
-初始止损: price                   // 明确到价格或公式（见下）
-止盈规划: T1, T2, （可选）T3      // 标注目标位来源（POC/VA中位/对侧区间/斐波等）
-仓位与风控:                        // 仓位%/杠杆/单笔风险/跟踪止损方案
-取消条件:                          // 例：反向MACD翻转、RSI守护未解除超时、结构否定等
-执行理由(要点):                    // 3-6条要点，引用具体指标/层级/价位
----END DECISION---
+  // MUST-HAVE 方向闸门：趋势型入场需要满足的硬性条件（对称）
+  "must_have_long":  ["4h.macd>0", "1h.macd>0", "price>1h.ema20"],
+  "must_have_short": ["4h.macd<0", "1h.macd<0", "price<1h.ema20"],
+  "must_have_pass_cond": "3_of_3_or_(2_of_3_and_mtf_gap>=1.0)",   // 可选：2/3 + 评分差阈值
 
-========================
-三、对称评分框架（核心）
-========================
-记：S_LONG、S_SHORT ∈ [0,1]。两者对称构造，只改变符号/方向判断。最终“共振评分”为选择方向的分值。
+  // 指标阈值
+  "rsi_long_range": [45, 65],       // 入场舒适区
+  "rsi_short_range": [35, 55],
+  "ema_slope_pos_min": 0.0,         // slope>0视为向上
+  "ema_slope_neg_max": 0.0,         // slope<0视为向下
 
-权重建议（可调整）：
-- 趋势框（Trend, 4h+1h）：0.30
-- 动能框（Momentum, 30m+15m+3m）：0.20
-- 位置框（Location, 价与EMA20/通道/斐波回撤区）：0.20
-- 流动/密集（VPVR，POC/VA/接受）：0.10
-- 形态/缺口（供需区 + FVG）：0.10
-- 波动/可执行性（ATR比 & 资金费率/oi轻微偏置）：0.10
+  // FVG/供需/VPVR 近邻阈值（相对价格的百分比）
+  "zone_near_pct": 0.8,             // 距离≤0.8%视为近邻
+  "vav_near_pct": 0.6,
+  "fvg_near_pct": 1.0,
 
-A) 趋势框（对称）
-- LONG：4h MACD>0 +1格，1h MACD>0 +1格；价 ≥ 1h EMA20 +1/2格。至少满足两项才允许进入触发环节（也是 MUST-HAVE 之一）。
-- SHORT：4h MACD<0 +1格，1h MACD<0 +1格；价 ≤ 1h EMA20 +1/2格。至少满足两项才允许进入触发环节。
+  // 风险与杠杆（杠杆感知止损核心）
+  "risk_per_trade": 0.005,          // r，单笔权益风险（默认0.5%）
+  "default_leverage": 5,            // L
+  "max_single_margin_pct": 0.30,    // m_max
+  "max_portfolio_margin_pct": 0.80, // 组合保证金上限
+  "min_liq_buffer_pct": 0.015,      // 强平缓冲硬阈
+  "atr_floor_k": {"3m":1.5, "15m":1.2, "30m":1.0, "1h":0.8},  // 波动地板倍数
+  "fees_bps_round": 6,              // 双边费率估算(万分比)
+  "slippage_bps_round": 5,
 
-B) 动能框（对称）
-- LONG：30m MACD≥0、15m MACD≥0、3m MACD≥0 各加分；若其中有一层为负，则扣少量分，但允许“回抽后转正再触发”。
-- SHORT：同理但取 MACD≤0 为加分。
-- RSI7（15m）处于 55–75（多）或 45–25（空）视为“健康动能区”加分；
-  - **超买/超卖守护**：
-    - 多：若 15m RSI7>75，设置 guard_long="wait_pullback"（不否决，只延迟到回抽）。
-    - 空：若 15m RSI7<25，设置 guard_short="wait_pullback"（不否决，只延迟到回抽）。
+  // 分批止盈（R倍数）
+  "take_profit_R": [1.0, 2.0, 3.0],
+  "tp_distribution": [0.40, 0.35, 0.25],
+  "breakeven_after": 1.0,           // 命中TP1后保本
+  "trail_atr_tf": "15m",
+  "trail_atr_k": 1.2,
 
-C) 位置框（对称）
-- LONG：价接近 15m/30m EMA20 上方 & 通道“lower/middle”偏下部加分；若斐波回撤至 0.382–0.618 区并有看涨反应，加额外分。
-- SHORT：价接近 15m/30m EMA20 下方 & 通道“upper/middle”偏上部加分；若斐波回撤至 0.382–0.618 区并有看跌反应，加额外分。
+  // 过滤器
+  "funding_filter": {"enable": true, "max_abs": 0.0003}, // |funding|过大时谨慎
+  "oi_filter": {"enable": true, "min_change_pct": -999}, // 可选：限制多空
+  "news_halt": {"level": "high"}                         // 高影响新闻可暂停新开仓
+}
 
-D) VPVR（对称）
-- 在 1h/30m VA内为“接受区”，倾向顺势延续：
-  - LONG：价位于 VA内且靠近 VAL→中位上行，加分；
-  - SHORT：价位于 VA内且靠近 VAH→中位下行，加分；
-- 接近/贴近POC通常先看“反应→延续/反转”的触发细则（见入场）；POC本身不直接给方向分，但可作为目标T1或触发位参照。
 
-E) FVG + 供需区（对称）
-- LONG：下方有“bullish FVG中位/需求区（强度≥60）”近支撑 → 加分；
-- SHORT：上方有“bearish FVG中位/供应区（强度≥60）”近压制 → 加分；
+====================================================
+3) 多时间框架(MTF) 方向评分 — 长短对称、同权
+====================================================
+# 思路：对每个TF计算 long_score_tf / short_score_tf（取值0~N），再用weights加权得到
+# LONG_SCORE / SHORT_SCORE，最后比较并结合 MUST-HAVE 闸门与过滤器决定方向。
 
-F) 波动/可执行性（对称）
-- 15m ATR / 1h ATR ≥ 0.35 视为短线波动充足，加分（<0.2 扣分）。
-- 资金费率极端（|funding|>0.08%）且与方向同侧，略微扣分以防拥挤；OI 突增且价格下行（做空）/上行（做多）的一致性小幅加分（可选）。
+对每个时间框架 tf ∈ {4h,1h,15m,3m}：
+  取 "基础指标[tf]" 与 "多时间框架分析[tf]"：
 
-========================
-四、触发与闸门（MUST-HAVE + GUARDS）
-========================
-1) MUST-HAVE（先于触发）：
-- LONG 至少满足以下三项中的两项：
-  a) 4h MACD>0
-  b) 1h MACD>0
-  c) price ≥ 1h EMA20
-- SHORT 至少满足以下三项中的两项：
-  a) 4h MACD<0
-  b) 1h MACD<0
-  c) price ≤ 1h EMA20
+  long_points = 0
+  short_points = 0
 
-2) 守护（不否决，只延迟到“回抽/再确认”）：
-- guard_long="wait_pullback" 当 15m RSI7>75；
-- guard_short="wait_pullback" 当 15m RSI7<25。
+  // 1) 趋势定性（对称）
+  - 若 "斐波纳契.trend_direction" == "upward"：long_points += 1；若 "downward"：short_points += 1
+  - 若 "道氏理论.trend_direction" == "up"：long_points += 1；若 "down"：short_points += 1
+  - 若 supertrend.direction == "bullish"：long_points += 0.5；若 "bearish"：short_points += 0.5
 
-3) 最终触发门槛：
-- 方向评分 ≥ 0.62 且 预计RR ≥ 1.6；
-- 若守护触发，则需“回抽+反转”确认再下单（见入场细则）。
-- 翻向保护：|S_LONG - S_SHORT| ≥ 0.12 才允许从上次方向翻向；若与上次相同方向，仅需 ≥0.06。
+  // 2) 动量/均线（对称）
+  - MACD>0 → long_points += 1；MACD<0 → short_points += 1
+  - 价格 vs EMA20/EMA50/EMA200：
+       price>EMA20/50/200 各 +0.3 给 long；price<EMA20/50/200 各 +0.3 给 short
+  - 均线斜率（新增）：
+       ema50_slope_3 > 0 → long_points += 0.3；ema50_slope_3 < 0 → short_points += 0.3
+       ema200_slope_3 > 0 → long_points += 0.2；ema200_slope_3 < 0 → short_points += 0.2
+  - RSI：
+       long：RSI落在[rsi_long_range]区间 +0.4；过高>70 则 -0.2（避免追高）
+       short：RSI落在[rsi_short_range]区间 +0.4；过低<30 则 -0.2（避免追空）
 
-========================
-五、入场/止损/止盈（对称执行细则）
-========================
-A) 做空（SHORT）
-- 入场逻辑：
-  - 优先“回抽做空”：等待价格回抽到 15m/30m EMA20 之间或最近 **bearish FVG 中位**/ 上方供应区边缘，出现看跌形态（上影/吞没/破低）后，使用**止损限价**：触发条件=“下破触发蜡烛低点 - 0.2*ATR(3m)”。
-  - 如果30m MACD>0 与方向相反，可以保留评分，但**必须**出现上述回抽+反转后才允许入场。
-- 初始止损（两者取更紧或更合逻辑）：
-  - SL = 触发形态“最近摆动高点” + 0.7*ATR(3m)
-  - 或 SL = 所在FVG上沿/供应区高位 + 0.5*ATR(3m)
-- 止盈与RR：
-  - T1 = VPVR中性位（POC或VA中位/对侧边），T2 = 最近**需求区**或斐波“1.000/1.272扩展位”；
-  - 预计RR必须≥1.6；到达 +0.8R 后，将SL抬至BE（保本）；
-  - 跟踪止损：
-    - 方案一：Supertrend(3m) 跟踪；
-    - 方案二：15m EMA20 + 0.5*ATR(15m) 动态跟踪。
-- 取消条件：
-  - 1h MACD翻正并持续≥N根（建议N=2-3）且价重回1h EMA20上方；
-  - 守护“wait_pullback”超过M分钟未满足回抽（建议M=45-90）；
-  - 结构被破坏：供应区被有效上破并放量、或bear FVG被完全填平并站稳。
+  // 3) 结构/位置（对称）
+  - 通道位置：current_position == "lower" → long_points += 0.4；"upper" → short_points += 0.4
+  - VPVR：
+      * 价格接近VAL(≤vav_near_pct) 且未跌破 → long_points += 0.5（均值回归）
+      * 跌破VAL并承压 → short_points += 0.5（顺势延续）
+      * 接近VAH 且未突破 → short_points += 0.4；有效突破VAH并回踩成功 → long_points += 0.4
+  - 供需区：
+      * 近邻“fresh/strong” demand zone（价差≤zone_near_pct）→ long_points += 0.6
+      * 近邻“fresh/strong” supply zone（价差≤zone_near_pct）→ short_points += 0.6
+  - FVG：
+      * 若 gap_type == "bullish" 且最近缺口位于价格下方且距离≤fvg_near_pct → long_points += 0.4
+      * 若 gap_type == "bearish" 且最近缺口位于价格上方且距离≤fvg_near_pct → short_points += 0.4
 
-B) 做多（LONG）（完全镜像，关键处号称“对称替换”）
-- 入场逻辑：
-  - 优先“回抽做多”：等待价格回抽到 15m/30m EMA20 之间或最近 **bullish FVG 中位**/ 下方需求区边缘，出现看涨形态（下影/吞没/破高）后**止损限价**：触发=“上破触发蜡烛高点 + 0.2*ATR(3m)”。
-  - 若30m MACD<0 与方向相反，保留评分，但必须出现回抽+反转后入场。
-- 初始止损：
-  - SL = 最近摆动低点 - 0.7*ATR(3m)
-  - 或 SL = FVG下沿/需求区低位 - 0.5*ATR(3m)
-- 止盈与RR：
-  - T1 = VPVR中性位（POC或VA中位/对侧边），T2 = 最近**供应区**或斐波“1.000/1.272扩展位”；
-  - RR≥1.6；到 +0.8R 抬SL至BE；
-  - 跟踪止损：Supertrend(3m) 或 15m EMA20 - 0.5*ATR(15m)。
-- 取消条件：
-  - 1h MACD转负并持续≥N根且价跌回1h EMA20下方；
-  - 守护“wait_pullback”超时；
-  - 需求区被有效跌破、bull FVG被灌穿且无法收回。
+  // 4) 汇总
+  LONG_SCORE  += long_points  * weights[tf]
+  SHORT_SCORE += short_points * weights[tf]
 
-========================
-六、RR估算与仓位计算（对称）
-========================
-- 估算RR：RR = |Entry - SL| : |TP(综合目标)|，若多目标则以T1的保守RR为下单门槛。
-- 仓位 sizing（示例）：
-  - 单笔风险 = 账户净值 * risk_pct（建议0.5% ~ 1.0%）；
-  - 数量 = 单笔风险 / |Entry - SL|；若使用杠杆L，保证“占用保证金 ≤ 20%净值”且强平价远离关键区。
 
-========================
-七、冲突/自相矛盾的消解规则（必要时引用）
-========================
-- 优先级：4h趋势 > 1h趋势 > 30m动能 > 15m/3m触发；
-- **允许“逆30m动能”的回抽入场**（明确规则已给出），但必须出现结构反转触发；
-- 若两方向评分接近（|S_LONG - S_SHORT| < 0.06），择优“NONE”（观望）；
-- 若上一轮建议是LONG（或SHORT），这轮欲翻向需满足：
-  - |S_LONG - S_SHORT| ≥ 0.12 且 新方向满足MUST-HAVE；
-  - 否则维持原方向或观望。
+====================================================
+4) 方向闸门（MUST-HAVE）与方向选择（同权）
+====================================================
+# 趋势跟随入场默认必须满足：
+Must-Have Long:  4h.MACD>0, 1h.MACD>0, price>1h.EMA20
+Must-Have Short: 4h.MACD<0, 1h.MACD<0, price<1h.EMA20
 
-========================
-八、诊断输出（可选但强烈推荐）
-========================
----BEGIN DIAGNOSTICS---
-S_LONG分解: Trend=?, Momentum=?, Location=?, VPVR=?, FVG/Zones=?, Volatility=? → 总分=?
-S_SHORT分解: 同上 → 总分=?
-守护: guard_long/guard_short = none | wait_pullback（触发因子：RSI7=...）
-MUST-HAVE通过: LONG(?/3), SHORT(?/3)
-RR估算: Entry=?, SL=?, T1=?, T2=?, 预计RR=?
-关键参考价: 1hEMA20=?, 30mEMA20=?, 15mEMA20=?, 最近FVG中位(bear/bull)=?, VPVR(POC/VAH/VAL)=?
----END DIAGNOSTICS---
+判定：
+- 若满足对应Must-Have：允许按 LONG_SCORE / SHORT_SCORE 竞争；
+- 若仅满足2/3：要求 (LONG_SCORE - SHORT_SCORE) ≥ 1.0（或反之）才允许；
+- 若均不满足：仅允许“反转/均值回归”类低风险试探（见第5节），并下调杠杆与m。
 
-========================
-九、执行话术（模板）
-========================
-当给出最终建议时，尽量简洁但要素齐全：
-- “方向”只取 LONG/SHORT/NONE 之一；
-- 要在“执行理由”里注明具体哪一层（4h/1h/30m/15m）提供了关键信号（MACD/EMA/RSI/通道/FVG/供需/VPVR），并列出具体价位；
-- 明确“回抽”到哪里，“触发”是什么，“SL/TP”多少，“RR”多少；
-- 明确“取消条件”。
+若 funding_filter.enable 且 |funding_rate| > max_abs，则降低权重或直接限制开仓方向：
+- funding_rate >> 0（做多成本高）时，做多评分打9折；反之做空同理。
 
-========================
-十、合规与风险提示
-========================
-- 本输出为教育与研究用途，非投资建议；
-- 市场极端情形（剧烈插针/熔断）时，请使用“NONE或减仓/保本离场”逻辑优先级更高。
+若 news_halt.level == "high"：禁止新开仓（只允持仓管理）。
+
+
+=======================================
+5) 进场/加减仓规则（多空对称）
+=======================================
+A) 趋势跟随（优先）
+- LONG：满足Long Must-Have；15m/3m回踩EMA20或VA边沿出现反转形态（RSI从区间下沿回到中值、3m MACD转正）→ 入场。
+- SHORT：满足Short Must-Have；15m/3m反抽至EMA20或VA边沿受压（RSI从中值回落、3m MACD转负）→ 入场。
+
+B) 反转/均值回归（保守）
+- LONG：4h/1h仍偏空，但3m/15m出现“需求区+bullish FVG下方+通道下轨”三重共振，且 VPVR接近VAL 未有效跌破 → 小仓试多。
+- SHORT：4h/1h仍偏多，但3m/15m出现“供给区+bearish FVG上方+通道上轨”三重共振，且 VPVR接近VAH 未有效突破 → 小仓试空。
+
+加仓：
+- 仅当未超过“单币最大保证金占比上限”且 R回撤未触发保本；二次信号与首次同强度或更强。
+减仓：
+- 3m/15m同时与方向背离（MACD/RSI + 结构破位）或命中TP1后回撤>0.5R。
+
+
+======================================================
+6) 杠杆感知的止损/止盈与仓位 Sizing（核心）
+======================================================
+记：r = risk_per_trade（权益风险比例），L = 杠杆，m = 保证金占比（相对净值）。
+目标止损百分比（风险反推）：
+  stop_pct_target = r / (m * L)
+
+设置波动/结构地板，取更大的作为“距离百分比” stop_pct_floor：
+  stop_pct_atr   = max( atr_k(tf)*ATR_tf / price )，推荐tf=15m，atr_k=atr_floor_k["15m"]
+  stop_pct_struc = 结构止损距离/price（多：最近结构低点下方、需求区下沿、VAL下方等；空：结构高点上方、供给区上沿、VAH上方等）
+  stop_pct_fees  = (fees_bps_round + slippage_bps_round) / 10000
+  stop_pct       = max(stop_pct_target, stop_pct_atr, stop_pct_struc) + stop_pct_fees
+
+强平缓冲：
+  要求 distance_to_liq_pct ≥ min_liq_buffer_pct
+  若不满足 → 优先降低 m（保证金占比），其后降低 L；若仍不满足 → 放弃该笔。
+
+合规回推m：
+  m_target = r / (L * stop_pct)
+  若 m_target > m_max → 尝试降低 L 到 L’ 使 m_target’ ≤ m_max；仍不行则跳过。
+
+名义仓位与数量：
+  nominal = 净值 * m_target * L
+  qty     = nominal / entry_price
+
+分批止盈（R倍数）：
+  R = stop_pct * entry_price
+  TP1 = entry_price ± 1.0R；TP2 = ±2.0R；TP3 = ±3.0R（多为 +，空为 -）
+  按 tp_distribution 部分减仓；命中TP1后将止损抬/压至保本（含费用）
+
+追踪止损：
+  使用 trail_atr_tf 的 ATR：trail_stop = 当前价 ∓ trail_atr_k * ATR（多为“价-ATR”，空为“价+ATR”）
+  Supertrend反向翻转亦触发全平。
+
+
+=================================
+7) 组合与风控约束（账户层）
+=================================
+- 不超 max_portfolio_margin_pct；新单会预估组合保证金与强平缓冲。
+- 单标的并发最多N笔（可设2）；币种/因子去相关（尽量不同板块/叙事）。
+- 黑天鹅开关触发或波动极端：降杠杆、降m或只做持仓管理。
+
+
+====================
+8) 输出（JSON规范）
+====================
+# 所有决策必须输出以下结构，便于回测与执行对接：
+
+{
+  "symbol": "SOLUSDT",
+  "decision": "LONG|SHORT|FLAT",
+  "confidence": 0.0~1.0,                   // 基于分数归一化
+  "scores": {"long": LONG_SCORE, "short": SHORT_SCORE},
+  "must_have_passed": true|false,
+  "entry": {
+    "type": "breakout|pullback|reversal",
+    "price": 153.05,
+    "timeframe_trigger": "3m|15m|..."
+  },
+  "risk": {
+    "equity": 10000.0,
+    "r": 0.005,
+    "L": 5,
+    "m": 0.18,
+    "stop_pct_target": 0.0055,
+    "stop_pct_final": 0.0082,
+    "liq_buffer_pct": 0.018,
+    "passed_liq_buffer": true
+  },
+  "position": {
+    "nominal": 9000.0,
+    "qty": 58.82,
+    "side": "buy|sell",
+    "leverage": 5,
+    "max_addons": 1
+  },
+  "levels": {
+    "stop_loss": 151.80,
+    "take_profits": [
+      {"tp": 1, "price": 154.58, "size_pct": 0.40},
+      {"tp": 2, "price": 156.12, "size_pct": 0.35},
+      {"tp": 3, "price": 157.67, "size_pct": 0.25}
+    ],
+    "trail": {"tf": "15m", "atr_k": 1.2}
+  },
+  "filters": {
+    "funding_rate": -0.00001932,
+    "funding_penalized": false,
+    "oi_latest": 8054231.07,
+    "news_halt": false
+  },
+  "confluence_checklist": {
+    "mtf": {
+      "4h": {"trend":"downward|upward|flat","macd":-2.32,"price_vs_ema20":"below","supertrend":"bullish|bearish","channel_pos":"upper|middle|lower","score":{"long":X,"short":Y}},
+      "1h": { "...": "..." },
+      "15m":{ "...": "..." },
+      "3m": { "...": "..." }
+    },
+    "fvg_alignment": true|false,
+    "vpvr_alignment": "VAL_bounce|VAH_reject|POC_magnet|none",
+    "supply_demand_alignment": "demand_near|supply_near|none",
+    "fib_alignment": "fib_cluster|none"
+  },
+  "notes": [
+    "为什么选这个方向（简要要点，最多3条）",
+    "止损为何放在这里（结构/ATR/费用说明）",
+    "如未过强平缓冲，已降m或L，仍不合格则放弃"
+  ]
+}
+
+
+==================================================
+9) 使用说明（避免“顾此失彼”的关键点）
+==================================================
+- 本模板将 MTF 分数与 MUST-HAVE 闸门解耦：
+  * MUST-HAVE 决定“是否允许”趋势型入场；
+  * MTF 分数（长短同权）决定“更优方向”；
+  * 二者均不通过 → 仅可做保守的均值回归试探，且自动降m/L。
+
+- 多空完全对称：所有打分项、阈值与入场/减仓/止盈逻辑，均以“上/下”“多/空”镜像处理。
+- 杠杆感知TP/SL贯穿：先以 r、m、L 反推目标止损，再与 ATR/结构取max，最后强制强平缓冲。
+
+END
