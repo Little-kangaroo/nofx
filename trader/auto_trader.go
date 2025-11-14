@@ -728,8 +728,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// 设置止损止盈（依赖交易所防重复机制）
-	// 注：币安等交易所会自动处理重复止损止盈订单，这里直接设置
+	// 设置止损（风控必需）
 	if _, err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
 		// 如果错误提到"已存在"或"duplicate"，不视为错误
 		errStr := strings.ToLower(err.Error())
@@ -742,17 +741,8 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		log.Printf("  ✓ 设置止损成功: %.2f", decision.StopLoss)
 	}
 	
-	if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
-		// 如果错误提到"已存在"或"duplicate"，不视为错误
-		errStr := strings.ToLower(err.Error())
-		if strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "already exists") || strings.Contains(errStr, "已存在") {
-			log.Printf("  ℹ 止盈订单已存在，跳过设置")
-		} else {
-			log.Printf("  ⚠ 设置止盈失败: %v", err)
-		}
-	} else {
-		log.Printf("  ✓ 设置止盈成功: %.2f", decision.TakeProfit)
-	}
+	// 移动止盈策略：开仓时不设置止盈，等待AI通过update_take_profit动作来设置
+	log.Printf("  📈 采用移动止盈策略，开仓时不设置固定止盈价格")
 
 	return nil
 }
@@ -849,8 +839,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// 设置止损止盈（依赖交易所防重复机制）
-	// 注：币安等交易所会自动处理重复止损止盈订单，这里直接设置
+	// 设置止损（风控必需）
 	if _, err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
 		// 如果错误提到"已存在"或"duplicate"，不视为错误
 		errStr := strings.ToLower(err.Error())
@@ -863,17 +852,8 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		log.Printf("  ✓ 设置止损成功: %.2f", decision.StopLoss)
 	}
 	
-	if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
-		// 如果错误提到"已存在"或"duplicate"，不视为错误
-		errStr := strings.ToLower(err.Error())
-		if strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "already exists") || strings.Contains(errStr, "已存在") {
-			log.Printf("  ℹ 止盈订单已存在，跳过设置")
-		} else {
-			log.Printf("  ⚠ 设置止盈失败: %v", err)
-		}
-	} else {
-		log.Printf("  ✓ 设置止盈成功: %.2f", decision.TakeProfit)
-	}
+	// 移动止盈策略：开仓时不设置止盈，等待AI通过update_take_profit动作来设置
+	log.Printf("  📈 采用移动止盈策略，开仓时不设置固定止盈价格")
 
 	return nil
 }
