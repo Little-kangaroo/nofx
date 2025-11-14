@@ -1,30 +1,31 @@
-MTF_多空对称统一模板_v1.9_最终版（干净可落地）
+MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
 ================================================
 
-【模板目标】
-- 面向数字货币合约（USDT本位/币本位），实现“多空对称、单调锁盈、对小级别翻转快速响应、利润保护更稳健”的统一提示词/策略模板。
-- 直接可落地：无“变更点/开发记录”等噪音文本；参数集中在一处；输入/输出格式清晰。
+【修订目的】
+- 仅在开仓瞬间创建单一保护性止损（STOP-ONLY），**不再同时挂出止盈单**；
+- 若必须使用 OCO（交易所/执行器强制），则确保“同组互斥 + reduce-only + close-on-trigger”，避免双向平仓同时有效；
+- 与 v1.9 完全兼容：保持“多空对称、单调锁盈、对小级别翻转快速响应、利润保护更稳健”的核心逻辑不变，仅补充“入场挂单策略/执行契约”。
 
 ——————————————————————————————————————
 一、输入数据（严格约定）
 ——————————————————————————————————————
 1) 账户状态（Account）
 {
-  "equity": 98.60,                 // 账户净值（USDT）
-  "margin_usage": 0.922,           // 保证金使用率（0~1）
-  "max_leverage": 10,              // 平台允许最大杠杆
-  "positions": [                   // 现有持仓（可空数组）
+  "equity": 98.60,
+  "margin_usage": 0.922,
+  "max_leverage": 10,
+  "positions": [
     {
       "symbol": "BTCUSDT",
-      "side": "SHORT",             // LONG 或 SHORT
+      "side": "SHORT",                // LONG 或 SHORT
       "entry_price": 99102.6,
       "qty": 0.01,
       "leverage": 5,
-      "unrealized_pnl_pct": -0.13, // 浮盈亏%
+      "unrealized_pnl_pct": -0.13,
       "liq_price": 118084.24,
-      "time_in_position_min": 41,  // 入场至今的分钟数
-      "stop_price": 100200.0,      // 当前止损/止盈合一位（追踪止盈）
-      "r_multiple_locked": 0.0     // 已锁定的R倍数（便于状况追踪）
+      "time_in_position_min": 41,
+      "stop_price": 100200.0,
+      "r_multiple_locked": 0.0
     }
   ]
 }
@@ -32,8 +33,8 @@ MTF_多空对称统一模板_v1.9_最终版（干净可落地）
 2) 基础指标（MarketSnapshot）——覆盖多时间框架
 {
   "price": 45000.0,
-  "funding_rate": 0.0001,          // 资金费率（8H或永续最新值）
-  "oi_latest": 1500000000,         // 总/交易所持仓量（按你的口径）
+  "funding_rate": 0.0001,
+  "oi_latest": 1500000000,
   "change_1h": 0.5,
   "change_4h": -1.2,
   "3m": {
@@ -44,9 +45,9 @@ MTF_多空对称统一模板_v1.9_最终版（干净可落地）
     "sma20": 44996.0,
     "sma50": 44991.5,
     "vwap": 44992.3,
-    "ema50_slope_3": 0.15,         // 最近3根斜率（每根收盘差）
+    "ema50_slope_3": 0.15,
     "ema200_slope_3": 0.05,
-    "macd": 12.5,                   // DIF-DEA 或直方图（约定统一为直方图）
+    "macd": 12.5,                     // 直方图口径
     "rsi7": 65.2,
     "rsi14": 58.7,
     "atr14": 125.6,
@@ -64,37 +65,36 @@ MTF_多空对称统一模板_v1.9_最终版（干净可落地）
 {
   "tick_size": 0.1,
   "lot_size": 0.001,
-  "taker_fee_bps": 5,              // 0.05% -> 5 bps
+  "taker_fee_bps": 5,
   "maker_fee_bps": 2,
   "slippage_bps_minor": 5,
-  "slippage_bps_major": 15
+  "slippage_bps_major": 15,
+  "trigger_type": "MARK_PRICE"        // 与执行端统一：MARK_PRICE/INDEX_PRICE/LAST_PRICE
 }
 
 ——————————————————————————————————————
-二、参数（可按需微调，默认即用）
+二、参数（默认稳健，可按需微调）
 ——————————————————————————————————————
 [风险控制与仓位]
-- risk_per_trade_pct     = 0.5           // 单笔风险（占净值%）
-- leverage_default       = 3             // 默认杠杆（稳健），强趋势自适应至 ≤5
-- margin_usage_ceiling   = 0.95          // ≥此值不再开新仓，仅管理老单
+- risk_per_trade_pct     = 0.5
+- leverage_default       = 3
+- margin_usage_ceiling   = 0.95
 - max_concurrent_trades  = 3
 
-[R定义与初始止损]
-- R_by_ATR_TF            = "15m"         // 用哪个TF的ATR定义R
-- R_multiplier_at_entry  = 1.2           // 初始止损距离 = 1.2 * ATR(15m)
+[R 定义与初始止损]
+- R_by_ATR_TF            = "15m"
+- R_multiplier_at_entry  = 1.2          // 初始止损距离 = 1.2 * ATR(15m)
 
 [阶梯锁盈（多空对称）]
 - R_milestones           = [1.0, 1.5, 2.0, 3.0]
-- lock_at_R              = {             // 达到该R后锁定的盈利
-    "1.0": 0.0,                         // 1R → 移到保本（含手续费）
-    "1.5": 0.5,                         // 1.5R → 锁0.5R
-    "2.0": 1.0,                         // 2R   → 锁1R
-    "3.0": 2.0                          // 3R   → 锁2R，然后转快速追踪
+- lock_at_R = {
+    "1.0": 0.0,                        // 1R → 保本（含手续费/滑点）
+    "1.5": 0.5,
+    "2.0": 1.0,
+    "3.0": 2.0                          // 转快速追踪
   }
 
-[追踪轨道（对小级别翻转更敏感）]
-// 轨道候选均以“止损价格候选”的形式给出：
-// 多头止损候选 = 轨道 - pad；空头止损候选 = 轨道 + pad
+[追踪轨道（响应小级别翻转）]
 - micro_fast = { tf: "3m",  base: "ema20_vs_vwap_max", pad_atr_mult: 0.6 }
 - fast       = { tf: "15m", base: "ema20",             pad_atr_mult: 0.9 }
 - slow       = { tf: "30m", base: "ema50",             pad_atr_mult: 1.3 }
@@ -102,157 +102,212 @@ MTF_多空对称统一模板_v1.9_最终版（干净可落地）
 [微结构翻转触发（MicroFlip）]
 - microflip_enable       = true
 - microflip_rules (LONG):
-    * 3m: price 上穿 ema20 且 macd>0 且 rsi7≥52，且近3根出现“更高低点”结构
-    * 触发后：多头止损候选取 micro_fast
+    * 3m: price 上穿 ema20 且 macd>0 且 rsi7≥52，且近3根“更高低点”
 - microflip_rules (SHORT):
-    * 3m: price 下破 ema20 且 macd<0 且 rsi7≤48，且近3根出现“更低高点”结构
-    * 触发后：空头止损候选取 micro_fast
-- microflip_cooldown_sec = 60          // 降低滞后但避免抖动
+    * 3m: price 下破 ema20 且 macd<0 且 rsi7≤48，且近3根“更低高点”
+- microflip_cooldown_sec = 60
 
 [利润保护模式（触发即变紧）]
 - protect_enable         = true
-- protect_trigger = { unrealized_pnl_pct: 0.8, time_min: 15 }
-- protect_pad_shrink     = 0.7          // 触发后 pad_atr_mult×0.7（更紧）
-- protect_R_floor        = 1.0          // 保护模式下，最低锁盈不低于 1R
+- protect_trigger        = { unrealized_pnl_pct: 0.8, time_min: 15 }
+- protect_pad_shrink     = 0.7
+- protect_R_floor        = 1.0
 
 [更新与单调性]
-- min_tick_move_to_update = 1           // 至少变动1个tick才下发更新
-- update_cooldown_sec     = 15          // 常规更新冷却
-- allow_intrabar_update   = true        // microflip/暴力波动时允许盘中更新
-- stop_distance_min_ticks = 3           // 止损与现价最小间距（避免立即触发）
+- min_tick_move_to_update = 1
+- update_cooldown_sec     = 15
+- allow_intrabar_update   = true
+- stop_distance_min_ticks = 3
 
 [过滤与开仓门槛]
-- trend_tf_major          = "4h,1h"     // 大级别趋势判定
-- trend_tf_minor          = "30m,15m"   // 次级别顺势/回撤判定
+- trend_tf_major          = "4h,1h"
+- trend_tf_minor          = "30m,15m"
 - entry_align_rules (做多举例)：
-    * 1h & 30m macd≥0；close≥ema20/50/100/200(15m中至少≥2条)；rsi14(15m)≥50
+    * 1h & 30m macd≥0；close≥ema(15m) 中≥2条；rsi14(15m)≥50
 - entry_avoid_rules：
-    * 距离近期高/低 < 0.5*ATR(15m)；rsi7>80或<20；重大数据前N分钟等
+    * 距离近期高/低 < 0.5*ATR(15m)；rsi7>80或<20；重大数据前N分钟
+
+[入场挂单策略/执行契约（新增关键）]
+- entry_order_policy = {
+    "mode": "STOP_ONLY_AT_ENTRY",      // 关键：默认只挂保护性止损，不挂TP
+    "bracket_fallback": false,         // 若执行端强制创建 bracket，则置 true，并启用 OCO 设置
+    "reduce_only": true,               // 所有平仓单默认 reduce-only
+    "close_on_trigger": true,          // 对 STOP 单启用（部分交易所字段名）
+    "oco_grouping": {                  // 仅 bracket_fallback=true 时生效
+      "enabled": true,
+      "link_with": "take_profit_and_stop", // 同组互斥：任一触发取消另一
+      "post_only_tp": true             // TP 尽量 maker
+    },
+    "tp_activation": {                 // 何时“补挂/激活”TP（替代入场即挂）
+      "enable": true,
+      "first_when": "R>=1.5 or protect_triggered",
+      "price_logic": "rail_fast or fixed_R_multiple",  // 候选：轨道 or 固定R
+      "reduce_only": true
+    }
+}
 
 ——————————————————————————————————————
 三、统一逻辑（核心执行）
 ——————————————————————————————————————
 A) 仓位 sizing（基于R的风险等额）
 - 定义 R = ATR(R_by_ATR_TF) * R_multiplier_at_entry
-- 初始止损价（以LONG为例）：init_sl = entry - R
-  （SHORT：init_sl = entry + R）
+- 初始止损价：
+  LONG：init_sl = entry - R
+  SHORT：init_sl = entry + R
 - 单笔风险资金 = equity * risk_per_trade_pct%
 - 合约名义 = 单笔风险资金 / R
-- 数量 qty = 合约名义 / entry_price （考虑 lot_size 向下取整）
-- 杠杆建议 = min(leverage_default 或 自适应值, max_leverage)
+- 数量 qty = 合约名义 / entry_price（按 lot_size 向下取整）
+- 杠杆建议 = min(leverage_default 或自适应值, max_leverage)
 
-B) 候选止损价的生成（对称写法）
-设方向 dir ∈ {LONG, SHORT}，以 mid 为当前 close：
-1. BE含费用候选（BE_with_fees）：
-   - 手续费与预估滑点换算到价格（bps→价差），并含已付资金费率的保护项
-   - LONG: be = entry + fee_slip_in_price
-   - SHORT: be = entry - fee_slip_in_price
-2. R阶梯锁盈候选（R_lock）：
-   - 若浮盈≥kR，则要求止损≥(LONG) entry + lock_at_R[k]*R；
-                         或 ≤(SHORT) entry - lock_at_R[k]*R
-3. 追踪轨道候选（micro_fast / fast / slow）：
-   - 计算轨道基准：
-     base="ema20_vs_vwap_max" → max(ema20(tf), vwap(tf))
-     base="ema20"/"ema50"     → 直接取对应均线
-   - 计算 pad = pad_atr_mult * ATR(tf)
-   - LONG 候选 = base - pad；SHORT 候选 = base + pad
-4. 尖峰/异常过滤（spike_filter）：
-   - 若当前bar高低振幅 > 2.5*ATR(3m)，则对候选附加额外 pad（更保守）
-5. 时间衰减棘轮（time_decay）：
-   - 随时间增加每 T=10min 收紧 3% 的 pad（protect_enable 时叠加）
+B) 候选止损价（对称写法）
+1. BE_with_fees：将手续费/滑点/资金费率换算为价差，并基于方向加减到 entry
+2. R_lock：浮盈≥kR 后，对应锁盈价（LONG 向上、SHORT 向下）
+3. 追踪轨道：micro_fast / fast / slow → base ± pad，其中 pad = pad_atr_mult * ATR(tf)
+4. spike_filter：若当前bar振幅 > 2.5*ATR(3m)，额外加 pad
+5. time_decay：每10min 收紧 3% pad（与 protect 可叠加）
 
-C) 聚合与单调性（决定性的“三道闸”）
-- 多头（LONG）：
+C) 聚合与单调性
+- LONG：
   s_cand = max( BE_with_fees, R_lock, micro_fast?, fast, slow, spike_filter?, time_decay? )
   s_cand = ceil_to_tick(s_cand)
-  new_stop = max(prev_stop, s_cand)                       // 单调性↑
-- 空头（SHORT）：
+  new_stop = max(prev_stop, s_cand)
+- SHORT：
   s_cand = min( BE_with_fees, R_lock, micro_fast?, fast, slow, spike_filter?, time_decay? )
   s_cand = floor_to_tick(s_cand)
-  new_stop = min(prev_stop, s_cand)                       // 单调性↓
-
-- 去抖与执行：
-  * 仅当 |new_stop - prev_stop| ≥ min_tick_move_to_update * tick_size 才更新
-  * 且与现价保持 ≥ stop_distance_min_ticks * tick_size 的安全距
-  * 常规更新遵守 update_cooldown_sec；若触发 microflip/极端波动，可忽略冷却
+  new_stop = min(prev_stop, s_cand)
+- 去抖与执行：仅当变动≥min_tick_move_to_update*tick 且 与现价距离≥stop_distance_min_ticks*tick 才更新；
+  允许 intrabar 更新（microflip/极端波动）
 
 D) MicroFlip 快速响应
-- LONG：若 3m 触发 microflip_rules(LONG)，立即把 micro_fast 纳入候选；
-         allow_intrabar_update=true 时即刻更新，随后 60s 冷却
-- SHORT：条件对称；保证 new_stop = min(prev_stop, …) 的单调性严格成立
+- LONG：触发 microflip_rules(LONG) ⇒ 把 micro_fast 纳入候选，立即更新（随后60s冷却）
+- SHORT：对称处理（保证 new_stop 单调下降）
 
-E) 仓位管理与加减仓（可选）
-- 仅当 margin_usage < margin_usage_ceiling 且 与大级别趋势同向时才允许加仓
-- 加仓后按新的加权入场价与统一R重算各候选（但“单调性”始终以 new_stop vs prev_stop 比较）
+E) 入场挂单策略（**修订核心**）
+- 若 decision=OPEN：
+  1) **STOP_ONLY_AT_ENTRY（默认）**
+     - 开多：仅挂一个 reduce-only STOP（卖出止损）；init_stop = entry - R
+     - 开空：仅挂一个 reduce-only STOP（买入止损）；init_stop = entry + R
+     - **不挂任何 TP**。后续由 R_lock / 轨道 / protect 推动“单一追踪止盈”与“TP激活”。
+  2) **BRACKET_FALLBACK（仅当执行端强制）**
+     - 创建 OCO 组（take_profit + stop）；两者均 reduce-only；同组互斥；统一 trigger_type；
+     - take_profit 的初始 price 可设置为 None（挂占位不激活）或远离现价的“哑TP”，并在满足 tp_activation 条件后被“就地改价/激活”。
+  3) 激活 TP 的时机：
+     - 首次达到 R≥1.5 或 protect_trigger 触发 ⇒ 按 rail_fast 或 固定 R 倍数 生成 TP 候选；
+     - 若使用 OCO：把 TP 改为“有效价”，同时保持 STOP 的单调性约束。
+
+F) 仓位管理与加减仓（可选）
+- 仅当 margin_usage < ceiling 且 顺应大级别趋势时才允许加仓
+- 加仓后按加权成本重算 R/BE 等；**new_stop 总是与 prev_stop 做单调比较**
 
 ——————————————————————————————————————
-四、输出（给到执行端/交易机器人/回测器）
+四、输出（执行端/交易机器人/回测器）
 ——————————————————————————————————————
-必须输出 JSON（单/多持仓均可），字段：
+必须输出 JSON：
 {
   "actions": [
     {
       "symbol": "BTCUSDT",
       "side": "SHORT",
-      "decision": "HOLD|OPEN|CLOSE|REDUCE|ADD",
+      "decision": "OPEN|HOLD|CLOSE|REDUCE|ADD",
       "entry_plan": {
-        "price": 99000.0,
-        "qty": 0.01,
+        "price": 95172.7,
+        "qty": 0.02,
         "leverage": 3,
-        "init_stop": 100500.0,
-        "take_profit": null              // 若使用统一追踪止盈，可为null
+        "init_stop": 97000.0,
+        "take_profit": null,               // 关键：默认 null
+        "entry_order_policy": "STOP_ONLY_AT_ENTRY"
       },
       "stop_update": {
-        "prev_stop": 100200.0,
-        "new_stop": 99880.0,             // 注意：做空止盈/止损只能更低（单调性）
-        "reason": "microflip_fast|R_lock|rail_fast|rail_slow|protect|spike_filter|time_decay"
+        "prev_stop": 97000.0,
+        "new_stop": 96480.0,
+        "reason": "rail_fast|R_lock|protect|microflip_fast|spike_filter|time_decay"
+      },
+      "order_flags": {                     // 新增：与执行端对齐
+        "reduce_only": true,
+        "close_on_trigger": true,
+        "trigger_type": "MARK_PRICE",
+        "oco_group": null,                 // 若启用 BRACKET_FALLBACK，则为某个 group_id
+        "tp_activation": { "armed": false, "rule": "R>=1.5 or protect" }
       },
       "r_multiple_locked": 1.0,
-      "notes": "可选：记录触发链与关键候选值"
+      "notes": "记录候选/取整/断言结果（可选）"
     }
   ]
 }
 
+【例子解释】
+- 对于你提到的“开空价 95,172.70，立刻出现 <=91,000 与 >=97,000 两个平仓挂单”的现象：
+  - 本修订默认 **entry_order_policy=STOP_ONLY_AT_ENTRY**，故只应存在 **>=97,000 的单一 STOP**；
+  - **<=91,000 的 TP 不会在入场时创建**，而是在首次达到 R≥1.5 或触发 protect 后再“补挂/激活”。
+
 ——————————————————————————————————————
-五、自检断言（强制）
+五、自检断言（强化）
 ——————————————————————————————————————
 - LONG：assert(new_stop >= prev_stop)
 - SHORT：assert(new_stop <= prev_stop)
 - assert(与现价距离 ≥ stop_distance_min_ticks * tick_size)
-- 记录：聚合前各候选、取整前后值、R与ATR、费用/滑点拆解、触发因子
+- **entry-only 断言（新增关键）**：
+  - 若 decision=OPEN 且 entry_order_policy=STOP_ONLY_AT_ENTRY：
+    * assert(active_exit_orders == 1)           // 只允许 1 个保护性 STOP
+    * assert(no_take_profit_active == true)     // TP 未激活（可有“占位”但 inactive）
+  - 若 bracket_fallback=true：
+    * assert(oco_grouping.enabled == true)
+    * assert(reduce_only==true for both TP/SL)
+    * assert(trigger_type 一致，避免一价双触发)
+- 记录：聚合前各候选、R/ATR、费用/滑点拆解、触发因子、活跃挂单清单
 
 ——————————————————————————————————————
-六、实现提示（伪代码片段）
+六、实现提示（伪代码）
 ——————————————————————————————————————
-# —— 多头 ——
-def update_long_stop(prev_stop, candidates, tick):
-    s = max([x for x in candidates if x is not None])
-    s = ceil_to_tick(s, tick)
-    new_stop = max(prev_stop, s)
-    if new_stop - prev_stop < tick:      # 去抖
-        return prev_stop
-    return new_stop
+# —— 入场仅挂 STOP（默认） ——
+def open_position(side, entry, R, qty, flags):
+    if side == "LONG":
+        stop = round_down(entry - R)    # 取整到tick
+        place_stop(side="SELL", price=stop, reduce_only=True, close_on_trigger=True, trigger=flags.trigger_type)
+    else:  # SHORT
+        stop = round_up(entry + R)
+        place_stop(side="BUY", price=stop, reduce_only=True, close_on_trigger=True, trigger=flags.trigger_type)
+    # 不创建 TP；返回挂单 id 供追踪
 
-# —— 空头 ——
+# —— 达到条件后再“补挂/激活” TP ——
+def maybe_arm_tp(position, context):
+    if not context.tp_activation.enable:
+        return
+    cond = (position.R_unrealized >= 1.5) or context.protect_triggered
+    if cond:
+        tp_price = choose_tp_by("rail_fast or fixed_R", position, context)
+        arm_or_create_oco_tp(position, tp_price, reduce_only=True, trigger=context.trigger_type)
+
+# —— 空头止损更新（单调下降） ——
 def update_short_stop(prev_stop, candidates, tick):
-    s = min([x for x in candidates if x is not None])
+    s = min(candidates)                 # min 聚合
     s = floor_to_tick(s, tick)
     new_stop = min(prev_stop, s)
-    if prev_stop - new_stop < tick:      # 去抖
+    if prev_stop - new_stop < tick:     # 去抖
         return prev_stop
     return new_stop
 
-# 费用/滑点换算到价格（示意）
+# —— 手续费/滑点 → 价格差 ——
 def fee_slip_to_price(entry, taker_bps, slip_bps):
     return entry * (taker_bps + slip_bps) / 1e4
 
 ——————————————————————————————————————
-七、注意事项
+七、执行端常见误配清单（排查指引）
 ——————————————————————————————————————
-- 不在模板中写入任何“变更点/版本记录”。
-- 不在模板中硬编码交易所限价/风控参数，统一由 ExchangeMeta 输入。
-- R 采用 ATR 度量，便于跨标的/跨周期统一风控。
-- 资金费率为负且持仓方向“付费”时，可将 BE_with_fees 适度外扩以覆盖若干周期的资金费率。
-- 强烈建议回测与实盘双轨：回测验证单调性与锁盈曲线，实盘验证滑点与冷却设置。
+1) 执行端默认强制 bracket=true：忽略 take_profit=null，导致 TP/SL 同时出现。
+   - 解决：明确传入 entry_order_policy=STOP_ONLY_AT_ENTRY；或将 bracket_fallback=true 并开启 OCO 互斥。
+
+2) reduce-only 未开启：平仓单被当成开仓单，可能形成“反向叠加”。
+   - 解决：TP/SL 全部带 reduce_only=true；STOP 叠加 close_on_trigger。
+
+3) 触发价类型不一致（如 STOP 用 MARK，TP 用 LAST）：
+   - 可能在急剧波动中“双触发”。
+   - 解决：统一 trigger_type。
+
+4) 交易所对同一方向多笔 STOP/TP 不自动互斥：
+   - 解决：使用 oco_grouping.enabled=true；或自管“取消/替换”老单。
+
+5) 保护模式/轨道更新后忘记“撤旧挂新”：
+   - 解决：更新策略内加入撤单-换价流程，确保活跃挂单唯一性。
 
 （完）
