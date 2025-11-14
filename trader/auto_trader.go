@@ -598,6 +598,12 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, act
 		return at.executeCloseLongWithRecord(decision, actionRecord)
 	case "close_short":
 		return at.executeCloseShortWithRecord(decision, actionRecord)
+	case "reduce":
+		return at.executeReduceWithRecord(decision, actionRecord)
+	case "reduce_long":
+		return at.executeReduceLongWithRecord(decision, actionRecord)
+	case "reduce_short":
+		return at.executeReduceShortWithRecord(decision, actionRecord)
 	case "hold", "wait":
 		// 无需执行，仅记录
 		return nil
@@ -1217,4 +1223,173 @@ func normalizeSymbol(symbol string) string {
 	}
 
 	return symbol
+}
+
+// executeReduceWithRecord 执行智能减仓（根据当前持仓自动判断方向）
+func (at *AutoTrader) executeReduceWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
+	log.Printf("  🔄 智能减仓: %s", decision.Symbol)
+	
+	// 获取当前持仓，判断减仓方向
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓失败: %w", err)
+	}
+	
+	var hasLong, hasShort bool
+	for _, pos := range positions {
+		if pos["symbol"] == decision.Symbol {
+			side := pos["side"].(string)
+			quantity := pos["positionAmt"].(float64)
+			
+			if side == "long" && quantity > 0 {
+				hasLong = true
+			} else if side == "short" && quantity < 0 {
+				hasShort = true
+			}
+		}
+	}
+	
+	// 根据持仓情况执行相应的减仓操作
+	if hasLong && hasShort {
+		// 同时有多空仓位，默认减多仓（可以根据盈亏情况调整）
+		return at.executeReduceLongWithRecord(decision, actionRecord)
+	} else if hasLong {
+		// 只有多仓，减多仓
+		return at.executeReduceLongWithRecord(decision, actionRecord)
+	} else if hasShort {
+		// 只有空仓，减空仓  
+		return at.executeReduceShortWithRecord(decision, actionRecord)
+	} else {
+		return fmt.Errorf("没有找到%s的持仓，无法执行减仓", decision.Symbol)
+	}
+}
+
+// executeReduceLongWithRecord 执行减多仓并记录详细信息
+func (at *AutoTrader) executeReduceLongWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
+	log.Printf("  🔄 减多仓: %s", decision.Symbol)
+	
+	// 获取当前多仓持仓
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓失败: %w", err)
+	}
+	
+	var currentQuantity float64
+	for _, pos := range positions {
+		if pos["symbol"] == decision.Symbol && pos["side"] == "long" {
+			currentQuantity = pos["positionAmt"].(float64)
+			break
+		}
+	}
+	
+	if currentQuantity <= 0 {
+		return fmt.Errorf("没有找到%s的多仓持仓", decision.Symbol)
+	}
+	
+	// 确定减仓数量（如果decision中指定了数量则使用，否则减仓50%）
+	var reduceQuantity float64
+	if decision.PositionSizeUSD > 0 {
+		// 根据USD金额计算减仓数量
+		marketData, err := market.Get(decision.Symbol)
+		if err != nil {
+			return err
+		}
+		reduceQuantity = decision.PositionSizeUSD / marketData.CurrentPrice
+	} else {
+		// 默认减仓50%
+		reduceQuantity = currentQuantity * 0.5
+	}
+	
+	// 确保不超过当前持仓
+	if reduceQuantity > currentQuantity {
+		reduceQuantity = currentQuantity
+	}
+	
+	actionRecord.Quantity = reduceQuantity
+	
+	// 获取当前价格用于记录
+	marketData, err := market.Get(decision.Symbol)
+	if err != nil {
+		return err
+	}
+	actionRecord.Price = marketData.CurrentPrice
+	
+	// 执行减仓（部分平仓）
+	order, err := at.trader.CloseLong(decision.Symbol, reduceQuantity)
+	if err != nil {
+		return err
+	}
+	
+	// 记录订单ID
+	if orderID, ok := order["orderId"].(int64); ok {
+		actionRecord.OrderID = orderID
+	}
+	
+	log.Printf("  ✓ 减多仓成功，订单ID: %v, 减仓数量: %.4f", order["orderId"], reduceQuantity)
+	return nil
+}
+
+// executeReduceShortWithRecord 执行减空仓并记录详细信息
+func (at *AutoTrader) executeReduceShortWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
+	log.Printf("  🔄 减空仓: %s", decision.Symbol)
+	
+	// 获取当前空仓持仓
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持���失败: %w", err)
+	}
+	
+	var currentQuantity float64
+	for _, pos := range positions {
+		if pos["symbol"] == decision.Symbol && pos["side"] == "short" {
+			currentQuantity = math.Abs(pos["positionAmt"].(float64)) // 空仓数量为负数，取绝对值
+			break
+		}
+	}
+	
+	if currentQuantity <= 0 {
+		return fmt.Errorf("没有找到%s的空仓持仓", decision.Symbol)
+	}
+	
+	// 确定减仓数量（如果decision中指定了数量则使用，否则减仓50%）
+	var reduceQuantity float64
+	if decision.PositionSizeUSD > 0 {
+		// 根据USD金额计算减仓数量
+		marketData, err := market.Get(decision.Symbol)
+		if err != nil {
+			return err
+		}
+		reduceQuantity = decision.PositionSizeUSD / marketData.CurrentPrice
+	} else {
+		// 默认减仓50%
+		reduceQuantity = currentQuantity * 0.5
+	}
+	
+	// 确保不超过当前持仓
+	if reduceQuantity > currentQuantity {
+		reduceQuantity = currentQuantity
+	}
+	
+	actionRecord.Quantity = reduceQuantity
+	
+	// 获取当前价格用于记录
+	marketData, err := market.Get(decision.Symbol)
+	if err != nil {
+		return err
+	}
+	actionRecord.Price = marketData.CurrentPrice
+	
+	// 执行减仓（部分平仓）
+	order, err := at.trader.CloseShort(decision.Symbol, reduceQuantity)
+	if err != nil {
+		return err
+	}
+	
+	// 记录订单ID
+	if orderID, ok := order["orderId"].(int64); ok {
+		actionRecord.OrderID = orderID
+	}
+	
+	log.Printf("  ✓ 减空仓成功，订单ID: %v, 减仓数量: %.4f", order["orderId"], reduceQuantity)
+	return nil
 }

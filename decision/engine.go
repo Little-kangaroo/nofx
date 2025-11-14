@@ -450,13 +450,20 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 	arrayEnd := findMatchingBracket(response, arrayStart)
 	var jsonContent string
 	if arrayEnd == -1 {
+		log.Printf("🔍 AI响应JSON不完整，尝试自动修复...")
+		log.Printf("🔍 原始响应片段: %s", response[arrayStart:min(arrayStart+300, len(response))])
+		
 		// 尝试修复不完整的JSON
 		jsonContent = tryFixIncompleteJSON(response[arrayStart:])
 		if jsonContent == "" {
+			log.Printf("❌ JSON自动修复失败")
 			return nil, fmt.Errorf("无法找到JSON数组结束，且无法自动修复\nJSON片段: %s", response[arrayStart:min(arrayStart+200, len(response))])
+		} else {
+			log.Printf("✅ JSON自动修复成功: %s", jsonContent)
 		}
 	} else {
 		jsonContent = strings.TrimSpace(response[arrayStart : arrayEnd+1])
+		log.Printf("🔍 找到完整JSON: %s", jsonContent[:min(200, len(jsonContent))])
 	}
 
 	// 🔧 修复常见的JSON格式错误：缺少引号的字段值
@@ -723,10 +730,56 @@ func tryFixIncompleteJSON(jsonFragment string) string {
 		}
 	}
 	
+	// 尝试修复不完整的对象
+	braceOpenCount := strings.Count(jsonFragment, "{")
+	braceCloseCount := strings.Count(jsonFragment, "}")
+	
+	if braceOpenCount > braceCloseCount {
+		// 添加缺失的}
+		needed := braceOpenCount - braceCloseCount
+		for i := 0; i < needed; i++ {
+			jsonFragment += "}"
+		}
+		// 然后添加数组结束符
+		if !strings.HasSuffix(jsonFragment, "]") {
+			jsonFragment += "]"
+		}
+		
+		// 验证修复后的JSON是否有效
+		var test []interface{}
+		if err := json.Unmarshal([]byte(jsonFragment), &test); err == nil {
+			return jsonFragment
+		}
+	}
+	
 	// 尝试查找最后一个完整的对象
 	lastBrace := strings.LastIndex(jsonFragment, "}")
 	if lastBrace == -1 {
-		return ""
+		// 没有找到完整的对象，尝试其他方法
+		// 查找最后一个逗号，截取到那里
+		lastComma := strings.LastIndex(jsonFragment, ",")
+		if lastComma > 0 {
+			// 截取到最后一个逗号之前，然后尝试完成
+			truncated := strings.TrimSpace(jsonFragment[:lastComma])
+			if strings.Count(truncated, "{") > strings.Count(truncated, "}") {
+				// 添加缺失的}
+				needed := strings.Count(truncated, "{") - strings.Count(truncated, "}")
+				for i := 0; i < needed; i++ {
+					truncated += "}"
+				}
+			}
+			truncated += "]"
+			
+			// 验证修���后的JSON是否有效
+			var test []interface{}
+			if err := json.Unmarshal([]byte(truncated), &test); err == nil {
+				return truncated
+			}
+		}
+		
+		// 最后尝试：创建空数组
+		log.Printf("⚠️ JSON修复失败，返回空数组。原始片段: %s", jsonFragment[:min(100, len(jsonFragment))])
+		return "[]"
 	}
 	
 	// 截取到最后一个完整对象，然后添加]
@@ -738,7 +791,9 @@ func tryFixIncompleteJSON(jsonFragment string) string {
 		return fixedJSON
 	}
 	
-	return ""
+	// 如果所有修复尝试都失败，返回空数组以避免系统崩溃
+	log.Printf("⚠️ JSON修复最终失败，返回空数组。原始片段: %s", jsonFragment[:min(100, len(jsonFragment))])
+	return "[]"
 }
 
 // min 返回两个int中较小的值
@@ -776,12 +831,30 @@ func isValidDecisionArray(jsonContent string) bool {
 	var numbers []float64
 	if err := json.Unmarshal([]byte(jsonContent), &numbers); err == nil {
 		// 这是一个数字数组，不是决策数组
+		log.Printf("⚠️ AI返回了数字数组而非决策数组")
 		return false
 	}
 	
 	// 检查是否包含决策对象的基本字段
 	// 至少应该包含 "symbol" 字段
 	if !strings.Contains(jsonContent, `"symbol"`) && !strings.Contains(jsonContent, `symbol`) {
+		log.Printf("⚠️ AI返回的JSON不包含symbol字段")
+		return false
+	}
+	
+	// 检查是否是持仓数据而不是决策数据
+	// 持仓数据通常包含: "side", "entry", "pnl_pct", "liq_price" 等字段
+	// 决策数据应该包含: "action", "leverage", "position_size_usd" 等字段
+	hasPositionFields := strings.Contains(jsonContent, `"side"`) && 
+						strings.Contains(jsonContent, `"entry"`) && 
+						strings.Contains(jsonContent, `"pnl_pct"`)
+	
+	hasDecisionFields := strings.Contains(jsonContent, `"action"`) || 
+						strings.Contains(jsonContent, `"leverage"`) || 
+						strings.Contains(jsonContent, `"position_size_usd"`)
+	
+	if hasPositionFields && !hasDecisionFields {
+		log.Printf("⚠️ AI返回了持仓数据而非交易决策数据。包含字段: side, entry, pnl_pct")
 		return false
 	}
 	
@@ -837,10 +910,15 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		"open_short":    true,
 		"close_long":    true,
 		"close_short":   true,
+		"reduce":        true, // 减仓操作
+		"reduce_long":   true, // 减多仓
+		"reduce_short":  true, // 减空仓
 		"hold":          true,
 		"wait":          true,
 		"buy_to_enter":  true, // 兼容提示词模板中的动作名
 		"sell_to_enter": true, // 兼容提示词模板中的动作名
+		"buy":           true, // 兼容简单的买入指令
+		"sell":          true, // 兼容简单的卖出指令
 	}
 
 	// 标准化动作名称
@@ -849,6 +927,13 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		d.Action = "open_long"
 	case "sell_to_enter":
 		d.Action = "open_short"
+	case "buy":
+		d.Action = "open_long"    // 默认将buy解释为开多
+	case "sell":
+		d.Action = "open_short"   // 默认将sell解释为开空
+	case "reduce":
+		// reduce需要根据当前持仓方向确定是reduce_long还是reduce_short
+		// 这个逻辑在执行阶段处理，这里保持原样
 	}
 
 	if !validActions[d.Action] {
