@@ -39,6 +39,9 @@ type Trader interface {
 	// CancelAllOrders 取消该币种的所有挂单
 	CancelAllOrders(symbol string) error
 
+	// GetOrderStatus 获取订单状态
+	GetOrderStatus(symbol string, orderID int64) (map[string]interface{}, error)
+
 	// FormatQuantity 格式化数量到正确的精度
 	FormatQuantity(symbol string, quantity float64) (string, error)
 }

@@ -402,7 +402,7 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 	cotTrace := extractCoTTrace(aiResponse)
 
 	// 2. 提取JSON决策列表
-	decisions, err := extractDecisionsWithContext(aiResponse, accountEquity, btcEthLeverage, altcoinLeverage)
+	decisions, err := extractDecisionsWithContext(aiResponse, accountEquity, btcEthLeverage, altcoinLeverage, templateName)
 	if err != nil {
 		return &FullDecision{
 			CoTTrace:  cotTrace,
@@ -440,7 +440,7 @@ func extractCoTTrace(response string) string {
 
 
 // extractDecisionsWithContext 提取JSON决策列表（带账户上下文）
-func extractDecisionsWithContext(response string, accountEquity float64, btcEthLeverage, altcoinLeverage int) ([]Decision, error) {
+func extractDecisionsWithContext(response string, accountEquity float64, btcEthLeverage, altcoinLeverage int, templateName string) ([]Decision, error) {
 	// 直接查找JSON数组 - 找第一个完整的JSON数组
 	arrayStart := strings.Index(response, "[")
 	if arrayStart == -1 {
@@ -475,27 +475,50 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 		return nil, fmt.Errorf("AI返回的JSON格式无效，不是决策数组格式\nJSON内容: %s", jsonContent)
 	}
 
+	// 🎯 智能解析器选择：根据模板名优先选择对应的解析器
+	log.Printf("🔍 [调试] 检测到模板: %s，选择对应解析策略", templateName)
+	
+	if strings.Contains(strings.ToLower(templateName), "taro") {
+		// taro模板优先使用taro解析器
+		log.Printf("🎯 [调试] 使用taro模板，优先尝试taro格式解析器")
+		
+		taroDecisions, taroErr := parseTaroFormatDecisions(jsonContent)
+		if taroErr == nil {
+			log.Printf("🔍 [调试] taro格式解析成功，数量: %d", len(taroDecisions))
+			for i, d := range taroDecisions {
+				log.Printf("🔍 [调试] taro决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f", 
+					i+1, d.Symbol, d.Action, d.StopLoss)
+			}
+			return taroDecisions, nil
+		}
+		log.Printf("⚠️ [调试] taro格式解析失败: %v，尝试标准格式", taroErr)
+	}
+
 	// 尝试解析为标准Decision格式
 	var decisions []Decision
 	if err := json.Unmarshal([]byte(jsonContent), &decisions); err == nil {
 		// 调试日志：打印解析后的决策内容
-		log.Printf("🔍 [调试] 成功解析AI决策，数量: %d", len(decisions))
+		log.Printf("🔍 [调试] 标准格式解析成功，数量: %d", len(decisions))
 		for i, d := range decisions {
 			log.Printf("🔍 [调试] 决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f, TakeProfit=%.6f", 
 				i+1, d.Symbol, d.Action, d.StopLoss, d.TakeProfit)
 		}
 		return decisions, nil
 	}
+	log.Printf("⚠️ [调试] 标准格式解析失败，尝试其他格式")
 
-	// 如果标准格式解析失败，尝试解析taro格式（使用actions数组和"stop"字段）
-	taroDecisions, taroErr := parseTaroFormatDecisions(jsonContent)
-	if taroErr == nil {
-		log.Printf("🔍 [调试] 成功解析taro格式决策，数量: %d", len(taroDecisions))
-		for i, d := range taroDecisions {
-			log.Printf("🔍 [调试] taro决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f", 
-				i+1, d.Symbol, d.Action, d.StopLoss)
+	// 如果不是taro模板，或者taro解析失败，尝试taro格式（兜底）
+	if !strings.Contains(strings.ToLower(templateName), "taro") {
+		taroDecisions, taroErr := parseTaroFormatDecisions(jsonContent)
+		if taroErr == nil {
+			log.Printf("🔍 [调试] 兜底taro格式解析成功，数量: %d", len(taroDecisions))
+			for i, d := range taroDecisions {
+				log.Printf("🔍 [调试] 兜底taro决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f", 
+					i+1, d.Symbol, d.Action, d.StopLoss)
+			}
+			return taroDecisions, nil
 		}
-		return taroDecisions, nil
+		log.Printf("⚠️ [调试] 兜底taro格式解析失败: %v", taroErr)
 	}
 
 	// 如果taro格式失败，尝试解析混合格式（AI可能返回标准格式但某些字段类型不匹配）

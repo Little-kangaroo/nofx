@@ -303,7 +303,12 @@ func (at *AutoTrader) runCycle() error {
 		log.Println("📅 日盈亏已重置")
 	}
 
-	// 3. 收集交易上下文
+	// 3. 检查止损单成交状态
+	if err := at.checkPendingStopOrders(record); err != nil {
+		log.Printf("⚠️ 检查止损单状态失败: %v", err)
+	}
+
+	// 4. 收集交易上下文
 	ctx, err := at.buildTradingContext()
 	if err != nil {
 		record.Success = false
@@ -1834,4 +1839,130 @@ func (at *AutoTrader) executeCloseAllPositionsWithRecord(decision *decision.Deci
 	}
 	
 	return nil
+}
+
+// checkPendingStopOrders 检查待确认的止损单状态，记录成交的订单
+func (at *AutoTrader) checkPendingStopOrders(record *logger.DecisionRecord) error {
+	if len(at.pendingStopOrders) == 0 {
+		return nil
+	}
+
+	log.Printf("🔍 检查 %d 个待确认止损单状态", len(at.pendingStopOrders))
+	
+	var toRemove []string
+	
+	for key, pendingOrder := range at.pendingStopOrders {
+		log.Printf("  🔍 检查止损单: %s (ID: %d)", pendingOrder.Symbol, pendingOrder.OrderID)
+		
+		// 查询订单状态
+		orderStatus, err := at.trader.GetOrderStatus(pendingOrder.Symbol, pendingOrder.OrderID)
+		if err != nil {
+			log.Printf("  ⚠️ 查询订单 %d 状态失败: %v", pendingOrder.OrderID, err)
+			
+			// 订单已经不存在，可能已经成交或被取消
+			// 检查持仓是否变化来判断是否成交
+			positions, posErr := at.trader.GetPositions()
+			if posErr == nil {
+				hasPosition := false
+				for _, pos := range positions {
+					if pos["symbol"] == pendingOrder.Symbol && pos["side"] == pendingOrder.Side {
+						if quantity, ok := pos["positionAmt"].(float64); ok && quantity > 0 {
+							hasPosition = true
+							break
+						}
+					}
+				}
+				
+				// 如果持仓消失，认为是止损成交
+				if !hasPosition {
+					log.Printf("  ✅ 止损单成交: %s %s (推断)", pendingOrder.Symbol, pendingOrder.Side)
+					at.recordStopLossExecution(pendingOrder, record)
+					toRemove = append(toRemove, key)
+				}
+			}
+			continue
+		}
+		
+		// 解析订单状态
+		status, ok := orderStatus["status"].(string)
+		if !ok {
+			log.Printf("  ⚠️ 无法解析订单状态: %v", orderStatus)
+			continue
+		}
+		
+		log.Printf("  📊 订单 %d 状态: %s", pendingOrder.OrderID, status)
+		
+		// 检查订单是否已成交
+		if status == "FILLED" || status == "PARTIALLY_FILLED" {
+			log.Printf("  ✅ 止损单成交: %s %s", pendingOrder.Symbol, pendingOrder.Side)
+			at.recordStopLossExecution(pendingOrder, record)
+			toRemove = append(toRemove, key)
+		} else if status == "CANCELED" || status == "REJECTED" || status == "EXPIRED" {
+			log.Printf("  ❌ 止损单失效: %s %s (状态: %s)", pendingOrder.Symbol, pendingOrder.Side, status)
+			toRemove = append(toRemove, key)
+		}
+	}
+	
+	// 移除已处理的订单
+	for _, key := range toRemove {
+		delete(at.pendingStopOrders, key)
+	}
+	
+	if len(toRemove) > 0 {
+		log.Printf("📝 移除了 %d 个已处理的止损单记录", len(toRemove))
+	}
+	
+	return nil
+}
+
+// recordStopLossExecution 记录止损单成交
+func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, record *logger.DecisionRecord) {
+	// 获取当前市场价格作为成交价
+	marketData, err := market.Get(pendingOrder.Symbol)
+	if err != nil {
+		log.Printf("⚠️ 获取 %s 市场价格失败: %v", pendingOrder.Symbol, err)
+		return
+	}
+	
+	executionPrice := marketData.CurrentPrice
+	
+	// 计算盈亏（这里是简化计算，实际应该使用精确的成交价格）
+	var pnl float64
+	if pendingOrder.Side == "long" {
+		// 多仓止损：入场价未知，使用止损价作为参考
+		pnl = (executionPrice - pendingOrder.StopPrice) * pendingOrder.Quantity
+	} else {
+		// 空仓止损：入场价未知，使用止损价作为参考
+		pnl = (pendingOrder.StopPrice - executionPrice) * pendingOrder.Quantity
+	}
+	
+	log.Printf("📊 记录止损成交: %s %s 数量=%.4f 价格=%.6f 预估盈亏=%.2f", 
+		pendingOrder.Symbol, pendingOrder.Side, pendingOrder.Quantity, executionPrice, pnl)
+	
+	// 创建交易记录
+	actionRecord := &logger.DecisionAction{
+		Symbol:    pendingOrder.Symbol,
+		Action:    fmt.Sprintf("stop_loss_%s", pendingOrder.Side), // stop_loss_long 或 stop_loss_short
+		Quantity:  pendingOrder.Quantity,
+		Price:     executionPrice,
+		OrderID:   pendingOrder.OrderID,
+		Success:   true,
+		Timestamp: time.Now(),
+		Error:     "",
+	}
+	
+	// 添加到决策记录中
+	if record.Decisions == nil {
+		record.Decisions = []logger.DecisionAction{}
+	}
+	record.Decisions = append(record.Decisions, *actionRecord)
+	
+	// 添加执行日志
+	logMessage := fmt.Sprintf("🎯 止损成交: %s %s %.4f@%.6f (原订单ID: %d)", 
+		pendingOrder.Symbol, strings.ToUpper(pendingOrder.Side), 
+		pendingOrder.Quantity, executionPrice, pendingOrder.OrderID)
+	record.ExecutionLog = append(record.ExecutionLog, logMessage)
+	
+	// 交易记录已通过 DecisionAction 添加到 record.Decisions 中
+	// 日志将在 LogDecision(record) 时统一记录
 }

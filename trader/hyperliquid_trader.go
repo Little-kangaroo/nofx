@@ -683,6 +683,29 @@ func (t *HyperliquidTrader) roundPriceToSigfigs(price float64) float64 {
 	return rounded
 }
 
+// GetOrderStatus 获取订单状态
+func (t *HyperliquidTrader) GetOrderStatus(symbol string, orderID int64) (map[string]interface{}, error) {
+	// Hyperliquid 的订单状态查询需要通过 info API
+	// 暂时返回一个简化的实现，实际应该调用 Hyperliquid 的 API
+	// 这里返回一个基本的状态结构，可以根据需要扩展
+	log.Printf("⚠️ Hyperliquid GetOrderStatus 暂时���用简化实现，订单ID: %d", orderID)
+	
+	result := map[string]interface{}{
+		"orderId": orderID,
+		"symbol":  symbol,
+		"status":  "UNKNOWN", // 需要实际查询 Hyperliquid API
+		"type":    "STOP_MARKET",
+		"side":    "UNKNOWN",
+		"origQty": "0",
+		"executedQty": "0",
+		"price":   "0",
+		"stopPrice": "0",
+		"updateTime": 0,
+	}
+
+	return result, nil
+}
+
 // convertSymbolToHyperliquid 将标准symbol转换为Hyperliquid格式
 // 例如: "BTCUSDT" -> "BTC"
 func convertSymbolToHyperliquid(symbol string) string {

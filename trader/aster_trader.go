@@ -1001,6 +1001,27 @@ func (t *AsterTrader) CancelAllOrders(symbol string) error {
 	return err
 }
 
+// GetOrderStatus 获取订单状态
+func (t *AsterTrader) GetOrderStatus(symbol string, orderID int64) (map[string]interface{}, error) {
+	params := map[string]interface{}{
+		"symbol":  symbol,
+		"orderId": orderID,
+	}
+
+	response, err := t.request("GET", "/fapi/v1/order", params)
+	if err != nil {
+		return nil, fmt.Errorf("查询订单状态失败: %w", err)
+	}
+
+	// 解析响应
+	var order map[string]interface{}
+	if err := json.Unmarshal(response, &order); err != nil {
+		return nil, fmt.Errorf("解析订单状态响应失败: %w", err)
+	}
+
+	return order, nil
+}
+
 // FormatQuantity 格式化数量（实现Trader接口）
 func (t *AsterTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
 	formatted, err := t.formatQuantity(symbol, quantity)

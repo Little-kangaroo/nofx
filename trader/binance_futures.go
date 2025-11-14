@@ -619,6 +619,31 @@ func (t *FuturesTrader) FormatQuantity(symbol string, quantity float64) (string,
 	return fmt.Sprintf(format, quantity), nil
 }
 
+// GetOrderStatus 获取订单状态
+func (t *FuturesTrader) GetOrderStatus(symbol string, orderID int64) (map[string]interface{}, error) {
+	service := t.client.NewGetOrderService().Symbol(symbol).OrderID(orderID)
+	order, err := service.Do(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("查询订单状态失败: %w", err)
+	}
+
+	result := map[string]interface{}{
+		"orderId":     order.OrderID,
+		"symbol":      order.Symbol,
+		"status":      string(order.Status),
+		"type":        string(order.Type),
+		"side":        string(order.Side),
+		"origQty":     order.OrigQuantity,
+		"executedQty": order.ExecutedQuantity,
+		"price":       order.Price,
+		"stopPrice":   order.StopPrice,
+		"timeInForce": string(order.TimeInForce),
+		"updateTime":  order.UpdateTime,
+	}
+
+	return result, nil
+}
+
 // 辅助函数
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && stringContains(s, substr)
