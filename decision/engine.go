@@ -1162,11 +1162,19 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		// 验证仓位价值上限（加1%容差以避免浮点数精度问题）
 		tolerance := maxPositionValue * 0.01 // 1%容差
 		if d.PositionSizeUSD > maxPositionValue+tolerance {
+			// 自动调整到上限而不是拒绝执行
+			originalSize := d.PositionSizeUSD
+			d.PositionSizeUSD = maxPositionValue
+			
+			coinType := "山寨币"
+			multiple := "1.5倍"
 			if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-				return fmt.Errorf("BTC/ETH单币种仓位价值不能超过%.0f USDT（10倍账户净值），实际: %.0f", maxPositionValue, d.PositionSizeUSD)
-			} else {
-				return fmt.Errorf("山寨币单币种仓位价值不能超过%.0f USDT（1.5倍账户净值），实际: %.0f", maxPositionValue, d.PositionSizeUSD)
+				coinType = "BTC/ETH"
+				multiple = "10倍"
 			}
+			
+			log.Printf("  ⚠️ %s 仓位超限，自动调整: %.0f USDT → %.0f USDT (%s%s账户净值上限)",
+				d.Symbol, originalSize, d.PositionSizeUSD, coinType, multiple)
 		}
 		// 止损是强制的（风控必需），止盈可以为0（支持移动止盈策略）
 		if d.StopLoss <= 0 {

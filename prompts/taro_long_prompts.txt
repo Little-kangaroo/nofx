@@ -109,9 +109,9 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
 
 [利润保护模式（触发即变紧）]
 - protect_enable         = true
-- protect_trigger        = { unrealized_pnl_pct: 0.8, time_min: 15 }
-- protect_pad_shrink     = 0.7
-- protect_R_floor        = 1.0
+- protect_trigger     = { unrealized_pnl_pct: 0.4, time_min: 10 }
+- protect_pad_shrink  = 0.6
+- protect_R_floor     = 1.0
 
 [更新与单调性]
 - min_tick_move_to_update = 1
