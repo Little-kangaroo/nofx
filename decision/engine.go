@@ -1168,9 +1168,11 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 				return fmt.Errorf("山寨币单币种仓位价值不能超过%.0f USDT（1.5倍账户净值），实际: %.0f", maxPositionValue, d.PositionSizeUSD)
 			}
 		}
-		if d.StopLoss <= 0 || d.TakeProfit <= 0 {
-			return fmt.Errorf("止损和止盈必须大于0")
+		// 止损是强制的（风控必需），止盈可以为0（支持移动止盈策略）
+		if d.StopLoss <= 0 {
+			return fmt.Errorf("开仓操作必须设置止损价格，当前StopLoss: %.6f", d.StopLoss)
 		}
+		// 注意：TakeProfit允许为0，支持taro模板的移动止盈策略
 
 		// 验证止损止盈的合理性和价格方向
 		// 获取当前市价作为入场价参考
@@ -1181,67 +1183,78 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		}
 		
 		if d.Action == "open_long" {
-			// 做多：止损 < 入场价 < 止盈
+			// 做多：止损 < 入场价 < 止盈（如果设置了止盈）
 			if d.StopLoss >= currentPrice {
 				return fmt.Errorf("做多时止损价(%.2f)必须低于当前价格(%.2f)", d.StopLoss, currentPrice)
 			}
-			if d.TakeProfit <= currentPrice {
-				return fmt.Errorf("做多时止盈价(%.2f)必须高于当前价格(%.2f)", d.TakeProfit, currentPrice)
-			}
-			if d.StopLoss >= d.TakeProfit {
-				return fmt.Errorf("做多时止损价(%.2f)必须小于止盈价(%.2f)", d.StopLoss, d.TakeProfit)
+			// 只在设置了止盈时验证止盈价格
+			if d.TakeProfit > 0 {
+				if d.TakeProfit <= currentPrice {
+					return fmt.Errorf("做多时止盈价(%.2f)必须高于当前价格(%.2f)", d.TakeProfit, currentPrice)
+				}
+				if d.StopLoss >= d.TakeProfit {
+					return fmt.Errorf("做多时止损价(%.2f)必须小于止盈价(%.2f)", d.StopLoss, d.TakeProfit)
+				}
 			}
 		} else if d.Action == "open_short" {
-			// 做空：止盈 < 入场价 < 止损
-			if d.TakeProfit >= currentPrice {
-				return fmt.Errorf("做空时止盈价(%.2f)必须低于当前价格(%.2f)", d.TakeProfit, currentPrice)
-			}
+			// 做空：止盈 < 入场价 < 止损（如果设置了止盈）
 			if d.StopLoss <= currentPrice {
 				return fmt.Errorf("做空时止损价(%.2f)必须高于当前价格(%.2f)", d.StopLoss, currentPrice)
 			}
-			if d.StopLoss <= d.TakeProfit {
-				return fmt.Errorf("做空时止损价(%.2f)必须大于止盈价(%.2f)", d.StopLoss, d.TakeProfit)
+			// 只在设置了止盈时验证止盈价格
+			if d.TakeProfit > 0 {
+				if d.TakeProfit >= currentPrice {
+					return fmt.Errorf("做空时止盈价(%.2f)必须低于当前价格(%.2f)", d.TakeProfit, currentPrice)
+				}
+				if d.StopLoss <= d.TakeProfit {
+					return fmt.Errorf("做空时止损价(%.2f)必须大于止盈价(%.2f)", d.StopLoss, d.TakeProfit)
+				}
 			}
 		}
 
-		// 验证风险回报比（必须≥1:3）
-		// 使用当前市价作为入场价
-		entryPrice := currentPrice
+		// 验证风险回报比（仅在设置了止盈时验证）
+		if d.TakeProfit > 0 {
+			// 使用当前市价作为入场价
+			entryPrice := currentPrice
 
-		var riskPercent, rewardPercent, riskRewardRatio float64
-		if d.Action == "open_long" {
-			// 做多：风险 = (入场价 - 止损价) / 入场价
-			//       收益 = (止盈价 - 入场价) / 入场价
-			riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
-			rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
+			var riskPercent, rewardPercent, riskRewardRatio float64
+			if d.Action == "open_long" {
+				// 做多：风险 = (入场价 - 止损价) / 入场价
+				//       收益 = (止盈价 - 入场价) / 入场价
+				riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
+				rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
+				if riskPercent > 0 {
+					riskRewardRatio = rewardPercent / riskPercent
+				}
+			} else if d.Action == "open_short" {
+				// 做空：风险 = (止损价 - 入场价) / 入场价
+				//       收益 = (入场价 - 止盈价) / 入场价
+				riskPercent = (d.StopLoss - entryPrice) / entryPrice * 100
+				rewardPercent = (entryPrice - d.TakeProfit) / entryPrice * 100
+				if riskPercent > 0 {
+					riskRewardRatio = rewardPercent / riskPercent
+				}
 			}
-		} else if d.Action == "open_short" {
-			// 做空：风险 = (止损价 - 入场价) / 入场价
-			//       收益 = (入场价 - 止盈价) / 入场价
-			riskPercent = (d.StopLoss - entryPrice) / entryPrice * 100
-			rewardPercent = (entryPrice - d.TakeProfit) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
-			}
-		}
 
-		// 根据模板设置不同的风险回报比要求
-		var minRiskRewardRatio float64
-		if strings.Contains(strings.ToLower(templateName), "taro") {
-			// taro模板：注重技术分析和动态管理，使用更宽松的标准
-			minRiskRewardRatio = 2.0
+			// 根据模板设置不同的风险回报比要求
+			var minRiskRewardRatio float64
+			if strings.Contains(strings.ToLower(templateName), "taro") {
+				// taro模板：注重技术分析和动态管理，使用更宽松的标准
+				minRiskRewardRatio = 2.0
+			} else {
+				// adaptive等其他模板：使用严格标准
+				minRiskRewardRatio = 3.0
+			}
+			
+			// 风险回报比不足时，不报错而是改为wait并说明原因
+			if riskRewardRatio < minRiskRewardRatio {
+				d.Action = "wait"
+				d.Reasoning = fmt.Sprintf("风险回报比过低(%.2f:1)，最低要求%.1f:1，暂时观望 [风险:%.2f%% 收益:%.2f%%]",
+					riskRewardRatio, minRiskRewardRatio, riskPercent, rewardPercent)
+			}
 		} else {
-			// adaptive等其他模板：使用严格标准
-			minRiskRewardRatio = 3.0
-		}
-		
-		// 风险回报比不足时，不报错而是改为wait并说明原因
-		if riskRewardRatio < minRiskRewardRatio {
-			d.Action = "wait"
-			d.Reasoning = fmt.Sprintf("风险回报比过低(%.2f:1)，最低要求%.1f:1，暂时观望 [风险:%.2f%% 收益:%.2f%%]",
-				riskRewardRatio, minRiskRewardRatio, riskPercent, rewardPercent)
+			// 没有设置止盈时，跳过风险回报比验证，允许使用移动止盈策略
+			log.Printf("  ℹ️ %s 采用移动止盈策略，跳过风险回报比验证", d.Symbol)
 		}
 	}
 

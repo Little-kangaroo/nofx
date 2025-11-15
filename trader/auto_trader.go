@@ -691,6 +691,17 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 
 	// 计算数量
 	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
+	
+	// 🔧 Binance期货最小名义价值检查：必须≥100 USDT
+	notionalValue := quantity * marketData.CurrentPrice
+	if notionalValue < 100.0 {
+		// 调整到最小名义价值
+		quantity = 100.0 / marketData.CurrentPrice
+		adjustedNotional := quantity * marketData.CurrentPrice
+		log.Printf("  ⚠️ 调整仓位大小: %.2f USDT → %.2f USDT (满足100 USDT最小要求)", 
+			decision.PositionSizeUSD, adjustedNotional)
+		decision.PositionSizeUSD = adjustedNotional // 更新决策中的仓位大小
+	}
 	actionRecord.Quantity = quantity
 	// 暂时使用市场价格，执行后会更新为实际成交价
 	actionRecord.Price = marketData.CurrentPrice
@@ -802,6 +813,17 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 
 	// 计算数量
 	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
+	
+	// 🔧 Binance期货最小名义价值检查：必须≥100 USDT
+	notionalValue := quantity * marketData.CurrentPrice
+	if notionalValue < 100.0 {
+		// 调整到最小名义价值
+		quantity = 100.0 / marketData.CurrentPrice
+		adjustedNotional := quantity * marketData.CurrentPrice
+		log.Printf("  ⚠️ 调整仓位大小: %.2f USDT → %.2f USDT (满足100 USDT最小要求)", 
+			decision.PositionSizeUSD, adjustedNotional)
+		decision.PositionSizeUSD = adjustedNotional // 更新决策中的仓位大小
+	}
 	actionRecord.Quantity = quantity
 	// 暂时使用市场价格，执行后会更新为实际成交价
 	actionRecord.Price = marketData.CurrentPrice
