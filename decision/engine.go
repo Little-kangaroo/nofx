@@ -477,6 +477,7 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 
 	// 🎯 智能解析器选择：根据模板名优先选择对应的解析器
 	log.Printf("🔍 [调试] 检测到模板: %s，选择对应解析策略", templateName)
+	log.Printf("🔍 [调试] JSON内容前200字符: %s", jsonContent[:min(200, len(jsonContent))])
 	
 	if strings.Contains(strings.ToLower(templateName), "taro") {
 		// taro模板优先使用taro解析器
@@ -1376,10 +1377,15 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 	}
 	
 	log.Printf("🔧 [调试] 开始增强决策，检查taro字段...")
+	log.Printf("🔧 [调试] 原始JSON片段: %s", jsonContent[:min(300, len(jsonContent))])
 	
 	for i := 0; i < len(decisions); i++ {
 		rawDecision := rawDecisions[i]
 		decision := &decisions[i]
+		
+		// 调试：打印原始JSON对象的关键字段
+		log.Printf("🔧 [调试] 决策#%d 原始字段: type=%v, decision=%v, action=%v, symbol=%v, side=%v", 
+			i+1, rawDecision["type"], rawDecision["decision"], rawDecision["action"], rawDecision["symbol"], rawDecision["side"])
 		
 		// 检查并处理stop字段 -> StopLoss
 		if stopValue, exists := rawDecision["stop"]; exists && decision.StopLoss == 0 {
@@ -1404,7 +1410,44 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 			}
 		}
 		
-		// 检查并处理decision字段 -> Action字段（关键修复）
+		// 检查并处理type字段 -> Action字段（关键修复）
+		if typeValue, exists := rawDecision["type"]; exists && decision.Action == "" {
+			if typeStr, ok := typeValue.(string); ok && typeStr != "" {
+				originalAction := decision.Action
+				
+				// 处理side字段来确定具体的动作
+				convertedAction := convertTaroActionToStandard(typeStr)
+				if sideValue, sideExists := rawDecision["side"]; sideExists {
+					if sideStr, ok := sideValue.(string); ok {
+						if convertedAction == "open" {
+							if sideStr == "LONG" || sideStr == "long" {
+								convertedAction = "open_long"
+							} else if sideStr == "SHORT" || sideStr == "short" {
+								convertedAction = "open_short"
+							}
+						} else if convertedAction == "close" {
+							if sideStr == "LONG" || sideStr == "long" {
+								convertedAction = "close_long"
+							} else if sideStr == "SHORT" || sideStr == "short" {
+								convertedAction = "close_short"
+							}
+						} else if convertedAction == "reduce" {
+							if sideStr == "LONG" || sideStr == "long" {
+								convertedAction = "reduce_long"
+							} else if sideStr == "SHORT" || sideStr == "short" {
+								convertedAction = "reduce_short"
+							}
+						}
+					}
+				}
+				
+				decision.Action = convertedAction
+				log.Printf("🔧 [调试] 增强决策#%d: 发现type字段='%s' -> Action='%s' (原值:'%s')", 
+					i+1, typeStr, decision.Action, originalAction)
+			}
+		}
+		
+		// 兼容处理：也检查decision字段（向后兼容）
 		if decisionValue, exists := rawDecision["decision"]; exists && decision.Action == "" {
 			if decisionStr, ok := decisionValue.(string); ok && decisionStr != "" {
 				originalAction := decision.Action
