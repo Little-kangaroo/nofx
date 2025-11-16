@@ -107,7 +107,7 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
     * 3m: price 下破 ema20 且 macd<0 且 rsi7≤48，且近3根“更低高点”
 - microflip_cooldown_sec = 60
 
-【出场与减仓硬规则（必须遵守）】
+【出场与减仓硬规则（必须遵守）}
 1. 出场类型
    - CLOSE：平掉该 symbol 当前方向的全部持仓。
    - REDUCE：仅平掉部分持仓（例如 30%～50%），保留剩余仓位继续跟随趋势。
@@ -119,8 +119,8 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
         - 持有多单时：4h 与 1h 的趋势判断由上涨变为下跌（major_trend 明显偏向 DOWN），且 price 跌破关键 1h swing low 或 4h/1h demand zone 下沿。
         - 持有空单时：4h 与 1h 的趋势判断由下跌变为上涨（major_trend 明显偏向 UP），且 price 突破关键 1h swing high 或 4h/1h supply zone 上沿。
      2) 进入相反强供需区（大级别）
-        - 多单：price 进入 15m / 30m 以上级别上反复测试的强 supply zone 内部，且 15m / 1h RSI 明显转弱。
-        - 空单：price 进入 15m / 30m 以上级别上反复测试的强 demand zone 内部，且 15m / 1h RSI 明显转强。
+        - 多单：price 进入 15m / 30m 以上级别上反复测试的强 supply zone 内部，且 15m / 1h RSI 显示明显转弱。
+        - 空单：price 进入 15m / 30m 以上级别上反复测试的强 demand zone 内部，且 15m / 1h RSI 显示明显转强。
      3) 时间止损（行情性价比极低）
         - 持仓时间远超预期（例如超过平均持仓时间 2~3 倍），但浮盈始终不足 0.3R，且多次测试关键位无明显突破；
         - 此时继续持有占用风险预算但收益有限，应倾向于 CLOSE 释放资金。
@@ -165,7 +165,7 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
        "type": "REDUCE",
        "reduce_plan": {
          "reduce_type": "by_fraction",
-         "fraction": 0.5      // 减仓 50%，保留 50%
+         "fraction": 0.5
        },
        "stop_update": {
          "prev_stop": 45000.0,
@@ -255,7 +255,7 @@ B) 候选止损价（对称写法）
 4. spike_filter：若当前bar振幅 > 2.5*ATR(3m)，额外加 pad
 5. time_decay：每10min 收紧 3% pad（与 protect 可叠加）
 
-【R_lock 梯度锁盈规则（建议实现为函数）】
+【R_lock 梯度锁盈规则（建议实现为函数）}
 - R_lock 不是单一阈值，而是一组分级锁盈规则，建议以浮盈 R 为单位进行判断：
   1) 浮盈 ≥ 1R 时：
      - 止损至少抬到 BE_with_fees（略高于成本价，覆盖手续费 / 滑点 / 资金费率），实现“安全垫”。
@@ -288,7 +288,7 @@ D) MicroFlip 快速响应
 - SHORT：对称处理（保证 new_stop 单调下降）
 
 E) 入场挂单策略（**修订核心**）
-- 若 type = OPEN：
+- 若 type=OPEN：
   1) **STOP_ONLY_AT_ENTRY（默认）**
      - 开多：仅挂一个 reduce-only STOP（卖出止损）；init_stop = entry - R
      - 开空：仅挂一个 reduce-only STOP（买入止损）；init_stop = entry + R
@@ -303,6 +303,8 @@ E) 入场挂单策略（**修订核心**）
 F) 仓位管理与加减仓（可选）
 - 仅当 margin_usage < ceiling 且 顺应大级别趋势时才允许加仓
 - 加仓后按加权成本重算 R/BE 等；**new_stop 总是与 prev_stop 做单调比较**
+
+——————————————————————————————————————
 
 G) 基础指标视角（必须引用）
 - 你在做任何方向判断、开仓 / 加仓 / 减仓 / 平仓决策时，必须显式参考“基础指标”部分给出的多周期指标，不能只依赖单一时间框架或价格形态。
@@ -351,7 +353,7 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
 - 微结构（micro）：3m
 
 2. 单一时间框架 bias 判定（概念说明）
-对每个 tf，必须**直接基于 `多时间框架分析[tf]` 的各个子模块**来判断 tf_bias ∈ {BULL, BEAR, NEUTRAL}，禁止只看价格或基础指标自行脑补供需区/通道/趋势。至少使用如下结构信息，并在思维链中引用其关键结论：
+对每个 tf，必须直接基于 `多时间框架分析[tf]` 的各个子模块来判断 tf_bias ∈ {BULL, BEAR, NEUTRAL}，禁止只看价格或基础指标自行脑补供需区/通道/趋势。至少使用如下结构信息，并在思维链中引用其关键结论：
 
 - 道氏理论数据：
   - 若结构为连续 higher highs + higher lows，trend_strength 较高 → 倾向 BULL；
@@ -382,6 +384,11 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
 - 明确指出一个核心结构来源（如“4h 道氏空头结构 + 下降通道中上部”或“1h 强 demand zone 上沿”）；
 - 明确指出一个价格相对关键结构的位置（如“接近 4h supply 区下沿 + 15m 通道上轨 + VPVR POC 附近”）。
 这些结构性的描述必须出现在思维链与最终分析文本中，而不是只用“略偏多/略偏空”这类模糊词汇概括。
+
+
+4. 方向约束（对 B/C/E/F/G 的硬约束）
+
+对所有开仓/加仓/减仓/平仓决策，必须使用 multi_tf_bias：
 
 - 若 major_bias == BULL：
   - 默认只允许 LONG 方向开仓；SHORT 视为逆势，仅当：
@@ -425,10 +432,14 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
 - 必须明确写出 major_bias / minor_bias / micro_bias 及其主要依据（引用具体 timeframe 和关键字段，如 fib.trend_direction / supertrend.direction / supply_zones / demand_zones / FVG 等）；
 - 任何“做多 / 做空 / 观望 / 减仓 / 加仓”的建议，都要至少引用一次 `多时间框架分析` 的关键信息，避免只说“MACD/RSI 这样那样”而不提结构与时间框架。
 
-——————————————————————————————————————
+
+
 四、输出（执行端/交易机器人/回测器）
 ——————————————————————————————————————
 必须输出 JSON：
+- actions 数组中的每个对象必须包含字段 "type"，且不能为空字符串；
+  - 允许值仅为：OPEN / CLOSE / REDUCE / HOLD / WAIT / ADD；
+  - 当你认为当前 symbol 不需要任何操作时，也必须显式输出 type="HOLD" 或 type="WAIT"，而不是省略 type 或留空。
 {
   "actions": [
     {
@@ -473,7 +484,7 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
 - SHORT：assert(new_stop <= prev_stop)
 - assert(与现价距离 ≥ stop_distance_min_ticks * tick_size)
 - **entry-only 断言（新增关键）**：
-  - 若 type = OPEN 且 entry_order_policy=STOP_ONLY_AT_ENTRY：
+  - 若 type=OPEN 且 entry_order_policy=STOP_ONLY_AT_ENTRY：
     * assert(active_exit_orders == 1)           // 只允许 1 个保护性 STOP
     * assert(no_take_profit_active == true)     // TP 未激活（可有“占位”但 inactive）
   - 若 bracket_fallback=true：
