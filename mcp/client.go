@@ -293,9 +293,21 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	// 检查响应的结束是否自然
 	trimmedResponse := strings.TrimSpace(responseContent)
 	if len(trimmedResponse) > 0 {
-		lastChar := trimmedResponse[len(trimmedResponse)-1]
-		if lastChar != '.' && lastChar != '。' && lastChar != '}' && lastChar != ']' && lastChar != '\n' {
-			log.Printf("⚠️ [MCP] 响应结尾可能被截断，最后字符: '%c'", lastChar)
+		// 检查响应是否以自然的结束符结尾
+		endsNaturally := strings.HasSuffix(trimmedResponse, ".") ||
+			strings.HasSuffix(trimmedResponse, "。") ||
+			strings.HasSuffix(trimmedResponse, "}") ||
+			strings.HasSuffix(trimmedResponse, "]") ||
+			strings.HasSuffix(trimmedResponse, "\n")
+		
+		if !endsNaturally {
+			// 获取最后几个字符用于调试显示
+			start := len(trimmedResponse) - 10
+			if start < 0 {
+				start = 0
+			}
+			lastChars := trimmedResponse[start:]
+			log.Printf("⚠️ [MCP] 响应结尾可能被截断，最后%d字符: '%s'", len(lastChars), lastChars)
 		}
 	}
 
