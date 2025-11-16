@@ -83,7 +83,7 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
 
 [R 定义与初始止损]
 - R_by_ATR_TF            = "15m"
-- R_multiplier_at_entry  = 1.2          // 初始止损距离 = 1.2 * ATR(15m)
+- R_multiplier_at_entry  = 2.0          // 初始止损距离 = 2.0 * ATR(15m)
 
 [阶梯锁盈（多空对称）]
 - R_milestones           = [1.0, 1.5, 2.0, 3.0]
@@ -114,7 +114,7 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
    - 这些逻辑与保护性止损共存：止损始终存在，CLOSE / REDUCE 是在此基础上的“主动退出”。
 
 2. 强制平仓（CLOSE）场景（慢刀：中长期结构反转）
-   - 以下任一条件满足时，应优先考虑 decision="CLOSE" 而不是继续持有或加仓：
+   - 以下任一条件满足时，应优先考虑 type="CLOSE" 而不是继续持有或加仓：
      1) 方向性结构反转（基于 4h / 1h 的多时间框架分析）
         - 持有多单时：4h 与 1h 的趋势判断由上涨变为下跌（major_trend 明显偏向 DOWN），且 price 跌破关键 1h swing low 或 4h/1h demand zone 下沿。
         - 持有空单时：4h 与 1h 的趋势判断由下跌变为上涨（major_trend 明显偏向 UP），且 price 突破关键 1h swing high 或 4h/1h supply zone 上沿。
@@ -147,7 +147,7 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
           * 如 4h / 1h 同步出现趋势减弱或反转信号，则可以直接 CLOSE 全部仓位。
 
 4. 减仓（REDUCE）场景（中速锁盈）
-   - 以下场景适合使用 decision="REDUCE" 而不是直接 CLOSE：
+   - 以下场景适合使用 type="REDUCE" 而不是直接 CLOSE：
      1) 已经取得可观浮盈（例如 ≥ 2R），但出现明显的短周期反转信号（见第 3 点）：
         - 多单：15m / 3m 出现连续更低高点 + MACD 由正转负 + RSI 从超买区回落；
         - 空单：15m / 3m 出现连续更高低点 + MACD 由负转正 + RSI 从超卖区回升。
@@ -162,7 +162,7 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
      {
        "symbol": "BTCUSDT",
        "side": "LONG",
-       "decision": "REDUCE",
+       "type": "REDUCE",
        "reduce_plan": {
          "reduce_type": "by_fraction",
          "fraction": 0.5      // 减仓 50%，保留 50%
@@ -178,7 +178,7 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
      {
        "symbol": "ETHUSDT",
        "side": "SHORT",
-       "decision": "CLOSE",
+       "type": "CLOSE",
        "reduce_plan": null,
        "stop_update": {
          "prev_stop": 3200.0,
@@ -189,7 +189,7 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
      }
 
 6. 思维链要求
-   - 在输出 decision 为 CLOSE / REDUCE 之前，思维链中必须明确说明：
+   - 在输出 type 为 CLOSE / REDUCE 之前，思维链中必须明确说明：
      1) 当前 major_trend 与持仓方向的关系（顺势 / 逆势）；
      2) 价格相对 15m / 30m 供需区、VPVR、关键 swing high / low 的位置；
      3) 当前浮盈约为几 R，触发了哪一级 R_lock 或短周期结构出场条件；
@@ -198,7 +198,7 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
 
 [利润保护模式（触发即变紧）]
 - protect_enable         = true
-- protect_trigger        = { unrealized_pnl_pct: 0.8, time_min: 15 }
+- protect_trigger        = { unrealized_pnl_pct: 0.4, time_min: 10 }
 - protect_pad_shrink     = 0.7
 - protect_R_floor        = 1.0
 
@@ -271,7 +271,6 @@ B) 候选止损价（对称写法）
   - new_stop 必须单调不升高（不得把止损价再往上放宽），且始终高于当前市价。
 - 在思维链中，你需要显式写出：当前浮盈约为几 R、命中了哪一级 R_lock 阶梯、对应计算出的 new_stop 大致价位，以及为何这样设置可以兼顾“继续吃趋势”和“防止利润大幅回吐”。
 
-
 C) 聚合与单调性
 - LONG：
   s_cand = max( BE_with_fees, R_lock, micro_fast?, fast, slow, spike_filter?, time_decay? )
@@ -289,7 +288,7 @@ D) MicroFlip 快速响应
 - SHORT：对称处理（保证 new_stop 单调下降）
 
 E) 入场挂单策略（**修订核心**）
-- 若 decision=OPEN：
+- 若 type = OPEN：
   1) **STOP_ONLY_AT_ENTRY（默认）**
      - 开多：仅挂一个 reduce-only STOP（卖出止损）；init_stop = entry - R
      - 开空：仅挂一个 reduce-only STOP（买入止损）；init_stop = entry + R
@@ -305,6 +304,131 @@ F) 仓位管理与加减仓（可选）
 - 仅当 margin_usage < ceiling 且 顺应大级别趋势时才允许加仓
 - 加仓后按加权成本重算 R/BE 等；**new_stop 总是与 prev_stop 做单调比较**
 
+G) 基础指标视角（必须引用）
+- 你在做任何方向判断、开仓 / 加仓 / 减仓 / 平仓决策时，必须显式参考“基础指标”部分给出的多周期指标，不能只依赖单一时间框架或价格形态。
+- 基础指标按周期的主要用途：
+  1) 4h / 1h：用于判断中长期趋势与强弱结构
+     - 使用字段：ema20 / ema50 / ema100 / ema200、ema50_slope_3、ema200_slope_3、macd、rsi14、价格变化（1h_change_pct, 4h_change_pct 等）。
+     - 典型强多头结构：price > ema20 > ema50 > ema100 > ema200 且 macd > 0 且 rsi14 > 55。
+     - 典型强空头结构：price < ema20 < ema50 < ema100 < ema200 且 macd < 0 且 rsi14 < 45。
+     - 若 4h / 1h 显示强空头结构，而你考虑做多，则该多单只能视为“逆势短线”，必须使用更紧的止损与更保守的仓位；做空同理。
+  2) 30m / 15m：用于判断中短期动能与回调深度
+     - 使用字段：ema20 / ema50 / ema100、macd、rsi14。
+     - 做多时优先选择 price 回踩或略下穿 ema20/ema50、rsi14 从 35~45 区间拐头向上、macd 柱由负转正或负值收窄的区域；
+     - 做空时优先选择 price 反弹至 ema20/ema50 附近、rsi14 从 55~65 区间拐头向下、macd 柱由正转负或正值收窄的区域。
+  3) 3m（micro）：用于执行级别的精细时机控制
+     - 使用字段：ema20 / ema50 / ema200、macd、rsi7。
+     - 做多：3m 出现 ema20 上穿 ema50、macd 由负转正、rsi7 自 <40 上穿 50；
+     - 做空：3m 出现 ema20 下穿 ema50、macd 由正转负、rsi7 自 >60 下穿 50。
+- RSI 统一分档（所有周期）：
+  * rsi < 30：超卖区（短期极弱）；
+  * 30 ≤ rsi < 45：偏弱；
+  * 45 ≤ rsi ≤ 55：中性；
+  * 55 < rsi ≤ 70：偏强；
+  * rsi > 70：超买区（短期极强）。
+- 基础指标参与的硬性限制示例：
+  1) 追涨 / 追跌限制
+     - 做多时：若 15m / 3m RSI > 75 且 price 明显高于 ema20 / ema50，则禁止在此位置加仓或新开大仓位多单，仅允许考虑减仓或等待回调；
+     - 做空时：若 15m / 3m RSI < 25 且 price 明显低于 ema20 / ema50，则禁止在此位置加仓或新开大仓位空单，仅允许考虑减仓或等待反弹。
+  2) 逆势仓位限制
+     - 若 4h / 1h 基础指标呈现强多头结构，而你选择做空，则该空单必须在思维链和 notes 中标注为“逆势短线”，并使用更小的 R（风险）与更紧的止损；
+     - 若 4h / 1h 基础指标呈现强空头结构，而你选择做多，同理。
+- 在思维链与最终分析文本中，你必须至少引用：
+  1) 一个中长期周期（4h 或 1h）的基础指标结论（例如“4h ema 空头排列 + macd 深度为负 + rsi14≈37，显示中期偏空结构”）；
+  2) 一个中短期周期（30m 或 15m）的动能判断（例如“15m rsi14≈58、macd 稍有放缓，说明短期仍偏多但动能边际减弱”）；
+  3) 一个 micro 周期（3m）的入场时机说明（例如“3m macd 刚由负转正、rsi7 自 40 上穿 50，适合作为顺势入场的触发条件”）。
+- 禁止只提到“MACD 有点弱、RSI 有点高”这类模糊描述而不给出具体周期、数值区间与交易含义。基础指标的分析必须与多时间框架结构（供需 / VPVR / FVG / 斐波）结合使用，用来强化或否决某个方向的交易想法。
+
+H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用）
+
+0. 适用范围（强制约束）
+- 所有涉及「趋势判断、方向选择、过滤噪音、保护盈利/止损」的步骤，都必须先参考 `多时间框架分析`，不能只看基础指标。
+- 若某个 symbol 缺少 `多时间框架分析` 字段，应当降低该标的优先级，或在解释中明确标注“多时间框架数据缺失”。
+
+1. 时间框架分组
+- 大级别（major）：4h、1h
+- 中级别（minor）：30m、15m
+- 微结构（micro）：3m
+
+2. 单一时间框架 bias 判定（概念说明）
+对每个 tf，基于 `多时间框架分析[tf]` 得到 tf_bias ∈ {BULL, BEAR, NEUTRAL}，至少使用如下信息：
+
+- 斐波纳契数据（fib）：
+  - trend_direction == "upward"   → 倾向 BULL
+  - trend_direction == "downward" → 倾向 BEAR
+- 道氏理论数据（dow）：
+  - 结合 supertrend.direction + trend_direction + trend_strength：
+    - 若 supertrend.direction == "bullish" 且 trend_direction ∈ {"up","flat"} 且 trend_strength 较高 → BULL
+    - 若 supertrend.direction == "bearish" 或 trend_direction == "down" 且 trend_strength 较高 → BEAR
+- 通道数据（channel）：
+  - channel_direction == "up" 且 current_position 接近下轨 → 顺势 BULL
+  - channel_direction == "down" 且 current_position 接近上轨 → 顺势 BEAR
+- VPVR + 供需区：
+  - 价格接近强 demand_zones（高 strength、touches 多）下沿 → 多方防守区，偏 BULL
+  - 价格接近强 supply_zones 上沿 → 空方防守区，偏 BEAR
+- FVG（缺口）：
+  - 若 active_gaps > 0 且 gap_type 与整体趋势方向一致，可视作趋势延续的“磁铁”区域；
+  - 若 active_gaps 与趋势方向相反，则提示短期反向补缺风险。
+
+若上述信号没有形成明显方向共识（多空权重接近、趋势很弱），该 tf_bias 记为 NEUTRAL，并在解释中说明“不具备明显方向”。
+
+3. 多时间框架合成 bias（multi_tf_bias）
+把 BULL 记为 +1，BEAR 记为 -1，NEUTRAL 记为 0，概念上计算：
+
+- major_bias  = sign( 3 * bias_4h + 2 * bias_1h )
+- minor_bias  = sign( 2 * bias_30m + 1 * bias_15m )
+- micro_bias  = bias_3m
+
+说明：
+- 某个 timeframe 缺失则跳过该项，但在文字说明中要写明“该 timeframe 数据缺失”；
+- sign(x) > 0 视为 BULL，sign(x) < 0 视为 BEAR，sign(x) == 0 视为 NEUTRAL。
+
+4. 方向约束（对 B/C/E/F/G 的硬约束）
+
+对所有开仓/加仓/减仓/平仓决策，必须使用 multi_tf_bias：
+
+- 若 major_bias == BULL：
+  - 默认只允许 LONG 方向开仓；SHORT 视为逆势，仅当：
+    - 存在多级别 supply 区强压制 + 道氏强空信号 + 价格处于上方极端位置
+    - 且有较小仓位、较紧止损保护
+    才可以考虑短线逆势。
+- 若 major_bias == BEAR：
+  - 默认只允许 SHORT 方向开仓；LONG 为逆势，仅在有强烈反转结构（如趋势极端衰竭 + 强 demand 区 + 多 timeframe 一致反转信号）时才小仓位尝试。
+- 若 major_bias == NEUTRAL：
+  - 视为震荡或无共识区间：
+    - 适当缩小仓位（如折半 risk_per_trade_pct）；
+    - 更依赖 minor_bias 与 micro_bias 做区间交易或直接观望；
+    - 避免在剧烈震荡但无方向的区域重仓。
+
+此外：
+- C) 进场信号必须显式对齐 multi_tf_bias：
+  - 若进场方向与 major_bias 相反 → 必须在理由中写出“逆势”，并说明补偿机制：小仓位、更紧止损、不加仓、更保守的盈亏比要求等；
+- B/E/F/G 中，凡涉及“顺势/逆势”“趋势减弱/反转”的地方，都要优先通过 multi_tf_bias 判定，而不是只看单一 timeframe 或单一指标。
+
+5. 保护盈利与风控联动（与 G) protect 的整合）
+
+- 当仓位处于盈利状态且：
+  - major_bias 仍与持仓方向同向，但 minor_bias 或 micro_bias 出现持续反向（例如连续几个 bar 中 tf_bias 由 +1 变为 -1）：
+    - 触发更保守的保护策略：
+      - 提高 protect 的触发优先级；
+      - 缩小止损缓冲（等价于更紧的移动止损），优先锁定已有利润；
+  - major_bias 由跟随持仓方向 → 反向：
+    - 视为趋势级别的潜在反转：
+      - 若已经锁盈（R_lock > 0），可在说明中给出“考虑部分或全部止盈离场”的建议；
+      - 或者将止损进一步推到更高档位（提高锁盈比例）。
+
+- 当仓位浮亏且 major_bias 与持仓方向相反：
+  - 禁止“补仓摊薄成本”；
+  - 倾向严格执行事先约定的 R 止损，不拖延；
+  - 在说明中直接强调“当前仓位逆大级别趋势，宜遵守纪律离场”。
+
+6. 输出说明中的引用要求
+
+在最终 JSON 的说明字段中：
+
+- 必须明确写出 major_bias / minor_bias / micro_bias 及其主要依据（引用具体 timeframe 和关键字段，如 fib.trend_direction / supertrend.direction / supply_zones / demand_zones / FVG 等）；
+- 任何“做多 / 做空 / 观望 / 减仓 / 加仓”的建议，都要至少引用一次 `多时间框架分析` 的关键信息，避免只说“MACD/RSI 这样那样”而不提结构与时间框架。
+
 ——————————————————————————————————————
 四、输出（执行端/交易机器人/回测器）
 ——————————————————————————————————————
@@ -314,7 +438,7 @@ F) 仓位管理与加减仓（可选）
     {
       "symbol": "BTCUSDT",
       "side": "SHORT",
-      "decision": "OPEN|HOLD|CLOSE|REDUCE|ADD",
+      "type":  "OPEN|HOLD|CLOSE|REDUCE|ADD",
       "entry_plan": {
         "price": 95172.7,
         "qty": 0.02,
@@ -353,7 +477,7 @@ F) 仓位管理与加减仓（可选）
 - SHORT：assert(new_stop <= prev_stop)
 - assert(与现价距离 ≥ stop_distance_min_ticks * tick_size)
 - **entry-only 断言（新增关键）**：
-  - 若 decision=OPEN 且 entry_order_policy=STOP_ONLY_AT_ENTRY：
+  - 若 type = OPEN 且 entry_order_policy=STOP_ONLY_AT_ENTRY：
     * assert(active_exit_orders == 1)           // 只允许 1 个保护性 STOP
     * assert(no_take_profit_active == true)     // TP 未激活（可有“占位”但 inactive）
   - 若 bracket_fallback=true：

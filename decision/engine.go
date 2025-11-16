@@ -546,7 +546,8 @@ func parseTaroFormatDecisions(jsonContent string) ([]Decision, error) {
 			Notes    string `json:"notes"`
 		} `json:"analysis"`
 		Actions []struct {
-			Type         string  `json:"type"`          // "open|hold|reduce|close|update_stop"
+			Type         string  `json:"type"`          // "open|hold|reduce|close|update_stop" - 旧格式
+			Decision     string  `json:"decision"`      // "OPEN|HOLD|CLOSE|REDUCE" - taro模板v1.9.2新格式
 			Side         string  `json:"side"`          // "LONG|SHORT"
 			Qty          interface{} `json:"qty"`       // "number or percent for reduce" - 可能是字符串或数字
 			Entry        interface{} `json:"entry"`     // "if open" - 可能是字符串或数字
@@ -572,9 +573,17 @@ func parseTaroFormatDecisions(jsonContent string) ([]Decision, error) {
 	// 转换为标准Decision格式
 	var decisions []Decision
 	for _, action := range taroResponse.Actions {
+		// 优先使用decision字段，如果没有则使用type字段（向后兼容）
+		actionType := action.Decision
+		if actionType == "" {
+			actionType = action.Type
+		}
+		
+		log.Printf("🔍 [调试] taro解析: decision='%s', type='%s', 使用='%s'", action.Decision, action.Type, actionType)
+		
 		decision := Decision{
 			Symbol:    symbol,
-			Action:    convertTaroActionToStandard(action.Type),
+			Action:    convertTaroActionToStandard(actionType),
 			Reasoning: action.Reason,
 		}
 
@@ -666,9 +675,10 @@ func parseTaroFormatDecisions(jsonContent string) ([]Decision, error) {
 	return decisions, nil
 }
 
-// convertTaroActionToStandard 转换taro动作名称为标准格式
+// convertTaroActionToStandard 转换taro动作名称为标准格式（支持大小写）
 func convertTaroActionToStandard(taroAction string) string {
 	switch taroAction {
+	// 小写格式（旧版本）
 	case "open":
 		return "open" // 需要结合side字段确定方向
 	case "hold":
@@ -679,6 +689,17 @@ func convertTaroActionToStandard(taroAction string) string {
 		return "close" // 需要结合side字段确定方向
 	case "update_stop":
 		return "update_stop"
+	// 大写格式（taro模板v1.9.2）
+	case "OPEN":
+		return "open"
+	case "HOLD":
+		return "hold"
+	case "REDUCE":
+		return "reduce"
+	case "CLOSE":
+		return "close"
+	case "WAIT":
+		return "wait"
 	default:
 		return "wait" // 未知动作默认为wait
 	}
@@ -1380,6 +1401,16 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 				decision.StopLoss = stopPrice
 				log.Printf("🔧 [调试] 增强决策#%d: 发现stop字段=%.6f，设置StopLoss=%.6f", 
 					i+1, stopValue, stopPrice)
+			}
+		}
+		
+		// 检查并处理decision字段 -> Action字段（关键修复）
+		if decisionValue, exists := rawDecision["decision"]; exists && decision.Action == "" {
+			if decisionStr, ok := decisionValue.(string); ok && decisionStr != "" {
+				originalAction := decision.Action
+				decision.Action = convertTaroActionToStandard(decisionStr)
+				log.Printf("🔧 [调试] 增强决策#%d: 发现decision字段='%s' -> Action='%s' (原值:'%s')", 
+					i+1, decisionStr, decision.Action, originalAction)
 			}
 		}
 		
