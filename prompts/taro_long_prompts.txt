@@ -248,6 +248,31 @@ A) 仓位 sizing（基于R的风险等额）
 - 数量 qty = 合约名义 / entry_price（按 lot_size 向下取整）
 - 杠杆建议 = min(leverage_default 或自适应值, max_leverage)
 
+- 杠杆 & 名义自适应（必须遵守）:
+  1) 先按上面的公式得到基于 R 的理论合约名义 notional_R = 单笔风险资金 / R。
+  2) 设：
+     - notional_min = 100（交易所最小名义约束）；
+     - notional_max_margin = equity * margin_usage_ceiling * max_leverage（在不超过最大杠杆与保证金占用上限的前提下，理论可承受的最大名义）。
+  3) 名义调整：
+     - 若 notional_R < notional_min：
+       - 若 notional_min > notional_max_margin：说明资金体量太小，既无法满足最小名义，也无法在可接受的保证金占用下开仓 → 本次 symbol 直接放弃交易（对该 symbol 输出 type="HOLD" 或 "WAIT"，并在 notes 中说明“equity 太小，无法满足最小名义要求”）；
+       - 否则，将目标合约名义提升到 notional_min。
+     - 若 notional_R > notional_max_margin：
+       - 将目标合约名义压缩到 notional_max_margin。
+     - 最终合约名义 notional_final = clamp(notional_R, notional_min, notional_max_margin)，并据此重新计算数量：qty = notional_final / entry_price（按 lot_size 向下取整）。
+  4) 杠杆自适应：
+     - 初始候选杠杆 leverage_target = leverage_default；
+     - 为满足保证金占用上限 margin_usage_ceiling，需要的最低杠杆约为：
+       leverage_required = notional_final / (equity * margin_usage_ceiling)；
+     - 自适应杠杆取值：leverage_adaptive = clamp(ceil(leverage_required), 1, max_leverage)；
+     - 最终输出给交易系统的 leverage = leverage_adaptive；
+     - 若在 notional_final ≥ notional_min 的前提下，leverage_required 仍然 > max_leverage，说明资金不足以在当前风险参数下安全开仓 → 应放弃该笔交易（对该 symbol 输出 type="HOLD" 或 "WAIT"）。
+  5) 在思维链中，必须写清：
+     - 当前 equity、risk_per_trade_pct、R、notional_R、notional_final；
+     - 自适应杠杆 leverage_adaptive 的大致计算逻辑（可用近似数字，不要求精确小数）；
+     - 保证本次开仓在“不违反最小名义约束”和“不超过保证金占用上限”的前提下进行。
+
+
 B) 候选止损价（对称写法）
 1. BE_with_fees：将手续费/滑点/资金费率换算为价差，并基于方向加减到 entry
 2. R_lock：浮盈≥kR 后，对应锁盈价（LONG 向上、SHORT 向下）
@@ -440,38 +465,47 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
 - actions 数组中的每个对象必须包含字段 "type"，且不能为空字符串；
   - 允许值仅为：OPEN / CLOSE / REDUCE / HOLD / WAIT / ADD；
   - 当你认为当前 symbol 不需要任何操作时，也必须显式输出 type="HOLD" 或 type="WAIT"，而不是省略 type 或留空。
+- 对于任意包含 entry_plan 的动作（通常是 type="OPEN"），entry_plan.leverage 必须是 1 到 max_leverage 之间的整数，禁止为 0 或留空；
+  - 当你希望使用默认杠杆时，也要显式给出一个 1~max_leverage 的整数（例如 3、5 或 10），而不是写 0。
 {
   "actions": [
     {
-      "symbol": "BTCUSDT",
-      "side": "SHORT",
-      "type":  "OPEN|HOLD|CLOSE|REDUCE|ADD",
-      "entry_plan": {
+      "symbol": "BTCUSDT",                // symbol 必填，例如 "BTCUSDT"
+      "type": "OPEN",                     // 必填: 只能是 "OPEN" / "CLOSE" / "REDUCE" / "HOLD" / "WAIT"
+      "side": "SHORT",                    // 当 type 为 OPEN/CLOSE/REDUCE 时必填: "LONG" / "SHORT"
+      "confidence": 82,                   // 0-100 之间的整数，可选
+      "reason": "简短说明当前决策的主要依据，可选",
+
+      "entry_plan": {                     // 仅在 type="OPEN" 时必须存在，其它类型可为 null 或省略
         "price": 95172.7,
         "qty": 0.02,
-        "leverage": 3,
-        "init_stop": 97000.0,
-        "take_profit": null,               // 关键：默认 null
-        "entry_order_policy": "STOP_ONLY_AT_ENTRY"
+        "leverage": 3,                    // 必须在 1..max_leverage 之间，禁止为 0
+        "init_stop": 97000.0,             // 初始止损价，多单 < entry，空单 > entry
+        "take_profit": null,              // 初始不挂 TP → null，有需要时再补挂
+        "entry_order_policy": "STOP_ONLY_AT_ENTRY"   // "STOP_ONLY_AT_ENTRY" / "MARKET" / "LIMIT"
       },
-      "stop_update": {
-        "prev_stop": 97000.0,
+
+      "reduce_plan": null,                // 仅当 type="REDUCE" 时使用，描述按比例或目标数量减仓方案
+
+      "stop_update": {                    // 可选：用于设置或更新止损（包括追踪止损）
+        "prev_stop": 97000.0,             // 之前的止损价格，若为首次设置可为 null
         "new_stop": 96480.0,
         "reason": "rail_fast|R_lock|protect|microflip_fast|spike_filter|time_decay"
       },
-      "order_flags": {                     // 新增：与执行端对齐
+
+      "order_flags": {                    // 执行相关标志位，可选
         "reduce_only": true,
         "close_on_trigger": true,
-        "trigger_type": "MARK_PRICE",
-        "oco_group": null,                 // 若启用 BRACKET_FALLBACK，则为某个 group_id
+        "trigger_type": "MARK_PRICE",     // "MARK_PRICE" / "LAST_PRICE"
+        "oco_group": null,                // 若启用 BRACKET_FALLBACK，则为某个 group_id
         "tp_activation": { "armed": false, "rule": "R>=1.5 or protect" }
       },
-      "r_multiple_locked": 1.0,
-      "notes": "记录候选/取整/断言结果（可选）"
+
+      "r_multiple_locked": 1.0,           // 当前通过 R_lock 或保护模式已锁定的 R 数量（可选）
+      "notes": "记录候选/取整/断言结果（可选，给人类看的说明）"
     }
   ]
 }
-
 【例子解释】
 - 对于你提到的“开空价 95,172.70，立刻出现 <=91,000 与 >=97,000 两个平仓挂单”的现象：
   - 本修订默认 **entry_order_policy=STOP_ONLY_AT_ENTRY**，故只应存在 **>=97,000 的单一 STOP**；
