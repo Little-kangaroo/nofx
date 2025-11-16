@@ -1362,7 +1362,7 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	return nil
 }
 
-// enhanceDecisionsWithTaroFields 增强决策解析，处理taro字段名（如stop字段）
+// enhanceDecisionsWithTaroFields 增强决策解析，处理taro字段名（如stop字段）和嵌套字段
 func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []Decision {
 	// 解析原始JSON以获取taro格式字段
 	var rawDecisions []map[string]interface{}
@@ -1387,7 +1387,107 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 		log.Printf("🔧 [调试] 决策#%d 原始字段: type=%v, decision=%v, action=%v, symbol=%v, side=%v", 
 			i+1, rawDecision["type"], rawDecision["decision"], rawDecision["action"], rawDecision["symbol"], rawDecision["side"])
 		
-		// 检查并处理stop字段 -> StopLoss
+		// 🔧 【新增】检查并处理entry_plan嵌套对象
+		if entryPlan, exists := rawDecision["entry_plan"]; exists {
+			if entryPlanMap, ok := entryPlan.(map[string]interface{}); ok {
+				log.Printf("🔧 [调试] 发现entry_plan嵌套对象: %v", entryPlanMap)
+				
+				// 提取leverage（关键修复）
+				if leverageValue, leverageExists := entryPlanMap["leverage"]; leverageExists && decision.Leverage == 0 {
+					var leverage int
+					switch v := leverageValue.(type) {
+					case float64:
+						leverage = int(v)
+					case int:
+						leverage = v
+					case string:
+						if parsed, err := strconv.Atoi(v); err == nil {
+							leverage = parsed
+						}
+					}
+					if leverage > 0 {
+						decision.Leverage = leverage
+						log.Printf("🔧 [调试] 增强决策#%d: 从entry_plan提取leverage=%d", i+1, leverage)
+					}
+				}
+				
+				// 提取position_size_usd
+				if qtyValue, qtyExists := entryPlanMap["qty"]; qtyExists && decision.PositionSizeUSD == 0 {
+					var qty float64
+					switch v := qtyValue.(type) {
+					case float64:
+						qty = v
+					case int:
+						qty = float64(v)
+					case string:
+						if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+							qty = parsed
+						}
+					}
+					// 如果有price字段，计算position_size_usd
+					if priceValue, priceExists := entryPlanMap["price"]; priceExists && qty > 0 {
+						var price float64
+						switch p := priceValue.(type) {
+						case float64:
+							price = p
+						case int:
+							price = float64(p)
+						case string:
+							if parsed, err := strconv.ParseFloat(p, 64); err == nil {
+								price = parsed
+							}
+						}
+						if price > 0 {
+							decision.PositionSizeUSD = qty * price
+							log.Printf("🔧 [调试] 增强决策#%d: 计算position_size_usd = qty(%.6f) × price(%.2f) = %.2f", 
+								i+1, qty, price, decision.PositionSizeUSD)
+						}
+					}
+				}
+				
+				// 提取init_stop -> StopLoss
+				if stopValue, stopExists := entryPlanMap["init_stop"]; stopExists && decision.StopLoss == 0 {
+					var stopPrice float64
+					switch v := stopValue.(type) {
+					case float64:
+						stopPrice = v
+					case int:
+						stopPrice = float64(v)
+					case string:
+						if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+							stopPrice = parsed
+						}
+					}
+					if stopPrice > 0 {
+						decision.StopLoss = stopPrice
+						log.Printf("🔧 [调试] 增强决策#%d: 从entry_plan提取init_stop=%.6f -> StopLoss", i+1, stopPrice)
+					}
+				}
+				
+				// 提取take_profit
+				if tpValue, tpExists := entryPlanMap["take_profit"]; tpExists && decision.TakeProfit == 0 {
+					var tpPrice float64
+					switch v := tpValue.(type) {
+					case float64:
+						tpPrice = v
+					case int:
+						tpPrice = float64(v)
+					case string:
+						if v != "" && v != "null" {
+							if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+								tpPrice = parsed
+							}
+						}
+					}
+					if tpPrice > 0 {
+						decision.TakeProfit = tpPrice
+						log.Printf("🔧 [调试] 增强决策#%d: 从entry_plan提取take_profit=%.6f", i+1, tpPrice)
+					}
+				}
+			}
+		}
+		
+		// 检查并处理stop字段 -> StopLoss（向后兼容）
 		if stopValue, exists := rawDecision["stop"]; exists && decision.StopLoss == 0 {
 			var stopPrice float64
 			switch v := stopValue.(type) {
@@ -1457,7 +1557,7 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 			}
 		}
 		
-		// 检查并处理take_profit字段的其他格式
+		// 检查并处理take_profit字段的其他格式（向后兼容）
 		if tpValue, exists := rawDecision["take_profit"]; exists && decision.TakeProfit == 0 {
 			var tpPrice float64
 			switch v := tpValue.(type) {
