@@ -139,7 +139,7 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 	}
 
 	// 5. 解析AI响应
-	decision, err := parseFullDecisionResponse(aiResponse, ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, templateName)
+	decision, err := parseFullDecisionResponseWithContext(aiResponse, ctx, templateName)
 	if err != nil {
 		return decision, fmt.Errorf("解析AI响应失败: %w", err)
 	}
@@ -421,7 +421,35 @@ func buildUserPrompt(ctx *Context) string {
 	return sb.String()
 }
 
-// parseFullDecisionResponse 解析AI的完整决策响应
+// parseFullDecisionResponseWithContext 解析AI的完整决策响应（包含持仓上下文）
+func parseFullDecisionResponseWithContext(aiResponse string, ctx *Context, templateName string) (*FullDecision, error) {
+	// 1. 提取思维链
+	cotTrace := extractCoTTrace(aiResponse)
+
+	// 2. 提取JSON决策列表
+	decisions, err := extractDecisionsWithContext(aiResponse, ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, templateName)
+	if err != nil {
+		return &FullDecision{
+			CoTTrace:  cotTrace,
+			Decisions: []Decision{},
+		}, fmt.Errorf("提取决策失败: %w", err)
+	}
+
+	// 3. 验证决策（包含持仓上下文的HOLD vs WAIT语义验证）
+	if err := validateDecisionsWithContext(decisions, ctx, templateName); err != nil {
+		return &FullDecision{
+			CoTTrace:  cotTrace,
+			Decisions: decisions,
+		}, fmt.Errorf("决策验证失败: %w", err)
+	}
+
+	return &FullDecision{
+		CoTTrace:  cotTrace,
+		Decisions: decisions,
+	}, nil
+}
+
+// parseFullDecisionResponse 解析AI的完整决策响应（原版，保持兼容性）
 func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int, templateName string) (*FullDecision, error) {
 	// 1. 提取思维链
 	cotTrace := extractCoTTrace(aiResponse)
@@ -435,7 +463,7 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 		}, fmt.Errorf("提取决策失败: %w", err)
 	}
 
-	// 3. 验证决策
+	// 3. 验证决策（不包含持仓上下文）
 	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage, templateName); err != nil {
 		return &FullDecision{
 			CoTTrace:  cotTrace,
@@ -1133,6 +1161,16 @@ func fixMissingQuotes(jsonStr string) string {
 	return jsonStr
 }
 
+// validateDecisionsWithContext 验证所有决策（包含持仓上下文）
+func validateDecisionsWithContext(decisions []Decision, ctx *Context, templateName string) error {
+	for i, decision := range decisions {
+		if err := validateDecisionWithContext(&decision, ctx, templateName); err != nil {
+			return fmt.Errorf("决策 #%d 验证失败: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
 // validateDecisions 验证所有决策（需要账户信息和杠杆配置）
 func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, templateName string) error {
 	for i, decision := range decisions {
@@ -1163,6 +1201,58 @@ func findMatchingBracket(s string, start int) int {
 	}
 
 	return -1
+}
+
+// validateDecisionWithContext 验证单个决策的有效性（包含持仓上下文的HOLD vs WAIT语义验证）
+func validateDecisionWithContext(d *Decision, ctx *Context, templateName string) error {
+	// 首先使用原版验证进行基础验证
+	if err := validateDecision(d, ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, templateName); err != nil {
+		return err
+	}
+
+	// 额外的HOLD vs WAIT语义验证
+	if templateName == "taro_long_prompts" {
+		// 对于taro模板，验证HOLD vs WAIT的语义正确性
+		if err := validateHoldWaitSemantics(d, ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateHoldWaitSemantics 验证HOLD vs WAIT动作的语义正确性
+func validateHoldWaitSemantics(d *Decision, ctx *Context) error {
+	// 检查该标的是否有持仓
+	hasPosition := false
+	var existingPosition *PositionInfo
+	
+	for i := range ctx.Positions {
+		if ctx.Positions[i].Symbol == d.Symbol {
+			hasPosition = true
+			existingPosition = &ctx.Positions[i]
+			break
+		}
+	}
+
+	action := strings.ToLower(d.Action)
+
+	// HOLD vs WAIT语义验证
+	if action == "hold" {
+		if !hasPosition {
+			return fmt.Errorf("语义错误: 标的 %s 当前没有持仓，应使用 WAIT 而不是 HOLD", d.Symbol)
+		}
+		log.Printf("✅ [HOLD语义验证] %s 有持仓(%s %.6f)，使用HOLD正确", 
+			d.Symbol, existingPosition.Side, existingPosition.Quantity)
+	} else if action == "wait" {
+		if hasPosition {
+			return fmt.Errorf("语义错误: 标的 %s 当前有持仓(%s %.6f)，应使用 HOLD 而不是 WAIT", 
+				d.Symbol, existingPosition.Side, existingPosition.Quantity)
+		}
+		log.Printf("✅ [WAIT语义验证] %s 无持仓，使用WAIT正确", d.Symbol)
+	}
+
+	return nil
 }
 
 // validateDecision 验证单个决策的有效性
