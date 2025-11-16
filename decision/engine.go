@@ -113,7 +113,32 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 		return nil, fmt.Errorf("调用AI API失败: %w", err)
 	}
 
-	// 4. 解析AI响应
+	// 4. 记录AI原始响应（用于调试）
+	log.Printf("🤖 [AI响应] 原始响应长度: %d 字符", len(aiResponse))
+	log.Printf("🤖 [AI响应] 前500字符: %s", aiResponse[:min(500, len(aiResponse))])
+	if len(aiResponse) > 1000 {
+		log.Printf("🤖 [AI响应] 后500字符: %s", aiResponse[len(aiResponse)-500:])
+	}
+	
+	// 检查响应是否可能被截断
+	if len(aiResponse) >= 3800 { // 接近4096 token限制
+		log.Printf("⚠️ [AI响应] 响应长度接近token限制，可能被截断！")
+	}
+	
+	// 检查JSON完整性
+	jsonStart := strings.Index(aiResponse, "[")
+	if jsonStart > 0 {
+		jsonEnd := strings.LastIndex(aiResponse, "]")
+		if jsonEnd == -1 {
+			log.Printf("⚠️ [AI响应] 发现思维链但JSON数组不完整，可能被截断！")
+		} else {
+			log.Printf("✅ [AI响应] 检测到完整的思维链和JSON结构")
+		}
+	} else {
+		log.Printf("⚠️ [AI响应] 未找到JSON数组标记，响应可能被截断或格式异常")
+	}
+
+	// 5. 解析AI响应
 	decision, err := parseFullDecisionResponse(aiResponse, ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, templateName)
 	if err != nil {
 		return decision, fmt.Errorf("解析AI响应失败: %w", err)
@@ -426,16 +451,38 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 
 // extractCoTTrace 提取思维链分析
 func extractCoTTrace(response string) string {
+	// 记录思维链提取过程
+	log.Printf("🧠 [CoT提取] 开始提取思维链，响应长度: %d", len(response))
+	
 	// 查找JSON数组的开始位置
 	jsonStart := strings.Index(response, "[")
 
 	if jsonStart > 0 {
 		// 思维链是JSON数组之前的内容
-		return strings.TrimSpace(response[:jsonStart])
+		cotTrace := strings.TrimSpace(response[:jsonStart])
+		log.Printf("🧠 [CoT提取] 提取到思维链，长度: %d 字符", len(cotTrace))
+		
+		// 检查思维链是否被截断（末尾没有明确的结束标志）
+		if !strings.HasSuffix(cotTrace, "。") && !strings.HasSuffix(cotTrace, ".") && 
+		   !strings.HasSuffix(cotTrace, "```") && !strings.HasSuffix(cotTrace, "\n") &&
+		   len(cotTrace) > 100 { // 避免短文本误判
+			log.Printf("⚠️ [CoT提取] 思维链可能被截断，末尾没有结束标志")
+		}
+		
+		return cotTrace
 	}
 
-	// 如果找不到JSON，整个响应都是思维链
-	return strings.TrimSpace(response)
+	// 如果找不到JSON，检查是否是纯思维链或响应被截断
+	trimmedResponse := strings.TrimSpace(response)
+	log.Printf("🧠 [CoT提取] 未找到JSON，将整个响应作为思维链，长度: %d 字符", len(trimmedResponse))
+	
+	// 检查是否可能是截断的响应
+	if len(trimmedResponse) >= 3800 && !strings.Contains(trimmedResponse, "```json") && 
+	   !strings.Contains(trimmedResponse, "[") {
+		log.Printf("⚠️ [CoT提取] 响应可能被截断，未找到JSON结构")
+	}
+	
+	return trimmedResponse
 }
 
 

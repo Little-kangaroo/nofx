@@ -398,21 +398,21 @@ func (at *AutoTrader) runCycle() error {
 	// log.Printf(strings.Repeat("=", 70) + "\n")
 
 	// 6. 打印AI思维链
-	// log.Printf("\n" + strings.Repeat("-", 70))
-	// log.Println("💭 AI思维链分析:")
-	// log.Println(strings.Repeat("-", 70))
-	// log.Println(decision.CoTTrace)
-	// log.Printf(strings.Repeat("-", 70) + "\n")
+	log.Printf("\n" + strings.Repeat("-", 70))
+	log.Println("💭 AI思维链分析:")
+	log.Println(strings.Repeat("-", 70))
+	log.Println(decision.CoTTrace)
+	log.Printf(strings.Repeat("-", 70) + "\n")
 
 	// 7. 打印AI决策
-	// log.Printf("📋 AI决策列表 (%d 个):\n", len(decision.Decisions))
-	// for i, d := range decision.Decisions {
-	// 	log.Printf("  [%d] %s: %s - %s", i+1, d.Symbol, d.Action, d.Reasoning)
-	// 	if d.Action == "open_long" || d.Action == "open_short" {
-	// 		log.Printf("      杠杆: %dx | 仓位: %.2f USDT | 止损: %.4f | 止盈: %.4f",
-	// 			d.Leverage, d.PositionSizeUSD, d.StopLoss, d.TakeProfit)
-	// 	}
-	// }
+	log.Printf("📋 AI决策列表 (%d 个):\n", len(decision.Decisions))
+	for i, d := range decision.Decisions {
+		log.Printf("  [%d] %s: %s - %s", i+1, d.Symbol, d.Action, d.Reasoning)
+		if d.Action == "open_long" || d.Action == "open_short" {
+			log.Printf("      杠杆: %dx | 仓位: %.2f USDT | 止损: %.4f | 止盈: %.4f",
+				d.Leverage, d.PositionSizeUSD, d.StopLoss, d.TakeProfit)
+		}
+	}
 	log.Println()
 
 	// 8. 对决策排序：确保先平仓后开仓（防止仓位叠加超限）

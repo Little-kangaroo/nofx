@@ -1065,7 +1065,7 @@ GET /api/status?trader_id=xxx            # 系统状态
 GET /api/account?trader_id=xxx           # 账户信息
 GET /api/positions?trader_id=xxx         # 持仓列表
 GET /api/equity-history?trader_id=xxx    # 净值历史（图表数据）
-GET /api/decisions/latest?trader_id=xxx  # 最新5条决策
+GET /api/decisions/latest?trader_id=xxx  # 最新10条决策
 GET /api/statistics?trader_id=xxx        # 统计信息
 ```
 
