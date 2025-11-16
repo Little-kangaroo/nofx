@@ -1119,6 +1119,18 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		"sell_to_enter":       true, // 兼容提示词模板中的动作名
 		"buy":                 true, // 兼容简单的买入指令
 		"sell":                true, // 兼容简单的卖出指令
+		// 支持taro模板的大写格式
+		"OPEN":                true,
+		"CLOSE":               true,
+		"REDUCE":              true,
+		"HOLD":                true,
+		"WAIT":                true,
+		"OPEN_LONG":           true,
+		"OPEN_SHORT":          true,
+		"CLOSE_LONG":          true,
+		"CLOSE_SHORT":         true,
+		"REDUCE_LONG":         true,
+		"REDUCE_SHORT":        true,
 	}
 
 	// 标准化动作名称
@@ -1134,10 +1146,33 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	case "reduce":
 		// reduce需要根据当前持仓方向确定是reduce_long还是reduce_short
 		// 这个逻辑在执行阶段处理，这里保持原样
+	// 支持taro模板的大写格式转小写
+	case "OPEN":
+		d.Action = "open"
+	case "CLOSE":
+		d.Action = "close"
+	case "REDUCE":
+		d.Action = "reduce"
+	case "HOLD":
+		d.Action = "hold"
+	case "WAIT":
+		d.Action = "wait"
+	case "OPEN_LONG":
+		d.Action = "open_long"
+	case "OPEN_SHORT":
+		d.Action = "open_short"
+	case "CLOSE_LONG":
+		d.Action = "close_long"
+	case "CLOSE_SHORT":
+		d.Action = "close_short"
+	case "REDUCE_LONG":
+		d.Action = "reduce_long"
+	case "REDUCE_SHORT":
+		d.Action = "reduce_short"
 	}
 
 	if !validActions[d.Action] {
-		return fmt.Errorf("无效的action: %s", d.Action)
+		return fmt.Errorf("无效的action: '%s' (支持的action类型: open_long, open_short, close_long, close_short, reduce, hold, wait, OPEN, CLOSE, REDUCE, HOLD, WAIT等)", d.Action)
 	}
 
 	// 开仓操作必须提供完整参数
