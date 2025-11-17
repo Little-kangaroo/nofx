@@ -215,7 +215,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	log.Printf("📤 [MCP] JSON请求体大小: %d bytes", len(jsonData))
 
 	// 写入详细参数到文件用于调试
-	writeAPICallDetailsToFile(systemPrompt, userPrompt, requestBody, jsonData)
+	writeAPICallDetailsToFile(systemPrompt, userPrompt, requestBody, jsonData, client)
 
 	// 创建HTTP请求
 	var url string
@@ -335,10 +335,17 @@ func isRetryableError(err error) bool {
 }
 
 // writeAPICallDetailsToFile 将AI API调用的详细参数写入文件用于调试
-func writeAPICallDetailsToFile(systemPrompt, userPrompt string, requestBody map[string]interface{}, jsonData []byte) {
-	// 使用时间戳创建文件名
+func writeAPICallDetailsToFile(systemPrompt, userPrompt string, requestBody map[string]interface{}, jsonData []byte, client *Client) {
+	// 获取模型信息
+	provider := string(client.Provider)
+	model := client.Model
+	if model == "" {
+		model = "unknown"
+	}
+	
+	// 使用时间戳和模型信息创建文件名
 	timestamp := time.Now().Format("20060102_150405")
-	filename := fmt.Sprintf("ai_api_call_%s.txt", timestamp)
+	filename := fmt.Sprintf("ai_api_call_%s_%s_%s.txt", provider, model, timestamp)
 	
 	file, err := os.Create(filename)
 	if err != nil {
