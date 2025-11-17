@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // PositionInfo 持仓信息
@@ -1152,13 +1153,74 @@ func isValidDecisionArray(jsonContent string) bool {
 	return true
 }
 
-// fixMissingQuotes 替换中文引号为英文引号（避免输入法自动转换）
+// fixMissingQuotes 替换中文引号为英文引号并清理编码问题字符
 func fixMissingQuotes(jsonStr string) string {
+	// 首先检查并修复UTF-8编码问题
+	if !utf8.ValidString(jsonStr) {
+		log.Printf("⚠️ [JSON清理] 检测到无效UTF-8字符，正在清理...")
+		jsonStr = strings.ToValidUTF8(jsonStr, "")
+	}
+	
+	// 处理中文引号
 	jsonStr = strings.ReplaceAll(jsonStr, "\u201c", "\"") // "
 	jsonStr = strings.ReplaceAll(jsonStr, "\u201d", "\"") // "
 	jsonStr = strings.ReplaceAll(jsonStr, "\u2018", "'")  // '
 	jsonStr = strings.ReplaceAll(jsonStr, "\u2019", "'")  // '
-	return jsonStr
+	
+	// 处理其他可能的编码问题字符
+	jsonStr = strings.ReplaceAll(jsonStr, "æ", "")        // 移除异常字符æ
+	jsonStr = strings.ReplaceAll(jsonStr, "ï", "")        // 移除异常字符ï
+	jsonStr = strings.ReplaceAll(jsonStr, "»", "")        // 移除异常字符»
+	jsonStr = strings.ReplaceAll(jsonStr, "¿", "")        // 移除异常字符¿
+	jsonStr = strings.ReplaceAll(jsonStr, "â", "")        // 移除异常字符â
+	jsonStr = strings.ReplaceAll(jsonStr, "€", "")        // 移除异常字符€
+	jsonStr = strings.ReplaceAll(jsonStr, "Â", "")        // 移除异常字符Â
+	jsonStr = strings.ReplaceAll(jsonStr, "Ã", "")        // 移除异常字符Ã
+	jsonStr = strings.ReplaceAll(jsonStr, "Æ", "")        // 移除异常字符Æ
+	
+	// 处理其他类型的引号和符号
+	jsonStr = strings.ReplaceAll(jsonStr, "「", "\"")     // 日文左引号
+	jsonStr = strings.ReplaceAll(jsonStr, "」", "\"")     // 日文右引号
+	jsonStr = strings.ReplaceAll(jsonStr, "『", "\"")     // 日文双左引号
+	jsonStr = strings.ReplaceAll(jsonStr, "』", "\"")     // 日文双右引号
+	jsonStr = strings.ReplaceAll(jsonStr, "【", "\"")     // 中文方括号左
+	jsonStr = strings.ReplaceAll(jsonStr, "】", "\"")     // 中文方括号右
+	
+	// 处理全角字符
+	jsonStr = strings.ReplaceAll(jsonStr, "：", ":")      // 全角冒号
+	jsonStr = strings.ReplaceAll(jsonStr, "，", ",")      // 全角逗号
+	jsonStr = strings.ReplaceAll(jsonStr, "｛", "{")      // 全角左大括号
+	jsonStr = strings.ReplaceAll(jsonStr, "｝", "}")      // 全角右大括号
+	jsonStr = strings.ReplaceAll(jsonStr, "［", "[")      // 全角左方括号
+	jsonStr = strings.ReplaceAll(jsonStr, "］", "]")      // 全角右方括号
+	
+	// 移除或替换可能导致JSON解析错误的特殊字符
+	jsonStr = strings.ReplaceAll(jsonStr, "\ufeff", "")   // BOM字符
+	jsonStr = strings.ReplaceAll(jsonStr, "\u00a0", " ")  // 不间断空格
+	jsonStr = strings.ReplaceAll(jsonStr, "\u200b", "")   // 零宽空格
+	jsonStr = strings.ReplaceAll(jsonStr, "\u200c", "")   // 零宽非连字符
+	jsonStr = strings.ReplaceAll(jsonStr, "\u200d", "")   // 零宽连字符
+	jsonStr = strings.ReplaceAll(jsonStr, "\u2028", "")   // 行分隔符
+	jsonStr = strings.ReplaceAll(jsonStr, "\u2029", "")   // 段分隔符
+	
+	// 移除控制字符（保留换行和制表符）
+	var cleaned strings.Builder
+	for _, r := range jsonStr {
+		if r < 32 && r != '\n' && r != '\r' && r != '\t' {
+			continue // 跳过其他控制字符
+		}
+		cleaned.WriteRune(r)
+	}
+	
+	result := cleaned.String()
+	
+	// 最终验证UTF-8编码
+	if !utf8.ValidString(result) {
+		log.Printf("⚠️ [JSON清理] 清理后仍有UTF-8问题，进行最终修复...")
+		result = strings.ToValidUTF8(result, "?")
+	}
+	
+	return result
 }
 
 // validateDecisionsWithContext 验证所有决策（包含持仓上下文）
