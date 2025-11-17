@@ -129,7 +129,12 @@ func (client *Client) CallWithMessages(systemPrompt, userPrompt string) (string,
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
-			fmt.Printf("⚠️  AI API调用失败，正在重试 (%d/%d)...\n", attempt, maxRetries)
+			// 检查是否是HTTP/2相关错误
+			if lastErr != nil && strings.Contains(lastErr.Error(), "http2:") {
+				fmt.Printf("⚠️  检测到HTTP/2问题，重试 (%d/%d) 使用优化配置...\n", attempt, maxRetries)
+			} else {
+				fmt.Printf("⚠️  AI API调用失败，正在重试 (%d/%d)...\n", attempt, maxRetries)
+			}
 		}
 
 		result, err := client.callOnce(systemPrompt, userPrompt)
@@ -253,8 +258,12 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		Timeout: client.Timeout,
 		Transport: &http.Transport{
 			TLSHandshakeTimeout:   30 * time.Second,  // TLS握手超时
-			ResponseHeaderTimeout: 60 * time.Second,  // 等待响应头超时
+			ResponseHeaderTimeout: 120 * time.Second, // 增加到120秒等待响应头
 			ExpectContinueTimeout: 1 * time.Second,   // Expect: 100-continue 超时
+			ForceAttemptHTTP2:     false,             // 禁用HTTP/2，强制使用HTTP/1.1
+			MaxIdleConns:          10,                // 最大空闲连接
+			IdleConnTimeout:       30 * time.Second,  // 空闲连接超时
+			DisableKeepAlives:     false,             // 启用keep-alive
 		},
 	}
 	
@@ -270,7 +279,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	}
 	defer resp.Body.Close()
 	
-	log.Printf("✅ [MCP] 请求成功，耗时: %v, 状态码: %d", requestDuration, resp.StatusCode)
+	log.Printf("✅ [MCP] 请求成功，耗时: %v, 状态码: %d, 协议: %s", requestDuration, resp.StatusCode, resp.Proto)
 
 	// 读取响应
 	body, err := io.ReadAll(resp.Body)
@@ -342,6 +351,9 @@ func isRetryableError(err error) bool {
 		"connection refused",
 		"temporary failure",
 		"no such host",
+		"http2: timeout awaiting response headers", // HTTP/2响应头超时
+		"context deadline exceeded",               // 上下文超时
+		"Client.Timeout exceeded",                 // 客户端超时
 	}
 	for _, retryable := range retryableErrors {
 		if strings.Contains(errStr, retryable) {
