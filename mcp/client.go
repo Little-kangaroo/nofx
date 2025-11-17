@@ -37,7 +37,7 @@ func New() *Client {
 		Provider: ProviderDeepSeek,
 		BaseURL:  "https://api.deepseek.com/v1",
 		Model:    "deepseek-chat",
-		Timeout:  120 * time.Second, // 增加到120秒，因为AI需要分析大量数据
+		Timeout:  300 * time.Second, // 增加到300秒（5分钟），适应32K tokens的长响应
 	}
 }
 
@@ -106,13 +106,13 @@ func (client *Client) SetCustomAPI(apiURL, apiKey, modelName string) {
 	}
 
 	client.Model = modelName
-	client.Timeout = 120 * time.Second
+	client.Timeout = 300 * time.Second // 增加到300秒，适应大模型长响应
 }
 
 // SetClient 设置完整的AI配置（高级用户）
 func (client *Client) SetClient(Client Client) {
 	if Client.Timeout == 0 {
-		Client.Timeout = 30 * time.Second
+		Client.Timeout = 300 * time.Second // 默认300秒超时
 	}
 	client = &Client
 }
@@ -227,6 +227,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		url = fmt.Sprintf("%s/chat/completions", client.BaseURL)
 	}
 	log.Printf("📡 [MCP] 请求 URL: %s", url)
+	log.Printf("📡 [MCP] 客户端超时设置: %v", client.Timeout)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -248,12 +249,28 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	}
 
 	// 发送请求
-	httpClient := &http.Client{Timeout: client.Timeout}
+	httpClient := &http.Client{
+		Timeout: client.Timeout,
+		Transport: &http.Transport{
+			TLSHandshakeTimeout:   30 * time.Second,  // TLS握手超时
+			ResponseHeaderTimeout: 60 * time.Second,  // 等待响应头超时
+			ExpectContinueTimeout: 1 * time.Second,   // Expect: 100-continue 超时
+		},
+	}
+	
+	// 记录请求开始时间
+	requestStart := time.Now()
+	log.Printf("📡 [MCP] 开始发送请求: %v", requestStart.Format("15:04:05"))
 	resp, err := httpClient.Do(req)
+	requestDuration := time.Since(requestStart)
+	
 	if err != nil {
+		log.Printf("❌ [MCP] 请求失败，耗时: %v, 错误: %v", requestDuration, err)
 		return "", fmt.Errorf("发送请求失败: %w", err)
 	}
 	defer resp.Body.Close()
+	
+	log.Printf("✅ [MCP] 请求成功，耗时: %v, 状态码: %d", requestDuration, resp.StatusCode)
 
 	// 读取响应
 	body, err := io.ReadAll(resp.Body)
