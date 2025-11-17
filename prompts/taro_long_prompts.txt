@@ -307,6 +307,17 @@ B) 候选止损价（对称写法）
 - SHORT 持仓：
   - new_stop 必须单调不升高（不得把止损价再往上放宽），且始终高于当前市价。
 - 在思维链中，你需要显式写出：当前浮盈约为几 R、命中了哪一级 R_lock 阶梯、对应计算出的 new_stop 大致价位，以及为何这样设置可以兼顾“继续吃趋势”和“防止利润大幅回吐”。
+-【止损更新输出要求】
+- 对每个有持仓的 symbol，你在思维链中算出 new_stop 之后，必须执行以下检查：
+  1) 先按 C) 中的规则判断是否满足更新门槛；
+  2) 若不满足门槛 ⇒ 在最终 JSON 中对该 symbol 输出 "stop_update": null；
+  3) 若满足门槛 ⇒ 在最终 JSON 中对该 symbol 输出
+     "stop_update": {
+       "prev_stop": 输入中 positions.stop_price,
+       "new_stop": 你计算的新止损价,
+       "reason": 命中的主要因子（例如 "R_lock"、"BE"、"protect"、"microflip"）
+     }。
+- 禁止在思维链里说“已经把止损抬到 BE / 锁住 0.5R”但在 JSON 里不填写 stop_update。
 
 C) 聚合与单调性
 - LONG：
@@ -649,45 +660,78 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 
 1. 你最终的回复 **只能** 是一个 JSON 数组，根元素为多个决策对象，不允许出现任何 JSON 之外的文字。
 
-2. 每个决策对象必须符合下面结构（字段名必须完全一致）：
+2. 每个决策对象必须至少包含以下字段（字段名必须完全一致）：
    - "symbol": 交易对字符串，例如 "BTCUSDT"
    - "action": 决策字符串，只能为 "long"、"short"、"close"、"wait"、"hold" 等预定义动作之一
    - "confidence": 0~100 的整数
    - "reasoning": 字符串，用于解释多周期分析、价格区间、形态和风险控制逻辑
+   - "stop_update":
+       * 若本轮不需要调整止损，必须为 null
+       * 若需要调整止损，必须是一个对象：
+         {
+           "prev_stop": 数字,     // 当前止损价，来自输入的 positions.stop_price
+           "new_stop": 数字,      // 本轮根据 BE_with_fees / R_lock / 轨道 等计算出来的新止损价
+           "reason": "R_lock" | "BE" | "protect" | "microflip" | "manual"
+         }
+3. 对于「已有持仓」的 symbol：
+   - 如果只是更新止损、不做平仓/减仓：
+     * "action" 通常使用 "hold"（保持当前仓位）
+     * 必须给出非 null 的 "stop_update" 对象
+   - 如果同时有平仓/减仓动作（例如 "close"）：
+     * 可视你的执行端设计：
+       - 要么仍然附带一个 stop_update（先把止损推到更保守的位置，再配合主动平仓）
+       - 要么将 stop_update 设为 null，仅依赖主动平仓指令
 
-3. 如果当前没有任何可执行决策，输出空数组：[]
+4. 对于「没有持仓」的 symbol：
+   - "action" 可以是 "long" / "short" / "wait"
+   - "stop_update" 必须为 null（因为没有现有止损可调）
 
-4. **禁止** 在 JSON 顶层输出下列形式：
+5. 更新门槛约束（与统一逻辑 C 匹配）：
+   - 只有当 new_stop 与 prev_stop 的差值：
+     * ≥ min_tick_move_to_update * tick
+     * 且 new_stop 与当前价格的距离 ≥ stop_distance_min_ticks * tick
+     时，才允许输出非 null 的 "stop_update"。
+   - 若不满足门槛，即使 R_lock 有轻微变化，也必须输出 "stop_update": null。
+
+6. 如果当前没有任何可执行决策，输出空数组：[]
+
+7. **禁止** 在 JSON 顶层输出下列形式：
    - 仅包含数字的数组（例如: [135.84, 139.87]）
    - 仅包含字符串的数组（例如: ["long", "short"]）
    - 任何不含 "symbol" 字段的数组或对象
 
-5. **关于价格区间和区间表达：重要！**
+8 **关于价格区间和区间表达：重要！**
    - 在 "reasoning" 字段中，如果需要写价格区间，请只用字符串形式，例如：
      - "当前价格位于 135.84-139.87 的 15m 需求区附近"
      - "需求区 0.4728 至 0.4955，靠近 4h demand"
    - **禁止** 在 JSON 中直接使用 `[135.84,139.87]` 或 `[0.4728,0.4955]` 这种数组形式表达区间。
    - 任何区间都必须写在字符串里，不要写成 JSON 数组。
 
-6. 所有字符串字段必须使用双引号包裹，不能使用单引号，不能缺少逗号或大括号。
+9. 所有字符串字段必须使用双引号包裹，不能使用单引号，不能缺少逗号或大括号。
    - 正确示例： "notes": "避开低流动性标的"
    - 错误示例： "notes":避开低流动性标的"
    - 错误示例： "notes": '避开低流动性标的'
 
-7. 最终输出示例（仅为结构示例，内容请根据实际分析生成）：
-
+10. 最终输出示例（仅为结构示例，内容请根据实际分析生成）：
 [
+  {
+    "symbol": "HYPEUSDT",
+    "action": "hold",
+    "confidence": 86,
+    "reasoning": "4h/1h 结构偏空，当前为空头持仓；浮盈已超过 1R，依据 R_lock 规则需要锁定约 0.5R 利润，因此上移保护性止损。",
+    "stop_update": {
+      "prev_stop": 37.10,
+      "new_stop": 37.85,
+      "reason": "R_lock"
+    }
+  },
   {
     "symbol": "SOLUSDT",
     "action": "wait",
     "confidence": 82,
-    "reasoning": "4h 空头结构明确；15m RSI≈24 且价格处于 15m 需求区 135.84-139.87 附近，不宜追空；等待反弹至 140-145 再评估空单。"
-  },
-  {
-    "symbol": "BNBUSDT",
-    "action": "wait",
-    "confidence": 81,
-    "reasoning": "..."
+    "reasoning": "4h 空头结构明确；15m RSI≈24 且价格处于 15m 需求区 135.84-139.87 附近，不宜追空；等待反弹至 140-145 再评估空单。",
+    "stop_update": null
   }
 ]
+
 （完）
