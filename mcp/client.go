@@ -310,6 +310,9 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 
 	responseContent := result.Choices[0].Message.Content
 	
+	// 🔧 重要修复：将AI响应内容也写入调试文件
+	writeAPIResponseToFile(systemPrompt, userPrompt, requestBody, jsonData, responseContent, client)
+	
 	// 记录响应信息和潜在的截断警告
 	log.Printf("📥 [MCP] AI响应接收: %d 字符", len(responseContent))
 	if len(responseContent) >= 30000 { // 接近32K字符限制
@@ -418,4 +421,78 @@ func writeAPICallDetailsToFile(systemPrompt, userPrompt string, requestBody map[
 	}
 	
 	log.Printf("📝 AI API调用参数已写入文件: %s", filename)
+}
+
+// writeAPIResponseToFile 将AI API调用的完整信息（包含响应）写入文件用于调试
+func writeAPIResponseToFile(systemPrompt, userPrompt string, requestBody map[string]interface{}, jsonData []byte, responseContent string, client *Client) {
+	// 获取模型信息
+	provider := string(client.Provider)
+	model := client.Model
+	if model == "" {
+		model = "unknown"
+	}
+	
+	// 使用时间戳和模型信息创建文件名
+	timestamp := time.Now().Format("20060102_150405")
+	filename := fmt.Sprintf("ai_api_call_response_%s_%s_%s.txt", provider, model, timestamp)
+	
+	file, err := os.Create(filename)
+	if err != nil {
+		log.Printf("⚠️ 无法创建AI API完整调试文件: %v", err)
+		return
+	}
+	defer file.Close()
+	
+	// 写入详细信息
+	fmt.Fprintf(file, "=== AI API 完整调用记录 ===\n")
+	fmt.Fprintf(file, "时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(file, "JSON请求体大小: %d bytes\n", len(jsonData))
+	fmt.Fprintf(file, "AI响应大小: %d 字符\n\n", len(responseContent))
+	
+	// 请求配置
+	fmt.Fprintf(file, "--- 请求配置 ---\n")
+	if model, ok := requestBody["model"]; ok {
+		fmt.Fprintf(file, "模型: %s\n", model)
+	}
+	if temp, ok := requestBody["temperature"]; ok {
+		fmt.Fprintf(file, "Temperature: %v\n", temp)
+	}
+	if maxTokens, ok := requestBody["max_tokens"]; ok {
+		fmt.Fprintf(file, "Max Tokens: %v\n", maxTokens)
+	}
+	
+	// 🔧 重要修复：记录实际发送的Messages结构
+	fmt.Fprintf(file, "\n--- 实际发送的Messages结构 ---\n")
+	if messages, ok := requestBody["messages"]; ok {
+		if messagesList, ok := messages.([]map[string]string); ok {
+			for i, msg := range messagesList {
+				role := msg["role"]
+				content := msg["content"]
+				fmt.Fprintf(file, "Message %d (Role: %s, Length: %d chars):\n", i+1, role, len(content))
+				fmt.Fprintf(file, "%s\n\n", content)
+			}
+		}
+	}
+	
+	// 分别记录原始prompt（用于对比）
+	fmt.Fprintf(file, "--- 原始 System Prompt (%d 字符) ---\n", len(systemPrompt))
+	fmt.Fprintf(file, "%s\n", systemPrompt)
+	
+	fmt.Fprintf(file, "\n--- 原始 User Prompt (%d 字符) ---\n", len(userPrompt))
+	fmt.Fprintf(file, "%s\n", userPrompt)
+	
+	// 🔧 关键添加：AI原始响应内容
+	fmt.Fprintf(file, "\n--- AI 原始响应内容 (%d 字符) ---\n", len(responseContent))
+	fmt.Fprintf(file, "%s\n", responseContent)
+	
+	// 完整JSON请求体（原始二进制数据）
+	fmt.Fprintf(file, "\n--- 完整JSON请求体（实际发送的字节流） ---\n")
+	var prettyJSON bytes.Buffer
+	if err := json.Indent(&prettyJSON, jsonData, "", "  "); err == nil {
+		fmt.Fprintf(file, "%s\n", prettyJSON.String())
+	} else {
+		fmt.Fprintf(file, "%s\n", string(jsonData))
+	}
+	
+	log.Printf("📝 AI API完整调用记录已写入文件: %s", filename)
 }

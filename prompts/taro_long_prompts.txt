@@ -476,7 +476,9 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
   - 正确示例： "notes": "避开低流动性标的"
   - 错误示例： "notes":避开低流动性标的"
   - 错误示例： "notes": '避开低流动性标的'
-
+- 重要：返回的JSON必须严格按照标准格式，不要添加额外的转义符。
+    正确示例：{"symbol": "BTCUSDT", "action": "wait"}
+    错误示例：{\"symbol\": \"BTCUSDT\", \"action\": \"wait\"}
 {
   "actions": [
     {
