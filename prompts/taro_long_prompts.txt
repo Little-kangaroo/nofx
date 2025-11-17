@@ -86,12 +86,13 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
 - R_multiplier_at_entry  = 2.0          // 初始止损距离 = 2.0 * ATR(15m)
 
 [阶梯锁盈（多空对称）]
-- R_milestones           = [1.0, 1.5, 2.0, 3.0]
+- R_milestones           = [0.7, 1.0, 1.5, 2.0, 3.0]
 - lock_at_R = {
-    "1.0": 0.0,                        // 1R → 保本（含手续费/滑点）
-    "1.5": 0.5,
-    "2.0": 1.0,
-    "3.0": 2.0                          // 转快速追踪
+    "0.7": 0.0,                        // 0.7R → 先抬到 BE（含手续费/滑点）
+    "1.0": 0.5,                        // 1R → 锁 0.5R
+    "1.5": 1.0,
+    "2.0": 1.5,
+    "3.0": 2.0                          // 3R → 锁 2R 并转快速追踪
   }
 
 [追踪轨道（响应小级别翻转）]
@@ -198,9 +199,9 @@ MTF_多空对称统一模板_v1.9.1_防双向挂单修订（干净可落地）
 
 [利润保护模式（触发即变紧）]
 - protect_enable         = true
-- protect_trigger        = { unrealized_pnl_pct: 0.4, time_min: 10 }
-- protect_pad_shrink     = 0.7
-- protect_R_floor        = 1.0
+- protect_trigger        = { unrealized_pnl_pct: 0.3, time_min: 5 }
+- protect_pad_shrink     = 0.6
+- protect_R_floor        = 0.5
 
 [更新与单调性]
 - min_tick_move_to_update = 1
