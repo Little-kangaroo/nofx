@@ -1161,11 +1161,23 @@ func fixMissingQuotes(jsonStr string) string {
 		jsonStr = strings.ToValidUTF8(jsonStr, "")
 	}
 	
+	// 🔧 关键修复：处理JSON字符串值内部的未转义双引号
+	// 使用正则表达式找到所有JSON字符串值，并转义其中的双引号
+	jsonStr = fixUnescapedQuotesInJSONValues(jsonStr)
+	
 	// 处理中文引号
 	jsonStr = strings.ReplaceAll(jsonStr, "\u201c", "\"") // "
 	jsonStr = strings.ReplaceAll(jsonStr, "\u201d", "\"") // "
 	jsonStr = strings.ReplaceAll(jsonStr, "\u2018", "'")  // '
 	jsonStr = strings.ReplaceAll(jsonStr, "\u2019", "'")  // '
+	
+	// 处理数学符号和特殊符号
+	jsonStr = strings.ReplaceAll(jsonStr, "≈", "约")       // 约等于符号
+	jsonStr = strings.ReplaceAll(jsonStr, "≤", "<=")      // 小于等于
+	jsonStr = strings.ReplaceAll(jsonStr, "≥", ">=")      // 大于等于
+	jsonStr = strings.ReplaceAll(jsonStr, "–", "-")       // en dash转普通连字符
+	jsonStr = strings.ReplaceAll(jsonStr, "—", "-")       // em dash转普通连字符
+	jsonStr = strings.ReplaceAll(jsonStr, "…", "...")     // 省略号
 	
 	// 处理其他可能的编码问题字符
 	jsonStr = strings.ReplaceAll(jsonStr, "æ", "")        // 移除异常字符æ
@@ -1177,14 +1189,6 @@ func fixMissingQuotes(jsonStr string) string {
 	jsonStr = strings.ReplaceAll(jsonStr, "Â", "")        // 移除异常字符Â
 	jsonStr = strings.ReplaceAll(jsonStr, "Ã", "")        // 移除异常字符Ã
 	jsonStr = strings.ReplaceAll(jsonStr, "Æ", "")        // 移除异常字符Æ
-	
-	// 处理其他类型的引号和符号
-	jsonStr = strings.ReplaceAll(jsonStr, "「", "\"")     // 日文左引号
-	jsonStr = strings.ReplaceAll(jsonStr, "」", "\"")     // 日文右引号
-	jsonStr = strings.ReplaceAll(jsonStr, "『", "\"")     // 日文双左引号
-	jsonStr = strings.ReplaceAll(jsonStr, "』", "\"")     // 日文双右引号
-	jsonStr = strings.ReplaceAll(jsonStr, "【", "\"")     // 中文方括号左
-	jsonStr = strings.ReplaceAll(jsonStr, "】", "\"")     // 中文方括号右
 	
 	// 处理全角字符
 	jsonStr = strings.ReplaceAll(jsonStr, "：", ":")      // 全角冒号
@@ -1221,6 +1225,66 @@ func fixMissingQuotes(jsonStr string) string {
 	}
 	
 	return result
+}
+
+// fixUnescapedQuotesInJSONValues 修复JSON字符串值内部的未转义双引号
+func fixUnescapedQuotesInJSONValues(jsonStr string) string {
+	var result strings.Builder
+	inString := false
+	escaped := false
+	
+	for i, r := range jsonStr {
+		if escaped {
+			// 如果前一个字符是转义符，直接添加当前字符
+			result.WriteRune(r)
+			escaped = false
+			continue
+		}
+		
+		if r == '\\' {
+			// 转义符
+			result.WriteRune(r)
+			escaped = true
+			continue
+		}
+		
+		if r == '"' {
+			if !inString {
+				// 开始一个字符串
+				inString = true
+				result.WriteRune(r)
+			} else {
+				// 可能是字符串结束，或者是字符串内部的未转义引号
+				// 检查下一个非空白字符
+				nextChar := getNextNonWhitespaceChar(jsonStr, i+1)
+				
+				if nextChar == ',' || nextChar == '}' || nextChar == ']' || nextChar == -1 {
+					// 这是字符串结束
+					inString = false
+					result.WriteRune(r)
+				} else {
+					// 这是字符串内部的未转义引号，需要转义
+					log.Printf("🔧 [JSON修复] 发现未转义的双引号，已自动转义")
+					result.WriteString("\\\"")
+				}
+			}
+		} else {
+			result.WriteRune(r)
+		}
+	}
+	
+	return result.String()
+}
+
+// getNextNonWhitespaceChar 获取下一个非空白字符
+func getNextNonWhitespaceChar(s string, startIndex int) rune {
+	for i := startIndex; i < len(s); i++ {
+		r := rune(s[i])
+		if r != ' ' && r != '\t' && r != '\n' && r != '\r' {
+			return r
+		}
+	}
+	return -1 // 没有找到
 }
 
 // validateDecisionsWithContext 验证所有决策（包含持仓上下文）
