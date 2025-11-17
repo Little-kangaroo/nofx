@@ -191,7 +191,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		"model":       client.Model,
 		"messages":    messages,
 		"temperature": 0.5, // 降低temperature以提高JSON格式稳定性
-		"max_tokens":  4096, // 增加到4096，防止思维链截断
+		"max_tokens":  32768, // 大幅提升到32K，适配升级后的AI模型
 	}
 
 	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持
@@ -201,7 +201,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	log.Printf("📤 [MCP] AI请求参数:")
 	log.Printf("   Model: %s", client.Model)
 	log.Printf("   Temperature: 0.5")
-	log.Printf("   Max Tokens: 4096")
+	log.Printf("   Max Tokens: 32768")
 	log.Printf("   Messages Count: %d", len(messages))
 	if systemPrompt != "" {
 		log.Printf("   System Prompt Length: %d chars", len(systemPrompt))
@@ -286,7 +286,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	
 	// 记录响应信息和潜在的截断警告
 	log.Printf("📥 [MCP] AI响应接收: %d 字符", len(responseContent))
-	if len(responseContent) >= 3800 { // 接近4096字符限制
+	if len(responseContent) >= 30000 { // 接近32K字符限制
 		log.Printf("⚠️ [MCP] 响应长度接近token限制，检查是否被截断")
 	}
 	

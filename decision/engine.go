@@ -121,7 +121,7 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 	}
 	
 	// 检查响应是否可能被截断
-	if len(aiResponse) >= 3800 { // 接近4096 token限制
+	if len(aiResponse) >= 30000 { // 接近32K token限制
 		log.Printf("⚠️ [AI响应] 响应长度接近token限制，可能被截断！")
 	}
 	
