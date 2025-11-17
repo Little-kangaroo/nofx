@@ -541,10 +541,20 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 	} else {
 		jsonContent = strings.TrimSpace(response[arrayStart : arrayEnd+1])
 		log.Printf("🔍 找到完整JSON: %s", jsonContent[:min(200, len(jsonContent))])
+	log.Printf("🔍 [调试] JSON内容特征检查:")
+	log.Printf("🔍 [调试] 包含转义引号 \\\": %v", strings.Contains(jsonContent, "\\\""))
+	log.Printf("🔍 [调试] 包含正常引号 \": %v", strings.Contains(jsonContent, "\""))
+	log.Printf("🔍 [调试] 包含混合转义模式: %v", strings.Contains(jsonContent, "{\\\"symbol") || strings.Contains(jsonContent, "\\\"symbol\\\":"))
 	}
 
-	// 🔧 修复常见的JSON格式错误：缺少引号的字段值
-	jsonContent = fixMissingQuotes(jsonContent)
+	// 🔧 修复常见���JSON格式错误：缺少引号的字段值
+	// 注意：AI返回的JSON通常是正确的，过度修复可能会破坏正确的JSON
+	// jsonContent = fixMissingQuotes(jsonContent) // 暂时禁用，因为会错误地破坏正确的JSON
+	log.Printf("🔍 [调试] 跳过JSON修复，直接使用AI原始JSON内容")
+	log.Printf("🔍 [调试] 跳过修复后JSON特征检查:")
+	log.Printf("🔍 [调试] 包含转义引号 \\\": %v", strings.Contains(jsonContent, "\\\""))
+	log.Printf("🔍 [调试] 包含正常引号 \": %v", strings.Contains(jsonContent, "\""))
+	log.Printf("🔍 [调试] 包含混合转义模式: %v", strings.Contains(jsonContent, "{\\\"symbol") || strings.Contains(jsonContent, "\\\"symbol\\\":"))
 
 	// 先检查JSON内容是否是有效的决策数组格式
 	if !isValidDecisionArray(jsonContent) {
@@ -798,8 +808,14 @@ func extractDecisions(response string) ([]Decision, error) {
 
 	jsonContent := strings.TrimSpace(response[arrayStart : arrayEnd+1])
 
-	// 🔧 修复常见的JSON格式错误：缺少引号的字段值
-	jsonContent = fixMissingQuotes(jsonContent)
+	// 🔧 修复常见���JSON格式错误：缺少引号的字段值
+	// 注意：AI返回的JSON通常是正确的，过度修复可能会破坏正确的JSON
+	// jsonContent = fixMissingQuotes(jsonContent) // 暂时禁用，因为会错误地破坏正确的JSON
+	log.Printf("🔍 [调试] 跳过JSON修复，直接使用AI原始JSON内容")
+	log.Printf("🔍 [调试] 跳过修复后JSON特征检查:")
+	log.Printf("🔍 [调试] 包含转义引号 \\\": %v", strings.Contains(jsonContent, "\\\""))
+	log.Printf("🔍 [调试] 包含正常引号 \": %v", strings.Contains(jsonContent, "\""))
+	log.Printf("🔍 [调试] 包含混合转义模式: %v", strings.Contains(jsonContent, "{\\\"symbol") || strings.Contains(jsonContent, "\\\"symbol\\\":"))
 
 	// 尝试解析为标准Decision格式
 	var decisions []Decision
