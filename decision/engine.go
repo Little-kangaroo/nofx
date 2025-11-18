@@ -1663,8 +1663,44 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 		decision := &decisions[i]
 		
 		// 调试：打印原始JSON对象的关键字段
-		log.Printf("🔧 [调试] 决策#%d 原始字段: type=%v, decision=%v, action=%v, symbol=%v, side=%v", 
-			i+1, rawDecision["type"], rawDecision["decision"], rawDecision["action"], rawDecision["symbol"], rawDecision["side"])
+		log.Printf("🔧 [调试] 决策#%d 原始字段: type=%v, decision=%v, action=%v, symbol=%v, side=%v, stop_update=%v", 
+			i+1, rawDecision["type"], rawDecision["decision"], rawDecision["action"], rawDecision["symbol"], rawDecision["side"], rawDecision["stop_update"])
+		
+		// 🔧 【新增】检查并处理stop_update嵌套对象
+		if stopUpdate, exists := rawDecision["stop_update"]; exists && stopUpdate != nil {
+			if stopUpdateMap, ok := stopUpdate.(map[string]interface{}); ok {
+				log.Printf("🔧 [调试] 发现stop_update嵌套对象: %v", stopUpdateMap)
+				
+				// 提取new_stop作为新的止损价格
+				if newStopValue, newStopExists := stopUpdateMap["new_stop"]; newStopExists {
+					var newStopPrice float64
+					switch v := newStopValue.(type) {
+					case float64:
+						newStopPrice = v
+					case int:
+						newStopPrice = float64(v)
+					case string:
+						if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+							newStopPrice = parsed
+						}
+					}
+					if newStopPrice > 0 {
+						// 修改action为update_stop
+						decision.Action = "update_stop"
+						decision.StopLoss = newStopPrice
+						log.Printf("🔧 [调试] 增强决策#%d: 发现stop_update，转换为action='update_stop', StopLoss=%.6f", 
+							i+1, newStopPrice)
+						
+						// 同时记录原因
+						if reasonValue, reasonExists := stopUpdateMap["reason"]; reasonExists {
+							if reasonStr, ok := reasonValue.(string); ok {
+								decision.Reasoning = fmt.Sprintf("止损更新(%s): %s", reasonStr, decision.Reasoning)
+							}
+						}
+					}
+				}
+			}
+		}
 		
 		// 🔧 【新增】检查并处理entry_plan嵌套对象
 		if entryPlan, exists := rawDecision["entry_plan"]; exists {

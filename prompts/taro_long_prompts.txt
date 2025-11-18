@@ -712,7 +712,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - 错误示例： "notes":避开低流动性标的"
    - 错误示例： "notes": '避开低流动性标的'
 
-10. 最终输出示例（仅为结构示例，内容请根据实际分析生成）：
+10. 最终输出示例,严格遵循这个结构，每次都要一样，不要乱改：
 [
   {
     "symbol": "HYPEUSDT",

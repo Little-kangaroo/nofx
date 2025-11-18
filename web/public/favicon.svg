@@ -1,0 +1,21 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- 圆角矩形背景 -->
+  <rect x="8" y="8" width="112" height="112" rx="24" ry="24"
+        fill="#2B2D31" stroke="#FBBF24" stroke-width="2"/>
+  
+  <!-- AI 文字 -->
+  <text x="64" y="65" font-size="32" font-family="Arial, sans-serif"
+        fill="#FBBF24" font-weight="bold" text-anchor="middle">AI</text>
+  
+  <!-- 上涨趋势线（绿色） -->
+  <polyline points="32,88 42,75 52,78 62,65"
+            fill="none" stroke="#22C55E" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- 下跌趋势线（红色） -->
+  <polyline points="66,65 76,78 86,75 96,88"
+            fill="none" stroke="#EF4444" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- 向上箭头指示器 -->
+  <path d="M58 65 L64 59 L70 65"
+        fill="none" stroke="#FBBF24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
