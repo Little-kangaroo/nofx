@@ -106,7 +106,7 @@ func (client *Client) SetCustomAPI(apiURL, apiKey, modelName string) {
 	}
 
 	client.Model = modelName
-	traderConfig.Timeout = 600 * time.Second // 增加到600秒，适应大模型长响应
+	client.Timeout = 600 * time.Second // 增加到600秒，适应大模型长响应
 }
 
 // SetClient 设置完整的AI配置（高级用户）
