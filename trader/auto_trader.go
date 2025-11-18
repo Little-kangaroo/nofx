@@ -536,28 +536,42 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		// 获取当前的止损挂单价格（从交易所实时查询）
 		var prevStopPrice float64 = 0.0
 		
+		log.Printf("🔍 [调试] 开始查询 %s %s 的止损挂单...", symbol, side)
+		
 		// 查询该币种的所有挂单
 		orders, err := at.trader.GetOpenOrders(symbol)
 		if err != nil {
-			log.Printf("⚠️ [调试] 查询 %s 挂单失败: %v", symbol, err)
+			log.Printf("❌ [调试] 查询 %s 挂单失败: %v", symbol, err)
 		} else {
+			log.Printf("📋 [调试] %s 查询到 %d 个挂单", symbol, len(orders))
+			
 			// 查找对应持仓方向的止损单
-			for _, order := range orders {
+			for i, order := range orders {
 				orderType, _ := order["type"].(string)
 				positionSide, _ := order["positionSide"].(string)
 				stopPriceStr, _ := order["stopPrice"].(string)
+				side_, _ := order["side"].(string)
+				
+				log.Printf("  📄 [调试] 挂单#%d: type=%s, side=%s, positionSide=%s, stopPrice=%s", 
+					i+1, orderType, side_, positionSide, stopPriceStr)
 				
 				// 检查是否是止损单
 				if orderType == "STOP_MARKET" || orderType == "STOP" {
+					log.Printf("    🎯 [调试] 这是止损单，检查方向匹配...")
 					// 检查持仓方向是否匹配
 					if (side == "long" && positionSide == "LONG") || 
 					   (side == "short" && positionSide == "SHORT") {
+						log.Printf("    ✅ [调试] 方向匹配，解析止损价格...")
 						// 解析止损价格
 						if stopPrice, parseErr := strconv.ParseFloat(stopPriceStr, 64); parseErr == nil && stopPrice > 0 {
 							prevStopPrice = stopPrice
 							log.Printf("🎯 [调试] %s %s 找到止损单: %.6f", symbol, side, prevStopPrice)
 							break // 找到第一个匹配的止损单即可
+						} else {
+							log.Printf("    ❌ [调试] 解析止损价格失败: %v, 原始值: '%s'", parseErr, stopPriceStr)
 						}
+					} else {
+						log.Printf("    ⚠️ [调试] 方向不匹配: 持仓%s vs 挂单%s", side, positionSide)
 					}
 				}
 			}
