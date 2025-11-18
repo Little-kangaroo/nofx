@@ -533,17 +533,37 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		}
 		updateTime := at.positionFirstSeenTime[posKey]
 
-		// 获取当前的止损挂单价格
-		var prevStopPrice float64
-		if side == "long" {
-			pendingKey := fmt.Sprintf("%s_long_stop", symbol)
-			if pendingOrder, exists := at.pendingStopOrders[pendingKey]; exists {
-				prevStopPrice = pendingOrder.StopPrice
+		// 获取当前的止损挂单价格（从交易所实时查询）
+		var prevStopPrice float64 = 0.0
+		
+		// 查询该币种的所有挂单
+		orders, err := at.trader.GetOpenOrders(symbol)
+		if err != nil {
+			log.Printf("⚠️ [调试] 查询 %s 挂单失败: %v", symbol, err)
+		} else {
+			// 查找对应持仓方向的止损单
+			for _, order := range orders {
+				orderType, _ := order["type"].(string)
+				positionSide, _ := order["positionSide"].(string)
+				stopPriceStr, _ := order["stopPrice"].(string)
+				
+				// 检查是否是止损单
+				if orderType == "STOP_MARKET" || orderType == "STOP" {
+					// 检查持仓方向是否匹配
+					if (side == "long" && positionSide == "LONG") || 
+					   (side == "short" && positionSide == "SHORT") {
+						// 解析止损价格
+						if stopPrice, parseErr := strconv.ParseFloat(stopPriceStr, 64); parseErr == nil && stopPrice > 0 {
+							prevStopPrice = stopPrice
+							log.Printf("🎯 [调试] %s %s 找到止损单: %.6f", symbol, side, prevStopPrice)
+							break // 找到第一个匹配的止损单即可
+						}
+					}
+				}
 			}
-		} else if side == "short" {
-			pendingKey := fmt.Sprintf("%s_short_stop", symbol)
-			if pendingOrder, exists := at.pendingStopOrders[pendingKey]; exists {
-				prevStopPrice = pendingOrder.StopPrice
+			
+			if prevStopPrice == 0 {
+				log.Printf("🔍 [调试] %s %s 未找到活跃的止损挂单", symbol, side)
 			}
 		}
 

@@ -1030,3 +1030,13 @@ func (t *AsterTrader) FormatQuantity(symbol string, quantity float64) (string, e
 	}
 	return fmt.Sprintf("%v", formatted), nil
 }
+
+// GetOpenOrders 获取指定币种的所有挂单
+func (t *AsterTrader) GetOpenOrders(symbol string) ([]map[string]interface{}, error) {
+	log.Printf("🔍 [Aster] 查询 %s 的挂单...", symbol)
+	
+	// TODO: 实现Aster的挂单查询
+	// 目前返回空列表，避免编译错误
+	log.Printf("⚠️ [Aster] GetOpenOrders 暂未实现")
+	return []map[string]interface{}{}, nil
+}

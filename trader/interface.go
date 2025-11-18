@@ -42,6 +42,9 @@ type Trader interface {
 	// GetOrderStatus 获取订单状态
 	GetOrderStatus(symbol string, orderID int64) (map[string]interface{}, error)
 
+	// GetOpenOrders 获取指定币种的所有挂单
+	GetOpenOrders(symbol string) ([]map[string]interface{}, error)
+
 	// FormatQuantity 格式化数量到正确的精度
 	FormatQuantity(symbol string, quantity float64) (string, error)
 }

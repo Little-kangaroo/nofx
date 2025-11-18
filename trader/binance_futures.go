@@ -657,3 +657,41 @@ func stringContains(s, substr string) bool {
 	}
 	return false
 }
+
+// GetOpenOrders 获取指定币种的所有挂单
+func (t *FuturesTrader) GetOpenOrders(symbol string) ([]map[string]interface{}, error) {
+	log.Printf("🔍 [Binance] 查询 %s 的挂单...", symbol)
+	
+	// 调用币安API获取挂单
+	orders, err := t.client.NewListOpenOrdersService().Symbol(symbol).Do(context.Background())
+	if err != nil {
+		log.Printf("❌ [Binance] 获取挂单失败: %v", err)
+		return nil, fmt.Errorf("获取挂单失败: %w", err)
+	}
+	
+	log.Printf("📋 [Binance] %s 找到 %d 个挂单", symbol, len(orders))
+	
+	// 转换为统一格式
+	result := make([]map[string]interface{}, len(orders))
+	for i, order := range orders {
+		result[i] = map[string]interface{}{
+			"symbol":       order.Symbol,
+			"orderId":      order.OrderID,
+			"type":         string(order.Type),
+			"side":         string(order.Side),
+			"quantity":     order.OrigQuantity,
+			"price":        order.Price,
+			"stopPrice":    order.StopPrice,
+			"status":       string(order.Status),
+			"timeInForce":  string(order.TimeInForce),
+			"reduceOnly":   order.ReduceOnly,
+			"positionSide": string(order.PositionSide),
+		}
+		
+		log.Printf("  📄 订单#%d: %s %s %s 数量:%s 价格:%s 止损价:%s", 
+			order.OrderID, order.Type, order.Side, order.PositionSide, 
+			order.OrigQuantity, order.Price, order.StopPrice)
+	}
+	
+	return result, nil
+}
