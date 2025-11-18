@@ -792,13 +792,13 @@ export const translations = {
     nofxDescription1: '一个透明、可信任的开源 OS，提供统一的 \'决策-风险-执行\'',
     nofxDescription2: '层，支持所有资产类别。',
     nofxDescription3: '从加密市场起步（24/7、高波动性完美测试场），未来扩展到股票、期货、外汇。核心：开放架构、AI',
-    nofxDescription4: '达尔文主义（多代理自竞争、策略进化）、CodeFi 飞轮（开发者 PR',
-    nofxDescription5: '贡献获积分奖励）。',
+    nofxDescription4: '达尔文主义（多代理自竞争、策略进化）',
+    nofxDescription5: '贡献获积分）。',
     youFullControl: '你 100% 掌控',
     fullControlDesc: '完全掌控 AI 提示词和资金',
-    startupMessages1: '启动自动交易系统...',
-    startupMessages2: 'API服务器启动在端口 8080',
-    startupMessages3: 'Web 控制台 http://localhost:3000',
+    startupMessages1: '如果你不情愿在10年内持有某只股票，那就不要持有10分钟',
+    startupMessages2: '以合理的价格投资一家出色的企业',
+    startupMessages3: '捕鱼的第一条规则：去有鱼的地方捕鱼',
     
     // How It Works Section
     howToStart: '如何开始使用',

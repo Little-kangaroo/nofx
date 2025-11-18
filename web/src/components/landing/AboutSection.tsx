@@ -90,10 +90,10 @@ export default function AboutSection({ language }: AboutSectionProps) {
 
               <Typewriter
                 lines={[
-                  '$ git clone https://github.com/tinkle-community/nofx.git',
-                  '$ cd nofx',
-                  '$ chmod +x start.sh',
-                  '$ ./start.sh start --build',
+                  '$ If you aren\'t willing to own a stock for ten years, don\'t even think about owning it for ten minutes.',
+                  '$ The first rule of fishing is to fish where the fish are',
+                  '$ It\'s far better to buy a wonderful company',
+                  '$  a fair price than a fair company at a wonderful price',
                   t('startupMessages1', language),
                   t('startupMessages2', language),
                   t('startupMessages3', language),
