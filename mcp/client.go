@@ -37,7 +37,7 @@ func New() *Client {
 		Provider: ProviderDeepSeek,
 		BaseURL:  "https://api.deepseek.com/v1",
 		Model:    "deepseek-chat",
-		Timeout:  300 * time.Second, // 增加到300秒（5分钟），适应32K tokens的长响应
+		Timeout:  600 * time.Second, // 增加到600秒（10分钟），减少超时发生
 	}
 }
 
@@ -106,13 +106,13 @@ func (client *Client) SetCustomAPI(apiURL, apiKey, modelName string) {
 	}
 
 	client.Model = modelName
-	client.Timeout = 300 * time.Second // 增加到300秒，适应大模型长响应
+	traderConfig.Timeout = 600 * time.Second // 增加到600秒，适应大模型长响应
 }
 
 // SetClient 设置完整的AI配置（高级用户）
 func (client *Client) SetClient(Client Client) {
 	if Client.Timeout == 0 {
-		Client.Timeout = 300 * time.Second // 默认300秒超时
+		Client.Timeout = 600 * time.Second // 默认600秒超时
 	}
 	client = &Client
 }
@@ -258,7 +258,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		Timeout: client.Timeout,
 		Transport: &http.Transport{
 			TLSHandshakeTimeout:   30 * time.Second,  // TLS握手超时
-			ResponseHeaderTimeout: 120 * time.Second, // 增加到120秒等待响应头
+			ResponseHeaderTimeout: 300 * time.Second, // 增加到300秒等待响应头
 			ExpectContinueTimeout: 1 * time.Second,   // Expect: 100-continue 超时
 			ForceAttemptHTTP2:     false,             // 禁用HTTP/2，强制使用HTTP/1.1
 			MaxIdleConns:          10,                // 最大空闲连接
@@ -343,20 +343,30 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	return responseContent, nil
 }
 
-// isRetryableError 判断错误是否可重试
+// isRetryableError 判断错误是否可重试（避免对超时错误重试以节省费用）
 func isRetryableError(err error) bool {
 	errStr := err.Error()
-	// 网络错误、超时、EOF等可以重试
+	// 超时错误不重试，避免额外费用
+	timeoutErrors := []string{
+		"timeout",
+		"context deadline exceeded",               // 上下文超时
+		"Client.Timeout exceeded",                 // 客户端超时
+		"http2: timeout awaiting response headers", // HTTP/2响应头超时
+	}
+	for _, timeoutErr := range timeoutErrors {
+		if strings.Contains(errStr, timeoutErr) {
+			log.Printf("⚠️ [费用控制] 检测到超时错误，不重试以避免额外费用: %s", timeoutErr)
+			return false // 超时错误不重试
+		}
+	}
+	
+	// 只对真正的网络连接问题重试
 	retryableErrors := []string{
 		"EOF",
-		"timeout",
 		"connection reset",
 		"connection refused",
 		"temporary failure",
 		"no such host",
-		"http2: timeout awaiting response headers", // HTTP/2响应头超时
-		"context deadline exceeded",               // 上下文超时
-		"Client.Timeout exceeded",                 // 客户端超时
 	}
 	for _, retryable := range retryableErrors {
 		if strings.Contains(errStr, retryable) {
