@@ -533,6 +533,20 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		}
 		updateTime := at.positionFirstSeenTime[posKey]
 
+		// 获取当前的止损挂单价格
+		var prevStopPrice float64
+		if side == "long" {
+			pendingKey := fmt.Sprintf("%s_long_stop", symbol)
+			if pendingOrder, exists := at.pendingStopOrders[pendingKey]; exists {
+				prevStopPrice = pendingOrder.StopPrice
+			}
+		} else if side == "short" {
+			pendingKey := fmt.Sprintf("%s_short_stop", symbol)
+			if pendingOrder, exists := at.pendingStopOrders[pendingKey]; exists {
+				prevStopPrice = pendingOrder.StopPrice
+			}
+		}
+
 		positionInfos = append(positionInfos, decision.PositionInfo{
 			Symbol:           symbol,
 			Side:             side,
@@ -545,6 +559,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 			LiquidationPrice: liquidationPrice,
 			MarginUsed:       marginUsed,
 			UpdateTime:       updateTime,
+			PrevStop:         prevStopPrice, // 添加当前止损挂单价格
 		})
 	}
 

@@ -26,6 +26,7 @@ type PositionInfo struct {
 	LiquidationPrice float64 `json:"liquidation_price"`
 	MarginUsed       float64 `json:"margin_used"`
 	UpdateTime       int64   `json:"update_time"` // 持仓更新时间戳（毫秒）
+	PrevStop         float64 `json:"prev_stop"`   // 当前止损挂单价格
 }
 
 // AccountInfo 账户信息
@@ -363,10 +364,18 @@ func buildUserPrompt(ctx *Context) string {
 				}
 			}
 
-			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n\n",
+			// 构建 prev_stop 显示
+			var prevStopStr string
+			if pos.PrevStop > 0 {
+				prevStopStr = fmt.Sprintf(" | prev_stop%.4f", pos.PrevStop)
+			} else {
+				prevStopStr = " | prev_stop--"
+			}
+
+			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f%s%s\n\n",
 				i+1, pos.Symbol, strings.ToUpper(pos.Side),
 				pos.EntryPrice, pos.MarkPrice, pos.UnrealizedPnLPct,
-				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
+				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, prevStopStr, holdingDuration))
 
 			// 使用FormatAsCompactData输出精简市场数据
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
