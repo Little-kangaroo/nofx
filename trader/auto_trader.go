@@ -112,6 +112,7 @@ type AutoTrader struct {
 	callCount             int              // AI调用次数
 	positionFirstSeenTime map[string]int64 // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
 	pendingStopOrders     map[string]*PendingStopOrder // 待确认的止损单
+	lastKnownStopOrders   map[string][]map[string]interface{} // 上次检查的止损单状态 (posKey -> orders)
 }
 
 // NewAutoTrader 创建自动交易器
@@ -235,6 +236,7 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		isRunning:             false,
 		positionFirstSeenTime: make(map[string]int64),
 		pendingStopOrders:     make(map[string]*PendingStopOrder),
+		lastKnownStopOrders:   make(map[string][]map[string]interface{}),
 	}, nil
 }
 
@@ -1895,11 +1897,26 @@ func (at *AutoTrader) executeCloseAllPositionsWithRecord(decision *decision.Deci
 
 // checkPendingStopOrders 检查待确认的止损单状态，记录成交的订单
 func (at *AutoTrader) checkPendingStopOrders(record *logger.DecisionRecord) error {
+	// 1. 检查内存中跟踪的止损单（AI更新的）
+	if err := at.checkTrackedStopOrders(record); err != nil {
+		log.Printf("⚠️ 检查跟踪的止损单失败: %v", err)
+	}
+	
+	// 2. 检查所有持仓的止损单（包括开仓时设置的）
+	if err := at.checkAllPositionStopOrders(record); err != nil {
+		log.Printf("⚠️ 检查所有持仓止损单失败: %v", err)
+	}
+	
+	return nil
+}
+
+// checkTrackedStopOrders 检查内存中跟踪的止损单（原有逻辑）
+func (at *AutoTrader) checkTrackedStopOrders(record *logger.DecisionRecord) error {
 	if len(at.pendingStopOrders) == 0 {
 		return nil
 	}
 
-	log.Printf("🔍 检查 %d 个待确认止损单状态", len(at.pendingStopOrders))
+	log.Printf("🔍 检查 %d 个跟踪的止损单状态", len(at.pendingStopOrders))
 	
 	var toRemove []string
 	
@@ -1962,6 +1979,134 @@ func (at *AutoTrader) checkPendingStopOrders(record *logger.DecisionRecord) erro
 	
 	if len(toRemove) > 0 {
 		log.Printf("📝 移除了 %d 个已处理的止损单记录", len(toRemove))
+	}
+	
+	return nil
+}
+
+// checkAllPositionStopOrders 检查所有当前持仓的止损单状态（包括开仓时设置的）
+func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) error {
+	log.Printf("🔍 检查所有持仓的止损挂单状态...")
+	
+	// 获取当前持仓
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓失败: %w", err)
+	}
+	
+	if len(positions) == 0 {
+		return nil // 无持仓，无需检查
+	}
+	
+	// 为每个持仓检查其止损挂单
+	for _, pos := range positions {
+		symbol := pos["symbol"].(string)
+		side := pos["side"].(string)
+		
+		log.Printf("  🔍 检查 %s %s 的止损挂单", symbol, side)
+		
+		// 查询该币种的所有挂单
+		orders, err := at.trader.GetOpenOrders(symbol)
+		if err != nil {
+			log.Printf("  ❌ 查询 %s 挂单失败: %v", symbol, err)
+			continue
+		}
+		
+		// 查找该持仓方向的止损单
+		var stopLossOrders []map[string]interface{}
+		for _, order := range orders {
+			orderType, _ := order["type"].(string)
+			positionSide, _ := order["positionSide"].(string)
+			orderSide, _ := order["side"].(string)
+			
+			// 检查是否是止损单
+			if orderType == "STOP_MARKET" || orderType == "STOP" {
+				// 检查持仓方向是否匹配
+				if (side == "long" && positionSide == "LONG") || 
+				   (side == "short" && positionSide == "SHORT") {
+					stopLossOrders = append(stopLossOrders, order)
+					log.Printf("    🎯 找到止损单: %s %s %s", orderType, orderSide, order["stopPrice"])
+				}
+			}
+		}
+		
+		if len(stopLossOrders) == 0 {
+			log.Printf("    ℹ️ %s %s 无止损挂单", symbol, side)
+			continue
+		}
+		
+		// 检查是否有止损单已成交（通过比较上次记录的止损单）
+		posKey := symbol + "_" + side
+		if lastStopOrders, exists := at.lastKnownStopOrders[posKey]; exists {
+			// 比较当前止损单与上次记录的止损单
+			currentOrderIDs := make(map[int64]bool)
+			for _, order := range stopLossOrders {
+				if orderID, ok := order["orderId"]; ok {
+					if idFloat, ok := orderID.(float64); ok {
+						currentOrderIDs[int64(idFloat)] = true
+					} else if idInt, ok := orderID.(int64); ok {
+						currentOrderIDs[idInt] = true
+					}
+				}
+			}
+			
+			// 检查哪些止损单消失了（可能已成交）
+			for _, lastOrder := range lastStopOrders {
+				lastOrderID := int64(0)
+				if orderID, ok := lastOrder["orderId"]; ok {
+					if idFloat, ok := orderID.(float64); ok {
+						lastOrderID = int64(idFloat)
+					} else if idInt, ok := orderID.(int64); ok {
+						lastOrderID = idInt
+					}
+				}
+				
+				if lastOrderID > 0 && !currentOrderIDs[lastOrderID] {
+					log.Printf("    ✅ 检测到止损单消失: %s %s (订单ID: %d)", symbol, side, lastOrderID)
+					
+					// 创建虚拟的PendingStopOrder来记录执行
+					stopPrice := 0.0
+					quantity := 0.0
+					if stopPriceStr, ok := lastOrder["stopPrice"].(string); ok {
+						stopPrice, _ = strconv.ParseFloat(stopPriceStr, 64)
+					}
+					if quantityStr, ok := lastOrder["quantity"].(string); ok {
+						quantity, _ = strconv.ParseFloat(quantityStr, 64)
+					}
+					
+					pendingOrder := &PendingStopOrder{
+						Symbol:         symbol,
+						Side:           side,
+						OrderID:        lastOrderID,
+						StopPrice:      stopPrice,
+						Quantity:       quantity,
+						CreateTime:     time.Now(),
+						OriginalAction: "stop_loss_detected",
+					}
+					
+					at.recordStopLossExecution(pendingOrder, record)
+				}
+			}
+		}
+		
+		// 更新该持仓的止损单记录
+		at.lastKnownStopOrders[posKey] = stopLossOrders
+	}
+	
+	// 清理已平仓持仓的止损单记录
+	currentPositionKeys := make(map[string]bool)
+	for _, pos := range positions {
+		symbol := pos["symbol"].(string)
+		side := pos["side"].(string)
+		posKey := symbol + "_" + side
+		currentPositionKeys[posKey] = true
+	}
+	
+	for posKey := range at.lastKnownStopOrders {
+		if !currentPositionKeys[posKey] {
+			log.Printf("  🧹 清理已平仓的止损记录: %s", posKey)
+			delete(at.lastKnownStopOrders, posKey)
+		}
 	}
 	
 	return nil

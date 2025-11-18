@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -240,10 +241,13 @@ func (l *DecisionLogger) GetStatistics() (*Statistics, error) {
 
 		for _, action := range record.Decisions {
 			if action.Success {
-				switch action.Action {
-				case "open_long", "open_short":
+				switch {
+				case action.Action == "open_long" || action.Action == "open_short":
 					stats.TotalOpenPositions++
-				case "close_long", "close_short":
+				case action.Action == "close_long" || action.Action == "close_short":
+					stats.TotalClosePositions++
+				case strings.HasPrefix(action.Action, "stop_loss_"):
+					// 止损执行也算作平仓
 					stats.TotalClosePositions++
 				}
 			}
@@ -348,15 +352,25 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 
 				symbol := action.Symbol
 				side := ""
-				if action.Action == "open_long" || action.Action == "close_long" {
+				isStopLoss := false
+				
+				// 检查是否是止损执行
+				if strings.HasPrefix(action.Action, "stop_loss_") {
+					isStopLoss = true
+					if action.Action == "stop_loss_long" {
+						side = "long"
+					} else if action.Action == "stop_loss_short" {
+						side = "short"
+					}
+				} else if action.Action == "open_long" || action.Action == "close_long" {
 					side = "long"
 				} else if action.Action == "open_short" || action.Action == "close_short" {
 					side = "short"
 				}
 				posKey := symbol + "_" + side
 
-				switch action.Action {
-				case "open_long", "open_short":
+				switch {
+				case action.Action == "open_long" || action.Action == "open_short":
 					// 记录开仓
 					openPositions[posKey] = map[string]interface{}{
 						"side":      side,
@@ -365,7 +379,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 						"quantity":  action.Quantity,
 						"leverage":  action.Leverage,
 					}
-				case "close_long", "close_short":
+				case action.Action == "close_long" || action.Action == "close_short" || isStopLoss:
 					// 移除已平仓记录
 					delete(openPositions, posKey)
 				}
@@ -382,15 +396,26 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 
 			symbol := action.Symbol
 			side := ""
-			if action.Action == "open_long" || action.Action == "close_long" {
+			isStopLoss := false
+			
+			// 检查是否是止损执行
+			if strings.HasPrefix(action.Action, "stop_loss_") {
+				isStopLoss = true
+				if action.Action == "stop_loss_long" {
+					side = "long"
+				} else if action.Action == "stop_loss_short" {
+					side = "short"
+				}
+			} else if action.Action == "open_long" || action.Action == "close_long" {
 				side = "long"
 			} else if action.Action == "open_short" || action.Action == "close_short" {
 				side = "short"
 			}
-			posKey := symbol + "_" + side // 使用symbol_side作为key，区分多空持仓
+			
+			posKey := symbol + "_" + side
 
-			switch action.Action {
-			case "open_long", "open_short":
+			switch {
+			case action.Action == "open_long" || action.Action == "open_short":
 				// 更新开仓记录（可能已经在预填充时记录过了）
 				openPositions[posKey] = map[string]interface{}{
 					"side":      side,
@@ -400,12 +425,12 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 					"leverage":  action.Leverage,
 				}
 
-			case "close_long", "close_short":
+			case action.Action == "close_long" || action.Action == "close_short" || isStopLoss:
 				// 查找对应的开仓记录（可能来自预填充或当前窗口）
 				if openPos, exists := openPositions[posKey]; exists {
 					openPrice := openPos["openPrice"].(float64)
 					openTime := openPos["openTime"].(time.Time)
-					side := openPos["side"].(string)
+					positionSide := openPos["side"].(string)
 					quantity := openPos["quantity"].(float64)
 					leverage := openPos["leverage"].(int)
 
@@ -413,7 +438,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 					// 合约交易 PnL 计算：quantity × 价格差
 					// 注意：杠杆不影响绝对盈亏，只影响保证金需求
 					var pnl float64
-					if side == "long" {
+					if positionSide == "long" {
 						pnl = quantity * (action.Price - openPrice)
 					} else {
 						pnl = quantity * (openPrice - action.Price)
@@ -430,7 +455,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 					// 记录交易结果
 					outcome := TradeOutcome{
 						Symbol:        symbol,
-						Side:          side,
+						Side:          positionSide,
 						Quantity:      quantity,
 						Leverage:      leverage,
 						OpenPrice:     openPrice,
@@ -442,6 +467,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 						Duration:      action.Timestamp.Sub(openTime).String(),
 						OpenTime:      openTime,
 						CloseTime:     action.Timestamp,
+						WasStopLoss:   isStopLoss, // 标记是否为止损
 					}
 
 					analysis.RecentTrades = append(analysis.RecentTrades, outcome)
