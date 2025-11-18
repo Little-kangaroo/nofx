@@ -803,16 +803,16 @@ export const translations = {
     // How It Works Section
     howToStart: '如何开始使用',
     fourSimpleSteps: '四个简单步骤，开启 AI 自动交易之旅',
-    step1Title: '拉取 GitHub 仓库',
-    step1Desc: ' 并切换到 dev 分支测试新功能。',
+    step1Title: '注册账号',
+    step1Desc: ' 注册平台账号管理自己的AI机器人。',
     step2Title: '配置环境',
     step2Desc: '前端设置交易所 API（如 Binance、Hyperliquid）、AI 模型和自定义提示词。',
     step3Title: '部署与运行',
-    step3Desc: '一键 Docker 部署，启动 AI 代理。注意：高风险市场，仅用闲钱测试。',
+    step3Desc: '启动自动交易机器人。注意：高风险市场，仅用闲钱测试。',
     step4Title: '优化与贡献',
-    step4Desc: '监控交易，提交 PR 改进框架。加入 Telegram 分享策略。',
+    step4Desc: '优化交易提示词模板。',
     importantRiskWarning: '重要风险提示',
-    riskWarningText: 'dev 分支不稳定，勿用无法承受损失的资金。NOFX 非托管，无官方策略。交易有风险，投资需谨慎。',
+    riskWarningText: '勿用无法承受损失的资金，无官方策略。交易有风险，投资需谨慎。',
     
     // Community Section (testimonials are kept as-is since they are quotes)
     
