@@ -204,12 +204,25 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		maxTokens = 8192 // 默认使用较保守的限制
 	}
 
-	// 构建请求体
+	// 构建请求体 - 支持新旧API格式
 	requestBody := map[string]interface{}{
 		"model":       client.Model,
 		"messages":    messages,
 		"temperature": 0.5, // 降低temperature以提高JSON格式稳定性
-		"max_tokens":  maxTokens,
+	}
+	
+	// 根据不同的API提供商使用不同的token限制参数名
+	// 新版OpenAI API要求使用max_completion_tokens而不是max_tokens
+	switch client.Provider {
+	case ProviderDeepSeek:
+		requestBody["max_tokens"] = maxTokens // DeepSeek仍使用max_tokens
+	case ProviderQwen:
+		requestBody["max_tokens"] = maxTokens // Qwen仍使用max_tokens
+	case ProviderCustom:
+		// 自定义API优先尝试max_completion_tokens（兼容新版OpenAI）
+		requestBody["max_completion_tokens"] = maxTokens
+	default:
+		requestBody["max_completion_tokens"] = maxTokens // 默认使用新格式
 	}
 
 	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持
@@ -220,7 +233,14 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	log.Printf("   Provider: %s", client.Provider)
 	log.Printf("   Model: %s", client.Model)
 	log.Printf("   Temperature: 0.5")
-	log.Printf("   Max Tokens: %d", maxTokens)
+	
+	// 显示实际使用的token参数名
+	if _, hasMaxTokens := requestBody["max_tokens"]; hasMaxTokens {
+		log.Printf("   Max Tokens (max_tokens): %d", maxTokens)
+	} else {
+		log.Printf("   Max Completion Tokens (max_completion_tokens): %d", maxTokens)
+	}
+	
 	log.Printf("   Messages Count: %d", len(messages))
 	if systemPrompt != "" {
 		log.Printf("   System Prompt Length: %d chars", len(systemPrompt))
@@ -424,7 +444,9 @@ func writeAPICallDetailsToFile(systemPrompt, userPrompt string, requestBody map[
 		fmt.Fprintf(file, "Temperature: %v\n", temp)
 	}
 	if maxTokens, ok := requestBody["max_tokens"]; ok {
-		fmt.Fprintf(file, "Max Tokens: %v\n", maxTokens)
+		fmt.Fprintf(file, "Max Tokens (max_tokens): %v\n", maxTokens)
+	} else if maxCompletionTokens, ok := requestBody["max_completion_tokens"]; ok {
+		fmt.Fprintf(file, "Max Completion Tokens (max_completion_tokens): %v\n", maxCompletionTokens)
 	}
 	
 	// System Prompt
