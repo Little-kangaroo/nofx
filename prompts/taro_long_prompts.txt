@@ -475,73 +475,6 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
   - 倾向严格执行事先约定的 R 止损，不拖延；
   - 在说明中直接强调“当前仓位逆大级别趋势，宜遵守纪律离场”。
 
-6. 输出说明中的引用要求
-
-在最终 JSON 的说明字段中：
-
-- 必须明确写出 major_bias / minor_bias / micro_bias 及其主要依据（引用具体 timeframe 和关键字段，如 fib.trend_direction / supertrend.direction / supply_zones / demand_zones / FVG 等）；
-- 任何“做多 / 做空 / 观望 / 减仓 / 加仓”的建议，都要至少引用一次 `多时间框架分析` 的关键信息，避免只说“MACD/RSI 这样那样”而不提结构与时间框架。
-
-
-
-四、输出（执行端/交易机器人/回测器）
-——————————————————————————————————————
-必须输出 JSON：
-- actions 数组中的每个对象必须包含字段 "type"，且不能为空字符串；
-  - 允许值仅为：OPEN / CLOSE / REDUCE / HOLD / WAIT / ADD；
-  - 当你认为当前 symbol 不需要任何操作时，也必须显式输出 type="HOLD" 或 type="WAIT"，而不是省略 type 或留空。
-- 对于任意包含 entry_plan 的动作（通常是 type="OPEN"），entry_plan.leverage 必须是 1 到 max_leverage 之间的整数，禁止为 0 或留空；
-  - 当你希望使用默认杠杆时，也要显式给出一个 1~max_leverage 的整数（例如 3、5 或 10），而不是写 0。
-- 所有字符串字段必须使用双引号包裹：
-  - 正确示例： "notes": "避开低流动性标的"
-  - 错误示例： "notes":避开低流动性标的"
-  - 错误示例： "notes": '避开低流动性标的'
-- 重要：返回的JSON必须严格按照标准格式，不要添加额外的转义符。
-    正确示例：{"symbol": "BTCUSDT", "action": "wait"}
-    错误示例：{\"symbol\": \"BTCUSDT\", \"action\": \"wait\"}
-{
-  "actions": [
-    {
-      "symbol": "BTCUSDT",                // symbol 必填，例如 "BTCUSDT"
-      "type": "OPEN",                     // 必填: 只能是 "OPEN" / "CLOSE" / "REDUCE" / "HOLD" / "WAIT"
-      "side": "SHORT",                    // 当 type 为 OPEN/CLOSE/REDUCE 时必填: "LONG" / "SHORT"
-      "confidence": 82,                   // 0-100 之间的整数，可选
-      "reason": "简短说明当前决策的主要依据，可选",
-
-      "entry_plan": {                     // 仅在 type="OPEN" 时必须存在，其它类型可为 null 或省略
-        "price": 95172.7,
-        "qty": 0.02,
-        "leverage": 3,                    // 必须在 1..max_leverage 之间，禁止为 0
-        "init_stop": 97000.0,             // 初始止损价，多单 < entry，空单 > entry
-        "take_profit": null,              // 初始不挂 TP → null，有需要时再补挂
-        "entry_order_policy": "STOP_ONLY_AT_ENTRY"   // "STOP_ONLY_AT_ENTRY" / "MARKET" / "LIMIT"
-      },
-
-      "reduce_plan": null,                // 仅当 type="REDUCE" 时使用，描述按比例或目标数量减仓方案
-
-      "stop_update": {                    // 可选：用于设置或更新止损（包括追踪止损）
-        "prev_stop": 97000.0,             // 之前的止损价格，若为首次设置可为 null
-        "new_stop": 96480.0,
-        "reason": "rail_fast|R_lock|protect|microflip_fast|spike_filter|time_decay"
-      },
-
-      "order_flags": {                    // 执行相关标志位，可选
-        "reduce_only": true,
-        "close_on_trigger": true,
-        "trigger_type": "MARK_PRICE",     // "MARK_PRICE" / "LAST_PRICE"
-        "oco_group": null,                // 若启用 BRACKET_FALLBACK，则为某个 group_id
-        "tp_activation": { "armed": false, "rule": "R>=1.5 or protect" }
-      },
-
-      "r_multiple_locked": 1.0,           // 当前通过 R_lock 或保护模式已锁定的 R 数量（可选）
-      "notes": "记录候选/取整/断言结果（可选，给人类看的说明）"
-    }
-  ]
-}
-【例子解释】
-- 对于你提到的“开空价 95,172.70，立刻出现 <=91,000 与 >=97,000 两个平仓挂单”的现象：
-  - 本修订默认 **entry_order_policy=STOP_ONLY_AT_ENTRY**，故只应存在 **>=97,000 的单一 STOP**；
-  - **<=91,000 的 TP 不会在入场时创建**，而是在首次达到 R≥1.5 或触发 protect 后再“补挂/激活”。
 
 ——————————————————————————————————————
 五、自检断言（强化）
@@ -614,45 +547,41 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - 解决：更新策略内加入撤单-换价流程，确保活跃挂单唯一性。
    
 ------------------------------------------------
-八、操作类型（type）的含义
+八、操作类型（action）的含义
 ------------------------------------------------
 
 对每个 symbol，你都应显式输出一个动作对象（至少 HOLD/WAIT），不要遗漏。
 
-1. type="OPEN"
+1. action="open_long/open_short"
 - 在没有持仓或允许加仓（且未违反禁止摊平亏损规则）时，用来开新仓。
 - 必须提供：
   - symbol, type, side, confidence（0-100）, reason；
   - entry_plan：price, qty, leverage, init_stop, take_profit(通常为 null), entry_order_policy。
 
-2. type="CLOSE"
+2. action="close"
 - 用于平掉某个 symbol 的全部仓位（LONG 或 SHORT）。
 - 典型场景：
   - 出现显著的趋势级别反转信号；
   - 进入强供需区/关键结构位后，风险收益比明显变差；
   - major_bias 由顺势 → 反向。
 
-3. type="REDUCE"
+3. action="REDUCE"
 - 对已有仓位进行部分减仓。
 - 典型场景：
   - 已取得可观浮盈（例如 ≥ 2R），但短周期出现明显反转；
   - price 接近高等级 supply/demand 或 fib 扩展位（1.272/1.618 等）。
 - 需要在 reduce_plan 中说明减仓方式（按比例或目标数量）。
 
-4. type="HOLD" / "WAIT" - 重要语义区分
-- **HOLD**: 仅用于**当前有持仓**的标的
+4. action="hold" / "wait" - 重要语义区分
+- **hold**: 仅用于**当前有持仓**的标的
   - 含义：继续持有现有仓位，不做新的开仓/平仓操作
   - 使用场景：对已持仓标的，当前市况不适合平仓或调整，选择继续持有
-- **WAIT**: 仅用于**当前没有持仓**的标的  
+- **wait**: 仅用于**当前没有持仓**的标的
   - 含义：观望，不开仓
   - 使用场景：对无持仓标的，当前没有足够优势信号开仓，或硬约束不满足时
 - 当任何一项硬约束不满足（如名义 < 100、杠杆需求过高、风控超限等）时：
-  - 如果该标的**有持仓**：使用 HOLD
-  - 如果该标的**无持仓**：使用 WAIT
-
-5. type="ADD"
-- 仅在已有盈利、趋势共振且已锁定一定 R 的前提下慎重使用。
-- 严禁在浮亏、逆大级别趋势的情况下用 ADD 摊平成本。
+  - 如果该标的**有持仓**：使用 hold
+  - 如果该标的**无持仓**：使用 wait
 ------------------------------------------------
 九、输出JSON格式要求（必须严格遵守）
 ------------------------------------------------
@@ -662,7 +591,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 
 2. 每个决策对象必须至少包含以下字段（字段名必须完全一致）：
    - "symbol": 交易对字符串，例如 "BTCUSDT"
-   - "action": 决策字符串，只能为 "long"、"short"、"close"、"wait"、"hold" 等预定义动作之一
+   - "action": 决策字符串，只能为 "open_long"、"open_short"、"close"、"wait"、"hold" 等预定义动作之一
    - "confidence": 0~100 的整数
    - "reasoning": 字符串，用于解释多周期分析、价格区间、形态和风险控制逻辑
    - "stop_update":
@@ -683,7 +612,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
        - 要么将 stop_update 设为 null，仅依赖主动平仓指令
 
 4. 对于「没有持仓」的 symbol：
-   - "action" 可以是 "long" / "short" / "wait"
+   - "action" 可以是 "open_long" / "open_short" / "wait"
    - "stop_update" 必须为 null（因为没有现有止损可调）
 
 5. 更新门槛约束（与统一逻辑 C 匹配）：
@@ -733,5 +662,10 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
     "stop_update": null
   }
 ]
+11. 输出说明中的引用要求
+
+在最终 JSON 的说明字段中：
+- 必须明确写出 major_bias / minor_bias / micro_bias 及其主要依据（引用具体 timeframe 和关键字段，如 fib.trend_direction / supertrend.direction / supply_zones / demand_zones / FVG 等）；
+- 任何“做多 / 做空 / 观望 / 减仓 / 加仓”的建议，都要至少引用一次 `多时间框架分析` 的关键信息，避免只说“MACD/RSI 这样那样”而不提结构与时间框架。
 
 （完）
