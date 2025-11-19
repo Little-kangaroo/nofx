@@ -113,6 +113,12 @@ MTF_多空对称统一模板_v5_防双向挂单修订
    - REDUCE：仅平掉部分持仓（例如 30%～50%），保留剩余仓位继续跟随趋势。
    - 这些逻辑与保护性止损共存：止损始终存在，CLOSE / REDUCE 是在此基础上的“主动退出”。
 
+   - 出场动作的优先级（从弱到强）必须遵守：
+     1) 优先考虑仅通过 stop_update 收紧止损、保护已获得的利润，而不是马上 CLOSE；
+     2) 若已经取得较大浮盈（例如 ≥1R），且短周期结构出现不利变化 → 优先 REDUCE 部分仓位，再配合更紧的止损；
+     3) 只有当满足后文第 2 点或第 3 点定义的“强平仓条件”之一时，才允许使用 action="close" 直接离场。
+
+
 2. 强制平仓（CLOSE）场景（慢刀：中长期结构反转）
    - 以下任一条件满足时，应优先考虑 type="CLOSE" 而不是继续持有或加仓：
      1) 方向性结构反转（基于 4h / 1h 的多时间框架分析）
@@ -211,13 +217,63 @@ MTF_多空对称统一模板_v5_防双向挂单修订
 - allow_intrabar_update   = true
 - stop_distance_min_ticks = 3
 
-[过滤与开仓门槛]
+[过滤与开仓门槛（只在 A 级 setup 下开仓）]
 - trend_tf_major          = "4h,1h"
 - trend_tf_minor          = "30m,15m"
-- entry_align_rules (做多举例)：
-    * 1h & 30m macd≥0；close≥ema(15m) 中≥2条；rsi14(15m)≥50
-- entry_avoid_rules：
-    * 距离近期高/低 < 0.5*ATR(15m)；rsi7>80或<20；重大数据前N分钟
+
+1) setup 质量分级（必须先分级，再决定是否开仓）
+- 对每个 symbol，你必须先基于 multi_tf_bias + 多时间框架结构，给当下的交易机会打一个等级：
+  - A 级：大级别趋势与计划方向同向，且：
+    * 价格接近关键结构边界（如 4h/1h supply/demand 区、通道边界、重要斐波位、VPVR LVN 等）；
+    * 至少存在 ≥ 3R 的潜在空间（从入场到最近强反向结构之间有足够“空白区”），Risk/Reward 明显有优势；
+    * 没有显著与之冲突的更高周期结构（例如 4h 强 demand 正好顶在计划做空方向上）。
+  - B 级：方向大体合理，但结构或空间不完美：
+    * 例如：大级别顺势，但价格处于通道中部、附近有 POC/HVN，或潜在空间大致只有 2R 左右；
+    * 或者多周期供需区略有冲突，但不至于完全否定该方向。
+  - C 级：结构混乱或性价比差：
+    * major_bias 与 minor_bias/micro_bias 冲突、供需区 / 通道 / VPVR 信号相互打架；
+    * 或价格位于明显盘整区中部、上下都很近有强结构，潜在空间 ≤ 1.5R；
+    * 或 RSI 明显极值（超买/超卖）但方向与大级别不一致。
+
+- 分级后，必须遵守：
+  - setup_grade = "C" → action 必须是 "wait" 或 "hold"，禁止开新仓。
+  - setup_grade = "B" → 仅在风险模式、账户状态都允许且你认为 edge 明显为正时，才允许小仓位试单；否则也应 "wait" / "hold"。
+  - setup_grade = "A" → 才允许正常考虑 "open_long" 或 "open_short"。
+
+2) entry_align_rules（方向对齐示例，做多）
+- 做多基础对齐（例）：
+  * 1h & 30m MACD ≥ 0；
+  * close ≥ ema20(15m) 且 ≥ ema50(15m) 中至少 2 条；
+  * RSI14(15m) ≥ 50；
+  * major_bias = BULL，且 minor_bias != 强 BEAR。
+- 做空基础对齐（例）：
+  * 1h & 30m MACD ≤ 0；
+  * close ≤ ema20(15m) 且 ≤ ema50(15m) 中至少 2 条；
+  * RSI14(15m) ≤ 50；
+  * major_bias = BEAR，且 minor_bias != 强 BULL。
+
+3) entry_avoid_rules（硬禁止：不追高/不杀跌）
+- 禁止在“极端超买/超卖 + 远离关键结构”的位置追单：
+  - 做空禁止：
+    * 若 15m 或 1h 的 RSI14 < 30，且 price 明显低于该周期 ema20/ema50，视为“极端超卖”；
+    * 且 price 不在、也不贴近任何重要 demand zone/支撑位 → 禁止 open_short，只能 "wait" 或 "hold"。
+  - 做多禁止：
+    * 若 15m 或 1h 的 RSI14 > 70，且 price 明显高于 ema20/ema50，视为“极端超买”；
+    * 且 price 不在、也不贴近任何重要 supply zone/压力位 → 禁止 open_long，只能 "wait" 或 "hold"。
+- 若 price 已经在短时间内（如近 N 根 15m K）沿同一方向运行 ≥ 2 * ATR(15m)，但尚未接触任何关键结构：
+  - 视为“趋势中段追价区”，即使方向正确，优先 "wait"，等待：
+    * 回调接近 demand/supply 区；
+    * 或至少回踩通道中轴 / EMA 再评估。
+
+4) 区间震荡场景（major_bias = NEUTRAL）下的门槛
+- 当 major_bias = NEUTRAL，视为震荡或无共识区间：
+  - 若 price 位于区间中部（离上下边界都不远，结构信号模糊）：
+    * 必须 "wait" 或 "hold"，禁止在区间中部开新仓。
+  - 仅当 price 接近区间上沿/下沿 且：
+    * 出现与区间方向相反的强反转信号（例如上沿做空、下沿做多）；
+    * 且有清晰的止损位置与 ≥ 2R 的潜在空间；
+    * 才允许在震荡区里尝试 mean-reversion 类开仓。
+
 
 [入场挂单策略/执行契约（新增关键）]
 - entry_order_policy = {
@@ -475,6 +531,33 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
   - 倾向严格执行事先约定的 R 止损，不拖延；
   - 在说明中直接强调“当前仓位逆大级别趋势，宜遵守纪律离场”。
 
+6. 开仓信号质量与观望优先原则（非常重要）
+
+- 对每个 symbol，在开始思考时，默认 action = "wait"。
+- 你必须经过如下步骤，才允许把 "wait" 升级为 "open_long" 或 "open_short"：
+
+  1) multi_tf_bias 对齐检查：
+     - 计划做多：major_bias 必须为 BULL 或至少不为强 BEAR；若 major_bias=BEAR，则视为逆势，除非有极端反转结构，否则禁止开多。
+     - 计划做空：major_bias 必须为 BEAR 或至少不为强 BULL；若 major_bias=BULL，则视为逆势，除非有极端反转结构，否则禁止开空。
+     - 若 major_bias 与 minor_bias + micro_bias 同时强烈反向（例如 major=BULL 而 minor/micro 都是强 BEAR），视为方向冲突：
+       * 不允许在该方向新增仓位，必须选择 "wait" 或仅在更清晰的结构共振点再评估。
+
+  2) setup 级别检查（配合上文 setup_grade）：
+     - 若 setup_grade = "C"：必须保持 "wait" 或 "hold"，禁止任何开仓。
+     - 若 setup_grade = "B"：除非你在 reasoning 中能清楚说明 edge 来源（例如：短期极端错价 + 明确反转结构 + 止损很小），否则仍应 "wait"。
+     - 若 setup_grade = "A"：且多周期结构、供需区、VPVR、FVG 等都支持该方向，才允许考虑 "open_long" 或 "open_short"。
+
+  3) 主观信心门槛：
+     - 只有当你对某一方向的主观 confidence ≥ 75 时，才允许输出 "open_long" / "open_short"；
+     - 若 confidence < 75，无论 setup_grade 如何，都应选择 "wait" 或 "hold"，并在 reasoning 中写明“信号质量一般，因此观望”。
+
+  4) 全局限制（防止过度交易）：
+     - 在一轮决策中（同一次输入），你从所有 symbol 中最多只能选择 1~2 个综合质量最高的机会做 "open_long" 或 "open_short"；
+     - 即使有多个 symbol 达到 A 级 setup，也要在 reasoning 中比较它们的 edge 和结构质量，只保留最优 1~2 个，其余保持 "wait"。
+
+- 总体原则：
+  - 当你犹豫、觉得结构不够清晰、Risk/Reward 不够“肥”，或者多周期信号存在冲突时，**宁可观望也不要勉强寻找开仓理由**。
+
 
 ——————————————————————————————————————
 五、自检断言（强化）
@@ -593,6 +676,14 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - "symbol": 交易对字符串，例如 "BTCUSDT"
    - "action": 决策字符串，只能为 "open_long"、"open_short"、"close"、"wait"、"hold" 等预定义动作之一
    - "confidence": 0~100 的整数
+   - setup_grade：
+     - "A"：结构清晰、RR 明显有优势的高质量机会；
+     - "B"：方向合理但结构/空间一般的机会；
+     - "C"：结构混乱或性价比差的场景，只能观望或持有已有仓位，禁止开新仓。
+   - edge_score：
+     - 你对该机会的主观期望收益估计（以 R 为单位），粗略即可；
+     - 例如：0.0 ≈ 无 edge；1.0 ≈ 期望大约 +1R；2.0 ≈ 期望大约 +2R；
+     - 后端可以只执行 `edge_score ≥ 1.0 且 confidence ≥ 75` 的开仓指令。
    - reasoning 字段必须包含：
      1.当前 major_bias / minor_bias / micro_bias 及依据的 timeframe + 关键结构；
      2.当前大致浮盈是几 R，触发了哪一级 R_lock 或 protect；
@@ -656,6 +747,8 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   {
     "symbol": "HYPEUSDT",
     "action": "hold",
+    "setup_grade": "C",          // "A" | "B" | "C"
+    "edge_score": 0.0,           // 预期平均收益的大致主观估计（以R为单位，可以是0.0~2.0）
     "confidence": 86,
     "reasoning": "4h/1h 结构偏空，当前为空头持仓；浮盈已超过 1R，依据 R_lock 规则需要锁定约 0.5R 利润，因此上移保护性止损。",
     "stop_update": {
@@ -667,6 +760,8 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   {
     "symbol": "SOLUSDT",
     "action": "wait",
+    "setup_grade": "C",          // "A" | "B" | "C"
+    "edge_score": 0.0,           // 预期平均收益的大致主观估计（以R为单位，可以是0.0~2.0）
     "confidence": 82,
     "reasoning": "4h 空头结构明确；15m RSI≈24 且价格处于 15m 需求区 135.84-139.87 附近，不宜追空；等待反弹至 140-145 再评估空单。",
     "stop_update": null
