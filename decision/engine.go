@@ -411,15 +411,13 @@ func buildUserPrompt(ctx *Context) string {
 
 		// 添加清晰的市场价格信息显示（类似BTC格式）
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n", displayedCount, coin.Symbol, sourceTags))
-		if marketData, hasData := ctx.MarketDataMap[coin.Symbol]; hasData {
-			sb.WriteString(fmt.Sprintf("%s: %.4f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
-				coin.Symbol, marketData.CurrentPrice, marketData.PriceChange1h, marketData.PriceChange4h,
-				marketData.CurrentMACD, marketData.CurrentRSI7))
-			
-			// 使用FormatAsCompactData输出精简市场数据
-			sb.WriteString(market.FormatAsCompactData(marketData))
-			sb.WriteString("\n")
-		}
+		sb.WriteString(fmt.Sprintf("%s: %.4f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
+			coin.Symbol, marketData.CurrentPrice, marketData.PriceChange1h, marketData.PriceChange4h,
+			marketData.CurrentMACD, marketData.CurrentRSI7))
+		
+		// 使用FormatAsCompactData输出精简市场数据
+		sb.WriteString(market.FormatAsCompactData(marketData))
+		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
 
