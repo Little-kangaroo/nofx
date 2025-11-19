@@ -191,12 +191,25 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		"content": userPrompt,
 	})
 
+	// 根据不同 AI 提供商设置合适的 max_tokens
+	var maxTokens int
+	switch client.Provider {
+	case ProviderDeepSeek:
+		maxTokens = 8192 // DeepSeek API 限制为 8192
+	case ProviderQwen:
+		maxTokens = 32768 // Qwen 支持更高的 token 限制
+	case ProviderCustom:
+		maxTokens = 32768 // 自定义 API 默认使用较高限制
+	default:
+		maxTokens = 8192 // 默认使用较保守的限制
+	}
+
 	// 构建请求体
 	requestBody := map[string]interface{}{
 		"model":       client.Model,
 		"messages":    messages,
 		"temperature": 0.5, // 降低temperature以提高JSON格式稳定性
-		"max_tokens":  32768, // 大幅提升到32K，适配升级后的AI模型
+		"max_tokens":  maxTokens,
 	}
 
 	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持
@@ -204,9 +217,10 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 
 	// 打印请求参数（脱敏）
 	log.Printf("📤 [MCP] AI请求参数:")
+	log.Printf("   Provider: %s", client.Provider)
 	log.Printf("   Model: %s", client.Model)
 	log.Printf("   Temperature: 0.5")
-	log.Printf("   Max Tokens: 32768")
+	log.Printf("   Max Tokens: %d", maxTokens)
 	log.Printf("   Messages Count: %d", len(messages))
 	if systemPrompt != "" {
 		log.Printf("   System Prompt Length: %d chars", len(systemPrompt))
