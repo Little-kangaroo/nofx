@@ -377,8 +377,13 @@ func buildUserPrompt(ctx *Context) string {
 				pos.EntryPrice, pos.MarkPrice, pos.UnrealizedPnLPct,
 				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, prevStopStr, holdingDuration))
 
-			// 使用FormatAsCompactData输出精简市场数据
+			// 添加清晰的市场价格信息显示（类似BTC格式）
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
+				sb.WriteString(fmt.Sprintf("%s: %.4f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
+					pos.Symbol, marketData.CurrentPrice, marketData.PriceChange1h, marketData.PriceChange4h,
+					marketData.CurrentMACD, marketData.CurrentRSI7))
+				
+				// 使用FormatAsCompactData输出精简市场数据
 				sb.WriteString(market.FormatAsCompactData(marketData))
 				sb.WriteString("\n")
 			}
@@ -404,10 +409,17 @@ func buildUserPrompt(ctx *Context) string {
 			sourceTags = " (OI_Top持仓增长)"
 		}
 
-		// 使用FormatAsCompactData输出精简市场数据
-		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
-		sb.WriteString(market.FormatAsCompactData(marketData))
-		sb.WriteString("\n")
+		// 添加清晰的市场价格信息显示（类似BTC格式）
+		sb.WriteString(fmt.Sprintf("### %d. %s%s\n", displayedCount, coin.Symbol, sourceTags))
+		if marketData, hasData := ctx.MarketDataMap[coin.Symbol]; hasData {
+			sb.WriteString(fmt.Sprintf("%s: %.4f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
+				coin.Symbol, marketData.CurrentPrice, marketData.PriceChange1h, marketData.PriceChange4h,
+				marketData.CurrentMACD, marketData.CurrentRSI7))
+			
+			// 使用FormatAsCompactData输出精简市场数据
+			sb.WriteString(market.FormatAsCompactData(marketData))
+			sb.WriteString("\n")
+		}
 	}
 	sb.WriteString("\n")
 

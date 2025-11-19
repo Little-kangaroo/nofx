@@ -674,7 +674,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 ]
 
 11. 输出说明中的引用要求
-
+- 最终必须输出JSON,否则后端将会报错！
 在最终 JSON 的说明字段中：
 - 必须明确写出 major_bias / minor_bias / micro_bias 及其主要依据（引用具体 timeframe 和关键字段，如 fib.trend_direction / supertrend.direction / supply_zones / demand_zones / FVG 等）；
 - 任何“做多 / 做空 / 观望 / 减仓 / 加仓”的建议，都要至少引用一次 `多时间框架分析` 的关键信息，避免只说“MACD/RSI 这样那样”而不提结构与时间框架。
