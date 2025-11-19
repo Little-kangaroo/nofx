@@ -204,11 +204,12 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		maxTokens = 8192 // 默认使用较保守的限制
 	}
 
-	// 构建请求体 - 支持新旧API格式
+	// 构建请求体 - 支持新旧API格式，兼容ChatGPT-5
 	requestBody := map[string]interface{}{
-		"model":       client.Model,
-		"messages":    messages,
-		"temperature": 0.5, // 降低temperature以提高JSON格式稳定性
+		"model":    client.Model,
+		"messages": messages,
+		// 移除temperature等采样参数以兼容ChatGPT-5和新版API
+		// 让模型使用默认参数以获得最佳性能
 	}
 	
 	// 根据不同的API提供商使用不同的token限制参数名
@@ -216,13 +217,16 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	switch client.Provider {
 	case ProviderDeepSeek:
 		requestBody["max_tokens"] = maxTokens // DeepSeek仍使用max_tokens
+		requestBody["temperature"] = 0.5      // DeepSeek支持temperature参数
 	case ProviderQwen:
 		requestBody["max_tokens"] = maxTokens // Qwen仍使用max_tokens
+		requestBody["temperature"] = 0.5      // Qwen支持temperature参数
 	case ProviderCustom:
-		// 自定义API优先尝试max_completion_tokens（兼容新版OpenAI）
+		// 自定义API（通常是OpenAI兼容）不设置temperature等采样参数
 		requestBody["max_completion_tokens"] = maxTokens
 	default:
-		requestBody["max_completion_tokens"] = maxTokens // 默认使用新格式
+		// 默认使用新格式，不设置采样参数
+		requestBody["max_completion_tokens"] = maxTokens
 	}
 
 	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持
@@ -232,7 +236,13 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	log.Printf("📤 [MCP] AI请求参数:")
 	log.Printf("   Provider: %s", client.Provider)
 	log.Printf("   Model: %s", client.Model)
-	log.Printf("   Temperature: 0.5")
+	
+	// 显示实际使用的参数
+	if temp, hasTemp := requestBody["temperature"]; hasTemp {
+		log.Printf("   Temperature: %v", temp)
+	} else {
+		log.Printf("   Temperature: 默认值 (兼容ChatGPT-5)")
+	}
 	
 	// 显示实际使用的token参数名
 	if _, hasMaxTokens := requestBody["max_tokens"]; hasMaxTokens {
@@ -442,6 +452,8 @@ func writeAPICallDetailsToFile(systemPrompt, userPrompt string, requestBody map[
 	}
 	if temp, ok := requestBody["temperature"]; ok {
 		fmt.Fprintf(file, "Temperature: %v\n", temp)
+	} else {
+		fmt.Fprintf(file, "Temperature: 默认值 (兼容ChatGPT-5)\n")
 	}
 	if maxTokens, ok := requestBody["max_tokens"]; ok {
 		fmt.Fprintf(file, "Max Tokens (max_tokens): %v\n", maxTokens)
