@@ -593,7 +593,10 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - "symbol": 交易对字符串，例如 "BTCUSDT"
    - "action": 决策字符串，只能为 "open_long"、"open_short"、"close"、"wait"、"hold" 等预定义动作之一
    - "confidence": 0~100 的整数
-   - "reasoning": 字符串，用于解释多周期分析、价格区间、形态和风险控制逻辑
+   - reasoning 字段必须包含：
+     1.当前 major_bias / minor_bias / micro_bias 及依据的 timeframe + 关键结构；
+     2.当前大致浮盈是几 R，触发了哪一级 R_lock 或 protect；
+     3.为何选择当前 action（open/close/hold/wait/REDUCE）而不是其他；
    - "stop_update":
        * 若本轮不需要调整止损，必须为 null
        * 若需要调整止损，必须是一个对象：
@@ -602,6 +605,13 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
            "new_stop": 数字,      // 本轮根据 BE_with_fees / R_lock / 轨道 等计算出来的新止损价
            "reason": "R_lock" | "BE" | "protect" | "microflip" | "manual"
          }
+      4.若有 stop_update，说明主要依据（R_lock/BE/protect/microflip）。
+      5.当你决定“不更新止损”时必须输出："stop_update": null，不能为了“方便”把 prev_stop 原样写回去。
+      6.只有在满足以下任一条件时，才可以返回非 null 的 stop_update：
+        - R_unrealized ≥ 0.5 且触发对应级别的 R_lock；
+        - 交易结构明显恶化，需要收紧止损以减少最大亏损（risk_cut）；
+        - protect / microflip 等策略被显式触发。
+
 3. 对于「已有持仓」的 symbol：
    - 如果只是更新止损、不做平仓/减仓：
      * "action" 通常使用 "hold"（保持当前仓位）
@@ -662,6 +672,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
     "stop_update": null
   }
 ]
+
 11. 输出说明中的引用要求
 
 在最终 JSON 的说明字段中：

@@ -1561,6 +1561,8 @@ func (at *AutoTrader) executeUpdateStopWithRecord(decision *decision.Decision, a
 	
 	var hasLong, hasShort bool
 	var longQuantity, shortQuantity float64
+	var hasExistingStopOrder bool = false
+	
 	for _, pos := range positions {
 		if pos["symbol"] == decision.Symbol {
 			side := pos["side"].(string)
@@ -1569,15 +1571,36 @@ func (at *AutoTrader) executeUpdateStopWithRecord(decision *decision.Decision, a
 			if side == "long" && quantity > 0 {
 				hasLong = true
 				longQuantity = quantity
+				
+				// 检查是否存在多仓止损单 (通过PrevStop字段检查)
+				if prevStop, ok := pos["prev_stop"]; ok {
+					if prevStopPrice, ok := prevStop.(float64); ok && prevStopPrice > 0 {
+						hasExistingStopOrder = true
+					}
+				}
 			} else if side == "short" && quantity < 0 {
 				hasShort = true
 				shortQuantity = math.Abs(quantity)
+				
+				// 检查是否存在空仓止损单
+				if prevStop, ok := pos["prev_stop"]; ok {
+					if prevStopPrice, ok := prevStop.(float64); ok && prevStopPrice > 0 {
+						hasExistingStopOrder = true
+					}
+				}
 			}
 		}
 	}
 	
 	if !hasLong && !hasShort {
-		return fmt.Errorf("没有找到%s的持仓，无法更新止损", decision.Symbol)
+		return fmt.Errorf("没有找到%s的持仓，无法设置止损", decision.Symbol)
+	}
+	
+	// 🔧 统一处理：无论是更新还是创建止损单
+	if hasExistingStopOrder {
+		log.Printf("  🔄 %s 更新现有止损单至%.6f", decision.Symbol, decision.StopLoss)
+	} else {
+		log.Printf("  📌 %s 当前没有止损单，创建新的止损保护(%.6f)", decision.Symbol, decision.StopLoss)
 	}
 	
 	// 获取当前价格用于验证
@@ -1605,10 +1628,40 @@ func (at *AutoTrader) executeUpdateStopWithRecord(decision *decision.Decision, a
 	// 根据持仓方向设置新的止损
 	if hasLong {
 		actionRecord.Quantity = longQuantity
-		// 多仓：止损价格应该低于当前价格
-		if decision.StopLoss >= marketData.CurrentPrice {
-			log.Printf("  ⚠️ [警告] 多仓止损价格(%.6f)应低于当前价格(%.6f)", decision.StopLoss, marketData.CurrentPrice)
-			return fmt.Errorf("多仓止损价格(%.2f)应低于当前价格(%.2f)", decision.StopLoss, marketData.CurrentPrice)
+		// 🔧 修复：多仓止损验证逻辑
+		// 多仓止损分两种情况：
+		// 1. 初始止损：应该低于当前价格（防止亏损扩大）
+		// 2. 移动止损：可以高于当前价格（锁定利润）
+		// 
+		// 获取当前持仓的入场价格用于判断
+		var entryPrice float64
+		for _, pos := range positions {
+			if pos["symbol"] == decision.Symbol && pos["side"] == "long" {
+				entryPrice = pos["entryPrice"].(float64)
+				break
+			}
+		}
+		
+		// 基本合理性检查：止损价格不应偏离当前价格过远
+		maxDeviation := marketData.CurrentPrice * 0.2 // 20%偏差范围
+		if decision.StopLoss < marketData.CurrentPrice - maxDeviation {
+			log.Printf("  ⚠️ [警告] 多仓止损价格(%.6f)过低，超出合理范围(%.6f)", decision.StopLoss, marketData.CurrentPrice - maxDeviation)
+			return fmt.Errorf("多仓止损价格(%.2f)过低，建议在%.2f以上", decision.StopLoss, marketData.CurrentPrice - maxDeviation)
+		}
+		
+		// 如果有入场价格，进行更精确的验证
+		if entryPrice > 0 {
+			// 多仓盈利时（当前价格 > 入场价格），允许移动止损
+			if marketData.CurrentPrice > entryPrice {
+				log.Printf("  📈 多仓盈利中(当前%.6f > 入场%.6f)，允许移动止损至%.6f", 
+					marketData.CurrentPrice, entryPrice, decision.StopLoss)
+			} else {
+				// 多仓亏损时，止损应该低��当前价格以限制亏损
+				if decision.StopLoss >= marketData.CurrentPrice {
+					log.Printf("  ⚠️ [警告] 多仓亏损中，止损价格(%.6f)应低于当前价格(%.6f)", decision.StopLoss, marketData.CurrentPrice)
+					return fmt.Errorf("多仓亏损中，止损价格(%.2f)应低于当前价格(%.2f)", decision.StopLoss, marketData.CurrentPrice)
+				}
+			}
 		}
 		log.Printf("  🔄 设置多仓止损: 数量=%.4f, 止损价格=%.6f", longQuantity, decision.StopLoss)
 		orderID, err := at.trader.SetStopLoss(decision.Symbol, "LONG", longQuantity, decision.StopLoss)
@@ -1637,10 +1690,40 @@ func (at *AutoTrader) executeUpdateStopWithRecord(decision *decision.Decision, a
 	
 	if hasShort {
 		actionRecord.Quantity = shortQuantity
-		// 空仓：止损价格应该高于当前价格
-		if decision.StopLoss <= marketData.CurrentPrice {
-			log.Printf("  ⚠️ [警告] 空仓止损价格(%.6f)应高于当前价格(%.6f)", decision.StopLoss, marketData.CurrentPrice)
-			return fmt.Errorf("空仓止损价格(%.2f)应高于当前价格(%.2f)", decision.StopLoss, marketData.CurrentPrice)
+		// 🔧 修复：空仓止损验证逻辑
+		// 空仓止损分两种情况：
+		// 1. 初始止损：应该高于当前价格（防止亏损扩大）
+		// 2. 移动止损：可以低于当前价格（锁定利润）
+		// 
+		// 获取当前持仓的入场价格用于判断
+		var entryPrice float64
+		for _, pos := range positions {
+			if pos["symbol"] == decision.Symbol && pos["side"] == "short" {
+				entryPrice = pos["entryPrice"].(float64)
+				break
+			}
+		}
+		
+		// 基本合理性检查：止损价格不应偏离当前价格过远
+		maxDeviation := marketData.CurrentPrice * 0.2 // 20%偏差范围
+		if decision.StopLoss > marketData.CurrentPrice + maxDeviation {
+			log.Printf("  ⚠️ [警告] 空仓止损价格(%.6f)过高，超出合理范围(%.6f)", decision.StopLoss, marketData.CurrentPrice + maxDeviation)
+			return fmt.Errorf("空仓止损价格(%.2f)过高，建议在%.2f以下", decision.StopLoss, marketData.CurrentPrice + maxDeviation)
+		}
+		
+		// 如果有入场价格，进行更精确的验证
+		if entryPrice > 0 {
+			// 空仓盈利时（当前价格 < 入场价格），允许移动止损
+			if marketData.CurrentPrice < entryPrice {
+				log.Printf("  📈 空仓盈利中(入场%.6f > 当前%.6f)，允许移动止损至%.6f", 
+					entryPrice, marketData.CurrentPrice, decision.StopLoss)
+			} else {
+				// 空仓亏损时，止损应该高于当前价格以限制亏损
+				if decision.StopLoss <= marketData.CurrentPrice {
+					log.Printf("  ⚠️ [警告] 空仓亏损中，止损价格(%.6f)应高于当前价格(%.6f)", decision.StopLoss, marketData.CurrentPrice)
+					return fmt.Errorf("空仓亏损中，止损价格(%.2f)应高于当前价格(%.2f)", decision.StopLoss, marketData.CurrentPrice)
+				}
+			}
 		}
 		log.Printf("  🔄 设置空仓止损: 数量=%.4f, 止损价格=%.6f", shortQuantity, decision.StopLoss)
 		orderID, err := at.trader.SetStopLoss(decision.Symbol, "SHORT", shortQuantity, decision.StopLoss)
@@ -1942,11 +2025,19 @@ func (at *AutoTrader) checkTrackedStopOrders(record *logger.DecisionRecord) erro
 					}
 				}
 				
-				// 如果持仓消失，认为是止损成交
+				// 🔧 加强验证：如果持仓消失，进一步确认是否真的是止损成交
 				if !hasPosition {
-					log.Printf("  ✅ 止损单成交: %s %s (推断)", pendingOrder.Symbol, pendingOrder.Side)
-					at.recordStopLossExecution(pendingOrder, record)
-					toRemove = append(toRemove, key)
+					// 验证PendingStopOrder的数据完整性
+					if pendingOrder.Quantity > 0 && pendingOrder.StopPrice > 0 {
+						log.Printf("  ✅ 止损单成交: %s %s (推断，已验证数据)", pendingOrder.Symbol, pendingOrder.Side)
+						at.recordStopLossExecution(pendingOrder, record)
+						toRemove = append(toRemove, key)
+					} else {
+						log.Printf("  ❌ 持仓消失但数据不完整，跳过记录: quantity=%.6f, stopPrice=%.6f", 
+							pendingOrder.Quantity, pendingOrder.StopPrice)
+						// 仍然移除无效的跟踪记录
+						toRemove = append(toRemove, key)
+					}
 				}
 			}
 			continue
@@ -2062,9 +2153,9 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 				}
 				
 				if lastOrderID > 0 && !currentOrderIDs[lastOrderID] {
-					log.Printf("    ✅ 检测到止损单消失: %s %s (订单ID: %d)", symbol, side, lastOrderID)
+					log.Printf("    🔍 检测到止损单消失: %s %s (订单ID: %d)", symbol, side, lastOrderID)
 					
-					// 创建虚拟的PendingStopOrder来记录执行
+					// 获取止损单详细信息
 					stopPrice := 0.0
 					quantity := 0.0
 					if stopPriceStr, ok := lastOrder["stopPrice"].(string); ok {
@@ -2074,17 +2165,43 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 						quantity, _ = strconv.ParseFloat(quantityStr, 64)
 					}
 					
-					pendingOrder := &PendingStopOrder{
-						Symbol:         symbol,
-						Side:           side,
-						OrderID:        lastOrderID,
-						StopPrice:      stopPrice,
-						Quantity:       quantity,
-						CreateTime:     time.Now(),
-						OriginalAction: "stop_loss_detected",
+					// 🔧 关键修复：如果从订单信息无法获取数量，从当前持仓获取
+					if quantity == 0 {
+						log.Printf("    ⚠️ 订单数量为0，尝试从持仓获取实际数量...")
+						for _, pos := range positions {
+							if pos["symbol"].(string) == symbol && pos["side"].(string) == side {
+								if posQuantity, ok := pos["positionAmt"].(float64); ok {
+									if posQuantity < 0 {
+										posQuantity = -posQuantity // 空仓为负数，转正
+									}
+									if posQuantity > 0 {
+										quantity = posQuantity
+										log.Printf("    ✅ 从持仓获取数量: %.6f", quantity)
+										break
+									}
+								}
+							}
+						}
 					}
 					
-					at.recordStopLossExecution(pendingOrder, record)
+					// 🔧 严格验证：只有在确实有数量且价格合理时才记录止损成交
+					if quantity > 0 && stopPrice > 0 {
+						log.Printf("    ✅ 确认止损成交: %s %s 数量=%.6f 止损价=%.6f", symbol, side, quantity, stopPrice)
+						
+						pendingOrder := &PendingStopOrder{
+							Symbol:         symbol,
+							Side:           side,
+							OrderID:        lastOrderID,
+							StopPrice:      stopPrice,
+							Quantity:       quantity,
+							CreateTime:     time.Now(),
+							OriginalAction: "stop_loss_detected",
+						}
+						
+						at.recordStopLossExecution(pendingOrder, record)
+					} else {
+						log.Printf("    ❌ 验证失败，跳过记录: quantity=%.6f, stopPrice=%.6f", quantity, stopPrice)
+					}
 				}
 			}
 		}
