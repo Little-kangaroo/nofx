@@ -772,14 +772,14 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - "symbol": 交易对字符串，例如 "BTCUSDT"
    - "action": 决策字符串，只能为 "open_long"、"open_short"、"close"、"wait"、"hold" 等预定义动作之一
    - "confidence": 0~100 的整数
-   - setup_grade：
+   - "setup_grade":              // ★ 这里加双引号，明确是字段名
      - "A"：结构清晰、RR 明显有优势的高质量机会；
      - "B"：方向合理但结构/空间一般的机会；
      - "C"：结构混乱或性价比差的场景，只能观望或持有已有仓位，禁止开新仓。
-   - edge_score：
+   - "edge_score":               // ★ 同样加双引号
      - 你对该机会的主观期望收益估计（以 R 为单位），粗略即可；
      - 例如：0.0 ≈ 无 edge；1.0 ≈ 期望大约 +1R；2.0 ≈ 期望大约 +2R；
-     - 后端可以只执行 `edge_score ≥ 1.0 且 confidence ≥ 75` 的开仓指令。
+
    - reasoning 字段必须包含：
      1.当前 major_bias / minor_bias / micro_bias 及依据的 timeframe + 关键结构；
      2.当前大致浮盈是几 R，触发了哪一级 R_lock 或 protect；
@@ -863,8 +863,33 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
     "stop_update": null
   }
 ]
+11. 错误示例（禁止这样输出）
 
-11. 输出说明中的引用要求
+   以下结构是错误的，因为缺少 "setup_grade" 和 "edge_score" 字段：
+
+   [
+     {
+       "symbol": "ADAUSDT",
+       "action": "wait",
+       "confidence": 58,
+       "reasoning": "4h 偏空、1h趋平、15m 短线偏多；价格临近 1h supply 0.4712-0.4822，虽有短空思路但结构与空间不如SOL清晰，择优放弃。"
+     }
+   ]
+
+   正确写法应该是（例如打为 C 级机会）：
+   [
+     {
+       "symbol": "ADAUSDT",
+       "action": "wait",
+       "setup_grade": "C",
+       "edge_score": 0.0,
+       "confidence": 58,
+       "reasoning": "4h 偏空、1h趋平、15m 短线偏多；价格临近 1h supply 0.4712-0.4822，虽有短空思路但结构与空间不如 SOL 清晰，择优放弃观望。",
+       "stop_update": null
+     }
+   ]
+
+12. 输出说明中的引用要求
 - 最终必须输出JSON,否则后端将会报错,必须保证JSON的完整性和正确性,否则后端解析JSON将会报错！
 在最终 JSON 的说明字段中：
 - 必须明确写出 major_bias / minor_bias / micro_bias 及其主要依据（引用具体 timeframe 和关键字段，如 fib.trend_direction / supertrend.direction / supply_zones / demand_zones / FVG 等）；
