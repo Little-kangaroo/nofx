@@ -505,19 +505,44 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 		}
 	}
 
+	// 添加当前总盈亏来匹配显示的总收益
+	// TotalUnrealizedProfit字段实际存储的是总盈亏（相对初始余额），包含已实现+未实现盈亏
+	if len(records) > 0 {
+		latestRecord := records[len(records)-1]
+		currentTotalPnL := latestRecord.AccountState.TotalUnrealizedProfit
+		
+		// 计算已统计的交易盈亏总和
+		alreadyCountedPnL := analysis.AvgWin + analysis.AvgLoss
+		
+		// 计算差值（主要是未平仓盈亏和手续费等）
+		unrealizedAndFeesPnL := currentTotalPnL - alreadyCountedPnL
+		
+		// 将差值分类添加到盈利或亏损中，确保总和匹配
+		if unrealizedAndFeesPnL > 0 {
+			analysis.AvgWin += unrealizedAndFeesPnL
+		} else if unrealizedAndFeesPnL < 0 {
+			analysis.AvgLoss += unrealizedAndFeesPnL
+		}
+	}
+
 	// 计算统计指标
 	if analysis.TotalTrades > 0 {
 		analysis.WinRate = (float64(analysis.WinningTrades) / float64(analysis.TotalTrades)) * 100
 
-		// 计算总盈利和总亏损
+		// 先保存累加的总盈利和总亏损，用于计算盈亏比
 		totalWinAmount := analysis.AvgWin   // 当前是累加的总和
 		totalLossAmount := analysis.AvgLoss // 当前是累加的总和（负数）
 
+		// 计算平均盈利和平均亏损
 		if analysis.WinningTrades > 0 {
-			analysis.AvgWin /= float64(analysis.WinningTrades)
+			analysis.AvgWin = totalWinAmount / float64(analysis.WinningTrades)
+		} else {
+			analysis.AvgWin = 0
 		}
 		if analysis.LosingTrades > 0 {
-			analysis.AvgLoss /= float64(analysis.LosingTrades)
+			analysis.AvgLoss = totalLossAmount / float64(analysis.LosingTrades)
+		} else {
+			analysis.AvgLoss = 0
 		}
 
 		// Profit Factor = 总盈利 / 总亏损（绝对值）
@@ -527,6 +552,8 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 		} else if totalWinAmount > 0 {
 			// 只有盈利没有亏损的情况，设置为一个很大的值表示完美策略
 			analysis.ProfitFactor = 999.0
+		} else {
+			analysis.ProfitFactor = 0
 		}
 	}
 
