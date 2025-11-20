@@ -779,6 +779,30 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - "edge_score":               // ★ 同样加双引号
      - 你对该机会的主观期望收益估计（以 R 为单位），粗略即可；
      - 例如：0.0 ≈ 无 edge；1.0 ≈ 期望大约 +1R；2.0 ≈ 期望大约 +2R；
+   - edge_score 与 setup_grade 的建议对应关系（用于校准，不要求精确）：
+     - 若 setup_grade = "A"：
+       * 一般应在 1.0 ~ 2.0 区间；
+       * 仅当你认为机会非常一般时，才允许接近 0.8~1.0，下限不应低于 0.5；
+     - 若 setup_grade = "B"：
+       * 一般在 0.3 ~ 1.0 区间；
+       * 结构略有冲突或空间一般时，约 0.3~0.7；
+       * 只有当你判断“edge 明显为正”时，才可接近 1.0。
+     - 若 setup_grade = "C"：
+       * 一般在 -0.5 ~ 0.2 区间；
+       * 明显负面 / 性价比差 → 负数或接近 0；
+       * 这种场景必须搭配 action="wait"/"hold"，禁止开新仓。
+     - 约束：若你最终对某个 symbol 输出 "action": "open_long" 或 "open_short"：
+       * 则该 symbol 的 edge_score 必须 ≥ 0.5；
+       * 若你主观判断 edge_score < 0.5，则应将 action 改为 "wait" / "hold"；
+       * 禁止出现 edge_score=0.0 却仍然开仓的情况。
+     - 对于 action="wait" / "hold" 的标的：
+       * 若你认为当前机会明显负期望（结构混乱、潜在空间不足、与大级别强冲突）：
+        - "setup_grade": "C"
+        - "edge_score": -0.5 ~ 0.0
+       * 若你认为有一定正向可能，但明显不如其它标的（“有点 edge，但不值得现在用风险预算”）：
+        - "setup_grade": "B"
+        - "edge_score": 0.2 ~ 0.7
+        - 并在 reasoning 中说明“为何择优放弃这个而选择其它标的”。
 
    - reasoning 字段必须包含：
      1.当前 major_bias / minor_bias / micro_bias 及依据的 timeframe + 关键结构；
