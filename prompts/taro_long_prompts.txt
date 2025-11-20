@@ -262,13 +262,39 @@ MTF_多空对称统一模板_v5_防双向挂单修订
 
 1) setup 质量分级（必须先分级，再决定是否开仓）
 - 对每个 symbol，你必须先基于 multi_tf_bias + 多时间框架结构，给当下的交易机会打一个等级：
-  - A 级：大级别趋势与计划方向同向，且：
-    * 价格接近关键结构边界（如 4h/1h supply/demand 区、通道边界、重要斐波位、VPVR LVN 等）；
-    * 至少存在 ≥ 3R 的潜在空间（从入场到最近强反向结构之间有足够“空白区”），Risk/Reward 明显有优势；
-    * 没有显著与之冲突的更高周期结构（例如 4h 强 demand 正好顶在计划做空方向上）。
+  - A 级：满足以下两类之一即可（不要求所有周期完全共振）：
+
+    1) A_trend：顺势趋势机会
+       * major_bias 与计划方向同向；
+       * 在 minor_bias 和 micro_bias 中，至少有一者明显同向，另一者最多是 NEUTRAL，
+         不要求两者都完美同向；
+       * 价格接近对当前方向有利的关键结构边界
+         （如 4h/1h supply/demand 区、通道边界、重要 fib 位、VPVR LVN 等）；
+       * 从合理止损位到最近强反向结构之间，至少有 ≈2R~2.5R 的潜在空间
+         （不再死磕 3R+，避免机会极少）；
+
+    2) A_reversal：高质量反转机会（small TF 先翻的那种）
+       * 当前 major_bias 仍显示原趋势（例如 BEAR），但：
+         - price 已处于或刚刚扎入高等级关键 demand/supply 区（4h/1h）内部；
+         - 1h/30m 结构出现明显“终结型信号”：
+           · 如空头中连续低点不再创新低，出现明显 higher low + 破前高；
+           · 或 MACD / RSI 出现明显底背离/顶背离；
+         - 15m/3m 已经形成一段 **与原趋势反向的趋势**（而不是只有一两根K的噪音）；
+       * 从“反转无效的合理止损位”（比如 demand 区下沿/前低）到上方最近主要反向结构，
+         仍有 ≥2R 的空间；
+       * 在 reasoning 中必须标明这是 “A_reversal 反转 setup”，并说明：
+         - 原大趋势；
+         - 反转结构出现在哪些周期；
+         - 为什么认为这是“大级别趋势可能反转的早期段”。
   - B 级：方向大体合理，但结构或空间不完美：
-    * 例如：大级别顺势，但价格处于通道中部、附近有 POC/HVN，或潜在空间大致只有 2R 左右；
-    * 或者多周期供需区略有冲突，但不至于完全否定该方向。
+    * 可以是顺势但位置一般（例如通道中部、附近有 POC/HVN，空间≈2R 左右）；
+    * 也可以是反转“早期”阶段：
+      - major_bias 仍然维持原趋势；
+      - 但 minor_bias 或 micro_bias 已经反向，且价格接近关键供需区 / 通道边界；
+    * 这类机会允许“小仓位试单”，而不是一律放弃：
+      - 建议 risk_per_trade_pct 为正常仓位的一半或更低；
+      - reasoning 中必须说明 edge 来源（是什么让你认为值得试，不是瞎猜）。
+
   - C 级：结构混乱或性价比差：
     * major_bias 与 minor_bias/micro_bias 冲突、供需区 / 通道 / VPVR 信号相互打架；
     * 或价格位于明显盘整区中部、上下都很近有强结构，潜在空间 ≤ 1.5R；
@@ -563,7 +589,17 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
       才可以重新评估是否开多。
 
 - 若 major_bias == BEAR：
-  - 默认只允许 SHORT 方向开仓；LONG 为逆势，仅在有强烈反转结构（如趋势极端衰竭 + 强 demand 区 + 多 timeframe 一致反转信号）时才小仓位尝试。
+  - 若 major_bias == BEAR：
+    - 默认只允许 SHORT 方向开仓；
+    - LONG 为逆势，仅在出现“高质量反转结构”时才考虑小仓位尝试，包括但不限于：
+      * price 进入或刚刚扎入 4h/1h 关键 demand 区内部；
+      * 1h 或 30m 出现明显的“空头衰竭 + 结构破坏”，例如：
+        - 连续 lower lows 终止，出现明显 higher low + 破前一波反弹高点；
+        - 或 MACD/RSI 底背离被向上突破确认；
+      * 15m / 3m 已经形成一段向上趋势，而非单根反弹（higher lows / higher highs 连续数个 swing）；
+    - 此类逆势多单可以视为 A_reversal 或 B 级反转 setup：
+      * 若位置与结构极佳（多因子强共振 + 空间足够） → 记为 A_reversal；
+      * 若部分条件具备但不完美 → 记为 B 级反转 setup，仅允许小仓试单。
   - 若此时 minor_bias 与 micro_bias 同时为强 BULL（例如连续更高低点 + MACD>0 + RSI14 明显高于 50）：
     - 视为“短周期趋势与 major 完全相反”的强冲突阶段，说明当前是顺势空头趋势中的强力反弹段；
     - **在该阶段禁止开新空单：**
@@ -638,14 +674,31 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
      - 若 major_bias 与 minor_bias + micro_bias 同时强烈反向（例如 major=BULL 而 minor/micro 都是强 BEAR），视为方向冲突：
        * 不允许在该方向新增仓位，必须选择 "wait" 或仅在更清晰的结构共振点再评估。
 
-  2) setup 级别检查（配合上文 setup_grade）：
-     - 若 setup_grade = "C"：必须保持 "wait" 或 "hold"，禁止任何开仓。
-     - 若 setup_grade = "B"：除非你在 reasoning 中能清楚说明 edge 来源（例如：短期极端错价 + 明确反转结构 + 止损很小），否则仍应 "wait"。
-     - 若 setup_grade = "A"：且多周期结构、供需区、VPVR、FVG 等都支持该方向，才允许考虑 "open_long" 或 "open_short"。
+  2) setup 级别检查（配合 setup_grade）：
+     - 若 setup_grade = "C"：
+       * 必须保持 "wait" 或 "hold"，禁止任何开仓。
 
-  3) 主观信心门槛：
-     - 只有当你对某一方向的主观 confidence ≥ 75 时，才允许输出 "open_long" / "open_short"；
-     - 若 confidence < 75，无论 setup_grade 如何，都应选择 "wait" 或 "hold"，并在 reasoning 中写明“信号质量一般，因此观望”。
+     - 若 setup_grade = "B"：
+       * 当 multi_tf_bias 整体不与计划方向强烈冲突，且：
+         - edge_score ≥ 0.5，且
+         - confidence ≥ 60
+         时，允许以“小仓位试单”的方式开仓（对应较小 risk_per_trade_pct）；
+       * 若你在 reasoning 中自己都说不清 edge，在结构上也不占优势，
+         则应选择 "wait"。
+
+     - 若 setup_grade = "A"：
+       * 且多周期结构、供需区、VPVR、FVG 等都支持该方向，才允许按正常风险开仓。
+
+
+  3) 主观信心门槛（按等级区分）：
+     - confidence < 60：
+       * 不允许开仓，应选择 "wait" / "hold"。
+     - 60 ≤ confidence < 75：
+       * 仅当 setup_grade = "B" 或 "A"，且 edge_score ≥ 0.5 时，
+         允许“小仓位试单”（对应 B 级风险）。
+     - confidence ≥ 75：
+       * 若 setup_grade = "A"，且其它条件满足，可以按正常风险开仓。
+
 
   4) 全局限制（防止过度交易）：
      - 在一轮决策中（同一次输入），你从所有 symbol 中最多只能选择 1~2 个综合质量最高的机会做 "open_long" 或 "open_short"；
