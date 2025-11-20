@@ -102,10 +102,12 @@
 二、参数（默认稳健，可按需微调）
 ——————————————————————————————————————
 [风险控制与仓位]
-- risk_per_trade_pct     = 0.5
-- leverage_default       = 3
+- risk_per_trade_pct     = 0.75       // 从 0.5 提升到 0.75，更积极一点
+- leverage_default       = 10         // 默认偏好使用 10x 杠杆
 - margin_usage_ceiling   = 0.95
+- notional_min           = 150        // 单笔最小名义（USDT），按账户规模可调，一般 100~300
 - max_concurrent_trades  = 3
+
 
 [R 定义与初始止损]
 - R_by_ATR_TF            = "15m"
@@ -454,13 +456,15 @@ A) 仓位 sizing（基于R的风险等额）
 - 单笔风险资金 = equity * risk_per_trade_pct%
 - 合约名义 = 单笔风险资金 / R
 - 数量 qty = 合约名义 / entry_price（按 lot_size 向下取整）
-- 杠杆建议 = min(leverage_default 或自适应值, max_leverage)
+- 杠杆建议 = leverage_default（默认使用的名义杠杆，实际执行时由下方“杠杆自适应”调整）
 
 - 杠杆 & 名义自适应（必须遵守）:
   1) 先按上面的公式得到基于 R 的理论合约名义 notional_R = 单笔风险资金 / R。
   2) 设：
-     - notional_min = 100（交易所最小名义约束）；
-     - notional_max_margin = equity * margin_usage_ceiling * max_leverage（在不超过最大杠杆与保证金占用上限的前提下，理论可承受的最大名义）。
+     - notional_min = 上方 [风险控制与仓位] 中定义的 notional_min
+       （单笔最小名义，一般 100~300 之间，本模板当前为 150）；
+     - notional_max_margin = equity * margin_usage_ceiling * max_leverage
+       （在不超过最大杠杆与保证金占用上限的前提下，理论可承受的最大名义）。
   3) 名义调整：
      - 若 notional_R < notional_min：
        - 若 notional_min > notional_max_margin：说明资金体量太小，既无法满足最小名义，也无法在可接受的保证金占用下开仓 → 本次 symbol 直接放弃交易（对该 symbol 输出 type="HOLD" 或 "WAIT"，并在 notes 中说明“equity 太小，无法满足最小名义要求”）；
@@ -468,13 +472,21 @@ A) 仓位 sizing（基于R的风险等额）
      - 若 notional_R > notional_max_margin：
        - 将目标合约名义压缩到 notional_max_margin。
      - 最终合约名义 notional_final = clamp(notional_R, notional_min, notional_max_margin)，并据此重新计算数量：qty = notional_final / entry_price（按 lot_size 向下取整）。
-  4) 杠杆自适应：
-     - 初始候选杠杆 leverage_target = leverage_default；
-     - 为满足保证金占用上限 margin_usage_ceiling，需要的最低杠杆约为：
-       leverage_required = notional_final / (equity * margin_usage_ceiling)；
-     - 自适应杠杆取值：leverage_adaptive = clamp(ceil(leverage_required), 1, max_leverage)；
-     - 最终输出给交易系统的 leverage = leverage_adaptive；
-     - 若在 notional_final ≥ notional_min 的前提下，leverage_required 仍然 > max_leverage，说明资金不足以在当前风险参数下安全开仓 → 应放弃该笔交易（对该 symbol 输出 type="HOLD" 或 "WAIT"）。
+    4) 杠杆自适应：
+       - 初始候选杠杆 leverage_target = leverage_default；   // 例如默认 10x
+       - 为满足保证金占用上限 margin_usage_ceiling，需要的最低杠杆约为：
+         leverage_required = notional_final / (equity * margin_usage_ceiling)；
+       - 自适应杠杆取值：
+         leverage_adaptive = clamp(
+           max(leverage_target, ceil(leverage_required)),
+           1,
+           max_leverage
+         )；
+       - 最终输出给交易系统的 leverage = leverage_adaptive；
+       - 若在 notional_final ≥ notional_min 的前提下，leverage_required 仍然 > max_leverage，
+         说明资金不足以在当前风险参数下安全开仓 → 应放弃该笔交易
+         （对该 symbol 输出 action="wait" 或 "hold"，并在 reasoning 中说明原因）。
+
   5) 在思维链中，必须写清：
      - 当前 equity、risk_per_trade_pct、R、notional_R、notional_final；
      - 自适应杠杆 leverage_adaptive 的大致计算逻辑（可用近似数字，不要求精确小数）；
