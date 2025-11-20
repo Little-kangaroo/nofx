@@ -588,10 +588,10 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
       且价格靠近 4h/1h 关键 demand 区 / 通道下沿时，
       才可以重新评估是否开多。
 
-- 若 major_bias == BEAR：
-  - 若 major_bias == BEAR：
-    - 默认只允许 SHORT 方向开仓；
-    - LONG 为逆势，仅在出现“高质量反转结构”时才考虑小仓位尝试，包括但不限于：
+
+    - 若 major_bias == BEAR：
+      - 默认只允许 SHORT 方向开仓；
+      - LONG 为逆势，仅在出现“高质量反转结构”时才考虑小仓位尝试，包括但不限于：
       * price 进入或刚刚扎入 4h/1h 关键 demand 区内部；
       * 1h 或 30m 出现明显的“空头衰竭 + 结构破坏”，例如：
         - 连续 lower lows 终止，出现明显 higher low + 破前一波反弹高点；
