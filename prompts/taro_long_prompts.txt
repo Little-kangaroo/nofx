@@ -256,7 +256,7 @@ MTF_多空对称统一模板_v5_防双向挂单修订
 - allow_intrabar_update   = true
 - stop_distance_min_ticks = 3
 
-[过滤与开仓门槛（只在 A 级 setup 下开仓）]
+[过滤与开仓门槛（优先 A 级，允许 B 级小仓试单）]
 - trend_tf_major          = "4h,1h"
 - trend_tf_minor          = "30m,15m"
 
