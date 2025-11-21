@@ -1657,58 +1657,87 @@ func (d *Database) GetTradeStatistics(traderID string) (map[string]interface{}, 
 
 // GetTradePerformanceAnalysis 获取交易表现分析（替代文件式AnalyzePerformance）
 func (d *Database) GetTradePerformanceAnalysis(traderID string, limit int) (map[string]interface{}, error) {
-	result := make(map[string]interface{})
-	
-	// 获取基础统计
-	stats, err := d.GetTradeStatistics(traderID)
-	if err != nil {
-		return nil, err
-	}
-	
-	// 将基础统计添加到结果中
-	for k, v := range stats {
-		result[k] = v
-	}
-	
 	// 获取最近的交易记录
 	trades, err := d.GetTraderTrades(traderID, limit)
 	if err != nil {
 		return nil, err
 	}
 	
-	// 转换为前端期望的格式
-	recentTrades := make([]map[string]interface{}, 0)
+	// 初始化分析结果，保持与原PerformanceAnalysis结构一致
+	analysis := map[string]interface{}{
+		"total_trades":   0,
+		"winning_trades": 0,
+		"losing_trades":  0,
+		"win_rate":       0.0,
+		"avg_win":        0.0,
+		"avg_loss":       0.0,
+		"profit_factor":  0.0,
+		"sharpe_ratio":   0.0,
+		"recent_trades":  []map[string]interface{}{},
+		"symbol_stats":   map[string]interface{}{},
+		"best_symbol":    "",
+		"worst_symbol":   "",
+	}
+	
+	// 如果没有交易记录
+	if len(trades) == 0 {
+		return analysis, nil
+	}
+	
+	// 筛选已完成的交易
+	var completedTrades []*TradeRecord
 	for _, trade := range trades {
 		if trade.Status == "closed" && trade.ClosePrice != nil && trade.CloseTime != nil {
-			tradeMap := map[string]interface{}{
-				"symbol":         trade.Symbol,
-				"side":           trade.Side,
-				"quantity":       trade.Quantity,
-				"leverage":       trade.Leverage,
-				"open_price":     trade.OpenPrice,
-				"close_price":    *trade.ClosePrice,
-				"position_value": trade.PositionValue,
-				"margin_used":    trade.MarginUsed,
-				"pn_l":          trade.PnL,
-				"pn_l_pct":      trade.PnLPct,
-				"duration":      fmt.Sprintf("%d秒", trade.DurationSecs),
-				"open_time":     trade.OpenTime,
-				"close_time":    *trade.CloseTime,
-				"was_stop_loss": trade.CloseReason == "stop_loss",
-			}
-			recentTrades = append(recentTrades, tradeMap)
+			completedTrades = append(completedTrades, trade)
 		}
 	}
 	
-	result["recent_trades"] = recentTrades
+	if len(completedTrades) == 0 {
+		return analysis, nil
+	}
 	
-	// 计算各币种表现
+	// 统计基础数据
+	totalTrades := len(completedTrades)
+	winningTrades := 0
+	losingTrades := 0
+	totalWinAmount := 0.0  // 总盈利金额
+	totalLossAmount := 0.0 // 总亏损金额（负数）
+	
+	// 各币种统计
 	symbolStats := make(map[string]map[string]interface{})
-	for _, trade := range trades {
-		if trade.Status != "closed" {
-			continue
+	
+	// 转换为recent_trades格式，同时进行统计
+	var recentTrades []map[string]interface{}
+	for _, trade := range completedTrades {
+		// 转换为前端期望的格式
+		tradeMap := map[string]interface{}{
+			"symbol":         trade.Symbol,
+			"side":           trade.Side,
+			"quantity":       trade.Quantity,
+			"leverage":       trade.Leverage,
+			"open_price":     trade.OpenPrice,
+			"close_price":    *trade.ClosePrice,
+			"position_value": trade.PositionValue,
+			"margin_used":    trade.MarginUsed,
+			"pn_l":          trade.PnL,
+			"pn_l_pct":      trade.PnLPct,
+			"duration":      fmt.Sprintf("%d秒", trade.DurationSecs),
+			"open_time":     trade.OpenTime,
+			"close_time":    *trade.CloseTime,
+			"was_stop_loss": trade.CloseReason == "stop_loss",
+		}
+		recentTrades = append(recentTrades, tradeMap)
+		
+		// 统计盈亏
+		if trade.PnL > 0 {
+			winningTrades++
+			totalWinAmount += trade.PnL
+		} else if trade.PnL < 0 {
+			losingTrades++
+			totalLossAmount += trade.PnL // 累加负数
 		}
 		
+		// 各币种统计
 		symbol := trade.Symbol
 		if _, exists := symbolStats[symbol]; !exists {
 			symbolStats[symbol] = map[string]interface{}{
@@ -1716,7 +1745,9 @@ func (d *Database) GetTradePerformanceAnalysis(traderID string, limit int) (map[
 				"total_trades":   0,
 				"winning_trades": 0,
 				"losing_trades":  0,
+				"win_rate":       0.0,
 				"total_pn_l":     0.0,
+				"avg_pn_l":       0.0,
 			}
 		}
 		
@@ -1731,47 +1762,139 @@ func (d *Database) GetTradePerformanceAnalysis(traderID string, limit int) (map[
 		}
 	}
 	
-	// 计算各币种胜率和平均盈亏
-	bestSymbol := ""
-	worstSymbol := ""
+	// 计算统计指标（完全按照原逻辑）
+	analysis["total_trades"] = totalTrades
+	analysis["winning_trades"] = winningTrades
+	analysis["losing_trades"] = losingTrades
+	
+	if totalTrades > 0 {
+		analysis["win_rate"] = (float64(winningTrades) / float64(totalTrades)) * 100
+		
+		// 计算平均盈利和平均亏损
+		if winningTrades > 0 {
+			analysis["avg_win"] = totalWinAmount / float64(winningTrades)
+		} else {
+			analysis["avg_win"] = 0.0
+		}
+		if losingTrades > 0 {
+			analysis["avg_loss"] = totalLossAmount / float64(losingTrades)
+		} else {
+			analysis["avg_loss"] = 0.0
+		}
+		
+		// Profit Factor = 总盈利 / 总亏损（绝对值）
+		// 注意：totalLossAmount 是负数，所以取负号得到绝对值
+		if totalLossAmount != 0 {
+			analysis["profit_factor"] = totalWinAmount / (-totalLossAmount)
+		} else if totalWinAmount > 0 {
+			// 只有盈利没有亏损的情况，设置为一个很大的值表示完美策略
+			analysis["profit_factor"] = 999.0
+		} else {
+			analysis["profit_factor"] = 0.0
+		}
+	}
+	
+	// 计算各币种胜率和平均盈亏，找出最好和最差币种
 	bestPnL := -999999.0
 	worstPnL := 999999.0
+	bestSymbol := ""
+	worstSymbol := ""
 	
 	for symbol, stats := range symbolStats {
-		totalTrades := stats["total_trades"].(int)
-		if totalTrades > 0 {
-			winningTrades := stats["winning_trades"].(int)
-			totalPnL := stats["total_pn_l"].(float64)
+		totalSymbolTrades := stats["total_trades"].(int)
+		if totalSymbolTrades > 0 {
+			winningSymbolTrades := stats["winning_trades"].(int)
+			totalSymbolPnL := stats["total_pn_l"].(float64)
 			
-			stats["win_rate"] = float64(winningTrades) / float64(totalTrades) * 100
-			stats["avg_pn_l"] = totalPnL / float64(totalTrades)
+			stats["win_rate"] = (float64(winningSymbolTrades) / float64(totalSymbolTrades)) * 100
+			stats["avg_pn_l"] = totalSymbolPnL / float64(totalSymbolTrades)
 			
-			if totalPnL > bestPnL {
-				bestPnL = totalPnL
+			if totalSymbolPnL > bestPnL {
+				bestPnL = totalSymbolPnL
 				bestSymbol = symbol
 			}
-			if totalPnL < worstPnL {
-				worstPnL = totalPnL
+			if totalSymbolPnL < worstPnL {
+				worstPnL = totalSymbolPnL
 				worstSymbol = symbol
 			}
 		}
 	}
 	
-	result["symbol_stats"] = symbolStats
-	result["best_symbol"] = bestSymbol
-	result["worst_symbol"] = worstSymbol
+	analysis["symbol_stats"] = symbolStats
+	analysis["best_symbol"] = bestSymbol
+	analysis["worst_symbol"] = worstSymbol
 	
-	// 计算盈亏比
-	if result["avg_loss"] != nil && result["avg_loss"].(float64) < 0 {
-		avgWin := 0.0
-		if result["avg_win"] != nil {
-			avgWin = result["avg_win"].(float64)
+	// 只保留最近的交易（倒序：最新的在前）
+	if len(recentTrades) > 10 {
+		// 反转数组，让最新的在前
+		for i, j := 0, len(recentTrades)-1; i < j; i, j = i+1, j-1 {
+			recentTrades[i], recentTrades[j] = recentTrades[j], recentTrades[i]
 		}
-		avgLoss := result["avg_loss"].(float64)
-		result["profit_factor"] = avgWin / (-avgLoss)
-	} else {
-		result["profit_factor"] = 0.0
+		recentTrades = recentTrades[:10]
+	} else if len(recentTrades) > 0 {
+		// 反转数组
+		for i, j := 0, len(recentTrades)-1; i < j; i, j = i+1, j-1 {
+			recentTrades[i], recentTrades[j] = recentTrades[j], recentTrades[i]
+		}
 	}
 	
-	return result, nil
+	analysis["recent_trades"] = recentTrades
+	
+	// 计算夏普比率（基于单笔交易的盈亏百分比）
+	sharpeRatio := d.calculateSharpeRatioFromTrades(completedTrades)
+	analysis["sharpe_ratio"] = sharpeRatio
+	
+	return analysis, nil
+}
+
+// calculateSharpeRatioFromTrades 基于交易记录计算夏普比率
+func (d *Database) calculateSharpeRatioFromTrades(trades []*TradeRecord) float64 {
+	if len(trades) < 2 {
+		return 0.0
+	}
+	
+	// 提取每笔交易的盈亏百分比作为周期收益率
+	var returns []float64
+	for _, trade := range trades {
+		if trade.MarginUsed > 0 {
+			// 将盈亏百分比转换为小数形式（例如：5% -> 0.05）
+			periodReturn := trade.PnLPct / 100.0
+			returns = append(returns, periodReturn)
+		}
+	}
+	
+	if len(returns) < 2 {
+		return 0.0
+	}
+	
+	// 计算平均收益率
+	sumReturns := 0.0
+	for _, r := range returns {
+		sumReturns += r
+	}
+	meanReturn := sumReturns / float64(len(returns))
+	
+	// 计算收益率标准差
+	sumSquaredDiff := 0.0
+	for _, r := range returns {
+		diff := r - meanReturn
+		sumSquaredDiff += diff * diff
+	}
+	variance := sumSquaredDiff / float64(len(returns))
+	stdDev := math.Sqrt(variance)
+	
+	// 避免除以零
+	if stdDev == 0 {
+		if meanReturn > 0 {
+			return 999.0 // 无波动的正收益
+		} else if meanReturn < 0 {
+			return -999.0 // 无波动的负收益
+		}
+		return 0.0
+	}
+	
+	// 计算夏普比率（假设无风险利率为0）
+	// 注：直接返回周期级别的夏普比率（非年化），正常范围 -2 到 +2
+	sharpeRatio := meanReturn / stdDev
+	return sharpeRatio
 }
