@@ -683,7 +683,16 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
       或由 BEAR 转为 BULL（出现底部/反转信号），
       且价格靠近 4h/1h 关键 demand 区 / 通道下沿时，
       才可以重新评估是否开多。
-
+    - 逆势做空的空间/位置约束（特别是 LTF_scalp）：
+      * 仅位于 1h/15m 的中继型 supply 带，且明显处于上涨中段时，
+        一般不视为“顶部反转区域”，不应作为逆势 LTF_scalp 的开仓依据；
+      * 理想的逆势空位置应满足至少其一：
+        - 与 4h 级别 supply 区有明显重叠；
+        - 接近最近一轮波段高点（距该波段最高点 < 0.5 * ATR(4h)），属于波段顶部区域；
+        - 是近期多次测试、形成明显抛压堆积的关键 supply 区（多次上攻均被压回）。
+      * 若仅满足“小级别 supply + major_bias 仍为 BULL + minor_bias 仍为 BULL”，
+        即使 micro_bias 短暂转空，也应打为 C 级或弱 B 级机会，action 倾向 "wait"，
+        而不是立即尝试逆势 LTF_scalp 做空。
 
     - 若 major_bias == BEAR：
       - 默认只允许 SHORT 方向开仓；
@@ -696,6 +705,16 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
     - 此类逆势多单可以视为 A_reversal 或 B 级反转 setup：
       * 若位置与结构极佳（多因子强共振 + 空间足够） → 记为 A_reversal；
       * 若部分条件具备但不完美 → 记为 B 级反转 setup，仅允许小仓试单。
+    - 逆势做多的空间/位置约束（特别是 LTF_scalp）：
+      * 仅位于 1h/15m 的中继型需求带，且明显处于下跌中段时，
+        一般不视为“底部反转区域”，不应作为逆势 LTF_scalp 的开仓依据；
+      * 理想的逆势多位置应满足至少其一：
+        - 与 4h 级别 demand 区有明显重叠；
+        - 接近最近一轮波段低点（距该波段最低点 < 0.5 * ATR(4h)）；
+        - 是近期多次测试、形成明显买盘堆积的关键 demand 区。
+      * 若仅满足“小级别 demand + major_bias 仍为 BEAR + minor_bias 仍为 BEAR”，
+        即使 micro_bias 短暂转多，也应打为 C 级或弱 B 级机会，action 倾向 "wait"。
+
   - 若此时 minor_bias 与 micro_bias 同时为强 BULL（例如连续更高低点 + MACD>0 + RSI14 明显高于 50）：
     - 视为“短周期趋势与 major 完全相反”的强冲突阶段，说明当前是顺势空头趋势中的强力反弹段；
     - **在该阶段禁止开新空单：**
@@ -783,10 +802,35 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
          则应选择 "wait"。
        * 若这是基于 30m/15m/3m 结构的短线机会（目标空间约 1~1.5R），
          同样视为 B 级小仓试单，不必等到 4h/1h 完全共振，只要满足前述风控与方向约束即可。
+     - 若 setup_grade = "B" 且属于 LTF_scalp（短线快进快出）：
+       * 顺势 LTF_scalp（进场方向与 major_bias 一致）：
+         - 仅当 edge_score ≥ 0.6 且 confidence ≥ 68 时，才允许“小仓位试单”；
+       * 逆势 LTF_scalp（进场方向与 major_bias 相反）：
+         - 仅当 edge_score ≥ 0.8 且 confidence ≥ 72 时，才允许小仓试单；
+         - 若未达到上述门槛，即使结构看似合理，也应选择 "wait"。
 
      - 若 setup_grade = "A"：
        * 且多周期结构、供需区、VPVR、FVG 等都支持该方向，才允许按正常风险开仓。
 
+  2.1) 对 LTF_scalp 类型开仓的多周期约束（即 reasoning 中标明 trade_style=LTF_scalp，或明显属于“小级别快进快出”的交易）：
+     - 做多 LTF_scalp：
+       * 必须满足：
+         - micro_bias 为 BULL，且
+         - 30m 或 15m 中至少一个 timeframe 的 bias 已由 BEAR 转为 NEUTRAL 或 BULL；
+       * 不允许出现下列情形就开多：
+         - major_bias = BEAR，
+         - minor_bias = BEAR（30m/15m 仍明显空头），
+         - 仅 micro_bias = BULL（3m 短线反弹），
+         这种结构视为空头趋势中的高噪音反弹，应选择 "wait"。
+     - 做空 LTF_scalp（对称）：
+       * 必须满足：
+         - micro_bias 为 BEAR，且
+         - 30m 或 15m 中至少一个 timeframe 的 bias 已由 BULL 转为 NEUTRAL 或 BEAR；
+       * 不允许出现：
+         - major_bias = BULL，
+         - minor_bias = BULL，
+         - 仅 micro_bias = BEAR，
+         的情形就开空，视为多头趋势中的高噪音回落，应选择 "wait"。
 
   3) 主观信心门槛（按等级区分）：
      - confidence < 60：
@@ -796,6 +840,13 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
          允许“小仓位试单”（对应 B 级风险）。
      - confidence ≥ 75：
        * 若 setup_grade = "A"，且其它条件满足，可以按正常风险开仓。
+     - 对 trade_style = LTF_scalp 的附加要求（若 reasoning 中标明此风格）：
+       * 顺势 LTF_scalp（方向与 major_bias 一致）：
+         - 实际执行时，只有在 confidence ≥ 68 且 edge_score ≥ 0.6 时才建议开仓；
+       * 逆势 LTF_scalp（方向与 major_bias 相反）：
+         - 实际执行时，只有在 confidence ≥ 72 且 edge_score ≥ 0.8 时才建议开仓；
+       * 若未达到上述阈值，即使其他条件满足，也应在 reasoning 中说明
+         “逆势 LTF_scalp 信心不足，因此选择 wait”。
 
 
   4) 全局限制（防止过度交易）：
