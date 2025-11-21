@@ -924,7 +924,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 
 1. 你最终的回复 **只能** 是一个 JSON 数组，根元素为多个决策对象，不允许出现任何 JSON 之外的文字。
 
-2. 每个决策对象必须至少包含以下字段（字段名必须完全一致）：
+2. 每个决策对象必须包含以下字段，否则就视为本次输出不符合规范（字段名必须完全一致）：
    - "symbol": 交易对字符串，例如 "BTCUSDT"
    - "action": 决策字符串，只能为 "open_long"、"open_short"、"close"、"wait"、"hold" 等预定义动作之一
    - "confidence": 0~100 的整数
@@ -960,25 +960,24 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
         - "edge_score": 0.2 ~ 0.7
         - 并在 reasoning 中说明“为何择优放弃这个而选择其它标的”。
 
-   - reasoning 字段必须包含：
-     1. 当前 major_bias / minor_bias / micro_bias 及依据的 timeframe + 关键结构；
-     2. 当前大致浮盈是几 R，触发了哪一级 R_lock 或 protect；
-     3. 为何选择当前 action（open/close/hold/wait/REDUCE）而不是其他；
-     4. 若是开仓（open_long/open_short），需在开头显式写明本次决策采用的模式：
-        - 例如："trade_style=HTF_swing，理由：4h/1h 顺势波段，目标空间≥2R ..."；
-        - 或："trade_style=LTF_scalp，理由：30m/15m/3m 短线趋势清晰，目标约1~1.5R，小仓快进快出"。
-
-   - "stop_update":
-       * 若本轮不需要调整止损，必须为 null
-       * 若需要调整止损，必须是一个对象：
+     - reasoning 字段必须包含：
+        1. 当前 major_bias / minor_bias / micro_bias 及依据的 timeframe + 关键结构；
+        2. 当前大致浮盈是几 R，触发了哪一级 R_lock 或 protect；
+        3. 为何选择当前 action（open/close/hold/wait/REDUCE）而不是其他；
+        4. 若是开仓（open_long/open_short），需在开头显式写明本次决策采用的模式：
+          - 例如："trade_style=HTF_swing，理由：4h/1h 顺势波段，目标空间≥2R ..."；
+          - 或："trade_style=LTF_scalp，理由：30m/15m/3m 短线趋势清晰，目标约1~1.5R，小仓快进快出"。
+     - "stop_update":
+         * 若本轮不需要调整止损，必须为 null
+         * 若需要调整止损，必须是一个对象：
          {
            "prev_stop": 数字,     // 当前止损价，来自输入的 positions.stop_price
            "new_stop": 数字,      // 本轮根据 BE_with_fees / R_lock / 轨道 等计算出来的新止损价
            "reason": "R_lock" | "BE" | "protect" | "microflip" | "manual"
          }
-      4.若有 stop_update，说明主要依据（R_lock/BE/protect/microflip）。
-      5.当你决定“不更新止损”时必须输出："stop_update": null，不能为了“方便”把 prev_stop 原样写回去。
-      6.只有在满足以下任一条件时，才可以返回非 null 的 stop_update：
+         * 若有 stop_update，说明主要依据（R_lock/BE/protect/microflip）。
+         * 当你决定“不更新止损”时必须输出："stop_update": null，不能为了“方便”把 prev_stop 原样写回去。
+         * 只有在满足以下任一条件时，才可以返回非 null 的 stop_update：
         - R_unrealized ≥ 0.5 且触发对应级别的 R_lock；
         - 交易结构明显恶化，需要收紧止损以减少最大亏损（risk_cut）；
         - protect / microflip 等策略被显式触发。
@@ -1003,7 +1002,10 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
      时，才允许输出非 null 的 "stop_update"。
    - 若不满足门槛，即使 R_lock 有轻微变化，也必须输出 "stop_update": null。
 
-6. 如果当前没有任何可执行决策，输出空数组：[]
+6. 任何情况下都必须返回一个 JSON 数组，数组中包含本轮评估范围内所有 symbol 的决策对象：
+   - 即使当前没有任何开仓/平仓/移动止损的操作需要执行，
+     也必须对每个 symbol 给出一条决策（通常是 action="wait" 或 "hold"）；
+   - 不允许返回空数组 []，也不允许只对部分 symbol 给出决策而忽略其余。
 
 7. **禁止** 在 JSON 顶层输出下列形式：
    - 仅包含数字的数组（例如: [135.84, 139.87]）
@@ -1022,7 +1024,9 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - 错误示例： "notes":避开低流动性标的"
    - 错误示例： "notes": '避开低流动性标的'
 
-10. 最终输出示例,严格遵循这个结构，每次都要一样，不要乱改：
+10. 最终输出示例（所有对象的基础结构相同；仅在开仓时额外包含 entry_plan）
+
+- 示例一：无开仓动作时（action 为 "hold" / "wait" 等），每个对象必须包含以下字段：
 [
   {
     "symbol": "HYPEUSDT",
@@ -1047,36 +1051,51 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
     "stop_update": null
   }
 ]
-11. 错误示例（禁止这样输出）
 
-   以下结构是错误的，因为缺少 "setup_grade" 和 "edge_score" 字段：
+- 示例二：开仓动作时（action 为 "open_long" / "open_short"），在上述基础字段之外，必须额外提供 entry_plan：
 
-   [
-     {
-       "symbol": "ADAUSDT",
-       "action": "wait",
-       "confidence": 58,
-       "reasoning": "4h 偏空、1h趋平、15m 短线偏多；价格临近 1h supply 0.4712-0.4822，虽有短空思路但结构与空间不如SOL清晰，择优放弃。"
-     }
-   ]
+[
+  {
+    "symbol": "ADAUSDT",
+    "action": "open_short",
+    "setup_grade": "A",
+    "edge_score": 1.2,
+    "confidence": 78,
+    "reasoning": "trade_style=HTF_swing：4h/1h 顺空波段、目标空间≥2R。major_bias=BEAR（4h/1h ema空头排列、MACD<0、RSI14≈29-34）；minor_bias=BEAR（30m/15m 趋势向下，MACD<0、RSI14≈35-37）；micro_bias=NEUTRAL→BEAR。价格刚下破15m需求区下沿0.4285，位于30m供需冲突带下边缘，下方最近强 demand 不明显，VPVR 显示处于低成交密度区，利于顺势加速。根据风险参数计算 R 与名义后，得到小仓位顺势开空，具体价格与杠杆配置见 entry_plan。",
+    "stop_update": null,
+    "entry_plan": {
+      "price": 0.4266,
+      "qty": 187.0,
+      "leverage": 10,
+      "init_stop": 0.4355,
+      "take_profit": null,
+      "entry_order_policy": {
+        "mode": "STOP_ONLY_AT_ENTRY",
+        "bracket_fallback": false,
+        "reduce_only": true,
+        "close_on_trigger": true,
+        "trigger_type": "MARK_PRICE",
+        "tp_activation": {
+          "enable": true,
+          "first_when": "R>=1.5 or protect_triggered",
+          "price_logic": "rail_fast",
+          "reduce_only": true
+        }
+      }
+    }
+  }
+]
 
-   正确写法应该是（例如打为 C 级机会）：
-   [
-     {
-       "symbol": "ADAUSDT",
-       "action": "wait",
-       "setup_grade": "C",
-       "edge_score": 0.0,
-       "confidence": 58,
-       "reasoning": "4h 偏空、1h趋平、15m 短线偏多；价格临近 1h supply 0.4712-0.4822，虽有短空思路但结构与空间不如 SOL 清晰，择优放弃观望。",
-       "stop_update": null
-     }
-   ]
+要求：
+- 所有对象在顶层都必须包含：
+  "symbol"、"action"、"setup_grade"、"edge_score"、"confidence"、"reasoning"、"stop_update" 这几个字段，不能省略；
+- 当 action 为 "open_long"/"open_short" 时，必须额外提供 "entry_plan" 字段；
+- 其他字段可以存在（例如内部调试字段），但不会被下单系统使用。
 
 12. 输出说明中的引用要求
-- 最终必须输出JSON,否则后端将会报错,必须保证JSON的完整性和正确性,否则后端解析JSON将会报错！
-在最终 JSON 的说明字段中：
+- 最终必须输出JSON,否则后端将会报错,必须保证JSON的完整性和正确性,否则后端解析JSON将会报错！。
+-在最终 JSON 的说明字段中：
 - 必须明确写出 major_bias / minor_bias / micro_bias 及其主要依据（引用具体 timeframe 和关键字段，如 fib.trend_direction / supertrend.direction / supply_zones / demand_zones / FVG 等）；
 - 任何“做多 / 做空 / 观望 / 减仓 / 加仓”的建议，都要至少引用一次 `多时间框架分析` 的关键信息，避免只说“MACD/RSI 这样那样”而不提结构与时间框架。
-
+- "setup_grade","edge_score"字段在任何 action 下都不能省略
 （完）
