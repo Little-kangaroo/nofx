@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"nofx/config"
 	"nofx/decision"
 	"nofx/logger"
 	"nofx/market"
@@ -98,6 +99,7 @@ type AutoTrader struct {
 	trader                Trader // 使用Trader接口（支持多平台）
 	mcpClient             *mcp.Client
 	decisionLogger        *logger.DecisionLogger // 决策日志记录器
+	database              *config.Database       // 数据库连接
 	initialBalance        float64
 	dailyPnL              float64
 	customPrompt          string   // 自定义交易策略prompt
@@ -116,7 +118,7 @@ type AutoTrader struct {
 }
 
 // NewAutoTrader 创建自动交易器
-func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
+func NewAutoTrader(config AutoTraderConfig, database *config.Database) (*AutoTrader, error) {
 	// 设置默认值
 	if config.ID == "" {
 		config.ID = "default_trader"
@@ -226,6 +228,7 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		trader:                trader,
 		mcpClient:             mcpClient,
 		decisionLogger:        decisionLogger,
+		database:              database,
 		initialBalance:        config.InitialBalance,
 		systemPromptTemplate:  systemPromptTemplate,
 		defaultCoins:          config.DefaultCoins,
@@ -624,13 +627,25 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		marginUsedPct = (totalMarginUsed / totalEquity) * 100
 	}
 
-	// 5. 分析历史表现（最近100个周期，避免长期持仓的交易记录丢失）
-	// 假设每3分钟一个周期，100个周期 = 5小时，足够覆盖大部分交易
-	performance, err := at.decisionLogger.AnalyzePerformance(100)
-	if err != nil {
-		log.Printf("⚠️  分析历史表现失败: %v", err)
-		// 不影响主流程，继续执行（但设置performance为nil以避免传递错误数据）
-		performance = nil
+	// 5. 分析历史表现（最近100笔交易）
+	var performance interface{}
+	if at.database != nil {
+		perf, err := at.database.GetTradePerformanceAnalysis(at.id, 100)
+		if err != nil {
+			log.Printf("⚠️  分析历史表现失败: %v", err)
+			performance = nil
+		} else {
+			performance = perf
+		}
+	} else {
+		// 兼容旧系统
+		perf, err := at.decisionLogger.AnalyzePerformance(100)
+		if err != nil {
+			log.Printf("⚠️  分析历史表现失败: %v", err)
+			performance = nil
+		} else {
+			performance = perf
+		}
 	}
 
 	// 6. 构建上下文
@@ -781,10 +796,16 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	// 🔧 重要修复：获取实际成交价格
 	// 等待订单确认后获取真实的持仓信息来确定实际成交价
 	time.Sleep(2 * time.Second) // 等待订单确认
-	if actualPrice := at.getActualFillPrice(decision.Symbol, "long"); actualPrice > 0 {
+	actualPrice := marketData.CurrentPrice
+	if actualFillPrice := at.getActualFillPrice(decision.Symbol, "long"); actualFillPrice > 0 {
+		actualPrice = actualFillPrice
 		actionRecord.Price = actualPrice
 		log.Printf("  📊 实际开仓价格: %.4f (原请求价格: %.4f)", actualPrice, marketData.CurrentPrice)
 	}
+
+	// 记录到数据库
+	at.recordTradeToDatabase(decision.Symbol, "long", quantity, decision.Leverage, 
+		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_long", true)
 
 	// 记录开仓时间
 	posKey := decision.Symbol + "_long"
@@ -2279,4 +2300,86 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 	
 	// 交易记录已通过 DecisionAction 添加到 record.Decisions 中
 	// 日志将在 LogDecision(record) 时统一记录
+}
+
+// recordTradeToDatabase 将交易记录到数据库
+func (at *AutoTrader) recordTradeToDatabase(symbol, side string, quantity float64, leverage int, 
+	price float64, orderID string, action string, isOpen bool) {
+	if at.database == nil {
+		return
+	}
+
+	if isOpen {
+		// 开仓记录
+		tradeRecord := &config.TradeRecord{
+			TraderID:      at.id,
+			Symbol:        symbol,
+			Side:          side,
+			Quantity:      quantity,
+			Leverage:      leverage,
+			OpenPrice:     price,
+			PositionValue: quantity * price,
+			MarginUsed:    (quantity * price) / float64(leverage),
+			OpenTime:      time.Now(),
+			Status:        "open",
+			OpenOrderID:   orderID,
+		}
+		
+		if err := at.database.CreateTrade(tradeRecord); err != nil {
+			log.Printf("  ⚠️ 记录开仓到数据库失败: %v", err)
+		} else {
+			log.Printf("  💾 已记录开仓到数据库: %s", tradeRecord.ID)
+		}
+	}
+
+	// 交易动作记录
+	actionRecord := &config.TradeActionRecord{
+		TraderID:  at.id,
+		Action:    action,
+		Symbol:    symbol,
+		Quantity:  quantity,
+		Price:     price,
+		Leverage:  leverage,
+		OrderID:   orderID,
+		Timestamp: time.Now(),
+		Success:   true,
+	}
+	
+	if err := at.database.CreateTradeAction(actionRecord); err != nil {
+		log.Printf("  ⚠️ 记录交易动作到数据库失败: %v", err)
+	}
+}
+
+// updateTradeInDatabase 更新数据库中的交易记录（平仓时使用）
+func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closePrice float64, 
+	closeOrderID, closeReason string) {
+	if at.database == nil {
+		return
+	}
+
+	// 查找对应的开仓记录
+	openTrade, err := at.database.GetOpenTrade(at.id, symbol, side)
+	if err != nil {
+		log.Printf("  ⚠️ 查找开仓记录失败: %v", err)
+		return
+	}
+
+	// 计算盈亏
+	var pnl float64
+	if side == "long" {
+		pnl = openTrade.Quantity * (closePrice - openTrade.OpenPrice)
+	} else {
+		pnl = openTrade.Quantity * (openTrade.OpenPrice - closePrice)
+	}
+	
+	pnlPct := (pnl / openTrade.MarginUsed) * 100
+	closeTime := time.Now()
+	durationSecs := int(closeTime.Sub(openTrade.OpenTime).Seconds())
+
+	if err := at.database.UpdateTrade(openTrade.ID, closePrice, closeTime, 
+		"closed", closeReason, closeOrderID, pnl, pnlPct, durationSecs); err != nil {
+		log.Printf("  ⚠️ 更新交易记录失败: %v", err)
+	} else {
+		log.Printf("  💾 已更新交易记录: PnL=%.2f USDT (%.2f%%)", pnl, pnlPct)
+	}
 }

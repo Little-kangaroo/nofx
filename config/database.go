@@ -140,6 +140,73 @@ func (d *Database) createTables() error {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 
+		// 决策记录表
+		`CREATE TABLE IF NOT EXISTS decision_records (
+			id TEXT PRIMARY KEY,
+			trader_id TEXT NOT NULL,
+			cycle_number INTEGER NOT NULL,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			system_prompt TEXT,
+			input_prompt TEXT,
+			cot_trace TEXT,
+			decision_json TEXT,
+			account_state_json TEXT,
+			positions_json TEXT,
+			candidate_coins_json TEXT,
+			execution_log_json TEXT,
+			success BOOLEAN DEFAULT 0,
+			error_message TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (trader_id) REFERENCES traders(id) ON DELETE CASCADE
+		)`,
+
+		// 交易记录表 - 存储每笔完整交易
+		`CREATE TABLE IF NOT EXISTS trades (
+			id TEXT PRIMARY KEY,
+			trader_id TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL, -- 'long' 或 'short'
+			quantity REAL NOT NULL,
+			leverage INTEGER NOT NULL,
+			open_price REAL NOT NULL,
+			close_price REAL,
+			position_value REAL NOT NULL,
+			margin_used REAL NOT NULL,
+			pnl REAL DEFAULT 0,
+			pnl_pct REAL DEFAULT 0,
+			duration_seconds INTEGER DEFAULT 0,
+			open_time DATETIME NOT NULL,
+			close_time DATETIME,
+			status TEXT NOT NULL DEFAULT 'open', -- 'open', 'closed', 'liquidated'
+			close_reason TEXT DEFAULT '', -- 'manual', 'stop_loss', 'take_profit', 'liquidation'
+			open_order_id TEXT,
+			close_order_id TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (trader_id) REFERENCES traders(id) ON DELETE CASCADE
+		)`,
+
+		// 交易动作表 - 存储每个交易动作
+		`CREATE TABLE IF NOT EXISTS trade_actions (
+			id TEXT PRIMARY KEY,
+			trader_id TEXT NOT NULL,
+			decision_record_id TEXT,
+			trade_id TEXT,
+			action TEXT NOT NULL, -- 'open_long', 'open_short', 'close_long', 'close_short', 'stop_loss_long', 'stop_loss_short'
+			symbol TEXT NOT NULL,
+			quantity REAL NOT NULL,
+			price REAL NOT NULL,
+			leverage INTEGER DEFAULT 1,
+			order_id TEXT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			success BOOLEAN DEFAULT 0,
+			error_message TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (trader_id) REFERENCES traders(id) ON DELETE CASCADE,
+			FOREIGN KEY (decision_record_id) REFERENCES decision_records(id) ON DELETE SET NULL,
+			FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE SET NULL
+		)`,
+
 		// 触发器：自动更新 updated_at
 		`CREATE TRIGGER IF NOT EXISTS update_users_updated_at
 			AFTER UPDATE ON users
@@ -175,6 +242,12 @@ func (d *Database) createTables() error {
 			AFTER UPDATE ON system_config
 			BEGIN
 				UPDATE system_config SET updated_at = CURRENT_TIMESTAMP WHERE key = NEW.key;
+			END`,
+
+		`CREATE TRIGGER IF NOT EXISTS update_trades_updated_at
+			AFTER UPDATE ON trades
+			BEGIN
+				UPDATE trades SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 			END`,
 	}
 
@@ -1225,4 +1298,480 @@ func (d *Database) GetBetaCodeStats() (total, used int, err error) {
 	}
 
 	return total, used, nil
+}
+
+// ===== 交易记录相关方法 =====
+
+// TradeRecord 交易记录结构
+type TradeRecord struct {
+	ID            string    `json:"id"`
+	TraderID      string    `json:"trader_id"`
+	Symbol        string    `json:"symbol"`
+	Side          string    `json:"side"` // 'long' 或 'short'
+	Quantity      float64   `json:"quantity"`
+	Leverage      int       `json:"leverage"`
+	OpenPrice     float64   `json:"open_price"`
+	ClosePrice    *float64  `json:"close_price"`
+	PositionValue float64   `json:"position_value"`
+	MarginUsed    float64   `json:"margin_used"`
+	PnL           float64   `json:"pnl"`
+	PnLPct        float64   `json:"pnl_pct"`
+	DurationSecs  int       `json:"duration_seconds"`
+	OpenTime      time.Time `json:"open_time"`
+	CloseTime     *time.Time `json:"close_time"`
+	Status        string    `json:"status"` // 'open', 'closed', 'liquidated'
+	CloseReason   string    `json:"close_reason"` // 'manual', 'stop_loss', 'take_profit', 'liquidation'
+	OpenOrderID   string    `json:"open_order_id"`
+	CloseOrderID  string    `json:"close_order_id"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// TradeAction 交易动作结构
+type TradeActionRecord struct {
+	ID               string    `json:"id"`
+	TraderID         string    `json:"trader_id"`
+	DecisionRecordID *string   `json:"decision_record_id"`
+	TradeID          *string   `json:"trade_id"`
+	Action           string    `json:"action"` // 'open_long', 'open_short', 'close_long', 'close_short', 'stop_loss_long', 'stop_loss_short'
+	Symbol           string    `json:"symbol"`
+	Quantity         float64   `json:"quantity"`
+	Price            float64   `json:"price"`
+	Leverage         int       `json:"leverage"`
+	OrderID          string    `json:"order_id"`
+	Timestamp        time.Time `json:"timestamp"`
+	Success          bool      `json:"success"`
+	ErrorMessage     string    `json:"error_message"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// DecisionRecordDB 决策记录数据库结构
+type DecisionRecordDB struct {
+	ID                 string    `json:"id"`
+	TraderID           string    `json:"trader_id"`
+	CycleNumber        int       `json:"cycle_number"`
+	Timestamp          time.Time `json:"timestamp"`
+	SystemPrompt       string    `json:"system_prompt"`
+	InputPrompt        string    `json:"input_prompt"`
+	CoTTrace           string    `json:"cot_trace"`
+	DecisionJSON       string    `json:"decision_json"`
+	AccountStateJSON   string    `json:"account_state_json"`
+	PositionsJSON      string    `json:"positions_json"`
+	CandidateCoinsJSON string    `json:"candidate_coins_json"`
+	ExecutionLogJSON   string    `json:"execution_log_json"`
+	Success            bool      `json:"success"`
+	ErrorMessage       string    `json:"error_message"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+// CreateTrade 创建新交易记录
+func (d *Database) CreateTrade(trade *TradeRecord) error {
+	if trade.ID == "" {
+		trade.ID = fmt.Sprintf("trade_%d", time.Now().UnixNano())
+	}
+	
+	_, err := d.db.Exec(`
+		INSERT INTO trades (
+			id, trader_id, symbol, side, quantity, leverage, open_price, 
+			position_value, margin_used, open_time, status, open_order_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, trade.ID, trade.TraderID, trade.Symbol, trade.Side, trade.Quantity, 
+	trade.Leverage, trade.OpenPrice, trade.PositionValue, trade.MarginUsed, 
+	trade.OpenTime, trade.Status, trade.OpenOrderID)
+	
+	return err
+}
+
+// UpdateTrade 更新交易记录（主要用于平仓）
+func (d *Database) UpdateTrade(tradeID string, closePrice float64, closeTime time.Time, 
+	status, closeReason, closeOrderID string, pnl, pnlPct float64, durationSecs int) error {
+	
+	_, err := d.db.Exec(`
+		UPDATE trades SET 
+			close_price = ?, close_time = ?, status = ?, close_reason = ?, 
+			close_order_id = ?, pnl = ?, pnl_pct = ?, duration_seconds = ?
+		WHERE id = ?
+	`, closePrice, closeTime, status, closeReason, closeOrderID, pnl, pnlPct, durationSecs, tradeID)
+	
+	return err
+}
+
+// GetOpenTrade 获取指定trader的开仓交易
+func (d *Database) GetOpenTrade(traderID, symbol, side string) (*TradeRecord, error) {
+	var trade TradeRecord
+	var closePriceSql sql.NullFloat64
+	var closeTime sql.NullTime
+	
+	err := d.db.QueryRow(`
+		SELECT id, trader_id, symbol, side, quantity, leverage, open_price, close_price,
+			position_value, margin_used, pnl, pnl_pct, duration_seconds,
+			open_time, close_time, status, close_reason, open_order_id, close_order_id,
+			created_at, updated_at
+		FROM trades 
+		WHERE trader_id = ? AND symbol = ? AND side = ? AND status = 'open'
+		ORDER BY open_time DESC LIMIT 1
+	`, traderID, symbol, side).Scan(
+		&trade.ID, &trade.TraderID, &trade.Symbol, &trade.Side, &trade.Quantity,
+		&trade.Leverage, &trade.OpenPrice, &closePriceSql, &trade.PositionValue,
+		&trade.MarginUsed, &trade.PnL, &trade.PnLPct, &trade.DurationSecs,
+		&trade.OpenTime, &closeTime, &trade.Status, &trade.CloseReason,
+		&trade.OpenOrderID, &trade.CloseOrderID, &trade.CreatedAt, &trade.UpdatedAt)
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	if closePriceSql.Valid {
+		trade.ClosePrice = &closePriceSql.Float64
+	}
+	if closeTime.Valid {
+		trade.CloseTime = &closeTime.Time
+	}
+	
+	return &trade, nil
+}
+
+// GetTraderTrades 获取指定trader的交易记录
+func (d *Database) GetTraderTrades(traderID string, limit int) ([]*TradeRecord, error) {
+	query := `
+		SELECT id, trader_id, symbol, side, quantity, leverage, open_price, close_price,
+			position_value, margin_used, pnl, pnl_pct, duration_seconds,
+			open_time, close_time, status, close_reason, open_order_id, close_order_id,
+			created_at, updated_at
+		FROM trades 
+		WHERE trader_id = ? 
+		ORDER BY open_time DESC
+	`
+	
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	
+	rows, err := d.db.Query(query, traderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	
+	var trades []*TradeRecord
+	for rows.Next() {
+		var trade TradeRecord
+		var closePrice sql.NullFloat64
+		var closeTime sql.NullTime
+		
+		err := rows.Scan(
+			&trade.ID, &trade.TraderID, &trade.Symbol, &trade.Side, &trade.Quantity,
+			&trade.Leverage, &trade.OpenPrice, &closePrice, &trade.PositionValue,
+			&trade.MarginUsed, &trade.PnL, &trade.PnLPct, &trade.DurationSecs,
+			&trade.OpenTime, &closeTime, &trade.Status, &trade.CloseReason,
+			&trade.OpenOrderID, &trade.CloseOrderID, &trade.CreatedAt, &trade.UpdatedAt)
+		
+		if err != nil {
+			continue
+		}
+		
+		if closePrice.Valid {
+			trade.ClosePrice = &closePrice.Float64
+		}
+		if closeTime.Valid {
+			trade.CloseTime = &closeTime.Time
+		}
+		
+		trades = append(trades, &trade)
+	}
+	
+	return trades, nil
+}
+
+// DeleteTrade 删除交易记录
+func (d *Database) DeleteTrade(tradeID string) error {
+	_, err := d.db.Exec(`DELETE FROM trades WHERE id = ?`, tradeID)
+	return err
+}
+
+// DeleteTraderTrades 删除指定trader的所有交易记录
+func (d *Database) DeleteTraderTrades(traderID string) error {
+	_, err := d.db.Exec(`DELETE FROM trades WHERE trader_id = ?`, traderID)
+	return err
+}
+
+// CreateTradeAction 创建交易动作记录
+func (d *Database) CreateTradeAction(action *TradeActionRecord) error {
+	if action.ID == "" {
+		action.ID = fmt.Sprintf("action_%d", time.Now().UnixNano())
+	}
+	
+	_, err := d.db.Exec(`
+		INSERT INTO trade_actions (
+			id, trader_id, decision_record_id, trade_id, action, symbol, 
+			quantity, price, leverage, order_id, timestamp, success, error_message
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, action.ID, action.TraderID, action.DecisionRecordID, action.TradeID, 
+	action.Action, action.Symbol, action.Quantity, action.Price, action.Leverage,
+	action.OrderID, action.Timestamp, action.Success, action.ErrorMessage)
+	
+	return err
+}
+
+// GetTradeActions 获取交易动作记录
+func (d *Database) GetTradeActions(traderID string, limit int) ([]*TradeActionRecord, error) {
+	query := `
+		SELECT id, trader_id, decision_record_id, trade_id, action, symbol,
+			quantity, price, leverage, order_id, timestamp, success, error_message, created_at
+		FROM trade_actions 
+		WHERE trader_id = ? 
+		ORDER BY timestamp DESC
+	`
+	
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	
+	rows, err := d.db.Query(query, traderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	
+	var actions []*TradeActionRecord
+	for rows.Next() {
+		var action TradeActionRecord
+		var decisionID, tradeID sql.NullString
+		
+		err := rows.Scan(
+			&action.ID, &action.TraderID, &decisionID, &tradeID, &action.Action,
+			&action.Symbol, &action.Quantity, &action.Price, &action.Leverage,
+			&action.OrderID, &action.Timestamp, &action.Success, &action.ErrorMessage,
+			&action.CreatedAt)
+		
+		if err != nil {
+			continue
+		}
+		
+		if decisionID.Valid {
+			action.DecisionRecordID = &decisionID.String
+		}
+		if tradeID.Valid {
+			action.TradeID = &tradeID.String
+		}
+		
+		actions = append(actions, &action)
+	}
+	
+	return actions, nil
+}
+
+// CreateDecisionRecord 创建决策记录
+func (d *Database) CreateDecisionRecord(record *DecisionRecordDB) error {
+	if record.ID == "" {
+		record.ID = fmt.Sprintf("decision_%d", time.Now().UnixNano())
+	}
+	
+	_, err := d.db.Exec(`
+		INSERT INTO decision_records (
+			id, trader_id, cycle_number, timestamp, system_prompt, input_prompt,
+			cot_trace, decision_json, account_state_json, positions_json,
+			candidate_coins_json, execution_log_json, success, error_message
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.ID, record.TraderID, record.CycleNumber, record.Timestamp,
+	record.SystemPrompt, record.InputPrompt, record.CoTTrace, record.DecisionJSON,
+	record.AccountStateJSON, record.PositionsJSON, record.CandidateCoinsJSON,
+	record.ExecutionLogJSON, record.Success, record.ErrorMessage)
+	
+	return err
+}
+
+// GetTradeStatistics 获取交易统计信息
+func (d *Database) GetTradeStatistics(traderID string) (map[string]interface{}, error) {
+	stats := make(map[string]interface{})
+	
+	// 总交易数
+	var totalTrades int
+	err := d.db.QueryRow(`SELECT COUNT(*) FROM trades WHERE trader_id = ? AND status != 'open'`, traderID).Scan(&totalTrades)
+	if err != nil {
+		return nil, err
+	}
+	stats["total_trades"] = totalTrades
+	
+	// 盈利交易数
+	var winningTrades int
+	err = d.db.QueryRow(`SELECT COUNT(*) FROM trades WHERE trader_id = ? AND status != 'open' AND pnl > 0`, traderID).Scan(&winningTrades)
+	if err != nil {
+		return nil, err
+	}
+	stats["winning_trades"] = winningTrades
+	
+	// 亏损交易数
+	var losingTrades int
+	err = d.db.QueryRow(`SELECT COUNT(*) FROM trades WHERE trader_id = ? AND status != 'open' AND pnl < 0`, traderID).Scan(&losingTrades)
+	if err != nil {
+		return nil, err
+	}
+	stats["losing_trades"] = losingTrades
+	
+	// 胜率
+	if totalTrades > 0 {
+		stats["win_rate"] = float64(winningTrades) / float64(totalTrades) * 100
+	} else {
+		stats["win_rate"] = 0.0
+	}
+	
+	// 总盈亏
+	var totalPnL sql.NullFloat64
+	err = d.db.QueryRow(`SELECT SUM(pnl) FROM trades WHERE trader_id = ? AND status != 'open'`, traderID).Scan(&totalPnL)
+	if err != nil {
+		return nil, err
+	}
+	if totalPnL.Valid {
+		stats["total_pnl"] = totalPnL.Float64
+	} else {
+		stats["total_pnl"] = 0.0
+	}
+	
+	// 平均盈利
+	var avgWin sql.NullFloat64
+	err = d.db.QueryRow(`SELECT AVG(pnl) FROM trades WHERE trader_id = ? AND status != 'open' AND pnl > 0`, traderID).Scan(&avgWin)
+	if err != nil {
+		return nil, err
+	}
+	if avgWin.Valid {
+		stats["avg_win"] = avgWin.Float64
+	} else {
+		stats["avg_win"] = 0.0
+	}
+	
+	// 平均亏损
+	var avgLoss sql.NullFloat64
+	err = d.db.QueryRow(`SELECT AVG(pnl) FROM trades WHERE trader_id = ? AND status != 'open' AND pnl < 0`, traderID).Scan(&avgLoss)
+	if err != nil {
+		return nil, err
+	}
+	if avgLoss.Valid {
+		stats["avg_loss"] = avgLoss.Float64
+	} else {
+		stats["avg_loss"] = 0.0
+	}
+	
+	return stats, nil
+}
+
+// GetTradePerformanceAnalysis 获取交易表现分析（替代文件式AnalyzePerformance）
+func (d *Database) GetTradePerformanceAnalysis(traderID string, limit int) (map[string]interface{}, error) {
+	result := make(map[string]interface{})
+	
+	// 获取基础统计
+	stats, err := d.GetTradeStatistics(traderID)
+	if err != nil {
+		return nil, err
+	}
+	
+	// 将基础统计添加到结果中
+	for k, v := range stats {
+		result[k] = v
+	}
+	
+	// 获取最近的交易记录
+	trades, err := d.GetTraderTrades(traderID, limit)
+	if err != nil {
+		return nil, err
+	}
+	
+	// 转换为前端期望的格式
+	recentTrades := make([]map[string]interface{}, 0)
+	for _, trade := range trades {
+		if trade.Status == "closed" && trade.ClosePrice != nil && trade.CloseTime != nil {
+			tradeMap := map[string]interface{}{
+				"symbol":         trade.Symbol,
+				"side":           trade.Side,
+				"quantity":       trade.Quantity,
+				"leverage":       trade.Leverage,
+				"open_price":     trade.OpenPrice,
+				"close_price":    *trade.ClosePrice,
+				"position_value": trade.PositionValue,
+				"margin_used":    trade.MarginUsed,
+				"pn_l":          trade.PnL,
+				"pn_l_pct":      trade.PnLPct,
+				"duration":      fmt.Sprintf("%d秒", trade.DurationSecs),
+				"open_time":     trade.OpenTime,
+				"close_time":    *trade.CloseTime,
+				"was_stop_loss": trade.CloseReason == "stop_loss",
+			}
+			recentTrades = append(recentTrades, tradeMap)
+		}
+	}
+	
+	result["recent_trades"] = recentTrades
+	
+	// 计算各币种表现
+	symbolStats := make(map[string]map[string]interface{})
+	for _, trade := range trades {
+		if trade.Status != "closed" {
+			continue
+		}
+		
+		symbol := trade.Symbol
+		if _, exists := symbolStats[symbol]; !exists {
+			symbolStats[symbol] = map[string]interface{}{
+				"symbol":         symbol,
+				"total_trades":   0,
+				"winning_trades": 0,
+				"losing_trades":  0,
+				"total_pn_l":     0.0,
+			}
+		}
+		
+		stats := symbolStats[symbol]
+		stats["total_trades"] = stats["total_trades"].(int) + 1
+		stats["total_pn_l"] = stats["total_pn_l"].(float64) + trade.PnL
+		
+		if trade.PnL > 0 {
+			stats["winning_trades"] = stats["winning_trades"].(int) + 1
+		} else if trade.PnL < 0 {
+			stats["losing_trades"] = stats["losing_trades"].(int) + 1
+		}
+	}
+	
+	// 计算各币种胜率和平均盈亏
+	bestSymbol := ""
+	worstSymbol := ""
+	bestPnL := -999999.0
+	worstPnL := 999999.0
+	
+	for symbol, stats := range symbolStats {
+		totalTrades := stats["total_trades"].(int)
+		if totalTrades > 0 {
+			winningTrades := stats["winning_trades"].(int)
+			totalPnL := stats["total_pn_l"].(float64)
+			
+			stats["win_rate"] = float64(winningTrades) / float64(totalTrades) * 100
+			stats["avg_pn_l"] = totalPnL / float64(totalTrades)
+			
+			if totalPnL > bestPnL {
+				bestPnL = totalPnL
+				bestSymbol = symbol
+			}
+			if totalPnL < worstPnL {
+				worstPnL = totalPnL
+				worstSymbol = symbol
+			}
+		}
+	}
+	
+	result["symbol_stats"] = symbolStats
+	result["best_symbol"] = bestSymbol
+	result["worst_symbol"] = worstSymbol
+	
+	// 计算盈亏比
+	if result["avg_loss"] != nil && result["avg_loss"].(float64) < 0 {
+		avgWin := 0.0
+		if result["avg_win"] != nil {
+			avgWin = result["avg_win"].(float64)
+		}
+		avgLoss := result["avg_loss"].(float64)
+		result["profit_factor"] = avgWin / (-avgLoss)
+	} else {
+		result["profit_factor"] = 0.0
+	}
+	
+	return result, nil
 }

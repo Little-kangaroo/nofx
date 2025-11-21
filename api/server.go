@@ -130,6 +130,11 @@ func (s *Server) setupRoutes() {
 			protected.GET("/decisions/latest", s.handleLatestDecisions)
 			protected.GET("/statistics", s.handleStatistics)
 			protected.GET("/performance", s.handlePerformance)
+			
+			// 新的基于数据库的交易记录接口
+			protected.GET("/trades", s.handleGetTrades)
+			protected.GET("/trade-statistics", s.handleGetTradeStatistics)
+			protected.DELETE("/trades/:id", s.handleDeleteTrade)
 		}
 	}
 }
@@ -1018,13 +1023,8 @@ func (s *Server) handleStatistics(c *gin.Context) {
 		return
 	}
 
-	trader, err := s.traderManager.GetTrader(traderID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return
-	}
-
-	stats, err := trader.GetDecisionLogger().GetStatistics()
+	// 从数据库获取统计信息
+	stats, err := s.database.GetTradeStatistics(traderID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取统计信息失败: %v", err),
@@ -1150,15 +1150,15 @@ func (s *Server) handlePerformance(c *gin.Context) {
 		return
 	}
 
-	trader, err := s.traderManager.GetTrader(traderID)
+	// 获取limit参数，默认为最近50笔交易
+	limitStr := c.DefaultQuery("limit", "50")
+	limit, err := strconv.Atoi(limitStr)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return
+		limit = 50
 	}
 
-	// 分析最近100个周期的交易表现（避免长期持仓的交易记录丢失）
-	// 假设每3分钟一个周期，100个周期 = 5小时，足够覆盖大部分交易
-	performance, err := trader.GetDecisionLogger().AnalyzePerformance(100)
+	// 从数据库获取交易表现分析
+	performance, err := s.database.GetTradePerformanceAnalysis(traderID, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("分析历史表现失败: %v", err),
@@ -1749,3 +1749,68 @@ func (s *Server) handleGetPublicTraderConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// handleGetTrades 获取交易记录
+func (s *Server) handleGetTrades(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 获取limit参数
+	limitStr := c.DefaultQuery("limit", "50")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil {
+		limit = 50
+	}
+
+	// 从数据库获取交易记录
+	trades, err := s.database.GetTraderTrades(traderID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("获取交易记录失败: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, trades)
+}
+
+// handleGetTradeStatistics 获取交易统计
+func (s *Server) handleGetTradeStatistics(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 从数据库获取统计信息
+	stats, err := s.database.GetTradeStatistics(traderID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("获取统计信息失败: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, stats)
+}
+
+// handleDeleteTrade 删除交易记录
+func (s *Server) handleDeleteTrade(c *gin.Context) {
+	tradeID := c.Param("id")
+	if tradeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "交易记录ID不能为空"})
+		return
+	}
+
+	err := s.database.DeleteTrade(tradeID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("删除交易记录失败: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "交易记录已删除"})
+}

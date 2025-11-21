@@ -286,6 +286,41 @@ export const api = {
     return res.json();
   },
 
+  // 获取交易记录（支持trader_id）
+  async getTrades(traderId?: string, limit?: number): Promise<any[]> {
+    const params = new URLSearchParams();
+    if (traderId) params.append('trader_id', traderId);
+    if (limit) params.append('limit', limit.toString());
+    
+    const url = `${API_BASE}/trades?${params.toString()}`;
+    const res = await fetch(url, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('获取交易记录失败');
+    return res.json();
+  },
+
+  // 获取交易统计（支持trader_id）
+  async getTradeStatistics(traderId?: string): Promise<any> {
+    const url = traderId
+      ? `${API_BASE}/trade-statistics?trader_id=${traderId}`
+      : `${API_BASE}/trade-statistics`;
+    const res = await fetch(url, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('获取交易统计失败');
+    return res.json();
+  },
+
+  // 删除交易记录
+  async deleteTrade(tradeId: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/trades/${tradeId}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('删除交易记录失败');
+  },
+
   // 获取竞赛数据（无需认证）
   async getCompetition(): Promise<CompetitionData> {
     const res = await fetch(`${API_BASE}/competition`);
