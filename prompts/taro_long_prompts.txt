@@ -187,14 +187,31 @@
                  · 因为此时系统尚未获得任何正向 R，收紧止损无法“保护利润”，只会增加被噪音扫出的概率。
 
         2）阶段 B：0R < 当前浮盈 < 0.5R（略有浮盈，但趋势尚未成型）
-             * 视为“刚开始朝有利方向移动”的阶段，典型特征是价格刚离开入场区不远；
-             * 处理原则：
-               - 对于轻微的短周期反向波动（例如：3m/5m 出现小级别反向 K 线，但 15m 通道/关键高低点仍完好）：
-                 · 继续 HOLD，**不收紧止损**，保留原始 R 空间，让行情有正常回踩/震荡的余地；
-               - 只有当出现“强烈结构恶化”（例如：短周期关键支撑/结构位被反向突破，并得到多根 K 确认）时：
-                 · 才可以考虑**小幅收紧止损**，减小最大风险，或在 reasoning 中说明“考虑直接 CLOSE 认错”；
-               - 阶段 B 同样 **禁止** 直接把止损推到 BE_with_fees 或与入场几乎重合的位置：
-                 · 你可以略微收紧，但必须仍保留一定的风险空间（例如仍保留 0.5R 左右的弹性）。
+          - 此阶段视为“刚刚转正但仍不稳定”的盈利区间。
+          - 全局默认原则：
+            * 若 R_unrealized 仍 < break_even_trigger_R（例如 <0.3R）：
+              - 继续 HOLD，不收紧止损，给行情正常回调空间；
+              - 不因单根 K 线或小幅 pullback 而 panic CLOSE。
+
+            * 若 R_unrealized ≥ break_even_trigger_R（例如 ≥0.3R），且：
+              - 持仓时间 ≥ protect_trigger.time_min（如 ≥5min），
+              - 短周期结构尚未出现明确反转（仍大致有利于持仓方向），
+              则可以启用“全局保护本规则”调整止损：
+              - 对 LONG 单：
+                · new_stop = max(prev_stop, entry_price - break_even_pad_R * R)；
+              - 对 SHORT 单：
+                · new_stop = min(prev_stop, entry_price + break_even_pad_R * R)；
+              - break_even_pad_R 默认为 0.1，即最多允许约 -0.1R 的技术性回撤，
+                或者将止损直接推到略微盈利的位置。
+
+            * 启用保护本规则的意图是：
+              - 一旦单子已经取得 ≈0.3R 以上的浮盈，
+                即便后面行情失败，也尽量不要再变成完整 -1R 的亏损单；
+              - 对所有风格（HTF_swing / LTF_scalp）均适用，只是 LTF_scalp 更频繁触发。
+
+          - 只有当阶段 B 出现“强烈结构恶化”时（例如违背入场假设的结构被破坏）：
+            * 才考虑直接 action="close" 提前认错，而不是继续依赖保护性止损。
+
 
          3）阶段 C：0.5R ≤ 当前浮盈 < 1R（已初步验证，但尚未完全成形）
              * 视为“交易开始被部分验证”的阶段，此时保护与放手需要平衡；
@@ -205,6 +222,12 @@
                - 即便在阶段 C，原则上也**避免直接将止损缩到 BE_with_fees**，除非同时满足：
                  · major_bias 与当前持仓方向已经不再同向，且高等级结构出现明显反转；
                  · 或账户整体风险已偏高，需要额外保守。
+               - 当同时满足“全局保护本规则”（break_even_trigger_R）与 R_lock 条件时：
+                 * 对 LONG 单：应选择更有利于仓位的止损，即：
+                   new_stop = max( stop_from_break_even_rule, stop_from_R_lock_rule )；
+                 * 对 SHORT 单：取 min(...)；
+                 * 换句话说：保护本规则只负责早期防止小赚变大亏，
+                   一旦进入 R_lock 区间，由 R_lock 决定更高的锁盈水平。
 
          4）阶段 D：当前浮盈在 1R~2R
              * 视为“方向已被较好验证”的阶段；
@@ -272,11 +295,30 @@
      4) 为何选择主动平仓 / 减仓，而不是继续持有或简单依赖保护性止损。
 
 
-[利润保护模式（触发即变紧）]
+[利润保护模式（全局）]
+
 - protect_enable         = true
-- protect_trigger        = { unrealized_pnl_pct: 0.3, time_min: 5 }   // 浮盈30%+走5分钟就启用保护
-- protect_pad_shrink     = 0.5                                       // 缩小保护垫，更贴价格
-- protect_R_floor        = 0.8                                       // 保护模式启用后至少锁 ~0.8R
+
+- protect_trigger        = { unrealized_R: 0.3, time_min: 5 }
+  // 当浮盈达到约 0.3R 且持仓时间 ≥ 5min 时，触发“保护模式”；
+  // 这里的 0.3R 是一个全局的早期保护触发值，适用于所有单子。
+
+- protect_pad_shrink     = 0.5
+  // 保护模式开启后，轨道/止损的 pad 缩小一半，让止损更贴近当前价格。
+
+- break_even_protect_enable = true
+- break_even_trigger_R      = 0.3
+- break_even_pad_R          = 0.1
+  // 全局“保护本规则”：
+  // - 当 R_unrealized ≥ 0.3R 且持仓时间 ≥ protect_trigger.time_min 时，
+  //   允许将止损上调/下调到接近 break-even；
+  // - break_even_pad_R = 0.1 表示最多允许回撤到 -0.1R 左右，
+  //   不再让已经盈利 0.3R 以上的单子回吐成完整 -1R 赔钱单。
+
+- protect_R_floor        = 0.8
+  // 对已经进入 R_lock 区间（例如 R≥1）的盈利单，保护模式下
+  // 努力锁定 ≥ 0.8R 的利润（大波段单主要参考这个）。
+
 
 [更新与单调性]
 - min_tick_move_to_update = 1

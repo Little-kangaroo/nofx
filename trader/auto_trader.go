@@ -2308,20 +2308,39 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 		Error:     "",
 	}
 	
-	// 添加到决策记录中
-	if record.Decisions == nil {
-		record.Decisions = []logger.DecisionAction{}
+	// 🔧 关键修改：将止损成交信息添加到对应币种的现有决策记录中
+	// 查找该币种的现有决策记录并添加止损成交信息
+	found := false
+	if record.Decisions != nil {
+		for i := range record.Decisions {
+			if record.Decisions[i].Symbol == pendingOrder.Symbol {
+				// 找到对应币种的决策，在其Error字段中添加止损成交信息
+				// 使用特殊格式，前端可以解析并显示在对应行
+				stopLossInfo := fmt.Sprintf("💥 止损成交 %.4f@%.6f (PnL: %.2f)", 
+					pendingOrder.Quantity, executionPrice, pnl)
+				
+				if record.Decisions[i].Error == "" {
+					record.Decisions[i].Error = stopLossInfo
+				} else {
+					record.Decisions[i].Error += " | " + stopLossInfo
+				}
+				found = true
+				break
+			}
+		}
 	}
-	record.Decisions = append(record.Decisions, *actionRecord)
 	
-	// 添加执行日志
-	logMessage := fmt.Sprintf("🎯 止损成交: %s %s %.4f@%.6f (原订单ID: %d)", 
-		pendingOrder.Symbol, strings.ToUpper(pendingOrder.Side), 
-		pendingOrder.Quantity, executionPrice, pendingOrder.OrderID)
-	record.ExecutionLog = append(record.ExecutionLog, logMessage)
+	// 如果没有找到对应币种的决策记录，创建独立的止损记录
+	if !found {
+		if record.Decisions == nil {
+			record.Decisions = []logger.DecisionAction{}
+		}
+		record.Decisions = append(record.Decisions, *actionRecord)
+	}
 	
-	// 交易记录已通过 DecisionAction 添加到 record.Decisions 中
-	// 日志将在 LogDecision(record) 时统一记录
+	// 后端日志记录
+	log.Printf("💾 止损成交已记录: %s %s @%.6f (PnL: %.2f)", 
+		pendingOrder.Symbol, strings.ToUpper(pendingOrder.Side), executionPrice, pnl)
 }
 
 // recordTradeToDatabase 将交易记录到数据库
