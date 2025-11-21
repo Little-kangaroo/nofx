@@ -2114,8 +2114,12 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 	for _, pos := range positions {
 		symbol := pos["symbol"].(string)
 		side := pos["side"].(string)
+		posQuantity := pos["positionAmt"].(float64)
+		if posQuantity < 0 {
+			posQuantity = -posQuantity // 空仓为负数，转为正数
+		}
 		
-		log.Printf("  🔍 检查 %s %s 的止损挂单", symbol, side)
+		log.Printf("  🔍 检查 %s %s 的止损挂单 (持仓数量: %.6f)", symbol, side, posQuantity)
 		
 		// 查询该币种的所有挂单
 		orders, err := at.trader.GetOpenOrders(symbol)
@@ -2129,7 +2133,6 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 		for _, order := range orders {
 			orderType, _ := order["type"].(string)
 			positionSide, _ := order["positionSide"].(string)
-			orderSide, _ := order["side"].(string)
 			
 			// 检查是否是止损单
 			if orderType == "STOP_MARKET" || orderType == "STOP" {
@@ -2137,7 +2140,7 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 				if (side == "long" && positionSide == "LONG") || 
 				   (side == "short" && positionSide == "SHORT") {
 					stopLossOrders = append(stopLossOrders, order)
-					log.Printf("    🎯 找到止损单: %s %s %s", orderType, orderSide, order["stopPrice"])
+					log.Printf("    🎯 找到止损单: %s %s", orderType, order["stopPrice"])
 				}
 			}
 		}
@@ -2147,7 +2150,7 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 			continue
 		}
 		
-		// 检查是否有止损单已成交（通过比较上次记录的止损单）
+		// 🔧 关键修复：检查是否有止损单已成交（通过比较上次记录的止损单）
 		posKey := symbol + "_" + side
 		if lastStopOrders, exists := at.lastKnownStopOrders[posKey]; exists {
 			// 比较当前止损单与上次记录的止损单
@@ -2176,52 +2179,64 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 				if lastOrderID > 0 && !currentOrderIDs[lastOrderID] {
 					log.Printf("    🔍 检测到止损单消失: %s %s (订单ID: %d)", symbol, side, lastOrderID)
 					
-					// 获取止损单详细信息
-					stopPrice := 0.0
-					quantity := 0.0
-					if stopPriceStr, ok := lastOrder["stopPrice"].(string); ok {
-						stopPrice, _ = strconv.ParseFloat(stopPriceStr, 64)
-					}
-					if quantityStr, ok := lastOrder["quantity"].(string); ok {
-						quantity, _ = strconv.ParseFloat(quantityStr, 64)
+					// 🔧 严格验证：只有持仓完全消失才认为是真正的止损成交
+					// 获取当前持仓数量，如果持仓还存在，说明不是真正的止损成交
+					currentPositions, posErr := at.trader.GetPositions()
+					if posErr != nil {
+						log.Printf("    ❌ 重新获取持仓失败: %v", posErr)
+						continue
 					}
 					
-					// 🔧 关键修复：如果从订单信息无法获取数量，从当前持仓获取
-					if quantity == 0 {
-						log.Printf("    ⚠️ 订单数量为0，尝试从持仓获取实际数量...")
-						for _, pos := range positions {
-							if pos["symbol"].(string) == symbol && pos["side"].(string) == side {
-								if posQuantity, ok := pos["positionAmt"].(float64); ok {
-									if posQuantity < 0 {
-										posQuantity = -posQuantity // 空仓为负数，转正
-									}
-									if posQuantity > 0 {
-										quantity = posQuantity
-										log.Printf("    ✅ 从持仓获取数量: %.6f", quantity)
-										break
-									}
+					hasCurrentPosition := false
+					var currentPosQuantity float64
+					for _, pos := range currentPositions {
+						if pos["symbol"] == symbol && pos["side"] == side {
+							qty, _ := pos["positionAmt"].(float64)
+							if qty != 0 { // 持仓数量不为0说明持仓还存在
+								hasCurrentPosition = true
+								currentPosQuantity = qty
+								if currentPosQuantity < 0 {
+									currentPosQuantity = -currentPosQuantity
 								}
+								break
 							}
 						}
 					}
 					
-					// 🔧 严格验证：只有在确实有数量且价格合理时才记录止损成交
-					if quantity > 0 && stopPrice > 0 {
-						log.Printf("    ✅ 确认止损成交: %s %s 数量=%.6f 止损价=%.6f", symbol, side, quantity, stopPrice)
+					// 🔧 关键判断：只有持仓完全消失才认为是真正的止损成交
+					if !hasCurrentPosition {
+						log.Printf("    ✅ 确认真正的止损成交: %s %s 持仓已完全平仓", symbol, side)
 						
-						pendingOrder := &PendingStopOrder{
-							Symbol:         symbol,
-							Side:           side,
-							OrderID:        lastOrderID,
-							StopPrice:      stopPrice,
-							Quantity:       quantity,
-							CreateTime:     time.Now(),
-							OriginalAction: "stop_loss_detected",
+						// 获取止损单详细信息
+						stopPrice := 0.0
+						quantity := posQuantity // 使用上次记录的持仓数量
+						if stopPriceStr, ok := lastOrder["stopPrice"].(string); ok {
+							stopPrice, _ = strconv.ParseFloat(stopPriceStr, 64)
 						}
 						
-						at.recordStopLossExecution(pendingOrder, record)
+						// 严格验证：只有在确实有数量且价格合理时才记录止损成交
+						if quantity > 0 && stopPrice > 0 {
+							log.Printf("    ✅ 记录真正的止损成交: %s %s 数量=%.6f 止损价=%.6f", 
+								symbol, side, quantity, stopPrice)
+							
+							pendingOrder := &PendingStopOrder{
+								Symbol:         symbol,
+								Side:           side,
+								OrderID:        lastOrderID,
+								StopPrice:      stopPrice,
+								Quantity:       quantity,
+								CreateTime:     time.Now(),
+								OriginalAction: "stop_loss_detected",
+							}
+							
+							at.recordStopLossExecution(pendingOrder, record)
+						} else {
+							log.Printf("    ❌ 验证失败，跳过记录: quantity=%.6f, stopPrice=%.6f", 
+								quantity, stopPrice)
+						}
 					} else {
-						log.Printf("    ❌ 验证失败，跳过记录: quantity=%.6f, stopPrice=%.6f", quantity, stopPrice)
+						log.Printf("    ⚠️ 止损单消失但持仓仍存在(%.6f)，可能是止损更新而非成交，跳过记录", 
+							currentPosQuantity)
 					}
 				}
 			}
@@ -2252,14 +2267,21 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 
 // recordStopLossExecution 记录止损单成交
 func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, record *logger.DecisionRecord) {
-	// 获取当前市场价格作为成交价
+	// 🔧 修复：使用止损价格作为成交价，而不是市场价格
+	// 止损单成交时，成交价格应该接近止损价格
+	executionPrice := pendingOrder.StopPrice
+	
+	// 获取当前市场价格用于验证和日志记录
 	marketData, err := market.Get(pendingOrder.Symbol)
 	if err != nil {
 		log.Printf("⚠️ 获取 %s 市场价格失败: %v", pendingOrder.Symbol, err)
-		return
+		// 继续使用止损价格，不因市场价格获取失败而中断
+	} else {
+		// 记录市场价格与止损价格的差异（用于调试）
+		priceDiff := math.Abs(marketData.CurrentPrice - pendingOrder.StopPrice)
+		log.Printf("🔍 止损成交验证: 市场价=%.6f, 止损价=%.6f, 差异=%.6f", 
+			marketData.CurrentPrice, pendingOrder.StopPrice, priceDiff)
 	}
-	
-	executionPrice := marketData.CurrentPrice
 	
 	// 计算盈亏（这里是简化计算，实际应该使用精确的成交价格）
 	var pnl float64
