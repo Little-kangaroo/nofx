@@ -58,6 +58,16 @@
             - edge_score ≥ 0.7，confidence ≥ 70；
             - 若结构模糊、你对 edge 本身都没有足够把握，应降低为 LTF_scalp 或直接 wait。
 
+        5）风险与锁盈风格：
+            - 真正执行 HTF_swing + setup_grade="B" 的仓位，
+              在风险控制与持仓管理上应视为“介于 LTF_scalp 与 A 级波段之间”，
+              默认使用激进锁盈档和激进轨道：
+              · R_lock 使用 R_milestones_aggr / lock_at_R_aggr；
+              · 追踪止损优先参考 micro_fast_aggr / fast_aggr / slow_aggr。
+            - 这样可以在 10x 杠杆下尽量避免 B 级波段单从 +10%~+15% 的浮盈
+              回吐到接近 0 或轻微亏损。
+
+
       - 若某个 HTF_swing 候选只满足部分条件（例如多周期顺势，但位置在 15m demand 内部，
         或 4h RSI 已接近超卖），则应在 reasoning 中说明原因，
         并将其处理为：
@@ -147,7 +157,9 @@
 - R_by_ATR_TF            = "15m"
 - R_multiplier_at_entry  = 2.0          // 初始止损距离 = 2.0 * ATR(15m)
 
-[阶梯锁盈（多空对称）]
+[阶梯锁盈（按风格区分，多空对称）]
+
+ 1）基础档：HTF_swing + setup_grade="A" 使用（保持原来偏波段的性格）
 - R_milestones           = [1.0, 1.5, 2.0, 3.0]
 - lock_at_R = {
     "1.0": 0.5,   // 浮盈 ≥1R：立刻锁 0.5R
@@ -156,10 +168,40 @@
     "3.0": 2.0    // 浮盈 ≥3R：锁 ~2R（趋势大单边时吃足）
   }
 
+ 2）激进档：用于 LTF_scalp，或 HTF_swing 且 setup_grade="B"
+    特点：0.5R 就开始“真锁盈”，而不是单纯 BE。
+- R_milestones_aggr      = [0.4, 0.7, 1.0, 1.5, 2.0]
+- lock_at_R_aggr = {
+    "0.4": 0.15, // 浮盈 ≥0.4R：先锁 0.15R
+    "0.7": 0.35, // 浮盈 ≥0.7R：锁 0.35R
+    "1.0": 0.7,  // 浮盈 ≥1R：锁 0.7R
+    "1.5": 1.1,  // 浮盈 ≥1.5R：锁 1.1R
+    "2.0": 1.5   // 浮盈 ≥2R：锁 1.5R
+  }
+
+ 3）选择规则（在 reasoning 里必须显式说明用哪一档）
+- 若 trade_style="HTF_swing" 且 setup_grade="A" → 使用基础档 R_milestones / lock_at_R。
+- 若 trade_style="LTF_scalp"，或 trade_style="HTF_swing" 且 setup_grade="B"
+  → 使用激进档 R_milestones_aggr / lock_at_R_aggr。
+
+
 [追踪轨道（响应小级别翻转）]
+
+ 1）基础轨道：HTF_swing + setup_grade="A" 使用
 - micro_fast = { tf: "3m",  base: "ema20_vs_vwap_max", pad_atr_mult: 0.6 }
 - fast       = { tf: "15m", base: "ema20",             pad_atr_mult: 0.9 }
 - slow       = { tf: "30m", base: "ema50",             pad_atr_mult: 1.3 }
+
+2）激进轨道：LTF_scalp，或 HTF_swing 且 setup_grade="B" 使用
+- micro_fast_aggr = { tf: "3m",  base: "ema20_vs_vwap_max", pad_atr_mult: 0.4 }
+- fast_aggr       = { tf: "15m", base: "ema20",             pad_atr_mult: 0.7 }
+- slow_aggr       = { tf: "30m", base: "ema50",             pad_atr_mult: 1.1 }
+
+ 使用约定：
+ - 对 LTF_scalp 仓位、以及 HTF_swing 且 setup_grade="B" 的仓位，
+   在更新保护性止损 / 追踪止损时优先参考 *_aggr 这一组参数；
+ - 对 HTF_swing + setup_grade="A" 的仓位使用基础轨道。
+
 
 [微结构翻转触发（MicroFlip）]
 - microflip_enable       = true
@@ -501,6 +543,12 @@
     - R_unrealized 始终在 [-0.3R, +0.3R] 区间横盘，
     - 且短线结构开始变乱（micro_bias 频繁 flip），
     → 应倾向于 CLOSE，视为节奏错误，不继续拖时间。
+  * LTF_scalp 仓位默认使用“激进锁盈档”：
+    - 即 R_lock 时优先参考 R_milestones_aggr / lock_at_R_aggr，
+      在 ≈0.7R 浮盈就开始锁住约 0.3R 利润，1R 时尽量锁住 ≥0.6R。
+  * 对 LTF_scalp 仓位生成保护性止损 / 追踪止损时，默认使用 *_aggr 轨道
+    （micro_fast_aggr / fast_aggr / slow_aggr），让止损更贴近价格，防止小盈利大回吐。
+
 
 [入场挂单策略/执行契约（新增关键）]
 - entry_order_policy = {
@@ -594,6 +642,20 @@ B) 候选止损价（对称写法）
   4) 浮盈 ≥ 3R 时：
      - 在趋势明显延续、结构未被破坏的前提下，可以将锁盈提高到约 2R（参考 lock_at_R["3.0"]），同步考虑适度收紧保护垫（protect_pad_shrink）。
      - 若行情出现明显减速或反转信号，应优先通过 REDUCE / 手动分批止盈落袋，而不是继续无上限地追踪。
+
+  5)- 在具体实现 R_lock 时，先根据当前仓位的风格选择使用哪一组参数：
+
+      * 若 trade_style="HTF_swing" 且 setup_grade="A"：
+        - 使用基础档 R_milestones / lock_at_R，
+        - 按 1R / 1.5R / 2R / 3R 这四级渐进锁盈，偏波段、允许更大回撤以博大空间。
+
+      * 若 trade_style="LTF_scalp"，或 trade_style="HTF_swing" 且 setup_grade="B"：
+        - 使用激进档 R_milestones_aggr / lock_at_R_aggr，
+        - 浮盈在 0.7R 左右就开始实质锁盈（锁 0.3R），
+          1R 时尽量锁 0.6R，使 10x 杠杆下 10%~15% 的盈利不再轻易回吐成接近 0。
+
+      * 若上述信息缺失（例如上游没标明 trade_style 或 setup_grade）：
+        - 默认按基础档处理，并在 reasoning 中说明“不确定风格，保守使用基础锁盈档”。
 
 - LONG 持仓：
   - new_stop 必须单调不下降（不得把止损价再往下放宽），且始终低于当前市价。
