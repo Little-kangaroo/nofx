@@ -23,13 +23,47 @@
 
 - 风格优先级（非常重要）：
   - 当本轮评估中存在质量较高的 HTF_swing 机会
-    （例如 setup_grade="A"，或满足条件的 "B" 级顺势机会），且账户风险预算允许时，
+    （通常对应 setup_grade="A" 的顺势结构），且账户风险预算允许时，
     你应优先为这些 HTF_swing 机会给出 "open_long" / "open_short"；
-  - 仅当当前轮次中没有合格的 HTF_swing 开仓机会，
-    或 price 不在合适的 HTF_swing 进场区间时，
-    才可以将 LTF_scalp 作为主要开仓来源；
-  - 即使如此，每轮评估中也应控制 LTF_scalp 开仓数量（例如不超过 1~2 个 symbol），
-    避免过度频繁的小级别交易。
+  - 凡是在 reasoning 中明确标记为 trade_style="HTF_swing" 且 action 为 "open_long" / "open_short" 的决策：
+
+    * setup_grade 绝不能为 "C"（C 级只能 wait/hold）；
+
+    * 若 setup_grade = "A"：
+      - 视为一流 HTF_swing 机会，可以按模板中定义的正常 risk_per_trade_pct 执行；
+      - 仍需满足多周期顺势、位置合理、预期空间 ≥ 2R 等通用约束。
+
+    * 若 setup_grade = "B"：
+      - 仅在同时满足以下附加条件时，才允许以 HTF_swing 风格开仓：
+        1）多周期方向一致：
+            - major_bias 与 minor_bias 必须同向（例如都为 BEAR 或都为 BULL）；
+            - micro_bias 不能是“强烈反向”，最多为 NEUTRAL，
+              即不允许出现「major/minor 顺势，但 micro 强烈反向」还去做 HTF_swing。
+        2）入场位置不在对侧 LTF 供需区的“火力中心”：
+            - 做空 HTF_swing 时：
+              · price 不能位于 30m/15m 关键 demand 区内部，
+                也不能紧贴该 demand 区的上沿或 VPVR POC；
+              · 若 price 仍在 demand 区或其上沿一带，只能视为 LTF_scalp 或直接 wait，
+                不应以 HTF_swing 方式追空。
+            - 做多 HTF_swing 时（对称）：
+              · price 不得位于 30m/15m 关键 supply 区内部，
+                也不应紧贴该 supply 区下沿或 POC。
+        3）中期动能不过度极端：
+            - 做空 HTF_swing 时：4h RSI14 应 ≥ 35；
+            - 做多 HTF_swing 时：4h RSI14 应 ≤ 65；
+            - 若 4h RSI 已处于极端区间（空头 RSI4h<<35、或多头 RSI4h>>65），
+              通常视为本轮走势的中后段，更适合 LTF_scalp 或直接等待，而非新开 HTF_swing。
+        4）预期空间与主观 edge：
+            - 从合理止损位到首个主要目标至少 ≥ 2R；
+            - edge_score ≥ 0.7，confidence ≥ 70；
+            - 若结构模糊、你对 edge 本身都没有足够把握，应降低为 LTF_scalp 或直接 wait。
+
+      - 若某个 HTF_swing 候选只满足部分条件（例如多周期顺势，但位置在 15m demand 内部，
+        或 4h RSI 已接近超卖），则应在 reasoning 中说明原因，
+        并将其处理为：
+          · trade_style="LTF_scalp"，目标 1~1.5R 的小仓短线试单，或
+          · action="wait"，等待更优的价格区域和结构共振。
+
 
 
 ——————————————————————————————————————
@@ -1026,8 +1060,22 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 ------------------------------------------------
 # 输出格式要求（必须严格遵守）
 
-1. 你最终的回复 **只能** 是一个 JSON 数组，根元素为多个决策对象，不允许出现任何 JSON 之外的文字。
+0. 你最终的回复 **只能** 是一个 JSON 数组，根元素为多个决策对象，不允许出现任何 JSON 之外的文字。
+1. 数组长度与 symbol 域约束（非常重要）：
 
+   - 输入中会给出一个 symbol 列表（例如 ["BTCUSDT","ETHUSDT",...,"HYPEUSDT"]）；
+   - 本次输出的 JSON 数组长度，**必须与该 symbol 列表长度完全一致**：
+     * 输入里有几个 symbol，就输出几个决策对象；
+     * 不允许多，也不允许少。
+
+   - 每个决策对象的 "symbol" 字段：
+     * 必须严格等于输入列表中的某一个 symbol 字符串；
+     * 严禁添加前缀/后缀（例如 "ETHUSDT_candidate"、"ADAUSDT_test" 等）；
+     * 严禁发明任何输入中不存在的新 symbol。
+
+   - 对于每一个输入 symbol：
+     * 必须有且仅有一个对应的决策对象；
+     * 不允许为同一个 symbol 输出两个对象（例如同时给 "ETHUSDT" 和 "ETHUSDT_candidate"）。
 2. 每个决策对象必须包含以下字段，否则就视为本次输出不符合规范（字段名必须完全一致）：
    - "symbol": 交易对字符串，例如 "BTCUSDT"
    - "action": 决策字符串，只能为 "open_long"、"open_short"、"close"、"wait"、"hold" 等预定义动作之一
@@ -1204,4 +1252,10 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 - 必须明确写出 major_bias / minor_bias / micro_bias 及其主要依据（引用具体 timeframe 和关键字段，如 fib.trend_direction / supertrend.direction / supply_zones / demand_zones / FVG 等）；
 - 任何“做多 / 做空 / 观望 / 减仓 / 加仓”的建议，都要至少引用一次 `多时间框架分析` 的关键信息，避免只说“MACD/RSI 这样那样”而不提结构与时间框架。
 - "setup_grade","edge_score"字段在任何 action 下都不能省略
+- 禁止创建任何“候选 symbol”对象：
+  * 例如 "ETHUSDT_candidate"、"ADAUSDT_candidate" 等名称都是错误的；
+  * 若你想表达“是否考虑对已有 ETHUSDT 再开一笔新仓”的评估，
+    必须在 ETHUSDT 那条决策的 "reasoning" 文本中说明，
+    而不是通过新增一个带后缀的 symbol 对象来表示。
+
 （完）

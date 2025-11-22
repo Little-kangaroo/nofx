@@ -460,6 +460,13 @@ func (at *AutoTrader) runCycle() error {
 		log.Printf("⚠ 保存决策记录失败: %v", err)
 	}
 
+	// 10. 同时保存到数据库
+	if at.database != nil {
+		if err := at.saveToDatabaseRecord(record); err != nil {
+			log.Printf("⚠ 保存决策记录到数据库失败: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -2430,4 +2437,32 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closePrice floa
 	} else {
 		log.Printf("  💾 已更新交易记录: PnL=%.2f USDT (%.2f%%)", pnl, pnlPct)
 	}
+}
+
+// saveToDatabaseRecord 将决策记录保存到数据库
+func (at *AutoTrader) saveToDatabaseRecord(record *logger.DecisionRecord) error {
+	// 序列化各种JSON字段
+	accountStateJSON, _ := json.Marshal(record.AccountState)
+	positionsJSON, _ := json.Marshal(record.Positions)
+	candidateCoinsJSON, _ := json.Marshal(record.CandidateCoins)
+	executionLogJSON, _ := json.Marshal(record.ExecutionLog)
+	
+	// 创建数据库记录
+	dbRecord := &config.DecisionRecordDB{
+		TraderID:           at.id,
+		CycleNumber:        record.CycleNumber,
+		Timestamp:          record.Timestamp,
+		SystemPrompt:       record.SystemPrompt,
+		InputPrompt:        record.InputPrompt,
+		CoTTrace:           record.CoTTrace,
+		DecisionJSON:       record.DecisionJSON, // 使用现有的DecisionJSON
+		AccountStateJSON:   string(accountStateJSON),
+		PositionsJSON:      string(positionsJSON),
+		CandidateCoinsJSON: string(candidateCoinsJSON),
+		ExecutionLogJSON:   string(executionLogJSON),
+		Success:            record.Success,
+		ErrorMessage:       record.ErrorMessage,
+	}
+	
+	return at.database.CreateDecisionRecord(dbRecord)
 }

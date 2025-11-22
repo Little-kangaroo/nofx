@@ -1402,6 +1402,7 @@ func (d *Database) GetOpenTrade(traderID, symbol, side string) (*TradeRecord, er
 	var trade TradeRecord
 	var closePriceSql sql.NullFloat64
 	var closeTime sql.NullTime
+	var closeOrderID sql.NullString
 	
 	err := d.db.QueryRow(`
 		SELECT id, trader_id, symbol, side, quantity, leverage, open_price, close_price,
@@ -1416,7 +1417,7 @@ func (d *Database) GetOpenTrade(traderID, symbol, side string) (*TradeRecord, er
 		&trade.Leverage, &trade.OpenPrice, &closePriceSql, &trade.PositionValue,
 		&trade.MarginUsed, &trade.PnL, &trade.PnLPct, &trade.DurationSecs,
 		&trade.OpenTime, &closeTime, &trade.Status, &trade.CloseReason,
-		&trade.OpenOrderID, &trade.CloseOrderID, &trade.CreatedAt, &trade.UpdatedAt)
+		&trade.OpenOrderID, &closeOrderID, &trade.CreatedAt, &trade.UpdatedAt)
 	
 	if err != nil {
 		return nil, err
@@ -1427,6 +1428,9 @@ func (d *Database) GetOpenTrade(traderID, symbol, side string) (*TradeRecord, er
 	}
 	if closeTime.Valid {
 		trade.CloseTime = &closeTime.Time
+	}
+	if closeOrderID.Valid {
+		trade.CloseOrderID = closeOrderID.String
 	}
 	
 	return &trade, nil
@@ -1459,15 +1463,17 @@ func (d *Database) GetTraderTrades(traderID string, limit int) ([]*TradeRecord, 
 		var trade TradeRecord
 		var closePrice sql.NullFloat64
 		var closeTime sql.NullTime
+		var closeOrderID sql.NullString
 		
 		err := rows.Scan(
 			&trade.ID, &trade.TraderID, &trade.Symbol, &trade.Side, &trade.Quantity,
 			&trade.Leverage, &trade.OpenPrice, &closePrice, &trade.PositionValue,
 			&trade.MarginUsed, &trade.PnL, &trade.PnLPct, &trade.DurationSecs,
 			&trade.OpenTime, &closeTime, &trade.Status, &trade.CloseReason,
-			&trade.OpenOrderID, &trade.CloseOrderID, &trade.CreatedAt, &trade.UpdatedAt)
+			&trade.OpenOrderID, &closeOrderID, &trade.CreatedAt, &trade.UpdatedAt)
 		
 		if err != nil {
+			log.Printf("⚠️ 扫描交易记录失败: %v", err)
 			continue
 		}
 		
@@ -1476,6 +1482,9 @@ func (d *Database) GetTraderTrades(traderID string, limit int) ([]*TradeRecord, 
 		}
 		if closeTime.Valid {
 			trade.CloseTime = &closeTime.Time
+		}
+		if closeOrderID.Valid {
+			trade.CloseOrderID = closeOrderID.String
 		}
 		
 		trades = append(trades, &trade)
