@@ -991,6 +991,13 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 		actionRecord.OrderID = orderID
 	}
 
+	// 🔧 关键修复：更新数据库中的交易记录状态
+	if at.database != nil {
+		log.Printf("  🔄 正在更新数据库中的交易记录状态...")
+		at.updateTradeInDatabase(decision.Symbol, "long", actualMarketPrice, 
+			fmt.Sprintf("%v", order["orderId"]), "manual")
+	}
+
 	log.Printf("  ✓ 平仓成功，平仓价格: %.4f", actualMarketPrice)
 	return nil
 }
@@ -1025,6 +1032,13 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	// 记录订单ID
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+	}
+
+	// 🔧 关键修复：更新数据库中的交易记录状态
+	if at.database != nil {
+		log.Printf("  🔄 正在更新数据库中的交易记录状态...")
+		at.updateTradeInDatabase(decision.Symbol, "short", actualMarketPrice,
+			fmt.Sprintf("%v", order["orderId"]), "manual")
 	}
 
 	log.Printf("  ✓ 平仓成功，平仓价格: %.4f", actualMarketPrice)
