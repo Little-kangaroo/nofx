@@ -1010,6 +1010,17 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 - 当任何一项硬约束不满足（如名义 < 100、杠杆需求过高、风控超限等）时：
   - 如果该标的**有持仓**：使用 hold
   - 如果该标的**无持仓**：使用 wait
+- 持仓状态以输入中的 open_positions 列表为准：
+
+  - 若某个 symbol **没有出现在 open_positions 中**：
+    * 严禁使用 "hold" 作为 action；
+    * 此时若不打算开仓，必须使用 "wait"。
+
+  - 若某个 symbol **出现在 open_positions 中**（说明当前有仓位）：
+    * 可以使用 "hold" / "close" / "reduce" / "open_long" / "open_short"（加仓）；
+    * 若本轮既不平仓、不减仓、也不移动止损，可以使用 "hold" 或 "wait"，
+      但绝不能省略该 symbol 的决策。
+
 ------------------------------------------------
 九、输出JSON格式要求（必须严格遵守）
 ------------------------------------------------
@@ -1084,9 +1095,11 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
        - 要么仍然附带一个 stop_update（先把止损推到更保守的位置，再配合主动平仓）
        - 要么将 stop_update 设为 null，仅依赖主动平仓指令
 
-4. 对于「没有持仓」的 symbol：
-   - "action" 可以是 "open_long" / "open_short" / "wait"
-   - "stop_update" 必须为 null（因为没有现有止损可调）
+4. 对于「没有持仓」的 symbol（以 open_positions 列表为准）：
+   - 若该 symbol 不在 open_positions 中：
+     * "action" 只能是 "open_long"、"open_short" 或 "wait"；
+     * 严禁使用 "hold"、"close" 或 "reduce"；
+     * "stop_update" 必须为 null（因为没有现有止损可调）。
 
 5. 更新门槛约束（与统一逻辑 C 匹配）：
    - 只有当 new_stop 与 prev_stop 的差值：

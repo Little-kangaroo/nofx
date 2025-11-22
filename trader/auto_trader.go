@@ -2283,13 +2283,20 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 			marketData.CurrentPrice, pendingOrder.StopPrice, priceDiff)
 	}
 	
-	// 计算盈亏（这里是简化计算，实际应该使用精确的成交价格）
+	// 🔧 关键修复：更新数据库中的交易记录状态
+	if at.database != nil {
+		log.Printf("🔄 正在更新数据库中的交易记录状态...")
+		at.updateTradeInDatabase(pendingOrder.Symbol, pendingOrder.Side, executionPrice, 
+			fmt.Sprintf("%d", pendingOrder.OrderID), "stop_loss")
+	}
+	
+	// 计算盈亏（简化计算，实际盈亏已在updateTradeInDatabase中精确计算）
 	var pnl float64
 	if pendingOrder.Side == "long" {
-		// 多仓止损：入场价未知，使用止损价作为参考
+		// 多仓止损：一般是亏损
 		pnl = (executionPrice - pendingOrder.StopPrice) * pendingOrder.Quantity
 	} else {
-		// 空仓止损：入场价未知，使用止损价作为参考
+		// 空仓止损：一般是亏损
 		pnl = (pendingOrder.StopPrice - executionPrice) * pendingOrder.Quantity
 	}
 	
