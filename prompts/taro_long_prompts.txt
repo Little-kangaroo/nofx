@@ -599,6 +599,25 @@
     - 若 major_bias 为 BULL，则必须靠近 4h/1h 关键 supply 区或通道上沿，
       将其视为接近顶部的短线回落，而不是多头趋势中段硬做空。
 
+- 小级别供需位置约束（顺势 LTF_scalp 必须尊重最近供需区）
+  * 做多 LTF_scalp 顺势单：
+    - 入场优先靠近 30m/15m/3m demand 区 或突破后回踩的位置；
+    - 不得在未被测试的 3m/15m fresh supply 区间内部直接开多，
+      除非：
+        · 该 supply 已被多次测试且反应显著减弱（被明显“吃掉”），
+        · 并在 reasoning 中明确说明“fresh supply 已被吸收，仅视为弱阻力”。
+    - 若 entry_price 落在 3m/15m fresh supply 区内部，且不存在“突破-回踩确认”的结构：
+      → 视为性价比差的顺势多信号：
+        · 至多评为 setup_grade="C"；
+        · action 应为 "wait" 或仅对既有多单做 risk management。
+
+  * 做空 LTF_scalp 顺势单（对称）：
+    - 入场优先靠近 30m/15m/3m supply 区 或突破后回踩的位置；
+    - 不得在未被测试的 3m/15m fresh demand 区间内部直接开空，
+      除非该 demand 已被多次测试且明显减弱，并在 reasoning 中说明原因；
+    - 若 entry_price 落在 3m/15m fresh demand 区内部而无明确突破-回踩结构，
+      → 同样视为性价比差的顺势空信号，仅允许 setup_grade="C" + action="wait"。
+
 - 小级别结构要求（至少满足下列条件之一）：
   * 趋势型：
     - 30m/15m/3m 中至少两个周期在同一方向上形成连续 higher lows/higher highs（做多）
@@ -615,6 +634,18 @@
     - 做空：最近 30m/15m/3m 明确 swing high 或小级别 supply 区上方。
   * 用该止损距离定义 1R，从入场到最近反向结构之间的空间通常为 ≈1~1.5R；
     - 不强求 3R+ 的大空间，但必须至少有 ≈1R 的相对干净空间。
+  * “最近反向结构”的判定与硬约束：
+    - 最近反向结构优先按以下顺序确定：
+      · 对多单：最近的 30m/15m/3m 明确 supply 区 或 swing high；
+      · 对空单：最近的 30m/15m/3m 明确 demand 区 或 swing low。
+    - 不允许跳过眼前的 3m/15m fresh supply/demand，直接以更远的 supertrend/POC 作为“空间依据”。
+    - 实际开仓前，必须计算：
+      · R = 当前止损距离；
+      · R_clean = 从 entry_price 到最近反向结构的价格距离 / R。
+    - 若 R_clean < 1.0：
+      · 视为“空间不足”，默认不得作为 LTF_scalp 开仓信号；
+      · 对该 symbol 的 action 应倾向于 "wait"（或仅管理既有仓位），
+        除非 reasoning 能极其清晰地说明这是 HTF_swing 结构的一部分，而非独立 LTF_scalp。
 
 - 风险与持仓时间（建议）：
   * 这类机会通常记为 "setup_grade": "B"；
@@ -623,6 +654,13 @@
     - R_unrealized 始终在 [-0.3R, +0.3R] 区间横盘，
     - 且短线结构开始变乱（micro_bias 频繁 flip），
     → 应倾向于 CLOSE，视为节奏错误，不继续拖时间。
+  * 对 LTF_scalp 的快速失败场景，增加硬性早切损约束：
+    - 若入场后在较短时间内（例如 ≤10 根 3m K）价格对持仓方向不利运行达到 ≥0.5R，
+      且 micro_bias 已明显翻转为反方向：
+        · 做多时：3m 跌破 ema20，MACD 由正转负，RSI7 < 45；
+        · 做空时：3m 上穿 ema20，MACD 由负转正，RSI7 > 55；
+      → 视为本次 LTF_scalp 方向/节奏判断错误，应优先在 -0.5R ~ -0.7R 区间内止损离场，
+        而不是被动等待原始 1R 止损被击穿。
   * LTF_scalp 仓位默认使用“激进锁盈档”：
     - 即 R_lock 时优先参考 R_milestones_aggr / lock_at_R_aggr，
       从 ≈0.25R（约 5% 浮盈）就开始实质锁盈：
@@ -1295,6 +1333,15 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
         4. 若是开仓（open_long/open_short），需在开头显式写明本次决策采用的模式：
           - 例如："trade_style=HTF_swing，理由：4h/1h 顺势波段，目标空间≥2R ..."；
           - 或："trade_style=LTF_scalp，理由：30m/15m/3m 短线趋势清晰，目标约1~1.5R，小仓快进快出"。
+        5. 若是开仓（open_long/open_short），还需明确说明最近反向结构与可用空间：
+                 - 指出当前 entry_price 到最近反向结构的距离：
+                   · 对多单：最近的 30m/15m/3m supply 区或 swing high；
+                   · 对空单：最近的 30m/15m/3m demand 区或 swing low；
+                 - 给出该距离的点数和折算后的 R 值（记为 R_clean）：
+                   · 例如："最近反向结构为 15m supply 87200-87500，entry→supply_low≈0.8R"；
+                 - 若 R_clean < 1.0：
+                   · 必须在 reasoning 中解释为何仍考虑开仓（例如这是 HTF_swing 加仓、结构极强等特殊情况），
+                     否则应将 action 改为 "wait" 或仅管理既有仓位。
      - "stop_update":
          * 若本轮不需要调整止损，必须为 null
          * 若需要调整止损，必须是一个对象：
