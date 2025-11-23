@@ -811,6 +811,14 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	}
 
 	// 记录到数据库
+	log.Printf("🔍 [调试] 准备记录开仓到数据库:")
+	log.Printf("    trader_id: '%s'", at.id)
+	log.Printf("    symbol: '%s'", decision.Symbol)
+	log.Printf("    side: 'long'")
+	log.Printf("    quantity: %.6f", quantity)
+	log.Printf("    leverage: %d", decision.Leverage)
+	log.Printf("    actualPrice: %.6f", actualPrice)
+	
 	at.recordTradeToDatabase(decision.Symbol, "long", quantity, decision.Leverage, 
 		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_long", true)
 
@@ -931,10 +939,24 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	// 🔧 重要修复：获取实际成交价格
 	// 等待订单确认后获取真实的持仓信息来确定实际成交价
 	time.Sleep(2 * time.Second) // 等待订单确认
-	if actualPrice := at.getActualFillPrice(decision.Symbol, "short"); actualPrice > 0 {
+	actualPrice := marketData.CurrentPrice
+	if actualFillPrice := at.getActualFillPrice(decision.Symbol, "short"); actualFillPrice > 0 {
+		actualPrice = actualFillPrice
 		actionRecord.Price = actualPrice
 		log.Printf("  📊 实际开仓价格: %.4f (原请求价格: %.4f)", actualPrice, marketData.CurrentPrice)
 	}
+
+	// 🔧 关键修复：添加缺失的数据库记录调用
+	log.Printf("🔍 [调试] 准备记录空仓开仓到数据库:")
+	log.Printf("    trader_id: '%s'", at.id)
+	log.Printf("    symbol: '%s'", decision.Symbol)
+	log.Printf("    side: 'short'")
+	log.Printf("    quantity: %.6f", quantity)
+	log.Printf("    leverage: %d", decision.Leverage)
+	log.Printf("    actualPrice: %.6f", actualPrice)
+	
+	at.recordTradeToDatabase(decision.Symbol, "short", quantity, decision.Leverage, 
+		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_short", true)
 
 	// 记录开仓时间
 	posKey := decision.Symbol + "_short"
@@ -986,6 +1008,29 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 		return err
 	}
 
+	// 🔧 修复：处理持仓已被其他方式关闭的情况
+	if orderIDValue, exists := order["orderId"]; exists && orderIDValue == "ALREADY_CLOSED" {
+		log.Printf("  ℹ️ %s 多仓已被其他方式平掉，同步更新数据库状态", decision.Symbol)
+		
+		// 同步更新数据库状态为已关闭
+		if at.database != nil {
+			log.Printf("🔍 [调试] 同步关闭已平仓位updateTradeInDatabase参数:")
+			log.Printf("    trader_id: '%s'", at.id)
+			log.Printf("    symbol: '%s'", decision.Symbol)
+			log.Printf("    side: 'long'")
+			log.Printf("    actualMarketPrice: %.6f", actualMarketPrice)
+			log.Printf("    orderID: 'SYNC_CLOSE'")
+			log.Printf("    closeReason: 'sync_close'")
+			
+			log.Printf("  🔄 正在同步更新数据库中的交易记录状态...")
+			at.updateTradeInDatabase(decision.Symbol, "long", actualMarketPrice, 
+				"SYNC_CLOSE", "sync_close")
+		}
+		
+		log.Printf("  ✓ 同步关闭完成，平仓价格: %.4f", actualMarketPrice)
+		return nil
+	}
+
 	// 记录订单ID
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
@@ -993,9 +1038,26 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 
 	// 🔧 关键修复：更新数据库中的交易记录状态
 	if at.database != nil {
+		// 安全获取orderID，处理nil情况
+		var orderIDStr string
+		if orderID, ok := order["orderId"]; ok && orderID != nil {
+			orderIDStr = fmt.Sprintf("%v", orderID)
+		} else {
+			orderIDStr = "" // 如果orderID为nil，使用空字符串
+			log.Printf("  ⚠️ [警告] 平仓订单ID为空或无效: %v", order["orderId"])
+		}
+		
+		log.Printf("🔍 [调试] 主动平多仓updateTradeInDatabase参数:")
+		log.Printf("    trader_id: '%s'", at.id)
+		log.Printf("    symbol: '%s'", decision.Symbol)
+		log.Printf("    side: 'long'")
+		log.Printf("    actualMarketPrice: %.6f", actualMarketPrice)
+		log.Printf("    orderID: '%s'", orderIDStr)
+		log.Printf("    closeReason: 'ai_close'")
+		
 		log.Printf("  🔄 正在更新数据库中的交易记录状态...")
 		at.updateTradeInDatabase(decision.Symbol, "long", actualMarketPrice, 
-			fmt.Sprintf("%v", order["orderId"]), "manual")
+			orderIDStr, "ai_close")
 	}
 
 	log.Printf("  ✓ 平仓成功，平仓价格: %.4f", actualMarketPrice)
@@ -1029,6 +1091,29 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 		return err
 	}
 
+	// 🔧 修复：处理持仓已被其他方式关闭的情况
+	if orderIDValue, exists := order["orderId"]; exists && orderIDValue == "ALREADY_CLOSED" {
+		log.Printf("  ℹ️ %s 空仓已被其他方式平掉，同步更新数据库状态", decision.Symbol)
+		
+		// 同步更新数据库状态为已关闭
+		if at.database != nil {
+			log.Printf("🔍 [调试] 同步关闭已平仓位updateTradeInDatabase参数:")
+			log.Printf("    trader_id: '%s'", at.id)
+			log.Printf("    symbol: '%s'", decision.Symbol)
+			log.Printf("    side: 'short'")
+			log.Printf("    actualMarketPrice: %.6f", actualMarketPrice)
+			log.Printf("    orderID: 'SYNC_CLOSE'")
+			log.Printf("    closeReason: 'sync_close'")
+			
+			log.Printf("  🔄 正在同步更新数据库中的交易记录状态...")
+			at.updateTradeInDatabase(decision.Symbol, "short", actualMarketPrice,
+				"SYNC_CLOSE", "sync_close")
+		}
+		
+		log.Printf("  ✓ 同步关闭完成，平仓价格: %.4f", actualMarketPrice)
+		return nil
+	}
+
 	// 记录订单ID
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
@@ -1036,9 +1121,26 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 
 	// 🔧 关键修复：更新数据库中的交易记录状态
 	if at.database != nil {
+		// 安全获取orderID，处理nil情况
+		var orderIDStr string
+		if orderID, ok := order["orderId"]; ok && orderID != nil {
+			orderIDStr = fmt.Sprintf("%v", orderID)
+		} else {
+			orderIDStr = "" // 如果orderID为nil，使用空字符串
+			log.Printf("  ⚠️ [警告] 平仓订单ID为空或无效: %v", order["orderId"])
+		}
+		
+		log.Printf("🔍 [调试] 主动平空仓updateTradeInDatabase参数:")
+		log.Printf("    trader_id: '%s'", at.id)
+		log.Printf("    symbol: '%s'", decision.Symbol)
+		log.Printf("    side: 'short'")
+		log.Printf("    actualMarketPrice: %.6f", actualMarketPrice)
+		log.Printf("    orderID: '%s'", orderIDStr)
+		log.Printf("    closeReason: 'ai_close'")
+		
 		log.Printf("  🔄 正在更新数据库中的交易记录状态...")
 		at.updateTradeInDatabase(decision.Symbol, "short", actualMarketPrice,
-			fmt.Sprintf("%v", order["orderId"]), "manual")
+			orderIDStr, "ai_close")
 	}
 
 	log.Printf("  ✓ 平仓成功，平仓价格: %.4f", actualMarketPrice)
@@ -2336,6 +2438,14 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 	
 	// 🔧 关键修复：更新数据库中的交易记录状态
 	if at.database != nil {
+		log.Printf("🔍 [调试] 被动止损updateTradeInDatabase参数:")
+		log.Printf("    trader_id: '%s'", at.id)
+		log.Printf("    symbol: '%s'", pendingOrder.Symbol)
+		log.Printf("    side: '%s'", pendingOrder.Side)
+		log.Printf("    executionPrice: %.6f", executionPrice)
+		log.Printf("    orderID: '%d'", pendingOrder.OrderID)
+		log.Printf("    closeReason: 'stop_loss'")
+		
 		log.Printf("🔄 正在更新数据库中的交易记录状态...")
 		at.updateTradeInDatabase(pendingOrder.Symbol, pendingOrder.Side, executionPrice, 
 			fmt.Sprintf("%d", pendingOrder.OrderID), "stop_loss")
@@ -2459,7 +2569,8 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closePrice floa
 	// 查找对应的开仓记录
 	openTrade, err := at.database.GetOpenTrade(at.id, symbol, side)
 	if err != nil {
-		log.Printf("  ⚠️ 查找开仓记录失败: %v", err)
+		log.Printf("  ❌ [严重错误] 无法找到开仓记录: %v", err)
+		log.Printf("  🔍 查找参数: trader_id='%s', symbol='%s', side='%s'", at.id, symbol, side)
 		return
 	}
 
@@ -2475,11 +2586,15 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closePrice floa
 	closeTime := time.Now()
 	durationSecs := int(closeTime.Sub(openTrade.OpenTime).Seconds())
 
+	log.Printf("  🔄 正在更新数据库: tradeID=%s, closePrice=%.6f, pnl=%.2f", 
+		openTrade.ID, closePrice, pnl)
+	
 	if err := at.database.UpdateTrade(openTrade.ID, closePrice, closeTime, 
 		"closed", closeReason, closeOrderID, pnl, pnlPct, durationSecs); err != nil {
-		log.Printf("  ⚠️ 更新交易记录失败: %v", err)
+		log.Printf("  ❌ [严重错误] 数据库更新失败: %v", err)
+		log.Printf("  🔍 更新参数: ID=%s, status='closed', reason='%s'", openTrade.ID, closeReason)
 	} else {
-		log.Printf("  💾 已更新交易记录: PnL=%.2f USDT (%.2f%%)", pnl, pnlPct)
+		log.Printf("  ✅ 数据库更新成功: 状态已改为closed, PnL=%.2f USDT", pnl)
 	}
 }
 

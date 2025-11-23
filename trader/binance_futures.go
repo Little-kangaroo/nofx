@@ -326,22 +326,54 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 
 // CloseLong 平多仓
 func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]interface{}, error) {
+	log.Printf("🔍 [CloseLong] 开始平多仓: symbol=%s, quantity=%.6f", symbol, quantity)
+	
 	// 如果数量为0，获取当前持仓数量
 	if quantity == 0 {
+		log.Printf("🔍 [CloseLong] 数量为0，查询当前持仓...")
+		
+		// 🔧 重要：清除缓存，获取最新持仓状态
+		t.positionsCacheMutex.Lock()
+		t.cachedPositions = nil
+		t.positionsCacheMutex.Unlock()
+		
 		positions, err := t.GetPositions()
 		if err != nil {
+			log.Printf("❌ [CloseLong] 获取持仓失败: %v", err)
 			return nil, err
 		}
 
-		for _, pos := range positions {
-			if pos["symbol"] == symbol && pos["side"] == "long" {
-				quantity = pos["positionAmt"].(float64)
+		log.Printf("🔍 [CloseLong] 获取到 %d 个持仓，正在查找 %s 的多仓...", len(positions), symbol)
+		
+		foundPosition := false
+		for i, pos := range positions {
+			posSymbol := pos["symbol"].(string)
+			posSide := pos["side"].(string)
+			posAmt := pos["positionAmt"].(float64)
+			
+			log.Printf("  持仓#%d: symbol=%s, side=%s, amount=%.6f", i+1, posSymbol, posSide, posAmt)
+			
+			if posSymbol == symbol && posSide == "long" {
+				quantity = posAmt
+				foundPosition = true
+				log.Printf("✅ [CloseLong] 找到目标持仓: %s long, 数量=%.6f", symbol, quantity)
 				break
 			}
 		}
 
+		if !foundPosition {
+			log.Printf("❌ [CloseLong] 未找到 %s 的多仓持仓", symbol)
+		}
+
 		if quantity == 0 {
-			return nil, fmt.Errorf("没有找到 %s 的多仓", symbol)
+			log.Printf("❌ [CloseLong] 最终数量为0，可能持仓已被其他方式平掉")
+			// 🔧 修复：返回特殊的"已平仓"标识而不是错误，让上层处理数据库同步
+			return map[string]interface{}{
+				"orderId": "ALREADY_CLOSED",
+				"symbol":  symbol,
+				"status":  "ALREADY_CLOSED",
+				"message": "持仓不存在，可能已被其他方式平掉",
+			}, nil
 		}
 	}
 
@@ -380,22 +412,54 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 
 // CloseShort 平空仓
 func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]interface{}, error) {
+	log.Printf("🔍 [CloseShort] 开始平空仓: symbol=%s, quantity=%.6f", symbol, quantity)
+	
 	// 如果数量为0，获取当前持仓数量
 	if quantity == 0 {
+		log.Printf("🔍 [CloseShort] 数量为0，查询当前持仓...")
+		
+		// 🔧 重要：清除缓存，获取最新持仓状态
+		t.positionsCacheMutex.Lock()
+		t.cachedPositions = nil
+		t.positionsCacheMutex.Unlock()
+		
 		positions, err := t.GetPositions()
 		if err != nil {
+			log.Printf("❌ [CloseShort] 获取持仓失败: %v", err)
 			return nil, err
 		}
 
-		for _, pos := range positions {
-			if pos["symbol"] == symbol && pos["side"] == "short" {
-				quantity = -pos["positionAmt"].(float64) // 空仓数量是负的，取绝对值
+		log.Printf("🔍 [CloseShort] 获取到 %d 个持仓，正在查找 %s 的空仓...", len(positions), symbol)
+		
+		foundPosition := false
+		for i, pos := range positions {
+			posSymbol := pos["symbol"].(string)
+			posSide := pos["side"].(string)
+			posAmt := pos["positionAmt"].(float64)
+			
+			log.Printf("  持仓#%d: symbol=%s, side=%s, amount=%.6f", i+1, posSymbol, posSide, posAmt)
+			
+			if posSymbol == symbol && posSide == "short" {
+				quantity = -posAmt // 空仓数量是负的，取绝对值
+				foundPosition = true
+				log.Printf("✅ [CloseShort] 找到目标持仓: %s short, 数量=%.6f", symbol, quantity)
 				break
 			}
 		}
 
+		if !foundPosition {
+			log.Printf("❌ [CloseShort] 未找到 %s 的空仓持仓", symbol)
+		}
+
 		if quantity == 0 {
-			return nil, fmt.Errorf("没有找到 %s 的空仓", symbol)
+			log.Printf("❌ [CloseShort] 最终数量为0，可能持仓已被其他方式平掉")
+			// 🔧 修复：返回特殊的"已平仓"标识而不是错误，让上���处理数据库同步
+			return map[string]interface{}{
+				"orderId": "ALREADY_CLOSED",
+				"symbol":  symbol,
+				"status":  "ALREADY_CLOSED",
+				"message": "持仓不存在，可能已被其他方式平掉",
+			}, nil
 		}
 	}
 
