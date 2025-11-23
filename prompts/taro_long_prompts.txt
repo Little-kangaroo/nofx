@@ -48,6 +48,28 @@
             - 做多 HTF_swing 时（对称）：
               · price 不得位于 30m/15m 关键 supply 区内部，
                 也不应紧贴该 supply 区下沿或 POC。
+        2.1）LTF_scalp 依托供给/需求区开仓的进场位置约束（多空对称）
+
+            - 做空 LTF_scalp（short），依托 supply zone 开仓时：
+              * entry_price 应位于该 supply zone 高度的上部区间，
+                建议在 zone 高度的上 40% 范围内（更靠近 zone 上沿和止损）；
+              * 若 entry_price 更接近 zone 下沿（例如：距 zone 上沿的距离 > 0.6 * zone_width），
+                则视为“性价比很差的顺势空 / 追空”，处理方式：
+                  · 至多评为 setup_grade="C"；
+                  · action 只能是 "wait" / "hold"（不允许以 LTF_scalp 方式新开空单）；
+                  · 若当前又处于空头尾声区，则进一步强化“禁止顺势空”的结论。
+
+            - 做多 LTF_scalp（long），依托 demand zone 开仓时，对称处理：
+              * entry_price 应位于该 demand zone 高度的下部区间，
+                建议在 zone 高度的下 40% 范围内（更靠近 zone 下沿和止损）；
+              * 若 entry_price 更接近 zone 上沿（例如：距 zone 下沿的距离 > 0.6 * zone_width），
+                则视为“性价比很差的顺势多 / 追多”，处理方式同上：
+                  · 至多评为 setup_grade="C"；
+                  · action 只能是 "wait" / "hold"（不允许以 LTF_scalp 方式新开多单）。
+
+            - 总结：LTF_scalp 依托供需区，只允许“靠边进场、止损附近进场”，
+              不允许在 zone 底部追空或在 zone 顶部追多。
+
         3）中期动能不过度极端：
             - 做空 HTF_swing 时：4h RSI14 应 ≥ 35；
             - 做多 HTF_swing 时：4h RSI14 应 ≤ 65；
@@ -153,9 +175,27 @@
 - max_concurrent_trades  = 3
 
 
-[R 定义与初始止损]
+[R 定义与初始止损（HTF_swing / LTF_scalp 区分，天然多空对称）]
+
 - R_by_ATR_TF            = "15m"
-- R_multiplier_at_entry  = 2.0          // 初始止损距离 = 2.0 * ATR(15m)
+
+ HTF_swing：偏波段，用更宽的 R，给趋势更大呼吸空间
+- R_multiplier_swing     = 2.0          // HTF_swing：初始止损距离 = 2.0 * ATR(15m)
+
+ LTF_scalp：短线快进快出，用更紧的 R，避免在性价比不好位置吃完整 swing 级别亏损
+- R_multiplier_scalp     = 1.3~1.5      // LTF_scalp：初始止损距离 ≈ 1.3~1.5 * ATR(15m)
+
+ 使用规则（在后文 position sizing / 止损放置时统一引用 R）：
+- 若 trade_style = "HTF_swing"：
+    R = ATR(R_by_ATR_TF) * R_multiplier_swing
+
+- 若 trade_style = "LTF_scalp"：
+    R = ATR(R_by_ATR_TF) * R_multiplier_scalp
+
+ R 本身是价格距离指标，对多空天然对称：
+ - 做空：止损价 = entry_price + R（再根据具体结构微调）；
+ - 做多：止损价 = entry_price - R（再根据具体结构微调）。
+
 
 [阶梯锁盈（按风格区分，多空对称）]
 
@@ -491,6 +531,36 @@
   - 视为“趋势中段追价区”，即使方向正确，优先 "wait"，等待：
     * 回调接近 demand/supply 区；
     * 或至少回踩通道中轴 / EMA 再评估。
+
+- 趋势尾声区（4h 级别）禁止顺势追单（多空对称）
+  1）空头尾声区（BEAR exhaustion）：
+      - 条件（需同时满足）：
+        * major_bias = BEAR，且
+        * 4h RSI14 < 30（明显超卖），且
+        * price 位于或紧贴 4h/1h 通道下沿，或位于关键 4h/1h demand 区内部 / 刚扎入区域；
+      → 视为当前下跌趋势进入中后段 / 尾声。
+      在空头尾声区内：
+        * 禁止新增 SHORT 仓位（包括 trade_style="LTF_scalp" 的顺势空）；
+        * 仅允许：
+          · 对已有 SHORT 仓位做风险管理（reduce / close / move_stop 等），或
+          · 等待明确反转结构出现后，再按逆势多单规则小仓尝试 LONG；
+        * 若模型仍给出 open_short 建议，风控层应强制将 action 改为 "wait" 或仅管理既有仓位，
+          并在 reasoning 中说明“处于空头尾声区，禁止顺势追空”。
+  2）多头尾声区（BULL exhaustion）：
+      - 条件（需同时满足）：
+        * major_bias = BULL，且
+        * 4h RSI14 > 70（明显超买），且
+        * price 位于或紧贴 4h/1h 通道上沿，或位于关键 4h/1h supply 区内部 / 刚扎入区域；
+      → 视为当前上涨趋势进入中后段 / 尾声。
+      在多头尾声区内：
+        * 禁止新增 LONG 仓位（包括 trade_style="LTF_scalp" 的顺势多）；
+        * 仅允许：
+          · 对已有 LONG 仓位做风险管理（reduce / close / move_stop 等），或
+          · 等待明确反转结构出现后，再按逆势空单规则小仓尝试 SHORT；
+        * 若模型仍给出 open_long 建议，风控层应强制将 action 改为 "wait" 或仅管理既有仓位，
+          并在 reasoning 中说明“处于多头尾声区，禁止顺势追多”。
+
+- 仅当当前不处于上述“趋势尾声区”时，才继续应用其它顺势/逆势开仓规则。
 
 4) 区间震荡场景（major_bias = NEUTRAL）下的门槛
 - 当 major_bias = NEUTRAL，视为震荡或无共识区间：
@@ -978,14 +1048,35 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
          允许“小仓位试单”（对应 B 级风险）。
      - confidence ≥ 75：
        * 若 setup_grade = "A"，且其它条件满足，可以按正常风险开仓。
-     - 对 trade_style = LTF_scalp 的附加要求（若 reasoning 中标明此风格）：
-       * 顺势 LTF_scalp（方向与 major_bias 一致）：
-         - 实际执行时，只有在 confidence ≥ 68 且 edge_score ≥ 0.6 时才建议开仓；
-       * 逆势 LTF_scalp（方向与 major_bias 相反）：
-         - 实际执行时，只有在 confidence ≥ 72 且 edge_score ≥ 0.8 时才建议开仓；
-       * 若未达到上述阈值，即使其他条件满足，也应在 reasoning 中说明
-         “逆势 LTF_scalp 信心不足，因此选择 wait”。
-
+     - 对 trade_style = "LTF_scalp" 的附加要求（若 reasoning 中标明此风格）：
+       * 顺势 LTF_scalp（进场方向与 major_bias 一致）：
+         - 基本门槛：
+           · confidence ≥ 68 且 edge_score ≥ 0.6；
+           · reasoning 中需明确说明顺势的依据（多周期 bias、供需区/通道共振等）。
+         - 在极端 RSI 环境下的额外过滤（多空对称）：
+           · 空头环境（major_bias = BEAR）：
+             - 若 4h RSI14 < 30（明显超卖），则视为“空头尾声区候选”；
+             - 若同时 price 位于或贴近 4h/1h 通道下沿，或关键 demand 区附近，
+               → 该方向的顺势 LTF_scalp 做空质量显著下降：
+                 · edge_score 上限降低为 0.6；
+                 · 若已触发「趋势尾声区过滤」中的空头尾声区条件，
+                   则**直接禁止顺势 LTF_scalp 空单**，action 应为 "wait" 或仅管理已有仓位，
+                   并在 reasoning 中说明“极端 RSI 顺势空被风控过滤”。
+           · 多头环境（major_bias = BULL）：
+             - 若 4h RSI14 > 70（明显超买），则视为“多头尾声区候选”；
+             - 若同时 price 位于或贴近 4h/1h 通道上沿，或关键 supply 区附近，
+               → 该方向的顺势 LTF_scalp 做多质量同样显著下降：
+                 · edge_score 上限降低为 0.6；
+                 · 若已触发「趋势尾声区过滤」中的多头尾声区条件，
+                   则**直接禁止顺势 LTF_scalp 多单**，action 应为 "wait" 或仅管理已有仓位，
+                   并在 reasoning 中说明“极端 RSI 顺势多被风控过滤”。
+       * 逆势 LTF_scalp（进场方向与 major_bias 相反）：
+         - 基本门槛：
+           · confidence ≥ 72 且 edge_score ≥ 0.8；
+           · reasoning 中必须给出清晰的反转 / 均值回归依据：
+             （如关键 demand/supply 共振、1h/30m 结构破坏、MACD/RSI 明显背离等）。
+         - 若未达到上述信心与 edge 要求，即使其他条件满足，也应在 reasoning 中说明
+           “逆势 LTF_scalp 信心不足，因此选择 wait”，而不是勉强开仓。
 
   4) 全局限制（防止过度交易）：
      - 在一轮决策中（同一次输入），你从所有 symbol 中最多只能选择 1~2 个综合质量最高的机会做 "open_long" 或 "open_short"；

@@ -39,6 +39,7 @@ export interface Position {
   unrealized_pnl_pct: number;
   liquidation_price: number;
   margin_used: number;
+  stop_price: number; // 🆕 添加止损价格
 }
 
 export interface DecisionAction {

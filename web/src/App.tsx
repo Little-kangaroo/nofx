@@ -502,6 +502,7 @@ function TraderDetailsPage({
                   <th className="pb-3 font-semibold text-gray-400">{t('side', language)}</th>
                   <th className="pb-3 font-semibold text-gray-400">{t('entryPrice', language)}</th>
                   <th className="pb-3 font-semibold text-gray-400">{t('markPrice', language)}</th>
+                  <th className="pb-3 font-semibold text-gray-400">{t('stopPrice', language)}</th>
                   <th className="pb-3 font-semibold text-gray-400">{t('quantity', language)}</th>
                   <th className="pb-3 font-semibold text-gray-400">{t('positionValue', language)}</th>
                   <th className="pb-3 font-semibold text-gray-400">{t('leverage', language)}</th>
@@ -526,6 +527,9 @@ function TraderDetailsPage({
                     </td>
                     <td className="py-3 font-mono" style={{ color: '#EAECEF' }}>{pos.entry_price.toFixed(4)}</td>
                     <td className="py-3 font-mono" style={{ color: '#EAECEF' }}>{pos.mark_price.toFixed(4)}</td>
+                    <td className="py-3 font-mono" style={{ color: pos.stop_price > 0 ? '#F0B90B' : '#848E9C' }}>
+                      {pos.stop_price > 0 ? pos.stop_price.toFixed(4) : '--'}
+                    </td>
                     <td className="py-3 font-mono" style={{ color: '#EAECEF' }}>{pos.quantity.toFixed(4)}</td>
                     <td className="py-3 font-mono font-bold" style={{ color: '#EAECEF' }}>
                       {(pos.quantity * pos.mark_price).toFixed(2)} USDT

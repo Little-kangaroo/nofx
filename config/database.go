@@ -1731,7 +1731,7 @@ func (d *Database) GetTradePerformanceAnalysis(traderID string, limit int) (map[
 			"margin_used":    trade.MarginUsed,
 			"pn_l":          trade.PnL,
 			"pn_l_pct":      trade.PnLPct,
-			"duration":      fmt.Sprintf("%d秒", trade.DurationSecs),
+			"duration":      formatTradeDuration(trade.DurationSecs),
 			"open_time":     trade.OpenTime,
 			"close_time":    *trade.CloseTime,
 			"was_stop_loss": trade.CloseReason == "stop_loss",
@@ -1857,7 +1857,35 @@ func (d *Database) GetTradePerformanceAnalysis(traderID string, limit int) (map[
 	return analysis, nil
 }
 
-// calculateSharpeRatioFromTrades 基于交易记录计算夏普比率
+// formatTradeDuration 格式化交易持续时间为用户友好的显示格式
+func formatTradeDuration(durationSecs int) string {
+	if durationSecs < 60 {
+		return fmt.Sprintf("%d秒", durationSecs)
+	} else if durationSecs < 3600 {
+		minutes := durationSecs / 60
+		seconds := durationSecs % 60
+		if seconds == 0 {
+			return fmt.Sprintf("%d分", minutes)
+		}
+		return fmt.Sprintf("%d分%d秒", minutes, seconds)
+	} else if durationSecs < 86400 {
+		hours := durationSecs / 3600
+		minutes := (durationSecs % 3600) / 60
+		if minutes == 0 {
+			return fmt.Sprintf("%d小时", hours)
+		}
+		return fmt.Sprintf("%d小时%d分", hours, minutes)
+	} else {
+		days := durationSecs / 86400
+		hours := (durationSecs % 86400) / 3600
+		if hours == 0 {
+			return fmt.Sprintf("%d天", days)
+		}
+		return fmt.Sprintf("%d天%d小时", days, hours)
+	}
+}
+
+// calculateSharpeRatioFromTrades 基���交易记录计算夏普比率
 func (d *Database) calculateSharpeRatioFromTrades(trades []*TradeRecord) float64 {
 	if len(trades) < 2 {
 		return 0.0
