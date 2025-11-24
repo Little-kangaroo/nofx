@@ -1806,9 +1806,12 @@ func (d *Database) GetTradePerformanceAnalysis(traderID string, limit int) (map[
 	
 	// 计算各币种胜率和平均盈亏，找出最好和最差币种
 	bestPnL := -999999.0
-	worstPnL := 999999.0
+	worstPnL := 999999.0  // 🔧 修复：初始化为正的大数，寻找最小值
 	bestSymbol := ""
 	worstSymbol := ""
+	
+	// 🔧 修复：需要先遍历一遍确定是否有数据
+	hasSymbolData := false
 	
 	for symbol, stats := range symbolStats {
 		totalSymbolTrades := stats["total_trades"].(int)
@@ -1819,13 +1822,24 @@ func (d *Database) GetTradePerformanceAnalysis(traderID string, limit int) (map[
 			stats["win_rate"] = (float64(winningSymbolTrades) / float64(totalSymbolTrades)) * 100
 			stats["avg_pn_l"] = totalSymbolPnL / float64(totalSymbolTrades)
 			
-			if totalSymbolPnL > bestPnL {
+			// 🔧 修复：正确的最好最差币种逻辑
+			if !hasSymbolData {
+				// 第一个币种，直接设置为初始值
 				bestPnL = totalSymbolPnL
-				bestSymbol = symbol
-			}
-			if totalSymbolPnL < worstPnL {
 				worstPnL = totalSymbolPnL
+				bestSymbol = symbol
 				worstSymbol = symbol
+				hasSymbolData = true
+			} else {
+				// 后续币种，进行比较
+				if totalSymbolPnL > bestPnL {
+					bestPnL = totalSymbolPnL
+					bestSymbol = symbol
+				}
+				if totalSymbolPnL < worstPnL {
+					worstPnL = totalSymbolPnL
+					worstSymbol = symbol
+				}
 			}
 		}
 	}

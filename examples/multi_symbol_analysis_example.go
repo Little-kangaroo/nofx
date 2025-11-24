@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"../market"
+	"nofx/market"
 )
 
 func main() {

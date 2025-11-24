@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"../market"
+	"nofx/market"
 )
 
 // APIResponse 统一API响应格式

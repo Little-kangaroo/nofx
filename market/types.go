@@ -47,8 +47,9 @@ type TimeframeAnalysis struct {
 	VolumeProfile   *VolumeProfile    `json:"volume_profile"`   // 成交量分布
 	SupplyDemand    *SupplyDemandData `json:"supply_demand"`    // 供需区分析
 	FairValueGaps   *FVGData          `json:"fair_value_gaps"`  // FVG分析
-	Fibonacci       *FibonacciData    `json:"fibonacci"`        // 斐波纳契分析
-	Weight          float64           `json:"weight"`           // 时间框架权重
+	Fibonacci         *FibonacciData            `json:"fibonacci"`          // 斐波纳契分析
+	SupportResistance *SupportResistanceData    `json:"support_resistance"` // 支撑阻力转换线
+	Weight            float64                   `json:"weight"`             // 时间框架权重
 	Reliability     float64           `json:"reliability"`      // 可���性评分
 }
 

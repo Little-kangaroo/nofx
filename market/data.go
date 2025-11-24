@@ -1834,7 +1834,7 @@ type SuperTrendResult struct {
 	LowerLine   float64 // 下轨价格
 }
 
-// calculateSupertrend 计算超级趋势线
+// calculateSupertrend 计算超级趋势线（标准实现）
 func calculateSupertrend(klines []Kline, atrPeriod int, factor float64) SuperTrendResult {
 	result := SuperTrendResult{
 		Direction:   "unknown",
@@ -1843,48 +1843,134 @@ func calculateSupertrend(klines []Kline, atrPeriod int, factor float64) SuperTre
 		LowerLine:   0.0,
 	}
 	
-	if len(klines) < atrPeriod {
+	if len(klines) < atrPeriod+1 {
 		return result
 	}
 	
-	// 计算ATR
-	atr := calculateATR(klines, atrPeriod)
-	if atr == 0 {
-		return result
+	// 计算所有价格点的SuperTrend线
+	length := len(klines)
+	supertrendLines := make([]float64, length)
+	directions := make([]string, length)
+	upperBands := make([]float64, length)
+	lowerBands := make([]float64, length)
+	
+	for i := atrPeriod; i < length; i++ {
+		// 计算ATR（使用到当前位置的数据）
+		atr := calculateATRAtIndex(klines, i, atrPeriod)
+		if atr == 0 {
+			continue
+		}
+		
+		// 计算基础带
+		hl2 := (klines[i].High + klines[i].Low) / 2
+		upperBand := hl2 + (factor * atr)
+		lowerBand := hl2 - (factor * atr)
+		
+		// 计算最终带（带过滤）
+		if i == atrPeriod {
+			// 初始值
+			upperBands[i] = upperBand
+			lowerBands[i] = lowerBand
+		} else {
+			// 上带过滤：如果当前上带小于前一个上带，且前一根K线收盘价大于前一个上带，则使用前一个上带
+			if upperBand < upperBands[i-1] || klines[i-1].Close > upperBands[i-1] {
+				upperBands[i] = upperBand
+			} else {
+				upperBands[i] = upperBands[i-1]
+			}
+			
+			// 下带过滤：如果当前下带大于前一个下带，且前一根K线收盘价小于前一个下带，则使用前一个下带
+			if lowerBand > lowerBands[i-1] || klines[i-1].Close < lowerBands[i-1] {
+				lowerBands[i] = lowerBand
+			} else {
+				lowerBands[i] = lowerBands[i-1]
+			}
+		}
+		
+		// 确定趋势方向和SuperTrend线
+		if i == atrPeriod {
+			// 初始方向判断
+			if klines[i].Close <= lowerBands[i] {
+				directions[i] = "bearish"
+				supertrendLines[i] = upperBands[i]
+			} else {
+				directions[i] = "bullish"
+				supertrendLines[i] = lowerBands[i]
+			}
+		} else {
+			// 趋势延续逻辑（SuperTrend核心��
+			prevDirection := directions[i-1]
+			
+			if prevDirection == "bullish" {
+				// 前一根为多头
+				if klines[i].Close < lowerBands[i] {
+					// 价格跌破下带，转为空头
+					directions[i] = "bearish"
+					supertrendLines[i] = upperBands[i]
+				} else {
+					// 继续多头
+					directions[i] = "bullish"
+					supertrendLines[i] = lowerBands[i]
+				}
+			} else {
+				// 前一根为空头
+				if klines[i].Close > upperBands[i] {
+					// 价格突破上带，转为多头
+					directions[i] = "bullish"
+					supertrendLines[i] = lowerBands[i]
+				} else {
+					// 继续空头
+					directions[i] = "bearish"
+					supertrendLines[i] = upperBands[i]
+				}
+			}
+		}
 	}
 	
-	// 获取最新的K线数据
-	latest := klines[len(klines)-1]
-	hl2 := (latest.High + latest.Low) / 2 // 中位价
-	
-	// 计算上轨和下轨
-	upperLine := hl2 + (factor * atr)
-	lowerLine := hl2 - (factor * atr)
-	
-	// 判断当前趋势方向
-	var direction string
-	var currentLine float64
-	
-	if latest.Close > lowerLine {
-		// 价格在下轨之上，多头趋势
-		direction = "bullish"
-		currentLine = lowerLine
-	} else if latest.Close < upperLine {
-		// 价格在上轨之下，空头趋势  
-		direction = "bearish"
-		currentLine = upperLine
-	} else {
-		// 价格在上下轨之间，方向不明确
-		direction = "sideways"
-		currentLine = hl2
+	// 返回最新的结果
+	lastIdx := length - 1
+	if lastIdx >= atrPeriod && directions[lastIdx] != "" {
+		result.Direction = directions[lastIdx]
+		result.CurrentLine = supertrendLines[lastIdx]
+		result.UpperLine = upperBands[lastIdx]
+		result.LowerLine = lowerBands[lastIdx]
 	}
-	
-	result.Direction = direction
-	result.CurrentLine = currentLine
-	result.UpperLine = upperLine
-	result.LowerLine = lowerLine
 	
 	return result
+}
+
+// calculateATRAtIndex 计算指定位置的ATR
+func calculateATRAtIndex(klines []Kline, endIndex, period int) float64 {
+	if endIndex < period {
+		return 0
+	}
+	
+	startIndex := endIndex - period + 1
+	if startIndex < 1 {
+		startIndex = 1
+	}
+	
+	trs := make([]float64, 0, period)
+	for i := startIndex; i <= endIndex; i++ {
+		high := klines[i].High
+		low := klines[i].Low
+		prevClose := klines[i-1].Close
+		
+		tr1 := high - low
+		tr2 := math.Abs(high - prevClose)
+		tr3 := math.Abs(low - prevClose)
+		
+		tr := math.Max(tr1, math.Max(tr2, tr3))
+		trs = append(trs, tr)
+	}
+	
+	// 计算平均TR作为ATR
+	sum := 0.0
+	for _, tr := range trs {
+		sum += tr
+	}
+	
+	return sum / float64(len(trs))
 }
 
 // extractCompactMultiTimeframeAnalysisWithSupertrend 提取包含超级趋势的多时间框架分析

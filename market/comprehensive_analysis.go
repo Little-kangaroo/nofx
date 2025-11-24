@@ -14,41 +14,45 @@ type ComprehensiveAnalyzer struct {
 	sdAnalyzer         *SupplyDemandAnalyzer
 	fvgAnalyzer        *FVGAnalyzer
 	fibonacciAnalyzer  *FibonacciAnalyzer
+	srAnalyzer         *SupportResistanceAnalyzer
 	config             *ComprehensiveConfig
 }
 
 // ComprehensiveConfig 综合分析配置
 type ComprehensiveConfig struct {
-	EnableDowTheory    bool    `json:"enable_dow_theory"`    // 启用道氏理论
-	EnableVPVR         bool    `json:"enable_vpvr"`          // 启用VPVR
-	EnableSupplyDemand bool    `json:"enable_supply_demand"` // 启用供需区
-	EnableFVG          bool    `json:"enable_fvg"`           // 启用FVG
-	EnableFibonacci    bool    `json:"enable_fibonacci"`     // 启用斐波纳契
-	WeightDowTheory    float64 `json:"weight_dow_theory"`    // 道氏理论权重
-	WeightVPVR         float64 `json:"weight_vpvr"`          // VPVR权重
-	WeightSupplyDemand float64 `json:"weight_supply_demand"` // 供需区权重
-	WeightFVG          float64 `json:"weight_fvg"`           // FVG权重
-	WeightFibonacci    float64 `json:"weight_fibonacci"`     // 斐波纳契权重
-	MinConfidence      float64 `json:"min_confidence"`       // 最小置信度
-	MaxSignals         int     `json:"max_signals"`          // 最大信号数量
+	EnableDowTheory           bool    `json:"enable_dow_theory"`            // 启用道氏理论
+	EnableVPVR                bool    `json:"enable_vpvr"`                  // 启用VPVR
+	EnableSupplyDemand        bool    `json:"enable_supply_demand"`         // 启用供需区
+	EnableFVG                 bool    `json:"enable_fvg"`                   // 启用FVG
+	EnableFibonacci           bool    `json:"enable_fibonacci"`             // 启用斐波纳契
+	EnableSupportResistance   bool    `json:"enable_support_resistance"`    // 启用支撑阻力转换线
+	WeightDowTheory           float64 `json:"weight_dow_theory"`            // 道氏理论权重
+	WeightVPVR                float64 `json:"weight_vpvr"`                  // VPVR权重
+	WeightSupplyDemand        float64 `json:"weight_supply_demand"`         // 供需区权重
+	WeightFVG                 float64 `json:"weight_fvg"`                   // FVG权重
+	WeightFibonacci           float64 `json:"weight_fibonacci"`             // 斐波纳契权重
+	WeightSupportResistance   float64 `json:"weight_support_resistance"`    // 支撑阻力权重
+	MinConfidence             float64 `json:"min_confidence"`               // 最小置信度
+	MaxSignals                int     `json:"max_signals"`                  // 最大信号数量
 }
 
 // ComprehensiveResult 综合分析结果
 type ComprehensiveResult struct {
-	Symbol           string               `json:"symbol"`            // 交易对
-	Timestamp        int64                `json:"timestamp"`         // 分析时间
-	CurrentPrice     float64              `json:"current_price"`     // 当前价格
-	DowTheory        *DowTheoryData       `json:"dow_theory"`        // 道氏理论分析
-	ChannelAnalysis  *ChannelData         `json:"channel_analysis"`  // 通道分析（独立指标）
-	VolumeProfile    *VolumeProfile       `json:"volume_profile"`    // 成交量分布
-	SupplyDemand     *SupplyDemandData    `json:"supply_demand"`     // 供需区分析
-	FairValueGaps    *FVGData             `json:"fair_value_gaps"`   // FVG分析
-	Fibonacci        *FibonacciData       `json:"fibonacci"`         // 斐波纳契分析
-	UnifiedSignals   []*UnifiedSignal     `json:"unified_signals"`   // 统一交易信号
-	MarketStructure  *MarketStructure     `json:"market_structure"`  // 市场结构
-	RiskAssessment   *RiskAssessment      `json:"risk_assessment"`   // 风险评估
-	TradingAdvice    *TradingAdvice       `json:"trading_advice"`    // 交易建议
-	Config           *ComprehensiveConfig `json:"config"`            // 分析配置
+	Symbol              string                    `json:"symbol"`                // 交易对
+	Timestamp           int64                     `json:"timestamp"`             // 分析时间
+	CurrentPrice        float64                   `json:"current_price"`         // 当前价格
+	DowTheory           *DowTheoryData            `json:"dow_theory"`            // 道氏理论分析
+	ChannelAnalysis     *ChannelData              `json:"channel_analysis"`      // 通道分析（独立指标）
+	VolumeProfile       *VolumeProfile            `json:"volume_profile"`        // 成交量分布
+	SupplyDemand        *SupplyDemandData         `json:"supply_demand"`         // 供需区分析
+	FairValueGaps       *FVGData                  `json:"fair_value_gaps"`       // FVG分析
+	Fibonacci           *FibonacciData            `json:"fibonacci"`             // 斐波纳契分析
+	SupportResistance   *SupportResistanceData    `json:"support_resistance"`    // 支撑阻力转换线
+	UnifiedSignals      []*UnifiedSignal          `json:"unified_signals"`       // 统一交易信号
+	MarketStructure     *MarketStructure          `json:"market_structure"`      // 市场结构
+	RiskAssessment      *RiskAssessment           `json:"risk_assessment"`       // 风险评估
+	TradingAdvice       *TradingAdvice            `json:"trading_advice"`        // 交易建议
+	Config              *ComprehensiveConfig      `json:"config"`                // 分析配置
 }
 
 // UnifiedSignal 统一交易信号
@@ -186,18 +190,20 @@ type TradingAdvice struct {
 
 // 默认综合分析配置
 var defaultComprehensiveConfig = &ComprehensiveConfig{
-	EnableDowTheory:    true,
-	EnableVPVR:         true,
-	EnableSupplyDemand: true,
-	EnableFVG:          true,
-	EnableFibonacci:    true,
-	WeightDowTheory:    0.25,
-	WeightVPVR:         0.2,
-	WeightSupplyDemand: 0.2,
-	WeightFVG:          0.15,
-	WeightFibonacci:    0.2,
-	MinConfidence:      60.0,
-	MaxSignals:         6,
+	EnableDowTheory:         true,
+	EnableVPVR:              true,
+	EnableSupplyDemand:      true,
+	EnableFVG:               true,
+	EnableFibonacci:         true,
+	EnableSupportResistance: true,
+	WeightDowTheory:         0.20,
+	WeightVPVR:              0.15,
+	WeightSupplyDemand:      0.15,
+	WeightFVG:               0.15,
+	WeightFibonacci:         0.15,
+	WeightSupportResistance: 0.20,
+	MinConfidence:           60.0,
+	MaxSignals:              6,
 }
 
 // NewComprehensiveAnalyzer 创建综合分析器
@@ -209,6 +215,7 @@ func NewComprehensiveAnalyzer() *ComprehensiveAnalyzer {
 		sdAnalyzer:        NewSupplyDemandAnalyzer(),
 		fvgAnalyzer:       NewFVGAnalyzer(),
 		fibonacciAnalyzer: NewFibonacciAnalyzer(),
+		srAnalyzer:        NewSupportResistanceAnalyzer(),
 		config:            defaultComprehensiveConfig,
 	}
 }
@@ -222,6 +229,7 @@ func NewComprehensiveAnalyzerWithConfig(config *ComprehensiveConfig) *Comprehens
 		sdAnalyzer:        NewSupplyDemandAnalyzer(),
 		fvgAnalyzer:       NewFVGAnalyzer(),
 		fibonacciAnalyzer: NewFibonacciAnalyzer(),
+		srAnalyzer:        NewSupportResistanceAnalyzer(),
 		config:            config,
 	}
 }
@@ -268,6 +276,7 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines3m, 
 		result.SupplyDemand = tf4h.SupplyDemand
 		result.FairValueGaps = tf4h.FairValueGaps
 		result.Fibonacci = tf4h.Fibonacci
+		result.SupportResistance = tf4h.SupportResistance
 	}
 
 	// 生成统一信号
@@ -337,6 +346,11 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines3m, klines4h []Kli
 	// 执行斐波纳契分析
 	if ca.config.EnableFibonacci && len(klines4h) > 15 {
 		result.Fibonacci = ca.fibonacciAnalyzer.Analyze(klines4h)
+	}
+
+	// 执行支撑阻力转换线分析
+	if ca.config.EnableSupportResistance && len(klines4h) > 20 {
+		result.SupportResistance = ca.srAnalyzer.Analyze(klines4h)
 	}
 
 	// 生成统一信号
@@ -1393,6 +1407,11 @@ func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe string, klines
 	// 斐波纳契分析
 	if ca.config.EnableFibonacci {
 		tfAnalysis.Fibonacci = ca.fibonacciAnalyzer.Analyze(klines)
+	}
+
+	// 支撑阻力转换线分析
+	if ca.config.EnableSupportResistance {
+		tfAnalysis.SupportResistance = ca.srAnalyzer.Analyze(klines)
 	}
 
 	// 计算可靠性评分

@@ -35,8 +35,8 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 	var bullishFVGs []*FairValueGap
 	var bearishFVGs []*FairValueGap
 
-	// 扫描所有K线寻找FVG
-	for i := 1; i < len(klines)-1; i++ {
+	// 扫描所有K线寻找FVG（从第2根K线开始，需要前两根作为参考）
+	for i := 2; i < len(klines); i++ {
 		// 检查看涨FVG
 		if bullishGap := fvg.identifyBullishFVG(klines, i); bullishGap != nil {
 			bullishFVGs = append(bullishFVGs, bullishGap)
@@ -83,23 +83,27 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 
 // identifyBullishFVG 识别看涨FVG
 func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int) *FairValueGap {
-	if index < 1 || index >= len(klines)-1 {
+	if index < 2 || index >= len(klines) {
 		return nil
 	}
 
-	prev := klines[index-1]
-	curr := klines[index]
-	next := klines[index+1]
+	// 标准FVG三根K线模式：[index-2, index-1, index]
+	// 前2根K线、中间K线、当前K线
+	firstCandle := klines[index-2]   // 第一根K线
+	middleCandle := klines[index-1]  // 中间K线
+	currentCandle := klines[index]   // 当前K线（第三根）
 
-	// 看涨FVG条件：前一根K线的高点 < 后一根K线的低点
-	// 说明中间存在价格缺口，表明买方力量强劲
-	if prev.High >= next.Low {
+	// 看涨FVG条件：当前K线的低点 > 第一根K线的高点
+	// 说明中间存在向上缺口，表明买方力量强劲
+	if currentCandle.Low <= firstCandle.High {
 		return nil
 	}
 
-	// 计算缺口大小
-	gapLow := prev.High
-	gapHigh := next.Low
+	// 按标准FVG计算方式：
+	// 上边界 = 当前K线的低点
+	// 下边界 = 第一根K线的高点
+	gapHigh := currentCandle.Low    // 上边界
+	gapLow := firstCandle.High      // 下边界
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapLow * 100
 
@@ -111,7 +115,7 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int) *FairValue
 	// 检查成交量确认（如果需要）
 	if fvg.config.RequireVolConf {
 		avgVolume := fvg.calculateAverageVolume(klines, index-10, index)
-		if curr.Volume < avgVolume*fvg.config.MinVolumeRatio {
+		if middleCandle.Volume < avgVolume*fvg.config.MinVolumeRatio {
 			return nil
 		}
 	}
@@ -130,15 +134,15 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int) *FairValue
 		WidthPercent: gapWidthPercent,
 		Origin: &FVGOrigin{
 			KlineIndex:    index,
-			PreviousCandle: fvg.createCandleInfo(&prev, index-1),
-			CurrentCandle:  fvg.createCandleInfo(&curr, index),
-			NextCandle:     fvg.createCandleInfo(&next, index+1),
-			ImpulsiveMove:  (next.Close - prev.Close) / prev.Close * 100,
+			PreviousCandle: fvg.createCandleInfo(&firstCandle, index-2),
+			CurrentCandle:  fvg.createCandleInfo(&middleCandle, index-1),
+			NextCandle:     fvg.createCandleInfo(&currentCandle, index),
+			ImpulsiveMove:  (currentCandle.Close - firstCandle.Close) / firstCandle.Close * 100,
 			TimeFrame:      fvg.config.TimeFrames[0],
 			FormationType:  formationType,
 		},
 		Status:       FVGStatusFresh,
-		CreationTime: curr.OpenTime,
+		CreationTime: middleCandle.OpenTime,
 		IsActive:     true,
 		IsFilled:     false,
 		TouchCount:   0,
@@ -153,23 +157,27 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int) *FairValue
 
 // identifyBearishFVG 识别看跌FVG
 func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int) *FairValueGap {
-	if index < 1 || index >= len(klines)-1 {
+	if index < 2 || index >= len(klines) {
 		return nil
 	}
 
-	prev := klines[index-1]
-	curr := klines[index]
-	next := klines[index+1]
+	// 标准FVG三根K线模式：[index-2, index-1, index]
+	// 前2根K线、中间K线、当前K线
+	firstCandle := klines[index-2]   // 第一根K线
+	middleCandle := klines[index-1]  // 中间K线
+	currentCandle := klines[index]   // 当前K线（第三根）
 
-	// 看跌FVG条件：前一根K线的低点 > 后一根K线的高点
-	// 说明中间存在价格缺口，表明卖方力量强劲
-	if prev.Low <= next.High {
+	// 看跌FVG条件：当前K线的高点 < 第一根K线的低点
+	// 说明中间存在向下缺口，表明卖方力量强劲
+	if currentCandle.High >= firstCandle.Low {
 		return nil
 	}
 
-	// 计算缺口大小
-	gapHigh := prev.Low
-	gapLow := next.High
+	// 按标准FVG计算方式：
+	// 上边界 = 第一根K线的低点
+	// 下边界 = 当前K线的高点
+	gapHigh := firstCandle.Low       // 上边界
+	gapLow := currentCandle.High     // 下边界
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapHigh * 100
 
@@ -181,7 +189,7 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int) *FairValue
 	// 检查成交量确认（如果需要）
 	if fvg.config.RequireVolConf {
 		avgVolume := fvg.calculateAverageVolume(klines, index-10, index)
-		if curr.Volume < avgVolume*fvg.config.MinVolumeRatio {
+		if middleCandle.Volume < avgVolume*fvg.config.MinVolumeRatio {
 			return nil
 		}
 	}
@@ -200,15 +208,15 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int) *FairValue
 		WidthPercent: gapWidthPercent,
 		Origin: &FVGOrigin{
 			KlineIndex:    index,
-			PreviousCandle: fvg.createCandleInfo(&prev, index-1),
-			CurrentCandle:  fvg.createCandleInfo(&curr, index),
-			NextCandle:     fvg.createCandleInfo(&next, index+1),
-			ImpulsiveMove:  (prev.Close - next.Close) / prev.Close * 100,
+			PreviousCandle: fvg.createCandleInfo(&firstCandle, index-2),
+			CurrentCandle:  fvg.createCandleInfo(&middleCandle, index-1),
+			NextCandle:     fvg.createCandleInfo(&currentCandle, index),
+			ImpulsiveMove:  (firstCandle.Close - currentCandle.Close) / firstCandle.Close * 100,
 			TimeFrame:      fvg.config.TimeFrames[0],
 			FormationType:  formationType,
 		},
 		Status:       FVGStatusFresh,
-		CreationTime: curr.OpenTime,
+		CreationTime: middleCandle.OpenTime,
 		IsActive:     true,
 		IsFilled:     false,
 		TouchCount:   0,
