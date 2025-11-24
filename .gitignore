@@ -43,3 +43,5 @@ node_modules/
 web/dist/
 web/.vite/
 web/yarn.lock
+config.db
+restart_nofx.sh
