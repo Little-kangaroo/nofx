@@ -643,9 +643,17 @@
       · R = 当前止损距离；
       · R_clean = 从 entry_price 到最近反向结构的价格距离 / R。
     - 若 R_clean < 1.0：
-      · 视为“空间不足”，默认不得作为 LTF_scalp 开仓信号；
-      · 对该 symbol 的 action 应倾向于 "wait"（或仅管理既有仓位），
-        除非 reasoning 能极其清晰地说明这是 HTF_swing 结构的一部分，而非独立 LTF_scalp。
+      · 视为“空间不足”，默认不得作为任何新开仓信号；
+      · 对该 symbol 的 action 必须为 "wait" 或仅管理既有仓位（例如 close / reduce），
+        禁止在当前价位新建 open_long / open_short。
+      · 若 trade_style="HTF_swing" 且 setup_grade="B"：
+        - 该机会不得作为 HTF_swing 新开仓：
+          · 要么降级为 trade_style="LTF_scalp"，按 LTF_scalp 规则重新评估是否值得小仓试单；
+          · 要么直接放弃（action="wait"）。
+      · 只有在 trade_style="HTF_swing" 且 setup_grade="A"，且 R_clean 介于 [0.8, 1.0) 这类少数例外时，
+        你才可以在 reasoning 中极其清晰地说明为什么仍然有足够的波段空间（例如更远的关键结构提供了明确 ≥2R 的目标），
+        否则一律视为“空间不足”不新开仓。
+
 
 - 风险与持仓时间（建议）：
   * 这类机会通常记为 "setup_grade": "B"；
@@ -1077,6 +1085,16 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
        * 逆势 LTF_scalp（进场方向与 major_bias 相反）：
          - 仅当 edge_score ≥ 0.8 且 confidence ≥ 72 时，才允许小仓试单；
          - 若未达到上述门槛，即使结构看似合理，也应选择 "wait"。
+       * 且 multi_tf_bias 必须满足方向一致性的硬约束：
+         - 三个 bias（major_bias / minor_bias / micro_bias）中，至少有 2 个与计划进场方向同向，剩余 1 个最多为 NEUTRAL；
+         - 若仅有 1 个同向、1 个反向、1 个 NEUTRAL，或 3 个 bias 方向互相拉扯、难以判断主导方向，
+           则该机会不得评为 "B"，必须降为 "C"，并保持 "wait" / "hold"，禁止 open_long / open_short。
+ 3）入场时机与小级别反转结构：
+    - 当 HTF_swing 依托 30m / 15m supply（做空）或 demand（做多）进场时，不能仅因为“价格刚进入该 zone”就立即开仓；
+    - 必须至少出现一种明确的小级别反转结构，例如：
+        · 对做空：15m / 3m 在该 zone 内出现假突破 / 冲高回落、显著上影线，或前一段上升结构被明确打破（出现连续 lower high / lower low，且 MACD / RSI 同步转弱）；
+        · 对做多：对称的假跌破 / 冲低回拉、下影线、或短周期下降结构被打破。
+    - 若 price 只是首次触碰或缓慢滑入该 zone，而 15m / 30m 仍保持原有趋势结构未被破坏，则本轮应继续保持 "wait"，等待上述反转结构出现后，再考虑将该机会评为 A / B 并给出 open_long / open_short 决策。
 
      - 若 setup_grade = "A"：
        * 且多周期结构、供需区、VPVR、FVG 等都支持该方向，才允许按正常风险开仓。
@@ -1092,14 +1110,14 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
          - 仅 micro_bias = BULL（3m 短线反弹），
          这种结构视为空头趋势中的高噪音反弹，应选择 "wait"。
      - 做空 LTF_scalp（对称）：
-       * 必须满足：
+       * 必须同时满足：
          - micro_bias 为 BEAR，且
-         - 30m 或 15m 中至少一个 timeframe 的 bias 已由 BULL 转为 NEUTRAL 或 BEAR；
-       * 不允许出现：
-         - major_bias = BULL，
-         - minor_bias = BULL，
-         - 仅 micro_bias = BEAR，
-         的情形就开空，视为多头趋势中的高噪音回落，应选择 "wait"。
+         - 30m 或 15m 中至少一个 timeframe 的 bias 已由 BULL 明确转为 NEUTRAL 或 BEAR（不能仍然是明显 BULL），且
+         - 1h 与 30m 中至少有一个周期的 MACD ≤ 0（不能出现 1h 和 30m 的 MACD 都>0 还去做空）。
+       * 若出现下列任一情形，则本轮只能评为 setup_grade="C"，action 只能为 "wait" / "hold"，禁止 open_short：
+         - major_bias = BULL，且 minor_bias = BULL，仅 micro_bias = BEAR（多头趋势中的高噪音回落）；
+         - 或者 reasoning 中描述 1h/30m 仍然“明显偏多 / MACD>0”，仅 3m 短线转空；
+         - 或者 30m 与 15m 的结构都仍然平坦、未出现任何一侧连续 lower high / lower low。
 
   3) 主观信心门槛（按等级区分）：
      - confidence < 60：
