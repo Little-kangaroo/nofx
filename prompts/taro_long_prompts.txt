@@ -598,6 +598,14 @@
     - 优先在 major_bias 为 BEAR 或 NEUTRAL 的环境中进行；
     - 若 major_bias 为 BULL，则必须靠近 4h/1h 关键 supply 区或通道上沿，
       将其视为接近顶部的短线回落，而不是多头趋势中段硬做空。
+- 大级别过渡段的禁做规则（micro 先翻的场景）：
+  * 若 4h / 1h 仅表现为“偏弱 / 中性”或“偏强 / 中性”：
+      - 例如 MACD 接近 0、RSI14 仍在 45~55 区间附近，
+        price 贴近 ema20 / ema50，未形成明显的多头或空头排列；
+  * 且 1h / 30m 的结构仍偏向原方向（例如原来是多头，现在只是动能减弱，但高低点结构尚未明显反转），
+  * 只有 15m / 3m 出现与原方向相反的 micro_bias（例如 micro_bias=BEAR，局部阻力密集），则该场景一律视为“大级别趋势的过渡 / 犹豫区”，不适合 LTF_scalp 抢反方向：
+      - 对应方向的 LTF_scalp（例如此时做空）必须 action="wait" 或仅管理既有仓位；
+      - 禁止在此类场景中以 trade_style="LTF_scalp" 给出 open_long / open_short。
 
 - 小级别供需位置约束（顺势 LTF_scalp 必须尊重最近供需区）
   * 做多 LTF_scalp 顺势单：
@@ -679,7 +687,19 @@
 
   * 对 LTF_scalp 仓位生成保护性止损 / 追踪止损时，默认使用 *_aggr 轨道
     （micro_fast_aggr / fast_aggr / slow_aggr），让止损更贴近价格，防止小盈利大回吐。
-
+  * LTF_scalp 的局部尾声与冷静期约束：
+    - 若刚刚出现连续 ≥3 根 3m 大实体 K 线单边向下（对应做空方向）
+      且 price 已明显跌离 15m ema20 / ema50，
+      同时接近 3m/15m demand 区或通道下沿附近，
+      → 视为局部“尾声杀跌”。
+      在这种情况下：
+        · 禁止立刻在当前价位 open_short；
+        · 必须至少等待 ≈5~8 根 3m K 的横盘 / 钝化，
+          或出现 3m/15m 级别的明显减速 / 背离 / 小级别反转结构后，
+          才重新评估是否还有 LTF_scalp 做空机会。
+    - 对称地，若连续 ≥3 根 3m 大实体向上 K 线拉升，
+      price 明显高于 15m ema20 / ema50 且接近 3m/15m supply 区或通道上沿，
+      → 视为局部“尾声拉升”，必须先经历同样的冷静期后才能考虑 LTF_scalp 多单。
 
 [入场挂单策略/执行契约（新增关键）]
 - entry_order_policy = {
@@ -874,6 +894,16 @@ G) 基础指标视角（必须引用）
   1) 追涨 / 追跌限制
      - 做多时：若 15m / 3m RSI > 75 且 price 明显高于 ema20 / ema50，则禁止在此位置加仓或新开大仓位多单，仅允许考虑减仓或等待回调；
      - 做空时：若 15m / 3m RSI < 25 且 price 明显低于 ema20 / ema50，则禁止在此位置加仓或新开大仓位空单，仅允许考虑减仓或等待反弹。
+     - 额外针对 trade_style="LTF_scalp" 的硬性限制：
+       · 做空 LTF_scalp 时：
+         - 若 15m / 3m RSI < 35，且 price 位于或刚刚扎入 3m/15m demand 区内部，
+           或通道位置为 channel_position="lower" 附近，
+           → 禁止在该位置 open_short，只允许等待反弹后的更高价位再评估；
+       · 做多 LTF_scalp 时：
+         - 若 15m / 3m RSI > 65，且 price 位于或刚刚扎入 3m/15m supply 区内部，
+           或通道位置为 channel_position="upper" 附近，
+           → 禁止在该位置 open_long，只允许等待回落后的更低价位再评估。
+
   2) 逆势仓位限制
      - 若 4h / 1h 基础指标呈现强多头结构，而你选择做空，则该空单必须在思维链和 notes 中标注为“逆势短线”，并使用更小的 R（风险）与更紧的止损；
      - 若 4h / 1h 基础指标呈现强空头结构，而你选择做多，同理。
@@ -1089,6 +1119,15 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
          - 三个 bias（major_bias / minor_bias / micro_bias）中，至少有 2 个与计划进场方向同向，剩余 1 个最多为 NEUTRAL；
          - 若仅有 1 个同向、1 个反向、1 个 NEUTRAL，或 3 个 bias 方向互相拉扯、难以判断主导方向，
            则该机会不得评为 "B"，必须降为 "C"，并保持 "wait" / "hold"，禁止 open_long / open_short。
+     - 对于 trade_style="LTF_scalp" 且 setup_grade="B" 的机会，必须再次满足下列多周期一致性硬约束：
+        · 三个 bias（major_bias / minor_bias / micro_bias）中，至少有 2 个与计划进场方向同向，
+          剩余 1 个最多为 NEUTRAL；
+        · 若出现 “1 个多头 + 1 个空头 + 1 个中性” 或类似互相拉扯的组合
+          （例如 4h 偏弱/中性，1h/30m 明显偏多，而 micro_bias=BEAR）：
+            - 则该机会不得视为可交易的 B 级 setup；
+            - 必须直接视为 setup_grade="C"，并将 action 固定为 "wait" / "hold"，
+              禁止 open_long / open_short。
+
  3）入场时机与小级别反转结构：
     - 当 HTF_swing 依托 30m / 15m supply（做空）或 demand（做多）进场时，不能仅因为“价格刚进入该 zone”就立即开仓；
     - 必须至少出现一种明确的小级别反转结构，例如：
@@ -1167,6 +1206,129 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
   - 当至少存在 1~2 个 A 级，或满足条件的 B 级机会（edge_score ≥ 0.5 且 confidence ≥ 60）时，
     应在它们之中选出优先级最高的 1~2 个给出 "open_long" 或 "open_short"，
     而不是对所有 symbol 一律选择 "wait"。
+
+——————————————————————————————————————
+四、开仓前硬性 Checklist（多重硬过滤）
+——————————————————————————————————————
+
+- 作用：在你打算对某个 symbol 输出 "action": "open_long" 或 "open_short" 之前，
+  必须逐项自检。任意一项未通过，都不得在该 symbol 上新开仓，只能 "wait"/"hold"
+  或对已有仓位做 close/reduce/move_stop。
+
+- 要求：在 reasoning 中显式写出每一大项的结论，例如：
+  “Checklist：A1 否 / A2 否 / B4 否 / B5 是 / … → 综合结论：允许开仓”。
+
+——————————
+A. 环境过滤（大级别）
+——————————
+
+A1) 趋势尾声区检查（4h 级别）
+  - 问：当前是否命中前文定义的「空头尾声区 / 多头尾声区」？
+    * 若是：
+      · 禁止在对应方向新增顺势仓位（包括 trade_style="LTF_scalp"）；
+      · 该方向本轮最多只能做风险管理（reduce / close / move_stop），
+        或等待明确反转结构后按逆势规则小仓试单；
+      · 若 reasoning 中仍想开仓，风控层应强制将 action 改为 "wait" / "hold"。
+
+A2) 大级别过渡段检查（micro 先翻）
+  - 问：是否属于「4h/1h 仅偏弱 / 偏强 / 中性 + 1h/30m 仍延续原方向，
+        只有 15m/3m micro_bias 先反向」的过渡 / 犹豫区？
+    * 若是：
+      · 禁止以 trade_style="LTF_scalp" 在反向方向开新仓（抢反向）；
+      · 对应方向的 LTF_scalp 行为必须为 "wait" 或仅管理既有仓位。
+
+A3) 极端 RSI 追涨 / 追跌检查
+  - 问：是否触发了前文「基础指标参与的硬性限制」中定义的极端 RSI 追涨 / 追跌条件？
+    * 若是：
+      · 禁止在当前价位新开仓或加大仓位；
+      · 仅允许减仓 / 等待回调或反弹后再评估。
+
+——————————
+B. 结构与空间检查
+——————————
+
+B4) 对侧供需区位置
+  - 问：当前 price 是否位于或刚刚扎入「与计划方向相反」的
+        3m / 15m fresh / strong / weakened supply 或 demand 区内部，
+        且尚未出现清晰的“突破–回踩确认”结构？
+    * 若是：
+      · 至多视为 setup_grade="C"；
+      · action 必须为 "wait" 或仅管理已有仓位，
+        禁止在该价位 open_long / open_short。
+
+B5) 最近反向结构与 R_clean
+  - 问：是否已经基于当前 entry_price 和止损，计算出：
+      · R = 当前止损距离；
+      · R_clean = 从 entry_price 到最近反向结构的价格距离 / R？
+    * 若未计算出 R_clean：视为流程不完整，禁止开仓。
+    * 若 R_clean < 1.0：
+      · 视为“空间不足”，默认不得作为任何新开仓信号；
+      · 对该 symbol 的 action 必须为 "wait" 或仅管理既有仓位（close / reduce）；
+      · 若 trade_style="HTF_swing" 且 setup_grade="A"，R_clean ∈ [0.8, 1.0)，
+        只有在 reasoning 中极其清晰说明仍有 ≥2R 的波段空间时才可例外，
+        否则同样视为“空间不足”。
+
+——————————
+C. 方向一致性检查
+——————————
+
+C6) major_bias 与计划方向
+  - 问：计划方向是否与 major_bias 同向？
+    * 若完全相反：
+      · 默认视为逆势交易，只允许 trade_style="LTF_scalp" + 小仓；
+      · reasoning 中必须清晰给出逆势逻辑与结构依据；
+      · 否则必须将该机会视为 setup_grade="C"，action="wait" / "hold"。
+
+C7) LTF_scalp 多周期一致性
+  - 仅在 trade_style="LTF_scalp" 且拟开仓时检查：
+    * 问：major_bias / minor_bias / micro_bias 三者中，
+      是否至少有 2 个与计划方向同向，剩余 1 个最多为 NEUTRAL？
+    * 若出现“1 多 1 空 1 中性”等明显拉扯组合：
+      · 不得视为可交易的 B 级机会；
+      · 必须将该机会整体降为 setup_grade="C"，并将 action 固定为 "wait" / "hold"。
+
+——————————
+D. 风险与账户约束
+——————————
+
+D8) 单笔风险与名义约束
+  - 问：本单使用的 risk_per_trade_pct 是否符合前文定义？
+    * HTF_swing：使用默认 risk_per_trade_pct；
+    * LTF_scalp：使用其约 1/2~1/3，不得反向放大。
+  - 基于 R 计算 notional_R 后：
+    * 若 notional_R < notional_min 且在 margin_usage_ceiling 内也无法满足：
+      · 说明账户体量不足以合理开出这一单；
+      · 本 symbol 本轮只能 "wait" / "hold"，不得通过提高杠杆或风险来“凑单”。
+
+D9) 保证金占用与杠杆
+  - 问：预估开仓后，账户的 margin_usage 是否会超过 margin_usage_ceiling？
+    * 若会超限：
+      · 禁止新增该笔仓位，只能减仓其他持仓或放弃本次机会。
+  - 问：自适应杠杆 leverage_adaptive 是否落在 [1, max_leverage] 合理区间内？
+    * 若需要超过 max_leverage 才能满足名义：
+      · 说明该方向在当前账户状态下不适合做，禁止开仓。
+
+——————————
+E. 相对机会优先级
+——————————
+
+E10) 与其他 symbol 的相对性价比
+  - 在本轮所有 symbol 之间对比：
+    * 若存在 setup_grade 更高、edge_score 明显更大、confidence 更高的 1~2 个标的：
+      · 应优先在那些标的上输出 "open_long" / "open_short"；
+      · 当前 symbol 统一设为 "wait" / "hold"，
+        并在 reasoning 中简单说明“相对性价比不够”。
+
+——————————
+终止规则（必须遵守）
+——————————
+
+- 若上述任意一项检查结论为“未通过 / 触发禁开仓条件”：
+  * 且当前对该 symbol **无持仓**：
+    - 本轮 action 必须为 "wait"，禁止输出 "open_long" / "open_short"；
+  * 且当前对该 symbol **已有持仓**：
+    - 本轮 action 应为 "hold" 或在必要时做 close/reduce/move_stop，
+      但同样禁止在该 symbol 上新增同向或反向的开仓。
 
 
 
