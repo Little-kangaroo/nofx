@@ -1214,6 +1214,19 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
 - 作用：在你打算对某个 symbol 输出 "action": "open_long" 或 "open_short" 之前，
   必须逐项自检。任意一项未通过，都不得在该 symbol 上新开仓，只能 "wait"/"hold"
   或对已有仓位做 close/reduce/move_stop。
+- 执行顺序（硬性约定）：
+  1) 先完成多时间框架分析与 setup_grade 评估：
+     - 给出 major_bias / minor_bias / micro_bias；
+     - 判断 trade_style（HTF_swing 或 LTF_scalp）与方向是否匹配；
+     - 初步确定 setup_grade、edge_score、confidence。
+  2) 然后逐项运行 Checklist（A/B/C/D/E）：
+     - 对 A1/A2/A3/B4/B5/C6/C7/D8/D9/E10 逐条给出“是 / 否”的结论；
+     - 若某一项触发禁开仓条件，必须在 Checklist 小结里明确指出。
+  3) 最后再给出 action / entry_plan：
+     - 只有当 Checklist 全部通过（或仅触发允许的例外情况）时，
+       才能输出 "open_long" 或 "open_short"；
+     - 若 Checklist 与最终 action 存在矛盾（例如 A2 已触发过渡区禁做，
+       但仍输出 LTF_scalp 反向开仓），视为违反本模板。
 
 - 要求：在 reasoning 中显式写出每一大项的结论，例如：
   “Checklist：A1 否 / A2 否 / B4 否 / B5 是 / … → 综合结论：允许开仓”。
