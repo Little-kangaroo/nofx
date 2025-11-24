@@ -793,6 +793,7 @@ func extractCompactMultiTimeframeAnalysis(data *Data) map[string]interface{} {
 			"供需区数据": extractCompactSupplyDemand(tfData.SupplyDemand),
 			"FVG数据": extractCompactFVG(tfData.FairValueGaps),
 			"斐波纳契数据": extractCompactFibonacci(tfData.Fibonacci),
+			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance),
 		}
 	}
 	
@@ -1994,12 +1995,77 @@ func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKli
 		supertrend := calculateSupertrend(klines, 20, 5.0)
 		
 		result[tf] = map[string]interface{}{
-			"道氏理论数据": extractCompactDowTheoryWithSupertrend(tfData.DowTheory, supertrend),
+			"道氏理论数据": extractCompactDowTheory(tfData.DowTheory),
+			"超级趋势指标": map[string]interface{}{
+				"direction": supertrend.Direction,
+				"current_line": supertrend.CurrentLine,
+			},
 			"通道数据": extractCompactChannelAnalysis(tfData.ChannelAnalysis),
 			"VPVR数据": extractCompactVPVR(tfData.VolumeProfile),
 			"供需区数据": extractCompactSupplyDemand(tfData.SupplyDemand),
 			"FVG数据": extractCompactFVG(tfData.FairValueGaps),
 			"斐波纳契数据": extractCompactFibonacci(tfData.Fibonacci),
+			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance),
+		}
+	}
+	
+	return result
+}
+
+// extractCompactSupportResistance 提取支撑阻力转换线的关键结果
+func extractCompactSupportResistance(data *SupportResistanceData) map[string]interface{} {
+	if data == nil {
+		return map[string]interface{}{}
+	}
+	
+	result := map[string]interface{}{
+		"active_levels": []map[string]interface{}{},
+		"statistics": map[string]interface{}{
+			"total_levels": 0,
+			"support_count": 0,
+			"resistance_count": 0,
+			"conversion_rate": 0.0,
+			"avg_strength": 0.0,
+		},
+	}
+	
+	if len(data.ActiveLevels) == 0 {
+		return result
+	}
+	
+	var activeLevels []map[string]interface{}
+	
+	// 提取活跃级别信息，按强度排序取前5个
+	levelCount := len(data.ActiveLevels)
+	if levelCount > 5 {
+		levelCount = 5
+	}
+	
+	for i := 0; i < levelCount; i++ {
+		level := data.ActiveLevels[i]
+		levelInfo := map[string]interface{}{
+			"price": level.Price,
+			"type": level.Type,
+			"original_type": level.OriginalType,
+			"strength": level.Strength,
+			"confidence": level.Confidence,
+			"touch_count": level.TouchCount,
+			"has_converted": level.HasConverted,
+			"conversion_count": level.ConversionCount,
+		}
+		activeLevels = append(activeLevels, levelInfo)
+	}
+	
+	result["active_levels"] = activeLevels
+	
+	// 统计信息
+	if data.Statistics != nil {
+		result["statistics"] = map[string]interface{}{
+			"total_levels": data.Statistics.TotalLevels,
+			"support_count": data.Statistics.ActiveSupport,
+			"resistance_count": data.Statistics.ActiveResistance,
+			"conversion_rate": data.Statistics.ConversionRate,
+			"avg_strength": data.Statistics.AvgStrength,
 		}
 	}
 	
