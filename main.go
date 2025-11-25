@@ -7,6 +7,7 @@ import (
 	"nofx/api"
 	"nofx/auth"
 	"nofx/config"
+	"nofx/logger"
 	"nofx/manager"
 	"nofx/market"
 	"nofx/pool"
@@ -150,11 +151,26 @@ func main() {
 	fmt.Println("╚════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 
+	// 🔥 优先初始化日志系统
+	logManager, err := logger.NewLogManager(logger.LogConfig{
+		LogDir:    "logs",          // 日志目录
+		MaxSizeMB: 100,            // 每个文件最大100MB
+		MaxDays:   30,             // 保留30天
+	})
+	if err != nil {
+		log.Fatalf("❌ 日志系统初始化失败: %v", err)
+	}
+	defer logManager.Close()
+
+	logger.LogSystemEvent("🚀 nofx系统启动")
+	logger.LogInfo("日志文件: %s", logManager.GetLogFile())
+
 	// 检查命令行参数
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "demo", "-demo", "--demo":
 			// 运行市场分析演示
+			logger.LogInfo("🎯 启动市场分析演示模式...")
 			fmt.Println("🎯 启动市场分析演示模式...")
 			fmt.Println()
 			market.DemoMain()
@@ -216,12 +232,14 @@ func main() {
 		dbPath = os.Args[1]
 	}
 
-	log.Printf("📋 初始化配置数据库: %s", dbPath)
+	logger.LogSystemEvent("📋 初始化配置数据库: %s", dbPath)
 	database, err := config.NewDatabase(dbPath)
 	if err != nil {
-		log.Fatalf("❌ 初始化数据库失败: %v", err)
+		logger.LogError("❌ 数据库初始化失败: %v", err)
+		log.Fatalf("❌ 数据库初始化失败: %v", err)
 	}
 	defer database.Close()
+	logger.LogSuccess("✅ 数据库初始化成功")
 
 	// 同步config.json到数据库
 	if err := syncConfigToDatabase(database); err != nil {
