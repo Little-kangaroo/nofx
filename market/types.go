@@ -1047,6 +1047,8 @@ type FibonacciConfig struct {
 	EnableExtensions  bool      `json:"enable_extensions"`   // 启用扩展分析
 	VolumeWeight      float64   `json:"volume_weight"`       // 成交量权重
 	DefaultRatios     []float64 `json:"default_ratios"`      // 默认比率
+	SwingLookback     int       `json:"swing_lookback"`      // 摆动点回望周期
+	MinSwingSize      float64   `json:"min_swing_size"`      // 最小摆动幅度(%)
 }
 
 // 枚举类型定义
@@ -1133,5 +1135,7 @@ var defaultFibonacciConfig = FibonacciConfig{
 	EnableExtensions:  true,  // 启用扩展分析
 	VolumeWeight:      0.3,   // 30%成交量权重
 	DefaultRatios:     []float64{0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618, 2.618}, // 标准斐波比率
+	SwingLookback:     15,    // 15周期回望（优化后的值）
+	MinSwingSize:      0.025, // 2.5%最小摆动幅度（过滤噪音）
 }
 

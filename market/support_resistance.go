@@ -1,7 +1,6 @@
 package market
 
 import (
-	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -14,101 +13,60 @@ type SupportResistanceAnalyzer struct {
 
 // SRConfig 支撑阻力分析配置
 type SRConfig struct {
-	MinTouchCount    int     `json:"min_touch_count"`    // 最小触及次数
-	TouchTolerance   float64 `json:"touch_tolerance"`    // 触及容忍度(百分比)
-	MinStrength      float64 `json:"min_strength"`       // 最小强度阈值
-	ConversionBuffer float64 `json:"conversion_buffer"`  // 转换缓冲区(百分比)
-	MaxLevelAge      int     `json:"max_level_age"`      // 最大级别年龄(小时)
-	LookbackPeriod   int     `json:"lookback_period"`    // 回看周期
+	LookbackPeriods int     `json:"lookback_periods"` // 回看K线数量
+	PivotLeft       int     `json:"pivot_left"`       // 转折点左侧比较根数
+	PivotRight      int     `json:"pivot_right"`      // 转折点右侧比较根数
+	ClusterTolerance float64 `json:"cluster_tolerance"` // 聚类容差百分比
+	MinHits         int     `json:"min_hits"`         // 最小命中次数
 }
 
-// SupportResistanceLevel 支撑阻力级别
-type SupportResistanceLevel struct {
-	ID               string                 `json:"id"`
-	Price            float64                `json:"price"`
-	Type             SRLevelType            `json:"type"`
-	OriginalType     SRLevelType            `json:"original_type"`
-	Strength         float64                `json:"strength"`
-	TouchCount       int                    `json:"touch_count"`
-	TouchEvents      []*SRTouchEvent        `json:"touch_events"`
-	ConversionEvents []*ConversionEvent     `json:"conversion_events"`
-	CreationTime     int64                  `json:"creation_time"`
-	LastTouch        int64                  `json:"last_touch"`
-	IsActive         bool                   `json:"is_active"`
-	HasConverted     bool                   `json:"has_converted"`
-	ConversionCount  int                    `json:"conversion_count"`
-	Confidence       float64                `json:"confidence"`
-	Status           SRStatus               `json:"status"`
+// PivotPoint 转折点
+type PivotPoint struct {
+	Price     float64 `json:"price"`     // 价格
+	Type      string  `json:"type"`      // "H"(高点) 或 "L"(低点)
+	Index     int     `json:"index"`     // K线索引
+	Timestamp int64   `json:"timestamp"` // 时间戳
 }
 
-// SRLevelType 支撑阻力级别类型
-type SRLevelType string
-
-const (
-	SRSupport    SRLevelType = "support"
-	SRResistance SRLevelType = "resistance"
-	SRNeutral    SRLevelType = "neutral"
-)
-
-// SRStatus 支撑阻力状态
-type SRStatus string
-
-const (
-	SRStatusActive    SRStatus = "active"
-	SRStatusConverted SRStatus = "converted"
-	SRStatusBroken    SRStatus = "broken"
-	SRStatusExpired   SRStatus = "expired"
-)
-
-// SRTouchEvent 支撑阻力触及事件
-type SRTouchEvent struct {
-	Timestamp   int64   `json:"timestamp"`
-	Price       float64 `json:"price"`
-	TouchType   string  `json:"touch_type"` // "bounce", "break", "test"
-	Reaction    float64 `json:"reaction"`   // 反应强度
-	Volume      float64 `json:"volume"`
-	Confirmed   bool    `json:"confirmed"`
+// PriceCluster 价格聚类
+type PriceCluster struct {
+	CenterPrice float64       `json:"center_price"` // 中心价格
+	Points      []*PivotPoint `json:"points"`       // 转折点列表
+	Count       int           `json:"count"`        // 命中次数
 }
 
-// ConversionEvent 转换事件
-type ConversionEvent struct {
-	Timestamp     int64       `json:"timestamp"`
-	FromType      SRLevelType `json:"from_type"`
-	ToType        SRLevelType `json:"to_type"`
-	BreakPrice    float64     `json:"break_price"`
-	BreakStrength float64     `json:"break_strength"`
-	Volume        float64     `json:"volume"`
-	Confirmed     bool        `json:"confirmed"`
+// SRLevel 支撑阻力级别（简化版 - 只返回4根关键水平线）
+type SRLevel struct {
+	Price    float64 `json:"price"`     // 价格
+	HitCount int     `json:"hit_count"` // 命中次数
+	Type     string  `json:"type"`      // "support" 或 "resistance"（相对当前价格）
+	Strength float64 `json:"strength"`  // 强度评分 (0-100)
 }
 
 // SupportResistanceData 支撑阻力分析结果
 type SupportResistanceData struct {
-	Levels       []*SupportResistanceLevel `json:"levels"`
-	ActiveLevels []*SupportResistanceLevel `json:"active_levels"`
-	Statistics   *SRStatistics             `json:"statistics"`
-	Config       *SRConfig                 `json:"config"`
-	LastAnalysis int64                     `json:"last_analysis"`
+	KeyLevels    []*SRLevel    `json:"key_levels"`    // 4根关键水平线
+	Statistics   *SRStatistics `json:"statistics"`    // 统计信息
+	Config       *SRConfig     `json:"config"`        // 配置信息
+	LastAnalysis int64         `json:"last_analysis"` // 最后分析时间
 }
 
 // SRStatistics 支撑阻力统计
 type SRStatistics struct {
-	TotalLevels        int     `json:"total_levels"`
-	ActiveSupport      int     `json:"active_support"`
-	ActiveResistance   int     `json:"active_resistance"`
-	ConversionRate     float64 `json:"conversion_rate"`
-	AvgStrength        float64 `json:"avg_strength"`
-	SuccessRate        float64 `json:"success_rate"`
-	MostReliableLevel  float64 `json:"most_reliable_level"`
+	TotalLevels     int     `json:"total_levels"`     // 总级别数
+	SupportCount    int     `json:"support_count"`    // 支撑级别数
+	ResistanceCount int     `json:"resistance_count"` // 阻力级别数
+	AvgStrength     float64 `json:"avg_strength"`     // 平均强度
+	AvgHitCount     float64 `json:"avg_hit_count"`    // 平均命中次数
 }
 
 // 默认配置
 var defaultSRConfig = SRConfig{
-	MinTouchCount:    2,
-	TouchTolerance:   0.002, // 0.2%
-	MinStrength:      0.3,
-	ConversionBuffer: 0.005, // 0.5%
-	MaxLevelAge:      168,   // 7天
-	LookbackPeriod:   200,   // 200根K线
+	LookbackPeriods:  300,  // 回看300根K线
+	PivotLeft:        3,    // 左侧3根比较
+	PivotRight:       3,    // 右侧3根比较
+	ClusterTolerance: 0.005, // 0.5%聚类容差
+	MinHits:          3,    // 至少3次命中
 }
 
 // NewSupportResistanceAnalyzer 创建支撑阻力分析器
@@ -120,539 +78,388 @@ func NewSupportResistanceAnalyzer() *SupportResistanceAnalyzer {
 
 // Analyze 分析支撑阻力转换线
 func (sra *SupportResistanceAnalyzer) Analyze(klines []Kline) *SupportResistanceData {
-	if len(klines) < sra.config.LookbackPeriod {
+	if len(klines) == 0 {
 		return &SupportResistanceData{
-			Levels:       []*SupportResistanceLevel{},
-			ActiveLevels: []*SupportResistanceLevel{},
+			KeyLevels:    []*SRLevel{},
 			Statistics:   &SRStatistics{},
 			Config:       &sra.config,
 			LastAnalysis: time.Now().UnixMilli(),
 		}
 	}
 
-	// 识别潜在的支撑阻力级别
-	levels := sra.identifyLevels(klines)
+	// 1. 计算支撑阻力转换线
+	levels := sra.computeSRLevels(klines)
 
-	// 分析历史触及和转换
-	sra.analyzeTouchEvents(levels, klines)
-	sra.analyzeConversions(levels, klines)
+	// 2. 计算统计信息
+	statistics := sra.calculateStatistics(levels)
 
-	// 更新级别状态和强度
-	sra.updateLevelStatuses(levels, klines)
-
-	// 筛选活跃级别
-	activeLevels := sra.filterActiveLevels(levels)
-
-	// 计算统计数据
-	statistics := sra.calculateStatistics(levels, activeLevels)
+	// 3. 筛选活跃级别（只返回最重要的4根水平线）
+	activeLevels := sra.selectKeyLevels(levels, klines[len(klines)-1].Close, 4)
 
 	return &SupportResistanceData{
-		Levels:       levels,
-		ActiveLevels: activeLevels,
+		KeyLevels:    activeLevels,
 		Statistics:   statistics,
 		Config:       &sra.config,
 		LastAnalysis: time.Now().UnixMilli(),
 	}
 }
 
-// identifyLevels 识别支撑阻力级别
-func (sra *SupportResistanceAnalyzer) identifyLevels(klines []Kline) []*SupportResistanceLevel {
-	var levels []*SupportResistanceLevel
-	levelMap := make(map[float64]*SupportResistanceLevel)
-
-	// 寻找显著的高低点
-	for i := 5; i < len(klines)-5; i++ {
-		// 检查是否为局部高点（阻力位候选）
-		if sra.isLocalHigh(klines, i) {
-			price := klines[i].High
-			level := sra.getOrCreateLevel(levelMap, price, SRResistance, klines[i].OpenTime)
-			if level != nil {
-				levels = append(levels, level)
-			}
-		}
-
-		// 检查是否为局部低点（支撑位候选）
-		if sra.isLocalLow(klines, i) {
-			price := klines[i].Low
-			level := sra.getOrCreateLevel(levelMap, price, SRSupport, klines[i].OpenTime)
-			if level != nil {
-				levels = append(levels, level)
-			}
-		}
+// computeSRLevels 计算支撑阻力转换线（按照标准算法）
+func (sra *SupportResistanceAnalyzer) computeSRLevels(klines []Kline) []*SRLevel {
+	N := len(klines)
+	if N == 0 {
+		return []*SRLevel{}
 	}
 
-	// 识别重要的价格聚集区
-	clusterLevels := sra.identifyPriceClusters(klines)
-	for _, level := range clusterLevels {
-		if !sra.isLevelExisting(levelMap, level.Price) {
-			levels = append(levels, level)
-		}
+	// 1. 确定回看区间
+	endIndex := N - 1 - sra.config.PivotRight
+	startIndex := sra.config.PivotLeft
+	if N-sra.config.LookbackPeriods > startIndex {
+		startIndex = N - sra.config.LookbackPeriods
 	}
+	
+	if endIndex <= startIndex {
+		return []*SRLevel{}
+	}
+
+	// 2. 找所有转折点
+	pivotPoints := sra.findPivotPoints(klines, startIndex, endIndex)
+
+	// 3. 按价格排序
+	sort.Slice(pivotPoints, func(i, j int) bool {
+		return pivotPoints[i].Price < pivotPoints[j].Price
+	})
+
+	// 4. 聚类：把价格靠近的转折点合并
+	clusters := sra.clusterPivotPoints(pivotPoints)
+
+	// 5. 过滤：只保留命中次数足够多的簇
+	validClusters := sra.filterClusters(clusters)
+
+	// 6. 生成最终的支撑阻力级别
+	levels := sra.generateLevels(validClusters, klines[len(klines)-1].Close)
+
+	// 7. 按价格排序
+	sort.Slice(levels, func(i, j int) bool {
+		return levels[i].Price < levels[j].Price
+	})
 
 	return levels
 }
 
-// isLocalHigh 检查是否为局部高点
-func (sra *SupportResistanceAnalyzer) isLocalHigh(klines []Kline, index int) bool {
-	current := klines[index].High
-	
-	// 检查左侧
-	for i := index - 3; i < index; i++ {
-		if klines[i].High >= current {
-			return false
+// findPivotPoints 寻找转折点
+func (sra *SupportResistanceAnalyzer) findPivotPoints(klines []Kline, startIndex, endIndex int) []*PivotPoint {
+	var pivotPoints []*PivotPoint
+
+	for i := startIndex; i <= endIndex; i++ {
+		current := klines[i]
+
+		// 检查是否为转折高点
+		if sra.isPivotHigh(klines, i) {
+			pivotPoints = append(pivotPoints, &PivotPoint{
+				Price:     current.High,
+				Type:      "H",
+				Index:     i,
+				Timestamp: current.OpenTime,
+			})
+		}
+
+		// 检查是否为转折低点
+		if sra.isPivotLow(klines, i) {
+			pivotPoints = append(pivotPoints, &PivotPoint{
+				Price:     current.Low,
+				Type:      "L",
+				Index:     i,
+				Timestamp: current.OpenTime,
+			})
 		}
 	}
-	
-	// 检查右侧
-	for i := index + 1; i <= index + 3; i++ {
-		if klines[i].High >= current {
-			return false
-		}
-	}
-	
-	return true
+
+	return pivotPoints
 }
 
-// isLocalLow 检查是否为局部低点
-func (sra *SupportResistanceAnalyzer) isLocalLow(klines []Kline, index int) bool {
-	current := klines[index].Low
-	
-	// 检查左侧
-	for i := index - 3; i < index; i++ {
-		if klines[i].Low <= current {
-			return false
-		}
-	}
-	
-	// 检查右侧
-	for i := index + 1; i <= index + 3; i++ {
-		if klines[i].Low <= current {
-			return false
-		}
-	}
-	
-	return true
-}
-
-// getOrCreateLevel 获取或创建级别
-func (sra *SupportResistanceAnalyzer) getOrCreateLevel(levelMap map[float64]*SupportResistanceLevel, price float64, levelType SRLevelType, timestamp int64) *SupportResistanceLevel {
-	// 检查是否已存在相近的级别
-	tolerance := price * sra.config.TouchTolerance
-	for existingPrice, level := range levelMap {
-		if math.Abs(price-existingPrice) <= tolerance {
-			return level // 返回现有级别，不创建新的
-		}
-	}
-
-	// 创建新级别
-	level := &SupportResistanceLevel{
-		ID:              fmt.Sprintf("sr_%s_%.2f_%d", levelType, price, timestamp),
-		Price:           price,
-		Type:            levelType,
-		OriginalType:    levelType,
-		TouchCount:      1,
-		TouchEvents:     []*SRTouchEvent{},
-		ConversionEvents: []*ConversionEvent{},
-		CreationTime:    timestamp,
-		LastTouch:       timestamp,
-		IsActive:        true,
-		HasConverted:    false,
-		ConversionCount: 0,
-		Confidence:      0.5,
-		Status:          SRStatusActive,
-	}
-
-	levelMap[price] = level
-	return level
-}
-
-// isLevelExisting 检查级别是否已存在
-func (sra *SupportResistanceAnalyzer) isLevelExisting(levelMap map[float64]*SupportResistanceLevel, price float64) bool {
-	tolerance := price * sra.config.TouchTolerance
-	for existingPrice := range levelMap {
-		if math.Abs(price-existingPrice) <= tolerance {
-			return true
-		}
-	}
-	return false
-}
-
-// identifyPriceClusters 识别价格聚集区
-func (sra *SupportResistanceAnalyzer) identifyPriceClusters(klines []Kline) []*SupportResistanceLevel {
-	var levels []*SupportResistanceLevel
-	
-	// 收集所有高低点
-	var prices []float64
-	for i := 0; i < len(klines); i++ {
-		prices = append(prices, klines[i].High, klines[i].Low)
-	}
-	
-	sort.Float64s(prices)
-	
-	// 寻找价格聚集区
-	clusterSize := 5
-	for i := 0; i < len(prices)-clusterSize; i++ {
-		clusterPrices := prices[i : i+clusterSize]
-		priceRange := clusterPrices[clusterSize-1] - clusterPrices[0]
-		avgPrice := (clusterPrices[0] + clusterPrices[clusterSize-1]) / 2
-		
-		// 如果价格聚集度高（变化范围小）
-		if priceRange/avgPrice < 0.01 { // 1%范围内
-			level := &SupportResistanceLevel{
-				ID:               fmt.Sprintf("sr_cluster_%.2f", avgPrice),
-				Price:            avgPrice,
-				Type:             SRNeutral,
-				OriginalType:     SRNeutral,
-				TouchCount:       clusterSize,
-				TouchEvents:      []*SRTouchEvent{},
-				ConversionEvents: []*ConversionEvent{},
-				CreationTime:     time.Now().UnixMilli(),
-				LastTouch:        time.Now().UnixMilli(),
-				IsActive:         true,
-				HasConverted:     false,
-				ConversionCount:  0,
-				Confidence:       0.7,
-				Status:           SRStatusActive,
-			}
-			levels = append(levels, level)
-		}
-	}
-	
-	return levels
-}
-
-// analyzeTouchEvents 分析触及事件
-func (sra *SupportResistanceAnalyzer) analyzeTouchEvents(levels []*SupportResistanceLevel, klines []Kline) {
-	for _, level := range levels {
-		touchCount := 0
-		
-		for i, kline := range klines {
-			if sra.isPriceNearLevel(kline.High, level.Price) || sra.isPriceNearLevel(kline.Low, level.Price) {
-				touchCount++
-				
-				// 创建触及事件
-				touchEvent := &SRTouchEvent{
-					Timestamp: kline.OpenTime,
-					Price:     level.Price,
-					Volume:    kline.Volume,
-					Confirmed: true,
-				}
-				
-				// 分析反应
-				reaction := sra.analyzeReaction(klines, i, level)
-				touchEvent.Reaction = reaction
-				
-				// 确定触及类型
-				if reaction > 0.01 {
-					touchEvent.TouchType = "bounce"
-				} else if reaction < -0.005 {
-					touchEvent.TouchType = "break"
-				} else {
-					touchEvent.TouchType = "test"
-				}
-				
-				level.TouchEvents = append(level.TouchEvents, touchEvent)
-				level.LastTouch = kline.OpenTime
-			}
-		}
-		
-		level.TouchCount = touchCount
-	}
-}
-
-// isPriceNearLevel 检查价格是否接近级别
-func (sra *SupportResistanceAnalyzer) isPriceNearLevel(price, levelPrice float64) bool {
-	tolerance := levelPrice * sra.config.TouchTolerance
-	return math.Abs(price-levelPrice) <= tolerance
-}
-
-// analyzeReaction 分析价格反应
-func (sra *SupportResistanceAnalyzer) analyzeReaction(klines []Kline, touchIndex int, level *SupportResistanceLevel) float64 {
-	if touchIndex >= len(klines)-3 {
-		return 0
-	}
-	
-	touchPrice := klines[touchIndex].Close
-	
-	// 检查后续3根K线的反应
-	reactionPeriod := 3
-	var maxReaction float64
-	
-	for i := 1; i <= reactionPeriod && touchIndex+i < len(klines); i++ {
-		futurePrice := klines[touchIndex+i].Close
-		reaction := (futurePrice - touchPrice) / touchPrice
-		
-		if level.Type == SRSupport {
-			// 支撑位期望向��反应
-			if reaction > maxReaction {
-				maxReaction = reaction
-			}
-		} else if level.Type == SRResistance {
-			// 阻力位期望向下反应
-			if -reaction > maxReaction {
-				maxReaction = -reaction
-			}
-		}
-	}
-	
-	return maxReaction
-}
-
-// analyzeConversions 分析转换事件
-func (sra *SupportResistanceAnalyzer) analyzeConversions(levels []*SupportResistanceLevel, klines []Kline) {
-	for _, level := range levels {
-		sra.detectConversion(level, klines)
-	}
-}
-
-// detectConversion 检测转换
-func (sra *SupportResistanceAnalyzer) detectConversion(level *SupportResistanceLevel, klines []Kline) {
-	if len(level.TouchEvents) < 2 {
-		return
-	}
-	
-	currentPrice := klines[len(klines)-1].Close
-	conversionBuffer := level.Price * sra.config.ConversionBuffer
-	
-	// 检查支撑转阻力
-	if level.Type == SRSupport && currentPrice > level.Price+conversionBuffer {
-		// 验证转换：价格突破后在级别上方停留
-		if sra.confirmConversion(level, klines, true) {
-			sra.recordConversion(level, SRSupport, SRResistance, klines[len(klines)-1])
-		}
-	}
-	
-	// 检查阻力转支撑
-	if level.Type == SRResistance && currentPrice < level.Price-conversionBuffer {
-		// 验证转换：价格突破后在级别下方停留
-		if sra.confirmConversion(level, klines, false) {
-			sra.recordConversion(level, SRResistance, SRSupport, klines[len(klines)-1])
-		}
-	}
-}
-
-// confirmConversion 确认转换
-func (sra *SupportResistanceAnalyzer) confirmConversion(level *SupportResistanceLevel, klines []Kline, isUpwardBreak bool) bool {
-	confirmationPeriod := 5
-	requiredConfirmation := 3
-	
-	if len(klines) < confirmationPeriod {
+// isPivotHigh 判断是否为转折高点
+func (sra *SupportResistanceAnalyzer) isPivotHigh(klines []Kline, index int) bool {
+	if index < sra.config.PivotLeft || index >= len(klines)-sra.config.PivotRight {
 		return false
 	}
-	
-	confirmationCount := 0
-	recentKlines := klines[len(klines)-confirmationPeriod:]
-	
-	for _, kline := range recentKlines {
-		if isUpwardBreak {
-			// 向上突破：要求价格保持在级别之上
-			if kline.Close > level.Price {
-				confirmationCount++
+
+	currentHigh := klines[index].High
+
+	// 检查左侧
+	for j := index - sra.config.PivotLeft; j < index; j++ {
+		if klines[j].High > currentHigh {
+			return false
+		}
+	}
+
+	// 检查右侧
+	for j := index + 1; j <= index+sra.config.PivotRight; j++ {
+		if klines[j].High > currentHigh {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isPivotLow 判断是否为转折低点
+func (sra *SupportResistanceAnalyzer) isPivotLow(klines []Kline, index int) bool {
+	if index < sra.config.PivotLeft || index >= len(klines)-sra.config.PivotRight {
+		return false
+	}
+
+	currentLow := klines[index].Low
+
+	// 检查左侧
+	for j := index - sra.config.PivotLeft; j < index; j++ {
+		if klines[j].Low < currentLow {
+			return false
+		}
+	}
+
+	// 检查右侧
+	for j := index + 1; j <= index+sra.config.PivotRight; j++ {
+		if klines[j].Low < currentLow {
+			return false
+		}
+	}
+
+	return true
+}
+
+// clusterPivotPoints 聚类转折点
+func (sra *SupportResistanceAnalyzer) clusterPivotPoints(pivotPoints []*PivotPoint) []*PriceCluster {
+	var clusters []*PriceCluster
+
+	for _, point := range pivotPoints {
+		assigned := false
+
+		// 在已有簇中寻找可以合并的
+		for _, cluster := range clusters {
+			allowedDiff := cluster.CenterPrice * sra.config.ClusterTolerance
+			if math.Abs(point.Price-cluster.CenterPrice) <= allowedDiff {
+				// 加入现有簇
+				cluster.Points = append(cluster.Points, point)
+				cluster.Count++
+
+				// 更新中心价格（简单平均）
+				sumPrice := 0.0
+				for _, p := range cluster.Points {
+					sumPrice += p.Price
+				}
+				cluster.CenterPrice = sumPrice / float64(cluster.Count)
+
+				assigned = true
+				break
 			}
+		}
+
+		// 如果没有合适的簇，新建一个
+		if !assigned {
+			newCluster := &PriceCluster{
+				CenterPrice: point.Price,
+				Points:      []*PivotPoint{point},
+				Count:       1,
+			}
+			clusters = append(clusters, newCluster)
+		}
+	}
+
+	return clusters
+}
+
+// filterClusters 过滤簇，只保留命中次数足够的
+func (sra *SupportResistanceAnalyzer) filterClusters(clusters []*PriceCluster) []*PriceCluster {
+	var validClusters []*PriceCluster
+
+	for _, cluster := range clusters {
+		if cluster.Count >= sra.config.MinHits {
+			validClusters = append(validClusters, cluster)
+		}
+	}
+
+	return validClusters
+}
+
+// generateLevels 生成支撑阻力级别
+func (sra *SupportResistanceAnalyzer) generateLevels(clusters []*PriceCluster, currentPrice float64) []*SRLevel {
+	var levels []*SRLevel
+
+	for _, cluster := range clusters {
+		// 分析级别类型
+		levelType := sra.analyzeLevelType(cluster, currentPrice)
+
+		// 计算强度
+		strength := sra.calculateLevelStrength(cluster)
+
+		level := &SRLevel{
+			Price:    cluster.CenterPrice,
+			HitCount: cluster.Count,
+			Type:     levelType,
+			Strength: strength,
+		}
+
+		levels = append(levels, level)
+	}
+
+	return levels
+}
+
+// analyzeLevelType 分析级别类型
+func (sra *SupportResistanceAnalyzer) analyzeLevelType(cluster *PriceCluster, currentPrice float64) string {
+	highCount := 0
+	lowCount := 0
+
+	for _, point := range cluster.Points {
+		if point.Type == "H" {
+			highCount++
+		} else if point.Type == "L" {
+			lowCount++
+		}
+	}
+
+	// 根据转折点类型和当前价格位置判断
+	if cluster.CenterPrice > currentPrice {
+		if highCount > lowCount {
+			return "resistance" // 在当前价格上方的高点集群 = 阻力
 		} else {
-			// 向下突破：要求价格保持在级别之下
-			if kline.Close < level.Price {
-				confirmationCount++
-			}
+			return "resistance" // 在上方的低点集群可能是之前的支撑转为阻力
 		}
-	}
-	
-	return confirmationCount >= requiredConfirmation
-}
-
-// recordConversion 记录转换事件
-func (sra *SupportResistanceAnalyzer) recordConversion(level *SupportResistanceLevel, fromType, toType SRLevelType, breakKline Kline) {
-	conversion := &ConversionEvent{
-		Timestamp:     breakKline.OpenTime,
-		FromType:      fromType,
-		ToType:        toType,
-		BreakPrice:    breakKline.Close,
-		BreakStrength: math.Abs(breakKline.Close-level.Price) / level.Price,
-		Volume:        breakKline.Volume,
-		Confirmed:     true,
-	}
-	
-	level.ConversionEvents = append(level.ConversionEvents, conversion)
-	level.Type = toType
-	level.HasConverted = true
-	level.ConversionCount++
-	level.Status = SRStatusConverted
-}
-
-// updateLevelStatuses 更新级别状态
-func (sra *SupportResistanceAnalyzer) updateLevelStatuses(levels []*SupportResistanceLevel, klines []Kline) {
-	currentTime := klines[len(klines)-1].OpenTime
-	
-	for _, level := range levels {
-		// 更新强度
-		sra.calculateLevelStrength(level)
-		
-		// 更新置信度
-		sra.calculateLevelConfidence(level)
-		
-		// 检查年龄
-		age := int((currentTime - level.CreationTime) / (3600 * 1000)) // 转换为小时
-		if age > sra.config.MaxLevelAge {
-			level.Status = SRStatusExpired
-			level.IsActive = false
-		}
-		
-		// 检查是否被完全突破
-		if sra.isLevelBroken(level, klines) {
-			level.Status = SRStatusBroken
-			level.IsActive = false
+	} else {
+		if lowCount > highCount {
+			return "support" // 在当前价格下方的低点集群 = 支撑
+		} else {
+			return "support" // 在下方的高点集群可能是之前的阻力转为支撑
 		}
 	}
 }
 
 // calculateLevelStrength 计算级别强度
-func (sra *SupportResistanceAnalyzer) calculateLevelStrength(level *SupportResistanceLevel) {
-	strength := 0.0
-	
-	// 基于触及次数
-	strength += math.Min(float64(level.TouchCount)*0.1, 0.5)
-	
-	// 基于成功反应次数
-	bounceCount := 0
-	for _, event := range level.TouchEvents {
-		if event.TouchType == "bounce" && event.Reaction > 0.005 {
-			bounceCount++
-		}
-	}
-	strength += math.Min(float64(bounceCount)*0.15, 0.3)
-	
-	// 基于转换历史
-	if level.HasConverted {
-		strength += 0.1
-	}
-	
-	// 基于年龄（越老越可靠）
-	ageBonus := math.Min(float64(len(level.TouchEvents))/10.0*0.1, 0.1)
-	strength += ageBonus
-	
-	level.Strength = math.Min(strength, 1.0)
+func (sra *SupportResistanceAnalyzer) calculateLevelStrength(cluster *PriceCluster) float64 {
+	// 基于命中次数的强度，归一化到0-1
+	baseStrength := math.Min(float64(cluster.Count)/10.0, 1.0)
+
+	// 可以添加其他因素，如时间跨度、价格波动等
+	return baseStrength
 }
 
 // calculateLevelConfidence 计算级别置信度
-func (sra *SupportResistanceAnalyzer) calculateLevelConfidence(level *SupportResistanceLevel) {
-	confidence := level.Strength
-	
-	// 基于触及事件质量
-	if len(level.TouchEvents) > 0 {
-		totalReaction := 0.0
-		for _, event := range level.TouchEvents {
-			totalReaction += event.Reaction
-		}
-		avgReaction := totalReaction / float64(len(level.TouchEvents))
-		confidence += avgReaction * 100
-	}
-	
-	// 转换历史加成
-	if level.HasConverted {
-		confidence += 0.1
-	}
-	
-	level.Confidence = math.Min(confidence, 1.0)
+func (sra *SupportResistanceAnalyzer) calculateLevelConfidence(cluster *PriceCluster) float64 {
+	// 简单的置信度计算：基于命中次数
+	confidence := math.Min(float64(cluster.Count)/5.0, 1.0)
+	return confidence
 }
 
-// isLevelBroken 检查级别是否被突破
-func (sra *SupportResistanceAnalyzer) isLevelBroken(level *SupportResistanceLevel, klines []Kline) bool {
-	if len(klines) < 5 {
-		return false
+// selectKeyLevels 选择关键水平线（只返回4根最重要的）
+func (sra *SupportResistanceAnalyzer) selectKeyLevels(levels []*SRLevel, currentPrice float64, maxCount int) []*SRLevel {
+	if len(levels) == 0 {
+		return []*SRLevel{}
 	}
-	
-	recentKlines := klines[len(klines)-5:]
-	breakCount := 0
-	
-	for _, kline := range recentKlines {
-		buffer := level.Price * sra.config.ConversionBuffer
-		
-		if level.Type == SRSupport && kline.Close < level.Price-buffer {
-			breakCount++
-		} else if level.Type == SRResistance && kline.Close > level.Price+buffer {
-			breakCount++
-		}
-	}
-	
-	return breakCount >= 4 // 5根K线中有4根突破
-}
 
-// filterActiveLevels 筛选活跃级别
-func (sra *SupportResistanceAnalyzer) filterActiveLevels(levels []*SupportResistanceLevel) []*SupportResistanceLevel {
-	var activeLevels []*SupportResistanceLevel
-	
-	for _, level := range levels {
-		if level.IsActive && 
-		   level.TouchCount >= sra.config.MinTouchCount && 
-		   level.Strength >= sra.config.MinStrength {
-			activeLevels = append(activeLevels, level)
-		}
-	}
-	
-	// 按强度排序
-	sort.Slice(activeLevels, func(i, j int) bool {
-		return activeLevels[i].Strength > activeLevels[j].Strength
+	// 按强度排序，选择最强的级别
+	sort.Slice(levels, func(i, j int) bool {
+		return levels[i].Strength > levels[j].Strength
 	})
+
+	var selectedLevels []*SRLevel
+	var supportLevels []*SRLevel
+	var resistanceLevels []*SRLevel
+
+	// 分类收集支撑和阻力位
+	for _, level := range levels {
+		if level.Price < currentPrice {
+			// 当前价格下方 = 支撑
+			level.Type = "support"
+			supportLevels = append(supportLevels, level)
+		} else if level.Price > currentPrice {
+			// 当前价格上方 = 阻力
+			level.Type = "resistance"
+			resistanceLevels = append(resistanceLevels, level)
+		}
+	}
+
+	// 支撑位按价格降序排列（离当前价格最近的在前）
+	sort.Slice(supportLevels, func(i, j int) bool {
+		return supportLevels[i].Price > supportLevels[j].Price
+	})
+
+	// 阻力位按价格升序排列（离当前价格最近的在前）
+	sort.Slice(resistanceLevels, func(i, j int) bool {
+		return resistanceLevels[i].Price < resistanceLevels[j].Price
+	})
+
+	// 选择最多2个支撑位和2个阻力位，确保总数不超过maxCount
+	supportCount := len(supportLevels)
+	resistanceCount := len(resistanceLevels)
 	
-	return activeLevels
+	maxSupport := maxCount / 2
+	maxResistance := maxCount / 2
+	
+	// 如果某一方不足，另一方可以多选
+	if supportCount < maxSupport {
+		maxResistance += maxSupport - supportCount
+		maxSupport = supportCount
+	}
+	if resistanceCount < maxResistance {
+		maxSupport += maxResistance - resistanceCount
+		maxResistance = resistanceCount
+	}
+
+	// 确保不超过实际数量
+	if maxSupport > supportCount {
+		maxSupport = supportCount
+	}
+	if maxResistance > resistanceCount {
+		maxResistance = resistanceCount
+	}
+
+	// 添加选中的支撑位
+	for i := 0; i < maxSupport; i++ {
+		selectedLevels = append(selectedLevels, supportLevels[i])
+	}
+
+	// 添加选中的阻力位
+	for i := 0; i < maxResistance; i++ {
+		selectedLevels = append(selectedLevels, resistanceLevels[i])
+	}
+
+	// 最终按价格排序输出
+	sort.Slice(selectedLevels, func(i, j int) bool {
+		return selectedLevels[i].Price < selectedLevels[j].Price
+	})
+
+	return selectedLevels
 }
 
-// calculateStatistics 计算统计数据
-func (sra *SupportResistanceAnalyzer) calculateStatistics(levels, activeLevels []*SupportResistanceLevel) *SRStatistics {
+// calculateStatistics 计算统计信息（简化版）
+func (sra *SupportResistanceAnalyzer) calculateStatistics(levels []*SRLevel) *SRStatistics {
+	if len(levels) == 0 {
+		return &SRStatistics{}
+	}
+
 	stats := &SRStatistics{
 		TotalLevels: len(levels),
 	}
-	
-	if len(levels) == 0 {
-		return stats
-	}
-	
-	// 计算活跃级别统计
-	totalStrength := 0.0
-	conversionCount := 0
-	successCount := 0
-	var mostReliable *SupportResistanceLevel
-	
-	for _, level := range activeLevels {
+
+	var totalStrength float64
+	var totalHitCount int
+
+	for _, level := range levels {
 		totalStrength += level.Strength
-		
-		if level.Type == SRSupport {
-			stats.ActiveSupport++
-		} else if level.Type == SRResistance {
-			stats.ActiveResistance++
-		}
-		
-		if level.HasConverted {
-			conversionCount++
-		}
-		
-		// 计算成功率（反弹次数/总触及次数）
-		bounceCount := 0
-		for _, event := range level.TouchEvents {
-			if event.TouchType == "bounce" {
-				bounceCount++
-			}
-		}
-		if bounceCount > 0 {
-			successCount++
-		}
-		
-		// 找到最可靠的级别
-		if mostReliable == nil || level.Confidence > mostReliable.Confidence {
-			mostReliable = level
+		totalHitCount += level.HitCount
+
+		switch level.Type {
+		case "support":
+			stats.SupportCount++
+		case "resistance":
+			stats.ResistanceCount++
 		}
 	}
-	
-	if len(activeLevels) > 0 {
-		stats.AvgStrength = totalStrength / float64(len(activeLevels))
-		stats.ConversionRate = float64(conversionCount) / float64(len(activeLevels)) * 100
-		stats.SuccessRate = float64(successCount) / float64(len(activeLevels)) * 100
-	}
-	
-	if mostReliable != nil {
-		stats.MostReliableLevel = mostReliable.Price
-	}
-	
+
+	stats.AvgStrength = totalStrength / float64(len(levels))
+	stats.AvgHitCount = float64(totalHitCount) / float64(len(levels))
+
 	return stats
 }
 

@@ -2015,58 +2015,55 @@ func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKli
 // extractCompactSupportResistance 提取支撑阻力转换线的关键结果
 func extractCompactSupportResistance(data *SupportResistanceData) map[string]interface{} {
 	if data == nil {
-		return map[string]interface{}{}
+		return map[string]interface{}{
+			"support_resistance_lines": []map[string]interface{}{},
+			"summary": map[string]interface{}{
+				"total_lines": 0,
+				"support_lines": 0,
+				"resistance_lines": 0,
+			},
+		}
 	}
 	
 	result := map[string]interface{}{
-		"active_levels": []map[string]interface{}{},
-		"statistics": map[string]interface{}{
-			"total_levels": 0,
-			"support_count": 0,
-			"resistance_count": 0,
-			"conversion_rate": 0.0,
-			"avg_strength": 0.0,
+		"support_resistance_lines": []map[string]interface{}{},
+		"summary": map[string]interface{}{
+			"total_lines": 0,
+			"support_lines": 0,
+			"resistance_lines": 0,
 		},
 	}
 	
-	if len(data.ActiveLevels) == 0 {
+	if len(data.KeyLevels) == 0 {
 		return result
 	}
 	
-	var activeLevels []map[string]interface{}
+	var lines []map[string]interface{}
+	supportCount := 0
+	resistanceCount := 0
 	
-	// 提取活跃级别信息，按强度排序取前5个
-	levelCount := len(data.ActiveLevels)
-	if levelCount > 5 {
-		levelCount = 5
-	}
-	
-	for i := 0; i < levelCount; i++ {
-		level := data.ActiveLevels[i]
-		levelInfo := map[string]interface{}{
+	// 提取关键水平线信息
+	for _, level := range data.KeyLevels {
+		lineInfo := map[string]interface{}{
 			"price": level.Price,
 			"type": level.Type,
-			"original_type": level.OriginalType,
 			"strength": level.Strength,
-			"confidence": level.Confidence,
-			"touch_count": level.TouchCount,
-			"has_converted": level.HasConverted,
-			"conversion_count": level.ConversionCount,
+			"hit_count": level.HitCount,
 		}
-		activeLevels = append(activeLevels, levelInfo)
+		lines = append(lines, lineInfo)
+		
+		if level.Type == "support" {
+			supportCount++
+		} else if level.Type == "resistance" {
+			resistanceCount++
+		}
 	}
 	
-	result["active_levels"] = activeLevels
-	
-	// 统计信息
-	if data.Statistics != nil {
-		result["statistics"] = map[string]interface{}{
-			"total_levels": data.Statistics.TotalLevels,
-			"support_count": data.Statistics.ActiveSupport,
-			"resistance_count": data.Statistics.ActiveResistance,
-			"conversion_rate": data.Statistics.ConversionRate,
-			"avg_strength": data.Statistics.AvgStrength,
-		}
+	result["support_resistance_lines"] = lines
+	result["summary"] = map[string]interface{}{
+		"total_lines": len(data.KeyLevels),
+		"support_lines": supportCount,
+		"resistance_lines": resistanceCount,
 	}
 	
 	return result

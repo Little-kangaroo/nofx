@@ -66,9 +66,62 @@
                 则视为“性价比很差的顺势多 / 追多”，处理方式同上：
                   · 至多评为 setup_grade="C"；
                   · action 只能是 "wait" / "hold"（不允许以 LTF_scalp 方式新开多单）。
+            - 总结：LTF_scalp 依托供需区，只允许“靠边进场、止损附近进场”，不允许在 zone 底部追空或在 zone 顶部追多。
 
-            - 总结：LTF_scalp 依托供需区，只允许“靠边进场、止损附近进场”，
-              不允许在 zone 底部追空或在 zone 顶部追多。
+        2.2）LTF_scalp 允许的形态类型（EDGE / BO_RETEST）
+            - 为避免“半空中追单”，LTF_scalp 开仓只允许以下两类结构形态：
+              1）EDGE（供需边缘形态）
+              2）BO_RETEST（突破-回踩形态）
+              任何不属于上述两类的 LTF_scalp 机会，一律视为 setup_grade="C"，action="wait" / "hold"。
+
+            1）EDGE（供需边缘形态）
+
+              - 核心思路：依托 3m/15m/30m 明确的 supply / demand 区
+                在“靠近边缘”的区域小仓试单，止损放在该结构外侧。
+
+              - 必须同时满足：
+                * 已明确识别最近有效的 3m/15m/30m 供需区（fresh/strong/weakened）；
+                * entry_price 满足 2.1）中的“zone 高度下 40% / 上 40%”约束：
+                  · 做多：entry_price 位于 demand zone 高度的下 40%；
+                  · 做空：entry_price 位于 supply zone 高度的上 40%；
+                * 止损价 sl 必须放在该供需区的相反边界外侧若干 tick / ATR，而不是区间内部；
+                * 通过 B5 检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求。
+
+              - 禁止的 EDGE 伪形态：
+                * entry_price 落在 zone 中部甚至靠近对侧边缘；
+                * 止损落在 zone 内（例如 demand 区内部就止损多单），
+                  这些都应视为“被结构噪音扫掉”的高风险行为。
+
+            2）BO_RETEST（突破-回踩形态）
+
+              - 核心思路：先让价格对重要水平（阻力/支撑/供需区边界/POC 等）
+                做出“清晰突破”，然后在回踩该水平附近时进场，
+                而不是在刚突破的那一两根 K 上追。
+
+              - 必须同时满足：
+                * 存在 15m/30m 级别的关键水平或区间边界（例如：
+                  最近供需区边界、明显的区间高低、重要 POC / HVN / LVN 等）；
+                * 已经出现有效突破：
+                  · 至少 1 根 15m 或 2 根 3m K 收盘稳定在该水平之外；
+                  · 突破过程中，动能/成交行为支持方向（macd、rsi、volume 等不明显反向背离）；
+                * entry_price 应位于对该关键水平的“回踩附近”，
+                  而不是在突破后的第一波延伸中继续追：
+                  · 多单：向上突破原阻力后，回踩到原阻力附近（现在充当支撑）时进场；
+                  · 空单：向下跌破原支撑后，回踩到原支撑附近（现在充当阻力）时进场；
+                * 止损 sl 仍然按“结构外”原则放置：在该关键水平对侧一定距离之外。
+
+              - 禁止的 BO_RETEST 伪形态：
+                * 仅凭一次“刺穿”高/低点但收盘价仍在区间内，就认定为突破；
+                * 在刚刚突破、尚未出现任何回踩的 K 上直接追价，
+                  且无法给出清晰的 retest 结构。
+
+            - 总结（LTF_scalp 形态过滤）：
+              * 若 trade_style="LTF_scalp" 且当前机会不属于 EDGE 或 BO_RETEST 之一，
+                即便多周期 bias 和指标方向看起来“还行”，
+                也必须将该机会整体评为 setup_grade="C"，action="wait" / "hold"；
+              * reasoning 中必须显式标出：
+                “trade_style=LTF_scalp，pattern=EDGE/BO_RETEST，结构依据为……”，
+                否则视为未满足形态要求。
 
         3）中期动能不过度极端：
             - 做空 HTF_swing 时：4h RSI14 应 ≥ 35；
@@ -195,6 +248,61 @@
  R 本身是价格距离指标，对多空天然对称：
  - 做空：止损价 = entry_price + R（再根据具体结构微调）；
  - 做多：止损价 = entry_price - R（再根据具体结构微调）。
+
+【重要说明：R 的估算与最终执行止损的关系】
+
+ - 上述基于 ATR * R_multiplier 得到的 R 和 “entry_price ± R” 的写法，
+   仅用于给出一个“典型止损尺度”的初步估算，方便理解仓位 sizing 的来源；
+ - 真正下单时的止损价与最终用于仓位计算的 R，必须严格按照下文
+   【止损锚定顺序（结构优先，其次 ATR 校验）】一节执行：
+   1）先基于供需区边界 / 关键 swing high/low 等结构选出 sl_struct；
+   2）再令 R_struct = |entry_price - sl_struct|，并用 ATR 估算值做过近/过宽校验；
+   3）最终所有与 R 相关的计算（position sizing / R_clean / R_unrealized），
+      一律使用 R_struct，而不是直接使用 ATR * multiplier 的估算值。
+
+【止损锚定顺序（结构优先，其次 ATR 校验）】
+
+- 上述通过 ATR * R_multiplier 得到的 R，是“期望的典型止损尺度”，
+  实际执行时，止损与最终用于计算 R 的值，必须按以下顺序确定：
+
+  1）先基于结构确定候选止损位 sl_struct：
+     - 对多单（LONG）：
+       · 优先选择最近有效的 demand 区下沿、关键 swing low、
+         或其它明显“多头假设失效”的结构价位，下方再留出若干 tick/小倍数 ATR。
+     - 对空单（SHORT）：
+       · 优先选择最近有效的 supply 区上沿、关键 swing high、
+         或其它明显“空头假设失效”的结构价位，上方再留出若干 tick/小倍数 ATR。
+
+  2）用该结构止损价计算结构 R 值：
+     - R_struct = | entry_price - sl_struct |
+
+  3）再用 ATR 估算值进行校验（避免过近或过宽）：
+     - 记 R_atr_est = ATR(R_by_ATR_TF) * R_multiplier_swing 或 R_multiplier_scalp
+       （取决于 trade_style）。
+     - 若 R_struct < 0.8 * R_atr_est：
+       · 视为止损过近，仍在结构内部或过度依赖短期噪音；
+       · 必须重新审视 sl_struct，将止损移至更合理的结构外位置，
+         使得 R_struct 至少达到 ≈0.8 * R_atr_est。
+     - 若 R_struct > 2.0 * R_atr_est：
+       · 视为止损过宽，可能远超本策略允许的典型风险尺度；
+       · 需要结合 R_clean 检查：
+         · 若以此止损计算的 R_clean 仍 ≥ 本策略要求（例如 ≥2R 波段空间），
+           且账户风险允许，可以接受这一较宽止损；
+         · 若 R_clean 明显不足或导致风险过大，应放弃本次机会（action="wait" / "hold"）。
+
+  4）最终用于所有 position sizing / R_clean / R_unrealized 计算的 R，
+     必须取 R = R_struct（经上述校验后的结构 R），
+     而不能直接使用 ATR * multiplier 的估算值替代。
+
+- 禁止的错误流程（明确禁止）：
+  * 先用 ATR * R_multiplier 算出一个 R，然后简单地设定
+    “止损价 = entry_price ± R”，而不考虑供需区边界、前高前低等关键结构；
+  * 任何“止损价明显落在当前供需区内部、区间中部噪音带”的设置，
+    都视为违背本条“结构优先”的原则，应通过 Checklist 或 R_clean 检查被过滤掉。
+
+- 总结：
+  * 止损价必须“贴结构、在结构外”，ATR 只用于给出合理的幅度参考和风险归一尺度；
+  * 若结构与 ATR 指标发生冲突，应以结构为主，ATR 仅作为是否过近/过宽的校验依据。
 
 
 [阶梯锁盈（按风格区分，多空对称）]
@@ -1533,8 +1641,13 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                  - 给出该距离的点数和折算后的 R 值（记为 R_clean）：
                    · 例如："最近反向结构为 15m supply 87200-87500，entry→supply_low≈0.8R"；
                  - 若 R_clean < 1.0：
-                   · 必须在 reasoning 中解释为何仍考虑开仓（例如这是 HTF_swing 加仓、结构极强等特殊情况），
-                     否则应将 action 改为 "wait" 或仅管理既有仓位。
+                   · 必须在 reasoning 中解释为何仍考虑开仓（例如这是 HTF_swing 加仓、结构极强等特殊情况），否则应将 action 改为 "wait" 或仅管理既有仓位。
+        6. 若是开仓（open_long/open_short），还需明确说明本次止损 sl_struct 依托的结构：
+          - 对多单：例如“sl_struct 设在最近 15m demand 区下沿 2.065，再下方留出 ≈0.2*ATR 作为缓冲”；
+          - 对空单：例如“sl_struct 设在最近 30m supply 区上沿 0.1459，上方留出若干 tick 作为缓冲”；
+          - 并在此基础上给出 R_struct = |entry_price - sl_struct| 与 R_clean，
+            保证止损价格确实落在关键结构之外，而不是结构内部。
+
      - "stop_update":
          * 若本轮不需要调整止损，必须为 null
          * 若需要调整止损，必须是一个对象：

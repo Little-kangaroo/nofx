@@ -62,7 +62,7 @@ func (fa *FibonacciAnalyzer) Analyze(klines []Kline) *FibonacciData {
 // identifySwingPoints 识别关键摆动点
 func (fa *FibonacciAnalyzer) identifySwingPoints(klines []Kline) []PricePoint {
 	var swingPoints []PricePoint
-	lookback := 5
+	lookback := fa.config.SwingLookback // 使用配置的回望周期
 
 	for i := lookback; i < len(klines)-lookback; i++ {
 		current := klines[i]
@@ -82,6 +82,33 @@ func (fa *FibonacciAnalyzer) identifySwingPoints(klines []Kline) []PricePoint {
 			if j != i && klines[j].Low <= current.Low {
 				isSwingLow = false
 				break
+			}
+		}
+		
+		// 🆕 添加最小摆动幅度过滤
+		if isSwingHigh || isSwingLow {
+			// 计算当前点相对于回望窗口内的价格变化幅度
+			var minPrice, maxPrice float64
+			minPrice = klines[i-lookback].Low
+			maxPrice = klines[i-lookback].High
+			
+			// 找到回望窗口内的最高和最低价
+			for j := i - lookback; j <= i + lookback; j++ {
+				if klines[j].High > maxPrice {
+					maxPrice = klines[j].High
+				}
+				if klines[j].Low < minPrice {
+					minPrice = klines[j].Low
+				}
+			}
+			
+			// 计算价格波动幅度
+			priceRange := maxPrice - minPrice
+			swingAmplitude := priceRange / ((maxPrice + minPrice) / 2) // 相对幅度
+			
+			// 只有达到最小摆动幅度的才认为是有效摆动点
+			if swingAmplitude < fa.config.MinSwingSize {
+				continue // 跳过幅度太小的摆动点
 			}
 		}
 		
