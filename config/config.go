@@ -168,7 +168,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("trader[%d]: initial_balance必须大于0", i)
 		}
 		if trader.ScanIntervalMinutes <= 0 {
-			trader.ScanIntervalMinutes = 3 // 默认3分钟
+			trader.ScanIntervalMinutes = 5 // 默认5分钟
 		}
 	}
 

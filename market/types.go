@@ -115,7 +115,7 @@ type OIData struct {
 	Average float64
 }
 
-// IntradayData 日内数据(3分钟间隔)
+// IntradayData 日内数据(5分钟间隔)
 type IntradayData struct {
 	MidPrices   []float64
 	EMA20Values []float64
@@ -712,7 +712,7 @@ var defaultSDConfig = SDConfig{
 	MaxTouchCount:      5,      // 最大5次触及 (允许更多测试)
 	BreakoutThreshold:  0.015,  // 1.5%突破阈值 (稍微严格)
 	ConfirmationBars:   2,      // 2根确认K线
-	TimeFrames:         []string{"15m", "1h", "4h"},
+	TimeFrames:         []string{"5m", "15m", "30m", "1h", "4h"},
 	EnableValidation:   true,
 	QualityThreshold:   0.4,    // 40%质量阈值 (大幅放宽)
 }
@@ -894,7 +894,7 @@ var defaultFVGConfig = FVGConfig{
 	MaxAge:           50,     // 50根K线最大存在时间
 	MaxTouchCount:    3,      // 最大3次触及
 	FillThreshold:    0.8,    // 80%填补阈值
-	TimeFrames:       []string{"15m", "1h", "4h"},
+	TimeFrames:       []string{"5m", "15m", "30m", "1h", "4h"},
 	EnableValidation: true,
 	QualityThreshold: 0.6,    // 60%质量阈值
 	RequireVolConf:   false,  // 不强制要求成交量确认

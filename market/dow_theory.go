@@ -26,7 +26,7 @@ func (dta *DowTheoryAnalyzer) Analyze(klines3m, klines4h []Kline, currentPrice f
 		analysisKlines = klines4h[len(klines4h)-300:]
 	}
 	
-	// 使用最近300根3分钟数据进行短期分析
+	// 使用最近300根5分钟数据进行短期分析
 	shortTermKlines := klines3m
 	if len(klines3m) > 300 {
 		shortTermKlines = klines3m[len(klines3m)-300:]
@@ -624,7 +624,7 @@ func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, sw
 		}
 	}
 
-	// 计算短期趋势强度（基于3分钟数据）
+	// 计算短期趋势强度（基于5分钟数据）
 	shortTerm := dta.calculateShortTermStrength(klines3m)
 
 	// 计算长期趋势强度（基于4小时数据）
@@ -662,12 +662,12 @@ func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, sw
 
 // calculateShortTermStrength 计算短期趋势强度
 func (dta *DowTheoryAnalyzer) calculateShortTermStrength(klines []Kline) float64 {
-	if len(klines) < 20 {
+	if len(klines) < 12 {
 		return 0
 	}
 
-	// 使用最近20个3分钟K线
-	recentKlines := klines[len(klines)-20:]
+	// 使用最近12个5分钟K线
+	recentKlines := klines[len(klines)-12:]
 
 	// 计算价格动量
 	priceChange := (recentKlines[len(recentKlines)-1].Close - recentKlines[0].Open) / recentKlines[0].Open

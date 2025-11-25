@@ -43,12 +43,12 @@ func main() {
 	// 示例3: 访问特定数据
 	fmt.Println("=== 访问特定时间框架和分析类型的数据 ===")
 	
-	// 访问BTCUSDT的3分钟道氏理论数据
+	// 访问BTCUSDT的5分钟道氏理论数据
 	if btcData, exists := multiSymbolData["BTCUSDT"]; exists {
-		if tf3m, exists := btcData["3m"].(map[string]interface{}); exists {
-			if dowData := tf3m["道氏理论数据"]; dowData != nil {
+		if tf5m, exists := btcData["5m"].(map[string]interface{}); exists {
+			if dowData := tf5m["道氏理论数据"]; dowData != nil {
 				dowJson, _ := json.MarshalIndent(dowData, "", "  ")
-				fmt.Printf("BTCUSDT 3分钟道氏理论数据:\n%s\n\n", dowJson)
+				fmt.Printf("BTCUSDT 5分钟道氏理论数据:\n%s\n\n", dowJson)
 			}
 		}
 	}

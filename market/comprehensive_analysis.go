@@ -235,8 +235,8 @@ func NewComprehensiveAnalyzerWithConfig(config *ComprehensiveConfig) *Comprehens
 }
 
 // AnalyzeMultiTimeframe 执行多时间框架综合分析
-func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines3m, klines15m, klines30m, klines1h, klines4h []Kline) *ComprehensiveResult {
-	if len(klines3m) == 0 && len(klines4h) == 0 {
+func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, klines15m, klines30m, klines1h, klines4h []Kline) *ComprehensiveResult {
+	if len(klines5m) == 0 && len(klines4h) == 0 {
 		return nil
 	}
 
@@ -247,9 +247,9 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines3m, 
 	if len(klines4h) > 0 {
 		currentPrice = klines4h[len(klines4h)-1].Close
 		timestamp = klines4h[len(klines4h)-1].CloseTime
-	} else if len(klines3m) > 0 {
-		currentPrice = klines3m[len(klines3m)-1].Close
-		timestamp = klines3m[len(klines3m)-1].CloseTime
+	} else if len(klines5m) > 0 {
+		currentPrice = klines5m[len(klines5m)-1].Close
+		timestamp = klines5m[len(klines5m)-1].CloseTime
 	}
 
 	result := &ComprehensiveResult{
@@ -261,7 +261,7 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines3m, 
 
 	// 执行多时间框架分析
 	multiTimeframeAnalysis := ca.AnalyzeAllTimeframes(symbol, currentPrice, map[string][]Kline{
-		"3m":  klines3m,
+		"5m":  klines5m,
 		"15m": klines15m,
 		"30m": klines30m,
 		"1h":  klines1h,
@@ -298,8 +298,8 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines3m, 
 }
 
 // Analyze 执行综合市场分析（向前兼容）
-func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines3m, klines4h []Kline) *ComprehensiveResult {
-	if len(klines3m) == 0 && len(klines4h) == 0 {
+func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kline) *ComprehensiveResult {
+	if len(klines5m) == 0 && len(klines4h) == 0 {
 		return nil
 	}
 
@@ -310,9 +310,9 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines3m, klines4h []Kli
 	if len(klines4h) > 0 {
 		currentPrice = klines4h[len(klines4h)-1].Close
 		timestamp = klines4h[len(klines4h)-1].CloseTime
-	} else if len(klines3m) > 0 {
-		currentPrice = klines3m[len(klines3m)-1].Close
-		timestamp = klines3m[len(klines3m)-1].CloseTime
+	} else if len(klines5m) > 0 {
+		currentPrice = klines5m[len(klines5m)-1].Close
+		timestamp = klines5m[len(klines5m)-1].CloseTime
 	}
 
 	result := &ComprehensiveResult{
@@ -324,7 +324,7 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines3m, klines4h []Kli
 
 	// 执行道氏理论分析
 	if ca.config.EnableDowTheory && len(klines4h) > 20 {
-		result.DowTheory = ca.dowAnalyzer.Analyze(klines3m, klines4h, currentPrice)
+		result.DowTheory = ca.dowAnalyzer.Analyze(klines5m, klines4h, currentPrice)
 		result.ChannelAnalysis = ca.channelAnalyzer.Analyze(klines4h, currentPrice)
 	}
 
@@ -1331,9 +1331,9 @@ func (ca *ComprehensiveAnalyzer) generateTradingAdvice(result *ComprehensiveResu
 
 // AnalyzeAllTimeframes 分析所有时间框架
 func (ca *ComprehensiveAnalyzer) AnalyzeAllTimeframes(symbol string, currentPrice float64, klinesMap map[string][]Kline) *MultiTimeframeAnalysis {
-	timeframes := []string{"3m", "15m", "30m", "1h", "4h"}
+	timeframes := []string{"5m", "15m", "30m", "1h", "4h"}
 	weights := map[string]float64{
-		"3m":  0.1,  // 短期噪音较多，权重较低
+		"5m":  0.15, // 短期趨势，适中提高权重
 		"15m": 0.15, // 短期趋势
 		"30m": 0.2,  // 中短期趋势
 		"1h":  0.25, // 中期趋势
@@ -1378,7 +1378,7 @@ func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe string, klines
 	// 执行各种分析
 	if ca.config.EnableDowTheory {
 		// 道氏理论需要3m和当前时间框架的数据
-		if timeframe == "3m" {
+		if timeframe == "5m" {
 			tfAnalysis.DowTheory = ca.dowAnalyzer.Analyze(klines, klines, currentPrice)
 		} else {
 			// 对于其他时间框架，使用当前数据
@@ -1423,7 +1423,7 @@ func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe string, klines
 // getMinDataPoints 获取时间框架的最小数据要求
 func (ca *ComprehensiveAnalyzer) getMinDataPoints(timeframe string) int {
 	switch timeframe {
-	case "3m":
+	case "5m":
 		return 100 // 5小时数据
 	case "15m":
 		return 80  // 20小时数据

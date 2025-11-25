@@ -349,7 +349,7 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 	// 设置扫描间隔默认值
 	scanIntervalMinutes := req.ScanIntervalMinutes
 	if scanIntervalMinutes <= 0 {
-		scanIntervalMinutes = 3 // 默认3分钟
+		scanIntervalMinutes = 5 // 默认5分钟
 	}
 
 	// 创建交易员配置（数据库实体）
@@ -1071,7 +1071,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 	}
 
 	// 获取尽可能多的历史数据（几天的数据）
-	// 每3分钟一个周期：10000条 = 约20天的数据
+	// 每5分钟一个周期：10000条 = 约34天的数据
 	records, err := trader.GetDecisionLogger().GetLatestRecords(10000)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{

@@ -11,9 +11,9 @@ func ComprehensiveAnalysisExample() {
 	fmt.Println("=== 综合市场分析示例 ===")
 
 	// 1. 生成示例K线数据
-	klines3m := generateSample3MinKlines()
+	klines5m := generateSample5MinKlines()
 	klines4h := generateSample4HourKlines()
-	fmt.Printf("生成了 %d 根3分钟K线和 %d 根4小时K线\n", len(klines3m), len(klines4h))
+	fmt.Printf("生成了 %d 根5分钟K线和 %d 根4小时K线\n", len(klines5m), len(klines4h))
 
 	// 2. 创建综合分析器
 	analyzer := NewComprehensiveAnalyzer()
@@ -21,7 +21,7 @@ func ComprehensiveAnalysisExample() {
 
 	// 3. 执行综合分析
 	symbol := "BTCUSDT"
-	result := analyzer.Analyze(symbol, klines3m, klines4h)
+	result := analyzer.Analyze(symbol, klines5m, klines4h)
 	if result == nil {
 		log.Println("综合分析失败")
 		return
@@ -45,7 +45,7 @@ func ComprehensiveAnalysisExample() {
 	}
 
 	customAnalyzer := NewComprehensiveAnalyzerWithConfig(customConfig)
-	customResult := customAnalyzer.Analyze(symbol, klines3m, klines4h)
+	customResult := customAnalyzer.Analyze(symbol, klines5m, klines4h)
 	if customResult != nil {
 		fmt.Println("\n=== 自定义配置分析结果 ===")
 		displayComprehensiveResults(customResult)
@@ -56,11 +56,11 @@ func ComprehensiveAnalysisExample() {
 	demonstrateRealTimeAnalysis(analyzer, symbol)
 }
 
-// generateSample3MinKlines 生成3分钟示例K线数据
-func generateSample3MinKlines() []Kline {
+// generateSample5MinKlines 生成5分钟示例K线数据
+func generateSample5MinKlines() []Kline {
 	klines := make([]Kline, 200)
 	basePrice := 45000.0
-	baseTime := time.Now().UnixMilli() - int64(200*3*60*1000) // 200根3分钟K线
+	baseTime := time.Now().UnixMilli() - int64(200*5*60*1000) // 200根5分钟K线
 
 	for i := range klines {
 		// 生成更加细致的价格波动
@@ -420,12 +420,12 @@ func demonstrateRealTimeAnalysis(analyzer *ComprehensiveAnalyzer, symbol string)
 
 	// 模拟获取实时数据
 	fmt.Println("1. 获取实时K线数据...")
-	klines3m := generateSample3MinKlines()
+	klines5m := generateSample5MinKlines()
 	klines4h := generateSample4HourKlines()
 
 	// 执行分析
 	fmt.Println("2. 执行综合分析...")
-	result := analyzer.Analyze(symbol, klines3m, klines4h)
+	result := analyzer.Analyze(symbol, klines5m, klines4h)
 
 	if result != nil {
 		fmt.Printf("3. 分析完成 - 生成 %d 个信号\n", len(result.UnifiedSignals))

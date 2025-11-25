@@ -13,15 +13,15 @@ import (
 
 // Get 获取指定代币的市场数据
 func Get(symbol string) (*Data, error) {
-	var klines3m, klines15m, klines30m, klines1h, klines4h []Kline
+	var klines5m, klines15m, klines30m, klines1h, klines4h []Kline
 	var err error
 	// 标准化symbol
 	symbol = Normalize(symbol)
 	
-	// 获取3分钟K线数据
-	klines3m, err = WSMonitorCli.GetCurrentKlines(symbol, "3m")
+	// 获取5分钟K线数据
+	klines5m, err = WSMonitorCli.GetCurrentKlines(symbol, "5m")
 	if err != nil {
-		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
+		return nil, fmt.Errorf("获取5分钟K线失败: %v", err)
 	}
 
 	// 获取15分钟K线数据
@@ -48,17 +48,17 @@ func Get(symbol string) (*Data, error) {
 		return nil, fmt.Errorf("获取4小时K线失败: %v", err)
 	}
 
-	// 计算当前指标 (基于3分钟最新数据)
-	currentPrice := klines3m[len(klines3m)-1].Close
-	currentEMA20 := calculateEMA(klines3m, 20)
-	currentMACD := calculateMACD(klines3m)
-	currentRSI7 := calculateRSI(klines3m, 7)
+	// 计算当前指标 (基于5分钟最新数据)
+	currentPrice := klines5m[len(klines5m)-1].Close
+	currentEMA20 := calculateEMA(klines5m, 20)
+	currentMACD := calculateMACD(klines5m)
+	currentRSI7 := calculateRSI(klines5m, 7)
 
 	// 计算价格变化百分比
-	// 1小时价格变化 = 20个3分钟K线前的价格
+	// 1小时价格变化 = 12个5分钟K线前的价格
 	priceChange1h := 0.0
-	if len(klines3m) >= 21 { // 至少需要21根K线 (当前 + 20根前)
-		price1hAgo := klines3m[len(klines3m)-21].Close
+	if len(klines5m) >= 13 { // 至少需要13根K线 (当前 + 12根前)
+		price1hAgo := klines5m[len(klines5m)-13].Close
 		if price1hAgo > 0 {
 			priceChange1h = ((currentPrice - price1hAgo) / price1hAgo) * 100
 		}
@@ -84,7 +84,7 @@ func Get(symbol string) (*Data, error) {
 	fundingRate, _ := getFundingRate(symbol)
 
 	// 计算日内系列数据
-	intradayData := calculateIntradaySeries(klines3m)
+	intradayData := calculateIntradaySeries(klines5m)
 
 	// 计算长期数据
 	longerTermData := calculateLongerTermData(klines4h)
@@ -96,11 +96,11 @@ func Get(symbol string) (*Data, error) {
 
 	// 多时间框架综合分析（包括道氏理论、VPVR、供需区、FVG、斐波纳契、通道分析）
 	comprehensiveAnalyzer := NewComprehensiveAnalyzer()
-	comprehensiveResult := comprehensiveAnalyzer.AnalyzeMultiTimeframe(symbol, klines3m, klines15m, klines30m, klines1h, klines4h)
+	comprehensiveResult := comprehensiveAnalyzer.AnalyzeMultiTimeframe(symbol, klines5m, klines15m, klines30m, klines1h, klines4h)
 
 	// 执行多时间框架分析
 	multiTimeframeAnalysis := comprehensiveAnalyzer.AnalyzeAllTimeframes(symbol, currentPrice, map[string][]Kline{
-		"3m":  klines3m,
+		"5m":  klines5m,
 		"15m": klines15m,
 		"30m": klines30m,
 		"1h":  klines1h,
@@ -607,14 +607,14 @@ func FormatAsStructuredData(data *Data) string {
 func FormatAsCompactData(data *Data) string {
 	// 重新获取K线数据用于超级趋势计算
 	symbol := data.Symbol
-	klines3m, _ := WSMonitorCli.GetCurrentKlines(symbol, "3m")
+	klines5m, _ := WSMonitorCli.GetCurrentKlines(symbol, "5m")
 	klines15m, _ := WSMonitorCli.GetCurrentKlines(symbol, "15m") 
 	klines30m, _ := WSMonitorCli.GetCurrentKlines(symbol, "30m")
 	klines1h, _ := WSMonitorCli.GetCurrentKlines(symbol, "1h")
 	klines4h, _ := WSMonitorCli.GetCurrentKlines(symbol, "4h")
 	
 	timeframeKlines := map[string][]Kline{
-		"3m":  klines3m,
+		"5m":  klines5m,
 		"15m": klines15m,
 		"30m": klines30m,
 		"1h":  klines1h,
@@ -650,11 +650,11 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		return 0
 	}()
 	
-	// 价格变化（基于3分钟K线计算）
-	if klines3m, exists := timeframeKlines["3m"]; exists && len(klines3m) > 0 {
-		// 1小时价格变化 = 20个3分钟K线前的价格
-		if len(klines3m) >= 21 {
-			price1hAgo := klines3m[len(klines3m)-21].Close
+	// 价格变化（基于5分钟K线计算）
+	if klines5m, exists := timeframeKlines["5m"]; exists && len(klines5m) > 0 {
+		// 1小时价格变化 = 12个5分钟K线前的价格
+		if len(klines5m) >= 13 {
+			price1hAgo := klines5m[len(klines5m)-13].Close
 			if price1hAgo > 0 {
 				result["change_1h"] = ((data.CurrentPrice - price1hAgo) / price1hAgo) * 100
 			}
@@ -670,7 +670,7 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 	}
 	
 	// 各时间框架的基础指标
-	timeframes := []string{"3m", "15m", "30m", "1h", "4h"}
+	timeframes := []string{"5m", "15m", "30m", "1h", "4h"}
 	for _, tf := range timeframes {
 		klines, exists := timeframeKlines[tf]
 		if !exists {
@@ -778,7 +778,7 @@ func extractCompactMultiTimeframeAnalysis(data *Data) map[string]interface{} {
 		return result
 	}
 	
-	timeframes := []string{"3m", "15m", "30m", "1h", "4h"}
+	timeframes := []string{"5m", "15m", "30m", "1h", "4h"}
 	
 	for _, tf := range timeframes {
 		tfData, exists := data.MultiTimeframeAnalysis.Timeframes[tf]
@@ -1389,7 +1389,7 @@ func formatMultiTimeframeAnalysis(data *MultiTimeframeAnalysis) string {
 	// 各时间框架可靠性
 	if len(data.Timeframes) > 0 {
 		sb.WriteString("\n  Timeframe Reliability Scores:\n")
-		timeframeOrder := []string{"3m", "15m", "30m", "1h", "4h"}
+		timeframeOrder := []string{"5m", "15m", "30m", "1h", "4h"}
 		for _, tf := range timeframeOrder {
 			if tfData, exists := data.Timeframes[tf]; exists {
 				sb.WriteString(fmt.Sprintf("    %s: %.1f%% (Weight: %.1f%%)\n",
@@ -1618,13 +1618,13 @@ func GetMultiSymbolAnalysis(symbols []string) (map[string]map[string]interface{}
 		
 		// 构建时间框架数据
 		symbolData := map[string]interface{}{
-			"3m": map[string]interface{}{
-				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "dow_theory"),
-				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "channel_analysis"),
-				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "volume_profile"),
-				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "supply_demand"),
-				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "fair_value_gaps"),
-				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "fibonacci"),
+			"5m": map[string]interface{}{
+				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "dow_theory"),
+				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "channel_analysis"),
+				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "volume_profile"),
+				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "supply_demand"),
+				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fair_value_gaps"),
+				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fibonacci"),
 			},
 			"15m": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "dow_theory"),
@@ -1720,13 +1720,13 @@ func GetSingleSymbolAnalysis(symbol string) (map[string]interface{}, error) {
 	
 	// 构建时间框架数据
 	symbolData := map[string]interface{}{
-		"3m": map[string]interface{}{
-			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "dow_theory"),
-			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "channel_analysis"),
-			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "volume_profile"),
-			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "supply_demand"),
-			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "fair_value_gaps"),
-			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "3m", "fibonacci"),
+		"5m": map[string]interface{}{
+			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "dow_theory"),
+			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "channel_analysis"),
+			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "volume_profile"),
+			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "supply_demand"),
+			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fair_value_gaps"),
+			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fibonacci"),
 		},
 		"15m": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "dow_theory"),
@@ -1982,7 +1982,7 @@ func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKli
 		return result
 	}
 	
-	timeframes := []string{"3m", "15m", "30m", "1h", "4h"}
+	timeframes := []string{"5m", "15m", "30m", "1h", "4h"}
 	
 	for _, tf := range timeframes {
 		tfData, exists := data.MultiTimeframeAnalysis.Timeframes[tf]

@@ -15,7 +15,7 @@ type WSMonitor struct {
 	symbols         []string
 	featuresMap     sync.Map
 	alertsChan      chan Alert
-	klineDataMap3m  sync.Map // 存储每个交易对的K线历史数据
+	klineDataMap5m  sync.Map // 存储每个交易对的K线历史数据
 	klineDataMap15m sync.Map // 存储每个交易对的K线历史数据
 	klineDataMap30m sync.Map // 存储每个交易对的K线历史数据
 	klineDataMap1h  sync.Map // 存储每个交易对的K线历史数据
@@ -35,7 +35,7 @@ type SymbolStats struct {
 }
 
 var WSMonitorCli *WSMonitor
-var subKlineTime = []string{"3m", "15m", "30m", "1h", "4h"} // 管理订阅流的K线周期
+var subKlineTime = []string{"5m", "15m", "30m", "1h", "4h"} // 管理订阅流的K线周期
 
 func NewWSMonitor(batchSize int) *WSMonitor {
 	WSMonitorCli = &WSMonitor{
@@ -94,7 +94,7 @@ func (m *WSMonitor) initializeHistoricalData() error {
 
 			// 获取所有时间框架的历史K线数据
 			timeframes := map[string]*sync.Map{
-				"3m":  &m.klineDataMap3m,
+				"5m":  &m.klineDataMap5m,
 				"15m": &m.klineDataMap15m,
 				"30m": &m.klineDataMap30m,
 				"1h":  &m.klineDataMap1h,
@@ -162,7 +162,7 @@ func (m *WSMonitor) subscribeAll() error {
 	for _, st := range subKlineTime {
 		err := m.combinedClient.BatchSubscribeKlines(m.symbols, st)
 		if err != nil {
-			log.Fatalf("❌ 订阅3m K线: %v", err)
+			log.Fatalf("❌ 订阅5m K线: %v", err)
 			return err
 		}
 	}
@@ -183,8 +183,8 @@ func (m *WSMonitor) handleKlineData(symbol string, ch <-chan []byte, _time strin
 
 func (m *WSMonitor) getKlineDataMap(_time string) *sync.Map {
 	switch _time {
-	case "3m":
-		return &m.klineDataMap3m
+	case "5m":
+		return &m.klineDataMap5m
 	case "15m":
 		return &m.klineDataMap15m
 	case "30m":
