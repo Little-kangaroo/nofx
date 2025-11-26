@@ -286,6 +286,11 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, erro
 	}
 	klines := value.([]Kline)
 	log.Printf("✓ [K线获取] %s %s缓存命中: %d条数据", symbol, _time, len(klines))
+	
+	// 🔍 临时检查：验证实际K线数量是否为300条
+	if len(klines) != 300 {
+		log.Printf("⚠️ [K线数量检查] %s %s 实际数量: %d条 (期望300条)", symbol, _time, len(klines))
+	}
 	return klines, nil
 }
 
