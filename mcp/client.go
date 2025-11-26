@@ -313,9 +313,10 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	
 	// 记录请求开始时间
 	requestStart := time.Now()
-	log.Printf("📡 [MCP] 开始发送请求: %v", requestStart.Format("15:04:05"))
+	log.Printf("📡 [MCP] 开始发送AI请求: %v", requestStart.Format("15:04:05"))
 	resp, err := httpClient.Do(req)
 	requestDuration := time.Since(requestStart)
+	log.Printf("📊 [AI请求耗时] HTTP请求耗时: %v", requestDuration)
 	
 	if err != nil {
 		log.Printf("❌ [MCP] 请求失败，耗时: %v, 错误: %v", requestDuration, err)
@@ -325,6 +326,8 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	
 	log.Printf("✅ [MCP] 请求成功，耗时: %v, 状态码: %d, 协议: %s", requestDuration, resp.StatusCode, resp.Proto)
 
+	// 读取和处理响应阶段耗时统计
+	responseProcessStart := time.Now()
 	// 读取响应
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -354,8 +357,18 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 
 	responseContent := result.Choices[0].Message.Content
 	
+	// 响应处理耗时统计
+	responseProcessDuration := time.Since(responseProcessStart)
+	totalRequestDuration := time.Since(requestStart)
+	
 	// 🔧 重要修复：将AI响应内容也写入调试文件
 	writeAPIResponseToFile(systemPrompt, userPrompt, requestBody, jsonData, responseContent, client)
+	
+	// AI请求完整耗时统计
+	log.Printf("📊 [AI请求耗时统计] 总耗时: %v | HTTP请求: %v (%.1f%%) | 响应处理: %v (%.1f%%)", 
+		totalRequestDuration, 
+		requestDuration, float64(requestDuration.Nanoseconds())/float64(totalRequestDuration.Nanoseconds())*100,
+		responseProcessDuration, float64(responseProcessDuration.Nanoseconds())/float64(totalRequestDuration.Nanoseconds())*100)
 	
 	// 记录响应信息和潜在的截断警告
 	log.Printf("📥 [MCP] AI响应接收: %d 字符", len(responseContent))

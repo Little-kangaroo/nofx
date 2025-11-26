@@ -184,14 +184,19 @@ func fetchMarketDataForContext(ctx *Context) error {
 	}
 
 	log.Printf("🔍 [DEBUG] 开始获取%d个币种的市场数据", len(symbolSet))
+	// 添加总体K线数据获取耗时统计
+	allDataStart := time.Now()
 	for symbol := range symbolSet {
 		log.Printf("🔍 [DEBUG] 正在获取 %s 的市场数据...", symbol)
+		// 单币种K线数据获取耗时统计
+		symbolDataStart := time.Now()
 		data, err := market.Get(symbol)
 		if err != nil {
 			log.Printf("❌ [ERROR] 获取 %s 市场数据失败: %v", symbol, err)
 			continue
 		}
-		log.Printf("✅ [DEBUG] 成功获取 %s 的市场数据，当前价格: %.4f", symbol, data.CurrentPrice)
+		symbolDataDuration := time.Since(symbolDataStart)
+		log.Printf("✅ [DEBUG] 成功获取 %s 的市场数据，当前价格: %.4f，耗时: %v", symbol, data.CurrentPrice, symbolDataDuration)
 
 		// ⚠️ 流动性过滤：持仓价值低于15M USD的币种不做（多空都不做）
 		// 持仓价值 = 持仓量 × 当前价格
@@ -210,6 +215,11 @@ func fetchMarketDataForContext(ctx *Context) error {
 
 		ctx.MarketDataMap[symbol] = data
 	}
+
+	// 总体K线数据获取耗时统计
+	allDataDuration := time.Since(allDataStart)
+	log.Printf("📊 [拉取K线数据统计] 总耗时: %v，币种数量: %d���平均每币种: %v", 
+		allDataDuration, len(ctx.MarketDataMap), allDataDuration/time.Duration(1+len(ctx.MarketDataMap)))
 
 	// 加载OI Top数据（不影响主流程）
 	oiPositions, err := pool.GetOITopPositions()

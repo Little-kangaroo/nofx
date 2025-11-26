@@ -9,15 +9,21 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Get 获取指定代币的市场数据
 func Get(symbol string) (*Data, error) {
+	// 技术指标计算总体耗时统计
+	totalStart := time.Now()
+	
 	var klines5m, klines15m, klines30m, klines1h, klines4h []Kline
 	var err error
 	// 标准化symbol
 	symbol = Normalize(symbol)
 	
+	// K线数据获取阶段耗时统计
+	klinesFetchStart := time.Now()
 	// 获取5分钟K线数据
 	klines5m, err = WSMonitorCli.GetCurrentKlines(symbol, "5m")
 	if err != nil {
@@ -48,11 +54,21 @@ func Get(symbol string) (*Data, error) {
 		return nil, fmt.Errorf("获取4小时K线失败: %v", err)
 	}
 
+	// K线数据获取阶段耗时统计
+	klinesFetchDuration := time.Since(klinesFetchStart)
+	log.Printf("📊 [%s-K线获取] 耗时: %v (5m+15m+30m+1h+4h)", symbol, klinesFetchDuration)
+
+	// 基础技术指标计算阶段耗时统计
+	basicIndicatorsStart := time.Now()
 	// 计算当前指标 (基于5分钟最新数据)
 	currentPrice := klines5m[len(klines5m)-1].Close
 	currentEMA20 := calculateEMA(klines5m, 20)
 	currentMACD := calculateMACD(klines5m)
 	currentRSI7 := calculateRSI(klines5m, 7)
+	
+	// 基础指标计算耗时统计
+	basicIndicatorsDuration := time.Since(basicIndicatorsStart)
+	log.Printf("📊 [%s-基础指标] 耗时: %v (Price+EMA20+MACD+RSI7)", symbol, basicIndicatorsDuration)
 
 	// 计算价格变化百分比
 	// 1小时价格变化 = 12个5分钟K线前的价格
@@ -94,6 +110,8 @@ func Get(symbol string) (*Data, error) {
 	mediumTermData30m := calculateMediumTermData(klines30m, "30m")
 	mediumTermData1h := calculateMediumTermData(klines1h, "1h")
 
+	// 高级分析阶段耗时统计
+	advancedAnalysisStart := time.Now()
 	// 多时间框架综合分析（包括道氏理论、VPVR、供需区、FVG、斐波纳契、通道分析）
 	comprehensiveAnalyzer := NewComprehensiveAnalyzer()
 	comprehensiveResult := comprehensiveAnalyzer.AnalyzeMultiTimeframe(symbol, klines5m, klines15m, klines30m, klines1h, klines4h)
@@ -106,8 +124,12 @@ func Get(symbol string) (*Data, error) {
 		"1h":  klines1h,
 		"4h":  klines4h,
 	})
+	
+	// 高级分析耗时统计
+	advancedAnalysisDuration := time.Since(advancedAnalysisStart)
+	log.Printf("📊 [%s-高级分析] 耗时: %v (道氏理论+VPVR+供需区+FVG+斐波纳契+多时间框架)", symbol, advancedAnalysisDuration)
 
-	return &Data{
+	data := &Data{
 		Symbol:                  symbol,
 		CurrentPrice:            currentPrice,
 		PriceChange1h:           priceChange1h,
@@ -130,7 +152,17 @@ func Get(symbol string) (*Data, error) {
 		SupplyDemand:            comprehensiveResult.SupplyDemand,
 		FairValueGaps:           comprehensiveResult.FairValueGaps,
 		Fibonacci:               comprehensiveResult.Fibonacci,
-	}, nil
+	}
+	
+	// 技术指标计算总体耗时统计
+	totalDuration := time.Since(totalStart)
+	log.Printf("📊 [%s-指标计算总结] 总耗时: %v | K线获取: %v (%.1f%%) | 基础指标: %v (%.1f%%) | 高级分析: %v (%.1f%%)", 
+		symbol, totalDuration, 
+		klinesFetchDuration, float64(klinesFetchDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100,
+		basicIndicatorsDuration, float64(basicIndicatorsDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100,
+		advancedAnalysisDuration, float64(advancedAnalysisDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100)
+	
+	return data, nil
 }
 
 // calculateEMA 计算EMA
