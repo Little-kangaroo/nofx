@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // LeverageConfig 杠杆配置
@@ -364,6 +365,11 @@ func main() {
 	fmt.Println("  • AI将自主设置止损和止盈价格")
 	fmt.Println("  • AI将基于市场数据、技术指标、账户状态做出全面分析")
 	fmt.Println()
+	fmt.Println("🕐 AI触发机制:")
+	fmt.Println("  • 系统将监听BTCUSDT 5分钟K线收盘事件")
+	fmt.Println("  • 每当收到BTCUSDT 5分钟收盘事件时，将自动触发所有运行中的AI交易员执行分析")
+	fmt.Println("  • 这确保AI分析与币安真实K线时间同步，避免时间偏差")
+	fmt.Println()
 	fmt.Println("⚠️  风险提示: AI自动交易有风险，建议小额资金测试！")
 	fmt.Println()
 	fmt.Println("按 Ctrl+C 停止运行")
@@ -387,7 +393,32 @@ func main() {
 	}()
 
 	// 启动流行情数据 - 默认使用所有交易员设置的币种 如果没有设置币种 则优先使用系统默认
-	go market.NewWSMonitor(150).Start(database.GetCustomCoins())
+	wsMonitor := market.NewWSMonitor(150)
+	
+	// 设置BTCUSDT触发器回调：触发所有运行中的trader执行AI分析
+	wsMonitor.SetBTCTrigger(func() {
+		callbackStart := time.Now()
+		log.Printf("🔔 BTCUSDT触发回调开始: %v", callbackStart.Format("15:04:05.000"))
+		
+		// 获取所有运行中的traders
+		allTraders := traderManager.GetAllTraders()
+		runningCount := 0
+		
+		for traderID, trader := range allTraders {
+			status := trader.GetStatus()
+			if running, ok := status["is_running"].(bool); ok && running {
+				runningCount++
+				log.Printf("🕐 BTCUSDT触发AI分析: %s", traderID)
+				// 同步执行，与原来定时器方式一致
+				trader.TriggerCycle()
+			}
+		}
+		
+		totalDuration := time.Since(callbackStart)
+		log.Printf("🏁 所有AI分析完成: %d个traders, 总耗时 %v", runningCount, totalDuration)
+	})
+	
+	go wsMonitor.Start(database.GetCustomCoins())
 	//go market.NewWSMonitor(150).Start([]string{}) //这里是一个使用方式 传入空的话 则使用market市场的所有币种
 	// 设置优雅退出
 	sigChan := make(chan os.Signal, 1)

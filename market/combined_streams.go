@@ -44,7 +44,31 @@ func (c *CombinedStreamsClient) Connect() error {
 	c.conn = conn
 	c.mu.Unlock()
 
-	log.Println("组合流WebSocket连接成功")
+	// 设置ping处理器 - 收到ping时自动回复pong
+	conn.SetPingHandler(func(message string) error {
+		log.Println("📡 [组合流] 收到服务端ping消息")
+		err := conn.WriteMessage(websocket.PongMessage, nil)
+		if err != nil {
+			log.Printf("❌ [组合流] 发送pong消息失败: %v", err)
+			return err
+		}
+		log.Println("✅ [组合流] 已成功回复pong消息")
+		// 重置读取超时时间
+		conn.SetReadDeadline(time.Now().Add(12 * time.Minute))
+		return nil
+	})
+
+	// 设置pong处理器
+	conn.SetPongHandler(func(string) error {
+		log.Println("✅ [组合流] 收到服务端pong响应")
+		conn.SetReadDeadline(time.Now().Add(12 * time.Minute))
+		return nil
+	})
+
+	// 设置读取超时 - 12分钟后没有消息就断开重连
+	conn.SetReadDeadline(time.Now().Add(12 * time.Minute))
+
+	log.Println("组合流WebSocket连接成功，已设置心跳处理")
 	go c.readMessages()
 
 	return nil
@@ -132,6 +156,8 @@ func (c *CombinedStreamsClient) readMessages() {
 				return
 			}
 
+			// 收到任何消息都重置读取超时时间
+			conn.SetReadDeadline(time.Now().Add(12 * time.Minute))
 			c.handleCombinedMessage(message)
 		}
 	}

@@ -248,26 +248,22 @@ func (at *AutoTrader) Run() error {
 	at.isRunning = true
 	log.Println("🚀 AI驱动自动交易系统启动")
 	log.Printf("💰 初始余额: %.2f USDT", at.initialBalance)
-	log.Printf("⚙️  扫描间隔: %v", at.config.ScanInterval)
+	log.Println("🕐 使用BTCUSDT 5分钟收盘事件触发AI分析")
 	log.Println("🤖 AI将全权决定杠杆、仓位大小、止损止盈等参数")
 
-	ticker := time.NewTicker(at.config.ScanInterval)
-	defer ticker.Stop()
-
-	// 首次立即执行
-	if err := at.runCycle(); err != nil {
-		log.Printf("❌ 执行失败: %v", err)
-	}
-
-	for at.isRunning {
-		select {
-		case <-ticker.C:
-			if err := at.runCycle(); err != nil {
-				log.Printf("❌ 执行失败: %v", err)
-			}
+	// 创建结束信号通道
+	done := make(chan struct{})
+	
+	// 监听停止信号
+	go func() {
+		for at.isRunning {
+			time.Sleep(1 * time.Second)
 		}
-	}
+		close(done)
+	}()
 
+	// 等待结束信号
+	<-done
 	return nil
 }
 
@@ -275,6 +271,23 @@ func (at *AutoTrader) Run() error {
 func (at *AutoTrader) Stop() {
 	at.isRunning = false
 	log.Println("⏹ 自动交易系统停止")
+}
+
+// TriggerCycle 被BTCUSDT事件触发的AI分析周期
+func (at *AutoTrader) TriggerCycle() {
+	if !at.isRunning {
+		return // 如果trader已停止，忽略触发
+	}
+	
+	triggerStart := time.Now()
+	log.Printf("🚀 [%s] BTCUSDT触发AI分析开始: %v", at.id, triggerStart.Format("15:04:05.000"))
+	
+	if err := at.runCycle(); err != nil {
+		log.Printf("❌ [%s] BTCUSDT触发的AI分析执行失败: %v", at.id, err)
+	} else {
+		duration := time.Since(triggerStart)
+		log.Printf("✅ [%s] BTCUSDT触发AI分析完成: 耗时 %v", at.id, duration)
+	}
 }
 
 // runCycle 运行一个交易周期（使用AI全权决策）
@@ -355,8 +368,14 @@ func (at *AutoTrader) runCycle() error {
 
 	// 4. 调用AI获取完整决策
 	log.Printf("🤖 正在请求AI分析并决策... [模板: %s]", at.systemPromptTemplate)
+	aiStart := time.Now()
+	log.Printf("⏰ AI请求开始时间: %v", aiStart.Format("15:04:05.000"))
+	
 	decision, err := decision.GetFullDecisionWithCustomPrompt(ctx, at.mcpClient, at.customPrompt, at.overrideBasePrompt, at.systemPromptTemplate)
-
+	
+	aiDuration := time.Since(aiStart)
+	log.Printf("🎯 AI请求完成耗时: %v", aiDuration)
+	
 	// 即使有错误，也保存思维链、决策和输入prompt（用于debug）
 	if decision != nil {
 		record.SystemPrompt = decision.SystemPrompt // 保存系统提示词

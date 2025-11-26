@@ -86,6 +86,14 @@
                   · 做空：entry_price 位于 supply zone 高度的上 40%；
                 * 止损价 sl 必须放在该供需区的相反边界外侧若干 tick / ATR，而不是区间内部；
                 * 通过 B5 检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求。
+                * 【EDGE 进场确认（5m Rejection）｜硬要求】为减少“供需区被抬走”的快速失败单，EDGE 还必须满足以下任一确认（多空对称）：
+                  · SHORT（依托 supply 上沿试空）：需要出现“5m 拒绝确认”后才允许 open_short：
+                          - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：high ≥ supply_high 且 close ≤ supply_high（向上刺破但收回到供给区内/下方）；
+                          - Rejection-B（备选）：最近 1~2 根已收盘 5m 显示动能转弱：close < open（收阴）且（RSI7 ≤ 60 或 MACD ≤ 0），并且价格仍位于 supply 的上 40% 区间。
+                  · LONG（依托 demand 下沿试多）：需要出现“5m 拒绝确认”后才允许 open_long：
+                          - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：low ≤ demand_low 且 close ≥ demand_low（向下刺破但收回到需求区内/上方）；
+                          - Rejection-B（备选）：最近 1~2 根已收盘 5m 显示动能转强：close > open（收阳）且（RSI7 ≥ 40 或 MACD ≥ 0），并且价格仍位于 demand 的下 40% 区间。
+                * 若无法给出上述任一 “5m 拒绝确认”，则本次 EDGE 必须降级为 setup_grade="C"，action="wait"/"hold"（禁止以 EDGE 新开仓）。
 
               - 禁止的 EDGE 伪形态：
                 * entry_price 落在 zone 中部甚至靠近对侧边缘；
@@ -1380,9 +1388,32 @@ B5) 最近反向结构与 R_clean
     * 若 R_clean < 1.0：
       · 视为“空间不足”，默认不得作为任何新开仓信号；
       · 对该 symbol 的 action 必须为 "wait" 或仅管理既有仓位（close / reduce）；
-      · 若 trade_style="HTF_swing" 且 setup_grade="A"，R_clean ∈ [0.8, 1.0)，
-        只有在 reasoning 中极其清晰说明仍有 ≥2R 的波段空间时才可例外，
-        否则同样视为“空间不足”。
+      · 若 trade_style="HTF_swing" 且 setup_grade="A"，R_clean ∈ [0.8, 1.0)，只有在 reasoning 中极其清晰说明仍有 ≥2R 的波段空间时才可例外，否则同样视为“空间不足”。
+
+B6) 执行时效与反延迟闸门（下单前最后一公里｜硬要求）
+  - 问：在【实际下单/发送订单】的那一刻，以下条件是否全部满足？
+    （此项由执行端强制校验；AI 也必须在 reasoning 中自检并给出结论。）
+    1) K线对齐：本次开仓信号必须基于“最新已收盘 5m K”（Binance kline_5m 的 x=true 那根）。
+       * 若在下单时已经出现了新一根 5m 收盘（bar 已推进），则该信号视为过期：
+         - action 必须为 "wait"（禁止下单）；
+         - 需等待下一轮重新评估，不得用旧信号追价。
+    2) 价差/滑点闸门：|live_price - entry_price| ≤ 0.25 * R_struct（可配置 0.2~0.35）。
+       * 若超出：视为延迟导致的追单/错位：
+         - action="wait"（或重新计算 entry/stop 后再评估）；
+         - 禁止沿用旧 stop 强行开仓。
+    3) 结构未失效（pattern 相关，必须满足）：
+       * 对 EDGE：
+         · SHORT：最近 1 根已收盘 5m 的 close 必须 ≤ supply_high；
+           若 close > supply_high：视为供给边缘试空失效，禁止 open_short。
+         · LONG：最近 1 根已收盘 5m 的 close 必须 ≥ demand_low；
+           若 close < demand_low：视为需求边缘试多失效，禁止 open_long。
+       * 对 BO_RETEST（突破-回踩）：
+         · SHORT：最近 1 根已收盘 5m 的 close 不得重新回到“突破前的区间内部”，且仍位于 retest 附近；
+         · LONG：对称处理。
+    4) zone 位置仍满足 2.1）“靠边进场”要求：
+       * SHORT：live_price 仍位于 supply 的上 40% 区间；
+       * LONG：live_price 仍位于 demand 的下 40% 区间；
+       * 若 live_price 已滑出该区域：视为性价比变差/追单，禁止开仓，action="wait"。
 
 ——————————
 C. 方向一致性检查

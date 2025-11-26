@@ -25,6 +25,7 @@ type WSMonitor struct {
 	filterSymbols   sync.Map // 使用sync.Map来存储需要监控的币种和其状态
 	symbolStats     sync.Map // 存储币种统计信息
 	FilterSymbol    []string //经过筛选的币种
+	btcTriggerCallback func() // BTCUSDT 5分钟收盘事件触发器回调
 }
 type SymbolStats struct {
 	LastActiveTime   time.Time
@@ -214,6 +215,24 @@ func (m *WSMonitor) processKlineUpdate(symbol string, wsData KlineWSData, _time 
 	kline.QuoteVolume, _ = parseFloat(wsData.Kline.QuoteVolume)
 	kline.TakerBuyBaseVolume, _ = parseFloat(wsData.Kline.TakerBuyBaseVolume)
 	kline.TakerBuyQuoteVolume, _ = parseFloat(wsData.Kline.TakerBuyQuoteVolume)
+
+	// 🎯 BTCUSDT 5分钟收盘事件检测
+	if symbol == "BTCUSDT" && _time == "5m" && wsData.Kline.IsFinal {
+		closeTime := time.UnixMilli(wsData.Kline.CloseTime)
+		log.Printf("🕐 BTCUSDT 5分钟K线收盘事件: %v", closeTime.Format("2006-01-02 15:04:05"))
+		
+		// 触发AI分析回调，传递触发时间用于性能统计
+		if m.btcTriggerCallback != nil {
+			go func() {
+				start := time.Now()
+				log.Printf("⏱️ 开始AI分析触发: %v", start.Format("15:04:05.000"))
+				m.btcTriggerCallback()
+				duration := time.Since(start)
+				log.Printf("📊 AI分析完成耗时: %v (从收盘事件触发到完成)", duration)
+			}()
+		}
+	}
+
 	// 更新K线数据
 	var klineDataMap = m.getKlineDataMap(_time)
 	value, exists := klineDataMap.Load(symbol)
@@ -268,6 +287,11 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, erro
 	klines := value.([]Kline)
 	log.Printf("✓ [K线获取] %s %s缓存命中: %d条数据", symbol, _time, len(klines))
 	return klines, nil
+}
+
+// SetBTCTrigger 设置BTCUSDT 5分钟收盘事件触发器回调
+func (m *WSMonitor) SetBTCTrigger(callback func()) {
+	m.btcTriggerCallback = callback
 }
 
 func (m *WSMonitor) Close() {
