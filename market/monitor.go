@@ -248,9 +248,11 @@ func (m *WSMonitor) processKlineUpdate(symbol string, wsData KlineWSData, _time 
 			// 添加新K线
 			klines = append(klines, kline)
 
-			// 保持数据长度
-			if len(klines) > 100 {
-				klines = klines[1:]
+			// 保持数据长度为300条（确保技术指标计算准确性）
+			const REQUIRED_KLINES = 300
+			if len(klines) > REQUIRED_KLINES {
+				// 保持最新的300条数据，删除最老的数据
+				klines = klines[len(klines)-REQUIRED_KLINES:]
 			}
 		}
 	} else {
