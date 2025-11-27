@@ -88,11 +88,17 @@
                 * 通过 B5 检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求。
                 * 【EDGE 进场确认（5m Rejection）｜硬要求】为减少“供需区被抬走”的快速失败单，EDGE 还必须满足以下任一确认（多空对称）：
                   · SHORT（依托 supply 上沿试空）：需要出现“5m 拒绝确认”后才允许 open_short：
-                          - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：high ≥ supply_high 且 close ≤ supply_high（向上刺破但收回到供给区内/下方）；
-                          - Rejection-B（备选）：最近 1~2 根已收盘 5m 显示动能转弱：close < open（收阴）且（RSI7 ≤ 60 或 MACD ≤ 0），并且价格仍位于 supply 的上 40% 区间。
+                    - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：high ≥ supply_high 且 close ≤ supply_high（向上刺破但收回到供给区内/下方）；
+                    - Rejection-B（备选）：最近 1~2 根已收盘 5m K 中，至少有 1 根满足：
+                      * close < open（收阴）；
+                      * 且（RSI7 ≤ 60 或 MACD ≤ 0）；
+                      * 且收盘价仍位于 supply 的上 40% 区间（不允许跌回 zone 中部）。
                   · LONG（依托 demand 下沿试多）：需要出现“5m 拒绝确认”后才允许 open_long：
-                          - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：low ≤ demand_low 且 close ≥ demand_low（向下刺破但收回到需求区内/上方）；
-                          - Rejection-B（备选）：最近 1~2 根已收盘 5m 显示动能转强：close > open（收阳）且（RSI7 ≥ 40 或 MACD ≥ 0），并且价格仍位于 demand 的下 40% 区间。
+                    - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：low ≤ demand_low 且 close ≥ demand_low（向下刺破但收回到需求区内/上方）；
+                    - Rejection-B（备选）：最近 1~2 根已收盘 5m K 中，至少有 1 根满足：
+                      * close > open（收阳）；
+                      * 且（RSI7 ≥ 40 或 MACD ≥ 0）；
+                      * 且收盘价仍位于 demand 的下 40% 区间（不允许拉回 zone 中部）。
                 * 若无法给出上述任一 “5m 拒绝确认”，则本次 EDGE 必须降级为 setup_grade="C"，action="wait"/"hold"（禁止以 EDGE 新开仓）。
 
               - 禁止的 EDGE 伪形态：
@@ -100,23 +106,30 @@
                 * 止损落在 zone 内（例如 demand 区内部就止损多单），
                   这些都应视为“被结构噪音扫掉”的高风险行为。
 
-            2）BO_RETEST（突破-回踩形态）
+            2）BO_RETEST（突破-回踩形态｜可执行剧本）
 
-              - 核心思路：先让价格对重要水平（阻力/支撑/供需区边界/POC 等）
-                做出“清晰突破”，然后在回踩该水平附近时进场，
-                而不是在刚突破的那一两根 K 上追。
+              - 核心思路：先确认“有效突破”，再只在“回踩带”入场；禁止在突破后的第一波延伸追价。
 
-              - 必须同时满足：
-                * 存在 15m/30m 级别的关键水平或区间边界（例如：
-                  最近供需区边界、明显的区间高低、重要 POC / HVN / LVN 等）；
-                * 已经出现有效突破：
-                  · 至少 1 根 15m 或 2 根 5m K 收盘稳定在该水平之外；
-                  · 突破过程中，动能/成交行为支持方向（macd、rsi、volume 等不明显反向背离）；
-                * entry_price 应位于对该关键水平的“回踩附近”，
-                  而不是在突破后的第一波延伸中继续追：
-                  · 多单：向上突破原阻力后，回踩到原阻力附近（现在充当支撑）时进场；
-                  · 空单：向下跌破原支撑后，回踩到原支撑附近（现在充当阻力）时进场；
-                * 止损 sl 仍然按“结构外”原则放置：在该关键水平对侧一定距离之外。
+              - 关键定义：
+                A) 有效突破（满足其一即可）：
+                   1) 至少 1 根已收盘 15m close 位于关键水平外侧，且 |close - key_level| ≥ 0.15*ATR14(15m)
+                   2) 或至少 2 根已收盘 5m close 位于关键水平外侧，且最近一根 5m 收盘没有立刻回到突破前区间内
+                   3) 成交确认（加分但非硬性）：突破K的 volume ≥ 1.2*avg_volume(同周期)
+
+                B) 回踩带（入场允许区）：
+                   - retest_band = [key_level - 0.25*ATR14(5m), key_level + 0.25*ATR14(5m)]
+                   - LONG：突破向上后，只允许在回踩带内的“靠下区域”考虑做多（避免再次追高）
+                   - SHORT：突破向下后，只允许在回踩带内的“靠上区域”考虑做空（避免再次追低）
+
+                C) 5m 入场确认（硬要求，满足其一）：
+                   - Confirm-1（优先）：出现 5m Rejection-A（对 key_level 或相邻 demand/supply 边界的刺破回收）
+                   - Confirm-2（备选）：最近 1 根已收盘 5m close 重新站回关键水平的正确一侧，且 RSI7 从极端区回落/回升（例如 LONG：RSI7 由>70 回落至 55~70 区间仍保持强势）
+
+              - 入场与止损（多空对称）：
+                * entry_price：必须位于 retest_band 内；若价格未回踩而直接拉开 → 一律 wait（禁止追价）。
+                * sl_struct：放在 key_level 的“错误一侧”之外，并留出 buffer（建议 ≥ 0.2*ATR14(5m) 或若干 tick）。
+                * 必须通过 B5：R_clean ≥ 1.0（LTF_scalp）/ ≥ 1.5（HTF_swing）。
+
 
               - 禁止的 BO_RETEST 伪形态：
                 * 仅凭一次“刺穿”高/低点但收盘价仍在区间内，就认定为突破；
@@ -185,6 +198,7 @@
 
 2) 基础指标（MarketSnapshot）——覆盖多时间框架
 {
+  "last_price": 45000.0,
   "price": 45000.0,
   "funding_rate": 0.0001,
   "oi_latest": 1500000000,
@@ -224,6 +238,16 @@
   "slippage_bps_major": 15,
   "trigger_type": "MARK_PRICE"        // 与执行端统一：MARK_PRICE/INDEX_PRICE/LAST_PRICE
 }
+【价格源统一（必须）】
+    - last_price：本模板所有判断/ROI/可执行性校验使用的“触发价”，其来源必须与 ExchangeMeta.trigger_type 一致
+      - trigger_type="MARK_PRICE"  => last_price 必须是 mark price
+      - trigger_type="LAST_PRICE"  => last_price 才是 last traded price
+      - trigger_type="INDEX_PRICE" => last_price 必须是 index price
+    - 变量别名（为兼容模板中大量使用的 price 变量）：
+      - 约定：price := last_price
+      - 若上游仍提供 price 字段，则必须保证 price == last_price（禁止两者不一致）
+    - 兼容约定：本系统同时提供 price 与 last_price，且两者恒等（price == last_price）。
+      后续计算若引用任一字段，均视为同一“触发价”（由 ExchangeMeta.trigger_type 决定其来源）。
 
 ——————————————————————————————————————
 二、参数（默认稳健，可按需微调）
@@ -326,6 +350,7 @@
 
  2）激进档：用于 LTF_scalp，或 HTF_swing 且 setup_grade="B"
     特点：从 0.25R 就开始“真锁盈”，R 越大锁得越多，适配 10x 杠杆短线单。
+    - 重要：若上游/后端可提供 leverage 与 roi_unrealized（按持仓计算的浮盈百分比），则“是否开始锁盈/止损推入盈利区”必须以 roi_unrealized≥0.05 为准；R_milestones_aggr 仅作为候选里程碑，不得绕过 ROI 门槛。
 - R_milestones_aggr      = [0.25, 0.5, 1.0, 1.5, 2.0]
 - lock_at_R_aggr = {
     "0.25": 0.10, // 浮盈 ≥0.25R：先锁 0.10R
@@ -359,9 +384,10 @@
 - slow       = { tf: "30m", base: "ema50",             pad_atr_mult: 1.3 }
 
 2）激进轨道：LTF_scalp，或 HTF_swing 且 setup_grade="B" 使用
-- micro_fast_aggr = { tf: "5m",  base: "ema20_vs_vwap_max", pad_atr_mult: 0.4 }
-- fast_aggr       = { tf: "15m", base: "ema20",             pad_atr_mult: 0.7 }
-- slow_aggr       = { tf: "30m", base: "ema50",             pad_atr_mult: 1.1 }
+- micro_fast_aggr = { tf: "5m",  base: "ema20_vs_vwap_max", pad_atr_mult: 0.55 }
+- fast_aggr       = { tf: "15m", base: "ema20",             pad_atr_mult: 0.90 }
+- slow_aggr       = { tf: "30m", base: "ema50",             pad_atr_mult: 1.35 }
+
 
  使用约定：
  - 对 LTF_scalp 仓位、以及 HTF_swing 且 setup_grade="B" 的仓位，
@@ -390,7 +416,7 @@
 
 
 2. 强制平仓（CLOSE）场景（慢刀：中长期结构反转）
-   - 以下任一条件满足时，应优先考虑 type="CLOSE" 而不是继续持有或加仓：
+   - 以下任一条件满足时，应优先考虑 action="close" 而不是继续持有或加仓：
      1) 方向性结构反转（基于 4h / 1h 的多时间框架分析）
         - 持有多单时：4h 与 1h 的趋势判断由上涨变为下跌（major_trend 明显偏向 DOWN），且 price 跌破关键 1h swing low 或 4h/1h demand zone 下沿。
         - 持有空单时：4h 与 1h 的趋势判断由下跌变为上涨（major_trend 明显偏向 UP），且 price 突破关键 1h swing high 或 4h/1h supply zone 上沿。
@@ -425,19 +451,50 @@
                  · 仅在 reasoning 中标记为“预警”，**保持原始保护性止损不变**；
                - 若短周期出现“明确结构反转”（例如：连续更高低点/更低高点被打破 + MACD/RSI 同步反向）：
                  · 倾向于**直接 CLOSE 认错出局**，而不是通过收紧止损“拖时间”；
-               - 阶段 A **禁止** 因短周期结构恶化而把止损上调/下调到接近入场价或 BE_with_fees 附近：
+               - 阶段 A **禁止** 因短周期结构恶化而把止损上调/下调到接近入场价或 BE_with_costs 附近：
                  · 因为此时系统尚未获得任何正向 R，收紧止损无法“保护利润”，只会增加被噪音扫出的概率。
 
         2）阶段 B：0R < 当前浮盈 < 0.5R（略有浮盈，但趋势尚未成型）
           - 此阶段视为“刚刚转正但仍不稳定”的盈利区间。
-          - 全局默认原则（先看 R_lock，再看 break-even）：
+          - 全局默认原则（先看 R_lock，再看 break-even；但 10x 短线以 ROI 触发为准）：
             * 若已达到当前所选锁盈档位的首个 R_lock 里程碑（基础档=1.0R；激进档=0.25R）：
-              - 必须优先按 R_lock 规则更新止损（lock_at_R / lock_at_R_aggr），不受 break_even_trigger_R 约束；
-              - 也即：激进档在 ≥0.25R 时必须开始“真锁盈”。
-、            * 若尚未达到首个 R_lock 里程碑，且 R_unrealized < break_even_trigger_R（例如 <0.3R）：
-              - 继续 HOLD，不收紧止损，给行情正常回调空间。
+              - 仍需进入“ROI 锁盈门槛”校验后，才允许把止损推入盈利区（避免过早假锁盈）；
+              - 也即：R_lock 只是“候选锁盈”，最终是否落地由 roi_unrealized gating 决定。
 
-            * 若 R_unrealized ≥ break_even_trigger_R（例如 ≥0.3R），且：持仓时间 ≥ protect_trigger.time_min（如 ≥5min），
+            * 统一定义 roi_unrealized（多空对称，默认 leverage=10；若上游提供 leverage 则用上游值）：
+              - LONG：roi_unrealized = ((last_price - entry_price) / entry_price) * leverage
+              - SHORT：roi_unrealized = ((entry_price - last_price) / entry_price) * leverage
+
+            * ROI 锁盈门槛（10x 短线默认）：
+              - roi_lock_trigger = 0.05   // 浮盈 5% 才开始锁盈（你希望的短线口径）
+              - roi_lock_floor   = 0.02   // 一旦触发锁盈，至少锁住 2% 浮盈（用于覆盖成本后仍“净盈利”）
+              - floor_price_bps  = 20     // 与 roi_lock_floor 等价的价格地板：20bps=0.20%（便于直接算价）
+
+            * 若 roi_unrealized < roi_lock_trigger：
+              - 继续 HOLD，不得把止损推到开仓价以上（不得“锁盈”）
+              - 允许的止损调整仅限“风险减载”（例如把 -1R 风险收敛到 -0.5R），但不得进入盈利区
+
+            * 若 roi_unrealized ≥ roi_lock_trigger，且：持仓时间 ≥ protect_trigger.time_min（如 ≥3min），
+              且短周期结构尚未出现明确反转（仍大致有利于持仓方向），则允许启用“净锁盈”止损：
+              先定义 BE_with_costs（多空对称）：
+              - 记 cost_bps = taker_fee_bps + slippage_bps_minor   // 从输入 ExchangeMeta 取值
+              - LONG：BE_with_costs = entry_price * (1 + cost_bps/10000) + stop_distance_min_ticks * tick_size
+              - SHORT：BE_with_costs = entry_price * (1 - cost_bps/10000) - stop_distance_min_ticks * tick_size
+
+              再定义 ProfitFloor（确保“锁净利润”，不是只推到 BE）：
+              - LONG：ProfitFloor = max(BE_with_costs, entry_price * (1 + floor_price_bps/10000))
+              - SHORT：ProfitFloor = min(BE_with_costs, entry_price * (1 - floor_price_bps/10000))
+
+              然后更新止损（单调性仍然必须遵守）：
+              - 对 LONG 单：new_stop = max(prev_stop, ProfitFloor)
+              - 对 SHORT 单：new_stop = min(prev_stop, ProfitFloor)
+
+              说明：
+              - 本规则一旦触发，止损不得再停留在“亏损区域”（LONG < BE_with_costs / SHORT > BE_with_costs）；
+              - 且必须至少锁住 20bps（约 2%@10x）对应的净利润地板，避免“锁盈但不赚钱”。
+
+
+            * 若 R_unrealized ≥ break_even_trigger_R，且：持仓时间 ≥ protect_trigger.time_min（如 ≥3min），
               - 短周期结构尚未出现明确反转（仍大致有利于持仓方向），则可以启用“全局保护本规则”调整止损（目标：至少不亏本金/费用）：
               先定义 BE_with_costs（多空对称）：
               - 记 cost_bps = taker_fee_bps + slippage_bps_minor   // 从输入 ExchangeMeta 取值
@@ -467,7 +524,7 @@
                - 当短周期出现结构恶化信号时，可以考虑：
                  · 适度收紧止损（例如将最大风险从 -1R 减少到约 -0.3R~-0.2R），以减少最坏情况；
                  · 或者在 reasoning 中建议先 REDUCE 一小部分仓位（如 20%~30%），余下交给 R_lock / 追踪止损；
-               - 即便在阶段 C，原则上也**避免直接将止损缩到 BE_with_fees**，除非同时满足：
+               - 即便在阶段 C，原则上也**避免直接将止损缩到 BE_with_costs**，除非同时满足：
                  · major_bias 与当前持仓方向已经不再同向，且高等级结构出现明显反转；
                  · 或账户整体风险已偏高，需要额外保守。
                - 当同时满足“全局保护本规则”（break_even_trigger_R）与 R_lock 条件时：
@@ -494,7 +551,7 @@
 
 
 4. 减仓（REDUCE）场景（中速锁盈）
-   - 以下场景适合使用 type="REDUCE" 而不是直接 CLOSE：
+   - 以下场景适合使用 action="REDUCE" 而不是直接 CLOSE：
      1) 已经取得可观浮盈（例如 ≥ 2R），但出现明显的短周期反转信号（见第 3 点）：
         - 多单：15m / 5m 出现连续更低高点 + MACD 由正转负 + RSI 从超买区回落；
         - 空单：15m / 5m 出现连续更高低点 + MACD 由负转正 + RSI 从超卖区回升。
@@ -547,11 +604,12 @@
 
 - protect_enable         = true
 
-- protect_trigger        = { unrealized_R: 0.3, time_min: 5 }
-  // 当浮盈达到约 0.3R 且持仓时间 ≥ 5min 时，触发“保护模式”；
+- protect_trigger        = { unrealized_R: 0.3, time_min: 3 }
+  // 当浮盈达到约 0.3R 且持仓时间 ≥ 3min 时，触发“保护模式”；
   // 这里的 0.3R 是一个全局的早期保护触发值，适用于所有单子。
 
-- protect_pad_shrink     = 0.5
+
+- protect_pad_shrink     = 0.7
 【硬限制】protect_pad_shrink 不得在早期浮盈段生效：
 - 当 R_unrealized < 0.5R 时：禁止缩 pad（等价于 protect_pad_shrink_effective = 1.0）
 - 只有当 R_unrealized ≥ 0.5R，或已触发 ≥1 个 R_lock 里程碑后，才允许应用 protect_pad_shrink
@@ -559,12 +617,62 @@
 // 保护模式开启后，轨道/止损的 pad 缩小一半，让止损更贴近当前价格。
 
 - break_even_protect_enable = true
-- break_even_trigger_R      = 0.3
-- break_even_pad_R          = 0.03
-  // 全局“首次保护=本金不亏底线”：
-  // - 当 R_unrealized ≥ break_even_trigger_R 且持仓时间 ≥ protect_trigger.time_min 时，
-  //   允许把止损推进到 BE_with_fees 附近，并额外锁住 break_even_pad_R*R 的最小缓冲；
-  // - 这条规则的目标是：一旦触发首次保护，本单“即使被扫也不应亏损本金”（考虑手续费/滑点后）。
+- break_even_trigger_R      = 0.4
+- break_even_pad_R          = 0.05
+【硬限制】ProfitFloor（盈利地板，防止“收紧但仍亏损”）
+- 定义 cost_bps = taker_fee_bps + slippage_bps_minor (+ 资金费率/交易所额外成本如可得)
+- 定义 BE_with_costs（多空对称）：
+  - LONG：BE_with_costs = entry_price * (1 + cost_bps/10000) + stop_distance_min_ticks*tick_size
+  - SHORT：BE_with_costs = entry_price * (1 - cost_bps/10000) - stop_distance_min_ticks*tick_size
+
+- 规则（ROI 锁盈优先级高于 break-even 禁止条款；避免规则互相打架）：
+  - 【ROI 锁盈：参数与取值契约（生产必须明确）】
+    - roi_lock_trigger = 0.05        // 10x 条件下：ROI(含杠杆) 浮盈≥5% 开始锁盈
+    - floor_price_bps  = 20          // 价格地板：+20bps（≈ +0.20% 价格；约等于 +2% ROI @10x）
+
+    - roi_unrealized 的取值优先级（要求“盈利为正”，已做多空对齐）：
+      1) 若输入里已提供 roi_unrealized：直接使用该字段
+      2) 否则若仓位里有 unrealized_pnl_pct：令 roi_unrealized = unrealized_pnl_pct
+      3) 否则按 last_price/entry_price/leverage 计算：
+         - LONG ：roi_unrealized = ((last_price - entry_price)/entry_price) * leverage
+         - SHORT：roi_unrealized = ((entry_price - last_price)/entry_price) * leverage
+
+  0) 统一前置定义（多空对称）：
+     - cost_bps = taker_fee_bps + slippage_bps_minor (+ 资金费率/额外成本如可得)
+     - LONG：BE_with_costs  = entry_price * (1 + cost_bps/10000) + stop_distance_min_ticks*tick_size
+     - SHORT：BE_with_costs = entry_price * (1 - cost_bps/10000) - stop_distance_min_ticks*tick_size
+
+  1) ROI 净锁盈（10x + 浮盈 5% 开始锁盈）：
+     - 若 roi_unrealized ≥ roi_lock_trigger 且 持仓时间 ≥ protect_trigger.time_min：
+       * 定义 ProfitFloor（确保“锁净利润”，不是只推到 BE）：
+         - LONG：ProfitFloor  = max(BE_with_costs, entry_price * (1 + floor_price_bps/10000))
+         - SHORT：ProfitFloor = min(BE_with_costs, entry_price * (1 - floor_price_bps/10000))
+       * 若输出 stop_update，则 new_stop 必须至少到达 ProfitFloor（并遵守单调性）：
+         - LONG：new_stop  = max(prev_stop, ProfitFloor)
+         - SHORT：new_stop = min(prev_stop, ProfitFloor)
+       * 同时必须通过“可执行性约束”（避免 stop 贴到当前价触发噪音/无法挂单）：
+         - LONG：new_stop ≤ last_price - stop_distance_min_ticks*tick_size
+         - SHORT：new_stop ≥ last_price + stop_distance_min_ticks*tick_size
+       * 若无法满足可执行性约束 ⇒ stop_update:null
+
+  2) 非 ROI 锁盈场景：早期（R_unrealized < break_even_trigger_R）默认不做“推入盈利区”的 stop_update
+     - 若 R_unrealized < break_even_trigger_R 且 roi_unrealized < roi_lock_trigger：
+       * 除非触发“强制减仓/强制平仓”条件，否则禁止把止损推入盈利区：
+         - 必须输出 stop_update:null
+       * 允许的止损调整仅限“风险减载”（例如把 -1R 风险收敛到 -0.5R），但不得跨过 BE_with_costs 进入盈利区
+
+  3) break-even 保护（R 达到阈值后，允许把止损推到成本上方一点点）：
+     - 若 R_unrealized ≥ break_even_trigger_R 且 持仓时间 ≥ protect_trigger.time_min：
+       * 若输出 stop_update，则：
+         - LONG：new_stop ≥ BE_with_costs + break_even_pad_R*R
+         - SHORT：new_stop ≤ BE_with_costs - break_even_pad_R*R
+       * 且同样必须满足可执行性约束（与上同）
+       * 若不满足 ⇒ stop_update:null
+
+  4) R_lock 里程碑（更强约束，优先级最高）：
+     - 当已触发任意 R_lock 里程碑：
+       * new_stop 必须至少达到对应 lock_at_R / lock_at_R_aggr 的锁盈价（再叠加必要成本缓冲）
+       * 且不得低于 ROI ProfitFloor（若已触发 ROI 锁盈）
 
 
 - protect_R_floor        = 0.8
@@ -573,10 +681,11 @@
 
 
 [更新与单调性]
-- min_tick_move_to_update = 1
-- update_cooldown_sec     = 15
-- allow_intrabar_update   = true
+- min_tick_move_to_update = 3
+- update_cooldown_sec     = 25
+- allow_intrabar_update   = false
 - stop_distance_min_ticks = 3
+
 
 [过滤与开仓门槛（优先 A 级，允许 B 级小仓 / LTF_scalp 快进快出）]
 - trend_tf_major          = "4h,1h"
@@ -591,7 +700,7 @@
        * 在 minor_bias 和 micro_bias 中，至少有一者明显同向，另一者最多是 NEUTRAL，
          不要求两者都完美同向；
        * 价格接近对当前方向有利的关键结构边界
-         （如 4h/1h supply/demand 区、通道边界、重要 fib 位、VPVR LVN 等）；
+         （如 4h/1h supply/demand 区、通道边界、重要 fib 位、VPVR 的 POC/VAH/VAL 等）；
        * 从合理止损位到最近强反向结构之间，至少有 ≈2R~2.5R 的潜在空间
          （不再死磕 3R+，避免机会极少）；
 
@@ -609,7 +718,7 @@
          - 反转结构出现在哪些周期；
          - 为什么认为这是“大级别趋势可能反转的早期段”。
   - B 级：方向大体合理，但结构或空间不完美：
-    * 可以是顺势但位置一般（例如通道中部、附近有 POC/HVN，空间≈2R 左右）；
+    * 可以是顺势但位置一般（例如通道中部、附近有 VPVR POC 或接近 VAH/VAL，空间≈2R 左右）；
     * 也可以是反转“早期”阶段：
       - major_bias 仍然维持原趋势；
       - 但 minor_bias 或 micro_bias 已经反向，且价格接近关键供需区 / 通道边界；
@@ -863,7 +972,10 @@ A) 仓位 sizing（基于R的风险等额）
        （在不超过最大杠杆与保证金占用上限的前提下，理论可承受的最大名义）。
   3) 名义调整：
      - 若 notional_R < notional_min：
-       - 若 notional_min > notional_max_margin：说明资金体量太小，既无法满足最小名义，也无法在可接受的保证金占用下开仓 → 本次 symbol 直接放弃交易（对该 symbol 输出 type="HOLD" 或 "WAIT"，并在 notes 中说明“equity 太小，无法满足最小名义要求”）；
+       - 若 notional_min > notional_max_margin：说明资金体量太小，既无法满足最小名义，也无法在可接受的保证金占用下开仓 本次 symbol 直接放弃交易：
+       - 若该 symbol 当前存在持仓（Account.positions 里能找到）→ 输出 action="hold"
+       - 若该 symbol 当前不存在持仓 → 输出 action="wait"
+       并在 notes 中说明：“equity 太小，无法满足最小名义要求（notional_min > notional_max_margin）”；
        - 否则，将目标合约名义提升到 notional_min。
      - 若 notional_R > notional_max_margin：
        - 将目标合约名义压缩到 notional_max_margin。
@@ -890,7 +1002,7 @@ A) 仓位 sizing（基于R的风险等额）
 
 
 B) 候选止损价（对称写法）
-1. BE_with_fees：将手续费/滑点/资金费率换算为价差，并基于方向加减到 entry
+1. BE_with_costs：将手续费/滑点/资金费率换算为价差，并基于方向加减到 entry
 2. R_lock：浮盈≥kR 后，对应锁盈价（LONG 向上、SHORT 向下）
 3. 追踪轨道：micro_fast / fast / slow → base ± pad，其中 pad = pad_atr_mult * ATR(tf)
 4. spike_filter：若当前bar振幅 > 2.5*ATR(5m)，额外加 pad
@@ -900,7 +1012,7 @@ B) 候选止损价（对称写法）
 - R_lock 不是单一阈值，而是一组分级锁盈规则，建议以浮盈 R 为单位进行判断：
 
   1) 浮盈 ≥ 1R 时：
-     - 启动激进锁盈：默认直接将止损上移/下移到锁住约 0.5R 的利润，而不是仅仅回到 BE_with_fees。
+     - 启动激进锁盈：默认直接将止损上移/下移到锁住约 0.5R 的利润，而不是仅仅回到 BE_with_costs。
      - 目的：一旦交易走出 1R 浮盈，就立刻把这单从“可能小亏/打平”升级为“即使被扫也有实质盈利”。
 
   2) 浮盈 ≥ 1.5R 时：
@@ -956,22 +1068,47 @@ B) 候选止损价（对称写法）
 
 C) 聚合与单调性
 - LONG：
-  s_cand = max( BE_with_fees, R_lock, micro_fast?, fast, slow, spike_filter?, time_decay? )
+  s_cand = max( BE_with_costs, R_lock, micro_fast?, fast, slow, spike_filter?, time_decay? )
   s_cand = ceil_to_tick(s_cand)
   new_stop = max(prev_stop, s_cand)
 - SHORT：
-  s_cand = min( BE_with_fees, R_lock, micro_fast?, fast, slow, spike_filter?, time_decay? )
+  s_cand = min( BE_with_costs, R_lock, micro_fast?, fast, slow, spike_filter?, time_decay? )
   s_cand = floor_to_tick(s_cand)
   new_stop = min(prev_stop, s_cand)
-- 去抖与执行：仅当变动≥min_tick_move_to_update*tick 且 与现价距离≥stop_distance_min_ticks*tick 才更新；
-  允许 intrabar 更新（microflip/极端波动）
+
+ 【硬检查】盈利地板与可执行性校验（Fail Closed）
+- 先计算 ProfitFloor（按上文 ProfitFloor 规则）：
+  - ProfitFloor 的触发条件以“ROI 锁盈优先级最高”为准：
+    - 若 (roi_unrealized ≥ roi_lock_trigger 且 持仓时间 ≥ protect_trigger.time_min) ⇒ ProfitFloor 必须生效
+    - 否则若触发 break-even 或任一 R_lock 里程碑 ⇒ ProfitFloor 生效
+    - 否则 ProfitFloor = null（表示此阶段禁止把止损推入‘会锁盈/打平’区间）
+  - 若已触发 ⇒ ProfitFloor = 对应的地板价
+
+- 对 LONG：
+  - 若 ProfitFloor != null：
+      s_cand = max(s_cand, ProfitFloor)
+  - 然后执行可执行性约束：
+      s_exec = min(s_cand, last_price - stop_distance_min_ticks*tick_size)
+      若 s_exec < ProfitFloor（或 ProfitFloor 存在但无法满足）⇒ stop_update:null
+      否则 new_stop = max(prev_stop, ceil_to_tick(s_exec))
+
+- 对 SHORT（对称）：
+  - 若 ProfitFloor != null：
+      s_cand = min(s_cand, ProfitFloor)
+  - 然后：
+      s_exec = max(s_cand, last_price + stop_distance_min_ticks*tick_size)
+      若 s_exec > ProfitFloor（或 ProfitFloor 存在但无法满足）⇒ stop_update:null
+      否则 new_stop = min(prev_stop, floor_to_tick(s_exec))
+
+- 去抖与执行：仅当变动≥min_tick_move_to_update*tick_size 且 与现价距离≥stop_distance_min_ticks*tick_size 才更新；
+- 仅 microflip 事件例外/或仅当 allow_intrabar_update=true 才允许
 
 D) MicroFlip 快速响应
 - LONG：触发 microflip_rules(LONG) ⇒ 把 micro_fast 纳入候选，立即更新（随后60s冷却）
 - SHORT：对称处理（保证 new_stop 单调下降）
 
 E) 入场挂单策略（**修订核心**）
-- 若 type=OPEN：
+- 若 action ∈ {"open_long","open_short"}：
   1) **STOP_ONLY_AT_ENTRY（默认）**
      - 开多：仅挂一个 reduce-only STOP（卖出止损）；init_stop = entry - R
      - 开空：仅挂一个 reduce-only STOP（买入止损）；init_stop = entry + R
@@ -979,9 +1116,26 @@ E) 入场挂单策略（**修订核心**）
   2) **BRACKET_FALLBACK（仅当执行端强制）**
      - 创建 OCO 组（take_profit + stop）；两者均 reduce-only；同组互斥；统一 trigger_type；
      - take_profit 的初始 price 可设置为 None（挂占位不激活）或远离现价的“哑TP”，并在满足 tp_activation 条件后被“就地改价/激活”。
-  3) 激活 TP 的时机：
-     - 首次达到 R≥1.5 或 protect_trigger 触发 ⇒ 按 rail_fast 或 固定 R 倍数 生成 TP 候选；
-     - 若使用 OCO：把 TP 改为“有效价”，同时保持 STOP 的单调性约束。
+  3) 激活 TP 的时机（按 trade_style 分层 + 结构优先）
+     - TP 生成必须“结构优先”，固定 R 倍数仅作兜底：
+       A) 结构候选（按优先级收集，LONG 取上方，SHORT 取下方）：
+          1) 最近反向供需区边界（supply_low / demand_high 等）
+          2) 支撑阻力转换线（support_resistance_lines 最近的反向线）
+          3) VPVR：poc_price、value_area_high/low（只用这些字段，不得假设 HVN/LVN）
+          4) FVG：nearest_gap（当 active_gaps>0 且 gap_type 与方向一致时）
+          5) Fib：1.272/1.618 扩展（趋势外推目标）或 0.382/0.618（回撤型入场后的目标）
+
+       B) 分风格激活阈值（建议默认值）：
+          - trade_style="LTF_scalp"：first_when = "R>=0.8 or protect_triggered"
+          - trade_style="HTF_swing"：first_when = "R>=1.5 or protect_triggered"
+
+       C) 具体执行：
+          - 若使用 OCO：
+            * 初始 take_profit 仍可为 None/哑TP；
+            * 一旦触发 first_when：优先取“最近且满足最低收益”的结构候选作为 TP1，
+              若无合格结构候选则用固定倍数兜底（LTF_scalp≈1.0R；HTF_swing≈2.0R）。
+            * 更新 TP 后仍必须满足 STOP 的单调性约束与去抖门槛。
+
 
 F) 仓位管理与加减仓（可选）
 - 仅当 margin_usage < ceiling 且 顺应大级别趋势时才允许加仓
@@ -1011,19 +1165,33 @@ G) 基础指标视角（必须引用）
   * 45 ≤ rsi ≤ 55：中性；
   * 55 < rsi ≤ 70：偏强；
   * rsi > 70：超买区（短期极强）。
-- 基础指标参与的硬性限制示例：
-  1) 追涨 / 追跌限制
-     - 做多时：若 15m / 5m RSI > 75 且 price 明显高于 ema20 / ema50，则禁止在此位置加仓或新开大仓位多单，仅允许考虑减仓或等待回调；
-     - 做空时：若 15m / 5m RSI < 25 且 price 明显低于 ema20 / ema50，则禁止在此位置加仓或新开大仓位空单，仅允许考虑减仓或等待反弹。
-     - 额外针对 trade_style="LTF_scalp" 的硬性限制：
-       · 做空 LTF_scalp 时：
-         - 若 15m / 5m RSI < 35，且 price 位于或刚刚扎入 5m/15m demand 区内部，
-           或通道位置为 channel_position="lower" 附近，
-           → 禁止在该位置 open_short，只允许等待反弹后的更高价位再评估；
-       · 做多 LTF_scalp 时：
-         - 若 15m / 5m RSI > 65，且 price 位于或刚刚扎入 5m/15m supply 区内部，
-           或通道位置为 channel_position="upper" 附近，
-           → 禁止在该位置 open_long，只允许等待回落后的更低价位再评估。
+- 基础指标参与的硬性限制示例（用于“防追单”，但允许结构性例外）：
+  1) 追涨 / 追跌限制（两层阈值，先硬后软）
+     - Layer-1【强极端｜绝对禁止开新仓】：
+       * LONG：若 (15m RSI14 ≥ 80 或 1h RSI14 ≥ 80) 且 channel_position="upper"禁止任何 open_long / 加仓；只允许：
+             - action="close"（若仅减仓，用 close_pct<100 表示；若全平，用 close_pct=100），或
+             - 若该 symbol 无持仓则 action="wait"，若有持仓则 action="hold"（仅管理止损）。
+       * SHORT：若 (15m RSI14 ≤ 20 或 1h RSI14 ≤ 20) 且 channel_position="lower"禁止任何 open_short / 加仓；只允许：
+             - action="close"（close_pct 规则同上），或
+             - 无持仓则 action="wait"，有持仓则 action="hold"（仅管理止损）。
+
+     - Layer-2【偏极端｜禁止“追价式入场”，但允许“结构性入场”】【核心改动】：
+       * 判断“追价式入场”（满足其一即视为追价）：
+         - LONG：price > ema20(5m) + 0.8*ATR14(5m) 或 price > ema50(15m) + 0.6*ATR14(15m)
+         - SHORT：price < ema20(5m) - 0.8*ATR14(5m) 或 price < ema50(15m) - 0.6*ATR14(15m)
+
+       * 若触发偏极端（例如 15m/5m RSI 偏高/偏低 + 通道边界附近）：
+         - 一律禁止“追价式入场”的 open_long/open_short；
+         - 但允许以下两类“结构性入场”作为例外（必须同时满足）：
+           A) pattern=BO_RETEST：
+              - entry_price 位于回踩带内（距关键水平 ≤ 0.25*ATR14(5m)），且不在突破后的第一波延伸追价；
+              - 最近 1 根已收盘 5m K 给出方向确认（见 BO_RETEST 章节的确认规则）；
+              - 通过 B5：R_clean ≥ 1.0（LTF_scalp）/ ≥ 1.5（HTF_swing）。
+           B) pattern=EDGE：
+              - entry_price 仍在 demand 下40%（做多）/ supply 上40%（做空），且出现 5m Rejection-A/B；
+              - 通过 B5：R_clean ≥ 1.0。
+         - 不满足例外条件 → action="wait"。
+
 
   2) 逆势仓位限制
      - 若 4h / 1h 基础指标呈现强多头结构，而你选择做空，则该空单必须在思维链和 notes 中标注为“逆势短线”，并使用更小的 R（风险）与更紧的止损；
@@ -1060,10 +1228,14 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
   - 若当前 price 落在或贴近强 demand zone（多级别共振、反复测试有效的需求区） → 对空头信号持谨慎态度，更倾向做多或观望；
   - 若当前 price 落在或贴近强 supply zone → 对多头信号持谨慎态度，更倾向做空或观望；
   - 多周期供需区冲突时，优先级为：4h > 1h > 30m > 15m > 5m，并在说明中写出“高周期供需区优先”。
-- VPVR 分析：
-  - 若 price 附近存在显著成交量高点（POC 或 HVN） → 容易产生盘整与假突破，Risk/Reward 通常不佳；
-  - 若 price 正在穿越成交量低谷（LVN 或成交密度空洞） → 更容易出现快速单边行情，可作为趋势方向的加分项；
-  - 在思维链中需指出：当前 price 相对于关键成交量节点（POC/HVN/LVN）的相对位置，以及这对多空方向意味着什么。
+- VPVR 分析（仅使用输入字段：poc_price / value_area_high / value_area_low）：
+  - POC（poc_price）：成交最密集的“磁吸区/盘整区”：
+    * price 靠近 POC → 更可能震荡、假突破增多，R/R 需更苛刻；
+  - 价值区边界（VAH/VAL）：
+    * price 在 [VAL, VAH] 内 → 偏“均值回归/震荡思维”，避免在区间中部追单；
+    * price 明确站上 VAH → 才视为“价值区上沿突破后的扩展段”，但必须用 BO_RETEST 回踩确认，禁止直接追价；
+    * price 明确跌破 VAL → 对称处理。
+  - 约束：若输入未提供 HVN/LVN 字段，严禁在 reasoning 中声称“HVN/LVN/低密度节点”，只能讨论 POC/VAH/VAL。
 - FVG（公允价值缺口）：
   - 若当前 price 上方存在未填补的 FVG，且趋势为多 → 可以将该 FVG 区作为潜在目标区或磁吸区；
   - 若当前 price 下方存在未填补的 FVG，且趋势为空 → 可以将该 FVG 区作为潜在目标区或磁吸区；
@@ -1072,6 +1244,13 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
   - 回撤场景：若 price 位于 0.382–0.618 区间，并叠加供需区 / VPVR 支撑 / 通道中轴 → 该位置的反转信号可信度更高；
   - 扩展场景：1.272 / 1.618 等 fib 扩展位可作为趋势外推的潜在目标与反转观察位；
   - 当 fib 位与供需区 / VPVR 关键节点 / 通道边界重合时，应在思维链中指出“多因子共振”，并相应提高该位置在决策中的权重。
+- 超级趋势（Supertrend）冲突裁决（必须引用 direction）：
+  - 若某 timeframe supertrend.direction 与该 timeframe 的结构/均线趋势相反：
+    * 将该 timeframe 的 tf_bias 至少降一级（例如 BULL → NEUTRAL，BEAR → NEUTRAL）；
+    * 对开仓增加确认门槛：只允许 EDGE/BO_RETEST（禁止任何追价式入场）。
+  - 若 4h supertrend.direction 反向：
+    * major_bias 不得直接判为强趋势（Strong BULL/BEAR），除非 1h/30m/15m 同向共振且结构空间（R_clean）显著充足；
+    * reasoning 必须明确写出“4h supertrend 与其它信号冲突”的处理结果（降级/观望/仅小仓）。
 
 在为每个 symbol 判定 tf_bias 时，至少要：
 - 明确指出一个核心结构来源（如“4h 道氏空头结构 + 下降通道中上部”或“1h 强 demand zone 上沿”）；
@@ -1371,11 +1550,18 @@ A2) 大级别过渡段检查（micro 先翻）
       · 禁止以 trade_style="LTF_scalp" 在反向方向开新仓（抢反向）；
       · 对应方向的 LTF_scalp 行为必须为 "wait" 或仅管理既有仓位。
 
-A3) 极端 RSI 追涨 / 追跌检查
-  - 问：是否触发了前文「基础指标参与的硬性限制」中定义的极端 RSI 追涨 / 追跌条件？
-    * 若是：
-      · 禁止在当前价位新开仓或加大仓位；
-      · 仅允许减仓 / 等待回调或反弹后再评估。
+A3) 极端 RSI 追涨 / 追跌检查（与前文 Layer-1/Layer-2 保持一致）
+  - 问：是否触发了前文「追涨/追跌限制」？
+    * 若触发 Layer-1（强极端）：
+      · 绝对禁止在当前价位新开仓或加大仓位；
+      · 仅允许 reduce/close 或 wait。
+    * 若触发 Layer-2（偏极端）：
+      · 禁止“追价式入场”（见定义：偏离 ema20/ema50 过大）；
+      · 但允许“结构性例外”：
+        - pattern=BO_RETEST（必须在回踩带入场 + 5m确认 + R_clean达标）
+        - pattern=EDGE（必须在 zone 边缘 + 5m Rejection 确认 + R_clean达标）
+      · 不满足例外 → action="wait"。
+
 
 ——————————
 B. 结构与空间检查
@@ -1390,15 +1576,21 @@ B4) 对侧供需区位置
       · action 必须为 "wait" 或仅管理已有仓位，
         禁止在该价位 open_long / open_short。
 
-B5) 最近反向结构与 R_clean
-  - 问：是否已经基于当前 entry_price 和止损，计算出：
-      · R = 当前止损距离；
-      · R_clean = 从 entry_price 到最近反向结构的价格距离 / R？
-    * 若未计算出 R_clean：视为流程不完整，禁止开仓。
-    * 若 R_clean < 1.0：
-      · 视为“空间不足”，默认不得作为任何新开仓信号；
-      · 对该 symbol 的 action 必须为 "wait" 或仅管理既有仓位（close / reduce）；
-      · 若 trade_style="HTF_swing" 且 setup_grade="A"，R_clean ∈ [0.8, 1.0)，只有在 reasoning 中极其清晰说明仍有 ≥2R 的波段空间时才可例外，否则同样视为“空间不足”。
+B5) 最近反向结构与 R_clean（定义必须可计算）
+  - 问：是否已经基于当前 entry_price 与 sl_struct 计算出 R_struct 与 R_clean？
+    * 定义：
+      · R_struct = |entry_price - sl_struct|（以价格计）
+      · 最近反向结构（nearest_opposite_structure）按优先级选取（LONG 选上方，SHORT 选下方）：
+        1) 最近反向供需区边界（supply/demand 的关键边界）
+        2) 最近反向支撑阻力线（support_resistance_lines）
+        3) VPVR 的 POC/VAH/VAL（按方向取会形成阻力/支撑的那一个）
+        4) FVG nearest_gap（若 active_gaps>0 且与方向一致）
+      · R_clean_pts = |nearest_opposite_structure - entry_price|
+      · R_clean = R_clean_pts / R_struct
+    * 若未给出上述任一“最近反向结构”与 R_clean：视为流程不完整，禁止开仓。
+    * 若 trade_style="LTF_scalp" 且 R_clean < 1.0：视为“空间不足”，禁止开仓。
+    * 若 trade_style="HTF_swing" 且 R_clean < 1.5：默认不得开仓；仅当 setup_grade="A" 且能明确指出更远的次级目标结构提供 ≥2R 空间时才允许例外（必须写清楚）。
+
 
 B6) 执行时效与反延迟闸门（下单前最后一公里｜硬要求）
   - 问：在【实际下单/发送订单】的那一刻，以下条件是否全部满足？
@@ -1496,7 +1688,7 @@ E10) 与其他 symbol 的相对性价比
 - SHORT：assert(new_stop <= prev_stop)
 - assert(与现价距离 ≥ stop_distance_min_ticks * tick_size)
 - **entry-only 断言（新增关键）**：
-  - 若 type=OPEN 且 entry_order_policy=STOP_ONLY_AT_ENTRY：
+  - 若 action ∈ {"open_long","open_short"} 且 entry_order_policy=STOP_ONLY_AT_ENTRY：
     * assert(active_exit_orders == 1)           // 只允许 1 个保护性 STOP
     * assert(no_take_profit_active == true)     // TP 未激活（可有“占位”但 inactive）
   - 若 bracket_fallback=true：
@@ -1570,6 +1762,12 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 - 必须提供：
   - symbol, type, side, confidence（0-100）, reason；
   - entry_plan：price, qty, leverage, init_stop, take_profit(通常为 null), entry_order_policy。
+    * entry_order_policy.tp_activation 必须包含：
+      - enable（true/false）
+      - first_when（按风格分层：LTF_scalp 建议 R>=0.8，HTF_swing 建议 R>=1.5，或 protect_triggered）
+      - price_logic（建议固定为 "structure_first_then_rail_fast"）
+      - reduce_only（true）
+
 
 2. action="close"
 - 用于平掉某个 symbol 的全部仓位（LONG 或 SHORT）。
@@ -1689,24 +1887,28 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
          * 若需要调整止损，必须是一个对象：
          {
            "prev_stop": 数字,     // 当前止损价，来自输入的 positions.stop_price
-           "new_stop": 数字,      // 本轮根据 BE_with_fees / R_lock / 轨道 等计算出来的新止损价
+           "new_stop": 数字,      // 本轮根据 BE_with_costs / R_lock / 轨道 等计算出来的新止损价
            "reason": "R_lock" | "BE" | "protect" | "microflip" | "manual"
          }
          * 若有 stop_update，说明主要依据（R_lock/BE/protect/microflip）。
          * 当你决定“不更新止损”时必须输出："stop_update": null，不能为了“方便”把 prev_stop 原样写回去。
          * 只有在满足以下任一条件时，才可以返回非 null 的 stop_update：
         - R_unrealized ≥ 0.5 且触发对应级别的 R_lock；
+        - roi_unrealized ≥ roi_lock_trigger 且 持仓时间 ≥ protect_trigger.time_min（ROI 锁盈触发）；
         - 交易结构明显恶化，需要收紧止损以减少最大亏损（risk_cut）；
         - protect / microflip 等策略被显式触发。
 
+
 3. 对于「已有持仓」的 symbol：
-   - 如果只是更新止损、不做平仓/减仓：
-     * "action" 通常使用 "hold"（保持当前仓位）
-     * 必须给出非 null 的 "stop_update" 对象
-   - 如果同时有平仓/减仓动作（例如 "close"）：
-     * 可视你的执行端设计：
-       - 要么仍然附带一个 stop_update（先把止损推到更保守的位置，再配合主动平仓）
-       - 要么将 stop_update 设为 null，仅依赖主动平仓指令
+- 默认只做仓位管理，不允许再输出 open_*：
+  - "action" 必须为 "hold"（除非你要主动平仓：action="close" 且 close_pct>0）
+- "stop_update" 允许为 null：
+  - 仅当同时满足下列条件时，才输出 stop_update 对象：
+    A) 通过 ProfitFloor / 可执行性校验（如有 ProfitFloor，new_stop 不得穿过 ProfitFloor）
+    B) 通过更新门槛约束：|new_stop - prev_stop| ≥ min_tick_move_to_update*tick_size
+    C) 与现价距离约束：LONG 需 new_stop ≤ last_price - stop_distance_min_ticks*tick_size（SHORT 对称）
+  - 若任意条件不满足 ⇒ 必须输出 "stop_update": null（禁止为了“字段非空”而回填 prev_stop/new_stop）
+
 
 4. 对于「没有持仓」的 symbol（以 open_positions 列表为准）：
    - 若该 symbol 不在 open_positions 中：
@@ -1716,8 +1918,8 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 
 5. 更新门槛约束（与统一逻辑 C 匹配）：
    - 只有当 new_stop 与 prev_stop 的差值：
-     * ≥ min_tick_move_to_update * tick
-     * 且 new_stop 与当前价格的距离 ≥ stop_distance_min_ticks * tick
+     * ≥ min_tick_move_to_update * tick_size
+     * 且 new_stop 与当前价格的距离 ≥ stop_distance_min_ticks * tick_size
      时，才允许输出非 null 的 "stop_update"。
    - 若不满足门槛，即使 R_lock 有轻微变化，也必须输出 "stop_update": null。
 
@@ -1797,7 +1999,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
         "tp_activation": {
           "enable": true,
           "first_when": "R>=1.5 or protect_triggered",
-          "price_logic": "rail_fast",
+          "price_logic": "structure_first_then_rail_fast",
           "reduce_only": true
         }
       }
@@ -1820,5 +2022,14 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 - 禁止创建任何“候选 symbol”对象：
   * 例如 "ETHUSDT_candidate"、"ADAUSDT_candidate" 等名称都是错误的；
   * 若你想表达“是否考虑对已有 ETHUSDT 再开一笔新仓”的评估，必须在 ETHUSDT 那条决策的 "reasoning" 文本中说明，而不是通过新增一个带后缀的 symbol 对象来表示。
+- 输入数据利用覆盖率（强制自检）：
+  - 对每个 symbol，reasoning 必须至少覆盖并点名一次以下模块（若该模块为空/无效也必须明确写“无/不适用”）：
+    1) 供需区（供需区数据：fresh/strong/weakened + 位置）
+    2) 支撑阻力转换线（至少引用最近的 1 条关键线）
+    3) VPVR（必须引用：poc_price 与“当前位置在 VAH/VAL 内外”的判断）
+    4) FVG（若 active_gaps>0 必须引用；否则写无）
+    5) 斐波纳契（若 active_retracements>0 必须引用；否则写无）
+    6) 超级趋势 supertrend.direction（至少引用 major timeframe=4h 与交易触发 timeframe=5m/15m）
+  - 若输出 action="wait"，也必须说明“下一次重新评估的触发条件/价格区域”（例如回踩到哪条线/哪段 demand/supply/哪级 fib）。
 
 （完）

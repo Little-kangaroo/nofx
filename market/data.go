@@ -673,7 +673,8 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 	result := make(map[string]interface{})
 	
 	// 全局指标（不依赖时间框架）
-	result["price"] = data.CurrentPrice
+	result["price"] = data.CurrentPrice      // 保留原有字段（向后兼容）
+	result["last_price"] = data.CurrentPrice // 新增字段（更清晰的命名）
 	result["funding_rate"] = data.FundingRate
 	result["oi_latest"] = func() float64 {
 		if data.OpenInterest != nil {
