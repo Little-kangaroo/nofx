@@ -377,11 +377,11 @@
     * 5m: price 下破 ema20 且 macd<0 且 rsi7≤48，且近3根“更低高点”
 - microflip_cooldown_sec = 60
 
-【出场与减仓硬规则（必须遵守）}
-1. 出场类型
-   - CLOSE：平掉该 symbol 当前方向的全部持仓。
-   - REDUCE：仅平掉部分持仓（例如 30%～50%），保留剩余仓位继续跟随趋势。
-   - 这些逻辑与保护性止损共存：止损始终存在，CLOSE / REDUCE 是在此基础上的“主动退出”。
+【出场与减仓硬规则（必须遵守）】
+1. 出场类型（输出层面统一用 action="close" 表达）
+   -全平：action="close" 且 close_pct=1.0（或 close_pct 省略默认 1.0）。
+   -减仓：action="close" 且 0 < close_pct < 1（例如 0.3～0.5），保留剩余仓位继续跟随趋势。
+    这些逻辑与保护性止损共存：止损始终存在；全平/减仓是在此基础上的“主动退出”。
 
    - 出场动作的优先级（从弱到强）必须遵守：
      1) 优先考虑仅通过 stop_update 收紧止损、保护已获得的利润，而不是马上 CLOSE；
@@ -430,21 +430,27 @@
 
         2）阶段 B：0R < 当前浮盈 < 0.5R（略有浮盈，但趋势尚未成型）
           - 此阶段视为“刚刚转正但仍不稳定”的盈利区间。
-          - 全局默认原则：
-            * 若 R_unrealized 仍 < break_even_trigger_R（例如 <0.3R）：
-              - 继续 HOLD，不收紧止损，给行情正常回调空间；
-              - 不因单根 K 线或小幅 pullback 而 panic CLOSE。
+          - 全局默认原则（先看 R_lock，再看 break-even）：
+            * 若已达到当前所选锁盈档位的首个 R_lock 里程碑（基础档=1.0R；激进档=0.25R）：
+              - 必须优先按 R_lock 规则更新止损（lock_at_R / lock_at_R_aggr），不受 break_even_trigger_R 约束；
+              - 也即：激进档在 ≥0.25R 时必须开始“真锁盈”。
+、            * 若尚未达到首个 R_lock 里程碑，且 R_unrealized < break_even_trigger_R（例如 <0.3R）：
+              - 继续 HOLD，不收紧止损，给行情正常回调空间。
 
-            * 若 R_unrealized ≥ break_even_trigger_R（例如 ≥0.3R），且：
-              - 持仓时间 ≥ protect_trigger.time_min（如 ≥5min），
-              - 短周期结构尚未出现明确反转（仍大致有利于持仓方向），
-              则可以启用“全局保护本规则”调整止损：
+            * 若 R_unrealized ≥ break_even_trigger_R（例如 ≥0.3R），且：持仓时间 ≥ protect_trigger.time_min（如 ≥5min），
+              - 短周期结构尚未出现明确反转（仍大致有利于持仓方向），则可以启用“全局保护本规则”调整止损（目标：至少不亏本金/费用）：
+              先定义 BE_with_costs（多空对称）：
+              - 记 cost_bps = taker_fee_bps + slippage_bps_minor   // 从输入 ExchangeMeta 取值
+              - LONG：BE_with_costs = entry_price * (1 + cost_bps/10000) + stop_distance_min_ticks * tick_size
+              - SHORT：BE_with_costs = entry_price * (1 - cost_bps/10000) - stop_distance_min_ticks * tick_size
+              然后更新止损（单调性仍然必须遵守）：
               - 对 LONG 单：
-                · new_stop = max(prev_stop, entry_price - break_even_pad_R * R)；
+                · new_stop = max(prev_stop, BE_with_costs)
               - 对 SHORT 单：
-                · new_stop = min(prev_stop, entry_price + break_even_pad_R * R)；
-              - break_even_pad_R 默认为 0.1，即最多允许约 -0.1R 的技术性回撤，
-                或者将止损直接推到略微盈利的位置。
+                · new_stop = min(prev_stop, BE_with_costs)
+              说明：
+              - 本规则一旦触发，止损不得再停留在“亏损区域”（LONG 低于 BE_with_costs / SHORT 高于 BE_with_costs）。
+
 
             * 启用保护本规则的意图是：
               - 一旦单子已经取得 ≈0.3R 以上的浮盈，
@@ -530,7 +536,7 @@
      }
 
 6. 思维链要求
-   - 在输出 type 为 CLOSE / REDUCE 之前，思维链中必须明确说明：
+   - 在输出 action="close"（全平或减仓）之前，思维链中必须明确说明：（若为减仓，需给出 close_pct）
      1) 当前 major_trend 与持仓方向的关系（顺势 / 逆势）；
      2) 价格相对 15m / 30m 供需区、VPVR、关键 swing high / low 的位置；
      3) 当前浮盈约为几 R，触发了哪一级 R_lock 或短周期结构出场条件；
@@ -546,16 +552,20 @@
   // 这里的 0.3R 是一个全局的早期保护触发值，适用于所有单子。
 
 - protect_pad_shrink     = 0.5
-  // 保护模式开启后，轨道/止损的 pad 缩小一半，让止损更贴近当前价格。
+【硬限制】protect_pad_shrink 不得在早期浮盈段生效：
+- 当 R_unrealized < 0.5R 时：禁止缩 pad（等价于 protect_pad_shrink_effective = 1.0）
+- 只有当 R_unrealized ≥ 0.5R，或已触发 ≥1 个 R_lock 里程碑后，才允许应用 protect_pad_shrink
+目的：避免“刚有一点浮盈→pad 砍半→止损贴脸→回撤噪音直接扫出”。
+// 保护模式开启后，轨道/止损的 pad 缩小一半，让止损更贴近当前价格。
 
 - break_even_protect_enable = true
 - break_even_trigger_R      = 0.3
-- break_even_pad_R          = 0.1
-  // 全局“保护本规则”：
-  // - 当 R_unrealized ≥ 0.3R 且持仓时间 ≥ protect_trigger.time_min 时，
-  //   允许将止损上调/下调到接近 break-even；
-  // - break_even_pad_R = 0.1 表示最多允许回撤到 -0.1R 左右，
-  //   不再让已经盈利 0.3R 以上的单子回吐成完整 -1R 赔钱单。
+- break_even_pad_R          = 0.03
+  // 全局“首次保护=本金不亏底线”：
+  // - 当 R_unrealized ≥ break_even_trigger_R 且持仓时间 ≥ protect_trigger.time_min 时，
+  //   允许把止损推进到 BE_with_fees 附近，并额外锁住 break_even_pad_R*R 的最小缓冲；
+  // - 这条规则的目标是：一旦触发首次保护，本单“即使被扫也不应亏损本金”（考虑手续费/滑点后）。
+
 
 - protect_R_floor        = 0.8
   // 对已经进入 R_lock 区间（例如 R≥1）的盈利单，保护模式下
@@ -1656,7 +1666,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
      - reasoning 字段必须包含：
         1. 当前 major_bias / minor_bias / micro_bias 及依据的 timeframe + 关键结构；
         2. 当前大致浮盈是几 R，触发了哪一级 R_lock 或 protect；
-        3. 为何选择当前 action（open/close/hold/wait/REDUCE）而不是其他；
+        3. 为何选择当前 action（open_long/open_short/close/hold/wait）而不是其他；若为“部分减仓”，仍输出 action="close"，并额外给出 close_pct（0~1）说明是部分平仓；
         4. 若是开仓（open_long/open_short），需在开头显式写明本次决策采用的模式：
           - 例如："trade_style=HTF_swing，理由：4h/1h 顺势波段，目标空间≥2R ..."；
           - 或："trade_style=LTF_scalp，理由：30m/15m/5m 短线趋势清晰，目标约1~1.5R，小仓快进快出"。
@@ -1701,7 +1711,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 4. 对于「没有持仓」的 symbol（以 open_positions 列表为准）：
    - 若该 symbol 不在 open_positions 中：
      * "action" 只能是 "open_long"、"open_short" 或 "wait"；
-     * 严禁使用 "hold"、"close" 或 "reduce"；
+     * 严禁使用 "hold"、"close"；（action 不存在 reduce；部分平仓仅在已有持仓时用 action="close"+close_pct 表达）；
      * "stop_update" 必须为 null（因为没有现有止损可调）。
 
 5. 更新门槛约束（与统一逻辑 C 匹配）：
@@ -1809,8 +1819,6 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 - "setup_grade","edge_score"字段在任何 action 下都不能省略
 - 禁止创建任何“候选 symbol”对象：
   * 例如 "ETHUSDT_candidate"、"ADAUSDT_candidate" 等名称都是错误的；
-  * 若你想表达“是否考虑对已有 ETHUSDT 再开一笔新仓”的评估，
-    必须在 ETHUSDT 那条决策的 "reasoning" 文本中说明，
-    而不是通过新增一个带后缀的 symbol 对象来表示。
+  * 若你想表达“是否考虑对已有 ETHUSDT 再开一笔新仓”的评估，必须在 ETHUSDT 那条决策的 "reasoning" 文本中说明，而不是通过新增一个带后缀的 symbol 对象来表示。
 
 （完）
