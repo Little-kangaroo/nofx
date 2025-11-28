@@ -162,7 +162,19 @@
               · 追踪止损优先参考 micro_fast_aggr / fast_aggr / slow_aggr。
             - 这样可以在 10x 杠杆下尽量避免 B 级波段单从 +10%~+15% 的浮盈
               回吐到接近 0 或轻微亏损。
-
+        6）统计意义优先（Context-Aware）：
+                    - 输入数据现包含 `ctx`（上下文）字段，包含 rank_pct, strength_z, vol_ratio 等。
+                    - 核心原则：不要仅凭绝对数值判断，要依据统计显著性判断。
+                    - 判读标准：
+                      * strength_z (Z-Score)：
+                        · > 1.0：显著强于历史水平（高权重）；
+                        · < -1.0：显著弱于历史水平（需更多共振才可操作，否则视为噪音）；
+                      * vol_ratio (成交量比率)：
+                        · > 1.5：机构行为或关键异动（即使结构小也值得关注）；
+                        · < 0.8：流动性不足或散户行为（需降级处理）；
+                      * width_atr (ATR倍数)：
+                        · 用此判断结构大小，不再依赖绝对涨跌幅百分比；
+                        · 例如：width_atr < 0.5 视为窄幅结构，> 1.5 视为宽幅结构。
 
       - 若某个 HTF_swing 候选只满足部分条件（例如多周期顺势，但位置在 15m demand 内部，
         或 4h RSI 已接近超卖），则应在 reasoning 中说明原因，
@@ -227,7 +239,35 @@
   "1h":  { /* 同结构，含 high/low/close */ },
   "4h":  { /* 同结构，含 high/low/close */ }
 }
-
+2.1) 关键结构与统计上下文示例（Advanced Analysis）
+{
+  "多时间框架分析": {
+    "15m": {
+      "供需区数据": {
+        "active_zones": [
+          {
+            "type": "demand",
+            "price_range": {"high": 90500, "low": 90000},
+            "status": "fresh",
+            "strength": 75,
+            "ctx": {             // ★ 核心统计字段
+              "strength_z": 1.8, // Z-Score > 1.0 (显著强)
+              "vol_ratio": 2.1,  // 成交量 2.1倍 (主力参与)
+              "width_atr": 1.2,  // 宽度 1.2 ATR (中等偏宽)
+              "rank_pct": 0.85   // 强于 85% 的历史结构
+            }
+          }
+        ]
+      },
+      "FVG数据": {
+        "active_gaps": 1,
+        "nearest_gap": 91200,
+        "gap_type": "bearish",
+        "ctx": { "strength_z": -0.5, "vol_ratio": 0.9 } // 弱结构示例
+      }
+    }
+  }
+}
 3) 交易环境（ExchangeMeta）
 {
   "tick_size": 0.1,
@@ -697,13 +737,12 @@
 
     1) A_trend：顺势趋势机会
        * major_bias 与计划方向同向；
-       * 在 minor_bias 和 micro_bias 中，至少有一者明显同向，另一者最多是 NEUTRAL，
-         不要求两者都完美同向；
-       * 价格接近对当前方向有利的关键结构边界
-         （如 4h/1h supply/demand 区、通道边界、重要 fib 位、VPVR 的 POC/VAH/VAL 等）；
-       * 从合理止损位到最近强反向结构之间，至少有 ≈2R~2.5R 的潜在空间
-         （不再死磕 3R+，避免机会极少）；
-
+       * 在 minor_bias 和 micro_bias 中，至少有一者明显同向，另一者最多是 NEUTRAL，不要求两者都完美同向；
+       * 价格接近对当前方向有利的关键结构边界（如 4h/1h supply/demand 区、通道边界、重要 fib 位、VPVR 的 POC/VAH/VAL 等）；
+       * 从合理止损位到最近强反向结构之间，至少有 ≈2R~2.5R 的潜在空间（不再死磕 3R+，避免机会极少）；
+       * 统计显著性支持（Hard Requirement）：
+         - 所依托的关键结构（供需/FVG/突破位），其 `ctx.strength_z` 必须 ≥ 0.5，或 `ctx.vol_ratio` ≥ 1.2（有量能支持）；
+         - 禁止在统计数据极其平庸（Z < 0, Vol < 1.0）的结构上定义 A 级机会。
     2) A_reversal：高质量反转机会（small TF 先翻的那种）
        * 当前 major_bias 仍显示原趋势（例如 BEAR），但：
          - price 已处于或刚刚扎入高等级关键 demand/supply 区（4h/1h）内部；
@@ -719,6 +758,9 @@
          - 为什么认为这是“大级别趋势可能反转的早期段”。
   - B 级：方向大体合理，但结构或空间不完美：
     * 可以是顺势但位置一般（例如通道中部、附近有 VPVR POC 或接近 VAH/VAL，空间≈2R 左右）；
+    * 统计评分补偿：
+          - 若结构本身的统计评分较低（如 strength_z < 0），则必须有其他指标（如 MACD/RSI/SuperTrend）的强力补偿；
+          - 若结构评分极低（如 strength_z < -1.5），即使方向顺势，也应降级为 C。
     * 也可以是反转“早期”阶段：
       - major_bias 仍然维持原趋势；
       - 但 minor_bias 或 micro_bias 已经反向，且价格接近关键供需区 / 通道边界；
@@ -1224,10 +1266,16 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
   - 通道类型为上升通道，且 price 位于通道中下部 → 倾向 BULL，但需注意上沿附近容易出现获利了结/反转；
   - 通道类型为下降通道，且 price 位于通道中上部 → 倾向 BEAR，但需注意下沿附近容易出现反弹；
   - 若 price 逼近通道上沿 / 下沿，即便方向与通道一致，也要在思维链中说明“接近边界，短线反向风险加大”。
-- 供需区分析：
-  - 若当前 price 落在或贴近强 demand zone（多级别共振、反复测试有效的需求区） → 对空头信号持谨慎态度，更倾向做多或观望；
-  - 若当前 price 落在或贴近强 supply zone → 对多头信号持谨慎态度，更倾向做空或观望；
-  - 多周期供需区冲突时，优先级为：4h > 1h > 30m > 15m > 5m，并在说明中写出“高周期供需区优先”。
+- 供需区分析（需结合 ctx 统计值判断）：
+  - 强度评估（Context-Aware）：
+    * 不要仅看 status="fresh/weakened"，必须参考 `ctx` 数据：
+    * 若 `strength_z` > 1.0 且 `vol_ratio` > 1.2：视为“机构级关键位”，即使 status="tested" 仍视为强支撑/阻力；
+    * 若 `strength_z` < -0.5：视为“弱结构”，仅在多周期共振时作为次要参考，不可直接挂 Limit 单。
+  - 拥挤度与失效：
+    * 参考 `touches`。若 touches > 5 且 strength_z 开始下降，视为流动性耗尽，警惕突破。
+  - 作用：
+    * Price 贴近强 Demand Zone → 倾向 BULL（但在弱 Zone 需警惕跌破）；
+    * Price 贴近强 Supply Zone → 倾向 BEAR。
 - VPVR 分析（仅使用输入字段：poc_price / value_area_high / value_area_low）：
   - POC（poc_price）：成交最密集的“磁吸区/盘整区”：
     * price 靠近 POC → 更可能震荡、假突破增多，R/R 需更苛刻；
@@ -1236,10 +1284,15 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
     * price 明确站上 VAH → 才视为“价值区上沿突破后的扩展段”，但必须用 BO_RETEST 回踩确认，禁止直接追价；
     * price 明确跌破 VAL → 对称处理。
   - 约束：若输入未提供 HVN/LVN 字段，严禁在 reasoning 中声称“HVN/LVN/低密度节点”，只能讨论 POC/VAH/VAL。
-- FVG（公允价值缺口）：
-  - 若当前 price 上方存在未填补的 FVG，且趋势为多 → 可以将该 FVG 区作为潜在目标区或磁吸区；
-  - 若当前 price 下方存在未填补的 FVG，且趋势为空 → 可以将该 FVG 区作为潜在目标区或磁吸区；
-  - 若 price 正好位于 FVG 内部或边缘，应在说明中强调“存在来回填补噪音风险”，避免在中性位置重仓。
+- FVG（公允价值缺口 - 统计视角）：
+  - 有效性判断（拒绝绝对值）：
+    * 忽略缺口的绝对涨跌幅，依据 ctx.width_atr 判断物理规模（> 1.5 为宽幅，< 0.5 为窄幅）；
+    * 依据 `ctx.vol_ratio` 判断爆发力（> 1.5 为强主力行为）。
+  - 陷阱过滤：
+    * 若 `rank_pct` < 0.2 (后20%) 且 `vol_ratio` < 1.0：视为“噪音缺口”，忽略不计；
+    * 若 `strength_z` > 2.0：视为“极强失衡”，是极佳的磁吸目标或反转位。
+  - 作用：
+    * 位于上方的强 FVG 是多头磁吸目标；位于下方的强 FVG 是空头磁吸目标。
 - 斐波纳契分析：
   - 回撤场景：若 price 位于 0.382–0.618 区间，并叠加供需区 / VPVR 支撑 / 通道中轴 → 该位置的反转信号可信度更高；
   - 扩展场景：1.272 / 1.618 等 fib 扩展位可作为趋势外推的潜在目标与反转观察位；
@@ -1580,11 +1633,17 @@ B5) 最近反向结构与 R_clean（定义必须可计算）
   - 问：是否已经基于当前 entry_price 与 sl_struct 计算出 R_struct 与 R_clean？
     * 定义：
       · R_struct = |entry_price - sl_struct|（以价格计）
-      · 最近反向结构（nearest_opposite_structure）按优先级选取（LONG 选上方，SHORT 选下方）：
-        1) 最近反向供需区边界（supply/demand 的关键边界）
-        2) 最近反向支撑阻力线（support_resistance_lines）
-        3) VPVR 的 POC/VAH/VAL（按方向取会形成阻力/支撑的那一个）
-        4) FVG nearest_gap（若 active_gaps>0 且与方向一致）
+      · “最近反向结构”的判定与硬约束（引入统计过滤）：
+              - 在识别最近反向结构时，必须自动忽略“统计噪音”，避免被弱结构吓退：
+                1) 忽略 `strength_z` < -1.0 的极弱供需区；
+                2) 忽略 `rank_pct` < 0.2 且 `vol_ratio` < 0.8 的微小 FVG；
+                3) 忽略 `status`="weakened" 且无成交量支持的区域。
+              - 有效反向结构定义：
+                1) 具有统计显著性（Strength Z > -0.5 或 rank > 30%）的供需区/FVG；
+                2) 通道边界、SuperTrend 线、VPVR 的 VAL/VAH/POC。
+              - R_clean 计算：
+                · R_clean_pts = |有效反向结构 - entry_price|
+                · R_clean = R_clean_pts / R_struct
       · R_clean_pts = |nearest_opposite_structure - entry_price|
       · R_clean = R_clean_pts / R_struct
     * 若未给出上述任一“最近反向结构”与 R_clean：视为流程不完整，禁止开仓。
@@ -1881,7 +1940,9 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
           - 对空单：例如“sl_struct 设在最近 30m supply 区上沿 0.1459，上方留出若干 tick 作为缓冲”；
           - 并在此基础上给出 R_struct = |entry_price - sl_struct| 与 R_clean，
             保证止损价格确实落在关键结构之外，而不是结构内部。
-
+        7. 必须显式引用 `ctx` 数据来支持你的论点：
+                   - 不要只说“强支撑”，要说“强支撑（Z=2.1, Vol=1.8x）”；
+                   - 不要只说“忽略该阻力”，要说“忽略弱阻力（Z=-1.2, Rank=15%）”。
      - "stop_update":
          * 若本轮不需要调整止损，必须为 null
          * 若需要调整止损，必须是一个对象：
