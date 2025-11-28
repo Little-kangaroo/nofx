@@ -859,13 +859,13 @@ func extractCompactMultiTimeframeAnalysis(data *Data) map[string]interface{} {
 		}
 
 		result[tf] = map[string]interface{}{
-			"道氏理论数据":  extractCompactDowTheory(tfData.DowTheory),
-			"通道数据":    extractCompactChannelAnalysis(tfData.ChannelAnalysis),
-			"VPVR数据":  extractCompactVPVR(tfData.VolumeProfile),
-			"供需区数据":   extractCompactSupplyDemand(tfData.SupplyDemand),
-			"FVG数据":   extractCompactFVG(tfData.FairValueGaps),
-			"斐波纳契数据":  extractCompactFibonacci(tfData.Fibonacci),
-			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance),
+			"道氏理论数据":  extractCompactDowTheory(tfData.DowTheory, data.Symbol),
+			"通道数据":    extractCompactChannelAnalysis(tfData.ChannelAnalysis, data.Symbol),
+			"VPVR数据":  extractCompactVPVR(tfData.VolumeProfile, data.Symbol),
+			"供需区数据":   extractCompactSupplyDemand(tfData.SupplyDemand, data.Symbol),
+			"FVG数据":   extractCompactFVG(tfData.FairValueGaps, data.Symbol),
+			"斐波纳契数据":  extractCompactFibonacci(tfData.Fibonacci, data.Symbol),
+			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance, data.Symbol),
 		}
 	}
 
@@ -873,7 +873,7 @@ func extractCompactMultiTimeframeAnalysis(data *Data) map[string]interface{} {
 }
 
 // extractCompactDowTheory 提取道氏理论的关键结果
-func extractCompactDowTheory(data *DowTheoryData) map[string]interface{} {
+func extractCompactDowTheory(data *DowTheoryData, symbol string) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
@@ -892,53 +892,53 @@ func extractCompactDowTheory(data *DowTheoryData) map[string]interface{} {
 
 	if data.TrendStrength != nil {
 		result["trend_direction"] = data.TrendStrength.Direction
-		result["trend_strength"] = data.TrendStrength.Overall
-		result["signal_confidence"] = data.TrendStrength.Consistency
+		result["trend_strength"] = FormatByDataTypeAndSymbol(data.TrendStrength.Overall, "strength", symbol)
+		result["signal_confidence"] = FormatByDataTypeAndSymbol(data.TrendStrength.Consistency, "confidence", symbol)
 	}
 
 	return result
 }
 
 // extractCompactChannelAnalysis 提取通道分析的关键结果
-func extractCompactChannelAnalysis(data *ChannelData) map[string]interface{} {
+func extractCompactChannelAnalysis(data *ChannelData, symbol string) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
 
 	result := map[string]interface{}{
 		"channel_direction": data.Direction,
-		"channel_width":     data.Quality * 100,
+		"channel_width":     FormatByDataTypeAndSymbol(data.Quality * 100, "percentage", symbol),
 		"current_position":  data.CurrentPosition,
 	}
 
 	if data.ActiveChannel != nil {
-		result["channel_width"] = data.ActiveChannel.Width * 100
+		result["channel_width"] = FormatByDataTypeAndSymbol(data.ActiveChannel.Width * 100, "percentage", symbol)
 	}
 
 	return result
 }
 
 // extractCompactVPVR 提取VPVR的关键结果
-func extractCompactVPVR(data *VolumeProfile) map[string]interface{} {
+func extractCompactVPVR(data *VolumeProfile, symbol string) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
 
 	result := map[string]interface{}{
 		"poc_price":       0.0,
-		"value_area_high": data.VAH,
-		"value_area_low":  data.VAL,
+		"value_area_high": FormatByDataTypeAndSymbol(data.VAH, "price", symbol),
+		"value_area_low":  FormatByDataTypeAndSymbol(data.VAL, "price", symbol),
 	}
 
 	if data.POC != nil {
-		result["poc_price"] = data.POC.Price
+		result["poc_price"] = FormatByDataTypeAndSymbol(data.POC.Price, "price", symbol)
 	}
 
 	return result
 }
 
 // extractCompactSupplyDemand 提取供需区的关键结果
-func extractCompactSupplyDemand(data *SupplyDemandData) map[string]interface{} {
+func extractCompactSupplyDemand(data *SupplyDemandData, symbol string) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
@@ -968,12 +968,24 @@ func extractCompactSupplyDemand(data *SupplyDemandData) map[string]interface{} {
 
 		zoneInfo := map[string]interface{}{
 			"price_range": map[string]float64{
-				"low":  zone.LowerBound,
-				"high": zone.UpperBound,
+				"low":  FormatByDataTypeAndSymbol(zone.LowerBound, "price", symbol),
+				"high": FormatByDataTypeAndSymbol(zone.UpperBound, "price", symbol),
 			},
-			"strength": zone.Strength,
+			"strength": FormatByDataTypeAndSymbol(zone.Strength, "strength", symbol),
 			"touches":  zone.TouchCount,
 			"status":   zone.Status,
+		}
+		
+		// 添加上下文评分
+		if zone.Context != nil {
+			zoneInfo["ctx"] = map[string]interface{}{
+				"strength_z": FormatByDataTypeAndSymbol(zone.Context.StrengthZ, "ratio", symbol),
+				"width_atr":  FormatByDataTypeAndSymbol(zone.Context.WidthATR, "ratio", symbol),
+				"vol_ratio":  FormatByDataTypeAndSymbol(zone.Context.VolRatio, "ratio", symbol),
+				"is_fresh":   zone.Context.IsFresh,
+				"time_score": FormatByDataTypeAndSymbol(zone.Context.TimeScore, "ratio", symbol),
+				"rank_pct":   FormatByDataTypeAndSymbol(zone.Context.RankPct, "ratio", symbol),
+			}
 		}
 
 		if zone.Type == SupplyZone {
@@ -1001,7 +1013,7 @@ func extractCompactSupplyDemand(data *SupplyDemandData) map[string]interface{} {
 	result["supply_zones"] = supplyZones
 	result["demand_zones"] = demandZones
 	result["zone_stats"] = map[string]interface{}{
-		"avg_strength": strengthSum / float64(len(data.ActiveZones)),
+		"avg_strength": FormatByDataTypeAndSymbol(strengthSum / float64(len(data.ActiveZones)), "strength", symbol),
 		"supply_count": supplyCount,
 		"demand_count": demandCount,
 	}
@@ -1023,7 +1035,7 @@ func sortZonesByStrength(zones []map[string]interface{}) {
 }
 
 // extractCompactFVG 提取FVG的关键结果
-func extractCompactFVG(data *FVGData) map[string]interface{} {
+func extractCompactFVG(data *FVGData, symbol string) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
@@ -1032,12 +1044,13 @@ func extractCompactFVG(data *FVGData) map[string]interface{} {
 		"active_gaps": len(data.ActiveFVGs),
 		"nearest_gap": 0.0,
 		"gap_type":    "unknown",
+		"gaps":        []map[string]interface{}{},
 	}
 
 	if len(data.ActiveFVGs) > 0 {
 		// 取第一个活跃的FVG作为最近的
 		fvg := data.ActiveFVGs[0]
-		result["nearest_gap"] = (fvg.LowerBound + fvg.UpperBound) / 2
+		result["nearest_gap"] = FormatByDataTypeAndSymbol((fvg.LowerBound + fvg.UpperBound) / 2, "price", symbol)
 		if fvg.Type == BullishFVG {
 			result["gap_type"] = "bullish"
 		} else if fvg.Type == BearishFVG {
@@ -1045,13 +1058,46 @@ func extractCompactFVG(data *FVGData) map[string]interface{} {
 		} else {
 			result["gap_type"] = "neutral"
 		}
+		
+		// 添加详细的FVG信息
+		var gaps []map[string]interface{}
+		for _, gap := range data.ActiveFVGs {
+			gapInfo := map[string]interface{}{
+				"id":           gap.ID,
+				"type":         gap.Type,
+				"upper_bound":  FormatByDataTypeAndSymbol(gap.UpperBound, "price", symbol),
+				"lower_bound":  FormatByDataTypeAndSymbol(gap.LowerBound, "price", symbol),
+				"center_price": FormatByDataTypeAndSymbol(gap.CenterPrice, "price", symbol),
+				"width":        FormatByDataTypeAndSymbol(gap.Width, "price", symbol),
+				"width_percent": FormatByDataTypeAndSymbol(gap.WidthPercent, "percentage", symbol),
+				"strength":     FormatByDataTypeAndSymbol(gap.Strength, "strength", symbol),
+				"quality":      gap.Quality,
+				"status":       gap.Status,
+				"touch_count":  gap.TouchCount,
+			}
+			
+			// 添加上下文评分
+			if gap.Context != nil {
+				gapInfo["ctx"] = map[string]interface{}{
+					"strength_z": FormatByDataTypeAndSymbol(gap.Context.StrengthZ, "ratio", symbol),
+					"width_atr":  FormatByDataTypeAndSymbol(gap.Context.WidthATR, "ratio", symbol),
+					"vol_ratio":  FormatByDataTypeAndSymbol(gap.Context.VolRatio, "ratio", symbol),
+					"is_fresh":   gap.Context.IsFresh,
+					"time_score": FormatByDataTypeAndSymbol(gap.Context.TimeScore, "ratio", symbol),
+					"rank_pct":   FormatByDataTypeAndSymbol(gap.Context.RankPct, "ratio", symbol),
+				}
+			}
+			
+			gaps = append(gaps, gapInfo)
+		}
+		result["gaps"] = gaps
 	}
 
 	return result
 }
 
 // extractCompactFibonacci 提取斐波纳契的关键结果
-func extractCompactFibonacci(data *FibonacciData) map[string]interface{} {
+func extractCompactFibonacci(data *FibonacciData, symbol string) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
@@ -1080,7 +1126,7 @@ func extractCompactFibonacci(data *FibonacciData) map[string]interface{} {
 				for _, level := range ret.Levels {
 					if level.Importance >= 0.5 { // 只包含重要性>=50%的级别
 						ratioKey := fmt.Sprintf("fib_%.3f", level.Ratio)
-						levels[ratioKey] = level.Price
+						levels[ratioKey] = FormatByDataTypeAndSymbol(level.Price, "price", symbol)
 					}
 				}
 
@@ -1102,7 +1148,7 @@ func extractCompactFibonacci(data *FibonacciData) map[string]interface{} {
 				levels := make(map[string]float64)
 				for _, level := range ext.Levels {
 					ratioKey := fmt.Sprintf("ext_%.3f", level.Ratio)
-					levels[ratioKey] = level.Price
+					levels[ratioKey] = FormatByDataTypeAndSymbol(level.Price, "price", symbol)
 				}
 				if len(levels) > 0 {
 					result["levels"] = levels
@@ -2080,17 +2126,17 @@ func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKli
 		supertrend := calculateSupertrend(klines, 20, 5.0)
 
 		result[tf] = map[string]interface{}{
-			"道氏理论数据": extractCompactDowTheoryWithSupertrend(tfData.DowTheory, supertrend),
+			"道氏理论数据": extractCompactDowTheoryWithSupertrend(tfData.DowTheory, supertrend, data.Symbol),
 			"超级趋势指标": map[string]interface{}{
 				"direction":    supertrend.Direction,
 				"current_line": supertrend.CurrentLine,
 			},
-			"通道数据":    extractCompactChannelAnalysis(tfData.ChannelAnalysis),
-			"VPVR数据":  extractCompactVPVR(tfData.VolumeProfile),
-			"供需区数据":   extractCompactSupplyDemand(tfData.SupplyDemand),
-			"FVG数据":   extractCompactFVG(tfData.FairValueGaps),
-			"斐波纳契数据":  extractCompactFibonacci(tfData.Fibonacci),
-			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance),
+			"通道数据":    extractCompactChannelAnalysis(tfData.ChannelAnalysis, data.Symbol),
+			"VPVR数据":  extractCompactVPVR(tfData.VolumeProfile, data.Symbol),
+			"供需区数据":   extractCompactSupplyDemand(tfData.SupplyDemand, data.Symbol),
+			"FVG数据":   extractCompactFVG(tfData.FairValueGaps, data.Symbol),
+			"斐波纳契数据":  extractCompactFibonacci(tfData.Fibonacci, data.Symbol),
+			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance, data.Symbol),
 		}
 	}
 
@@ -2098,7 +2144,7 @@ func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKli
 }
 
 // extractCompactSupportResistance 提取支撑阻力转换线的关键结果
-func extractCompactSupportResistance(data *SupportResistanceData) map[string]interface{} {
+func extractCompactSupportResistance(data *SupportResistanceData, symbol string) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{
 			"support_resistance_lines": []map[string]interface{}{},
@@ -2130,9 +2176,9 @@ func extractCompactSupportResistance(data *SupportResistanceData) map[string]int
 	// 提取关键水平线信息
 	for _, level := range data.KeyLevels {
 		lineInfo := map[string]interface{}{
-			"price":     level.Price,
+			"price":     FormatByDataTypeAndSymbol(level.Price, "price", symbol),
 			"type":      level.Type,
-			"strength":  level.Strength,
+			"strength":  FormatByDataTypeAndSymbol(level.Strength, "strength", symbol),
 			"hit_count": level.HitCount,
 		}
 		lines = append(lines, lineInfo)
@@ -2155,23 +2201,23 @@ func extractCompactSupportResistance(data *SupportResistanceData) map[string]int
 }
 
 // extractCompactDowTheoryWithSupertrend 提取包含超级趋势的道氏理论数据
-func extractCompactDowTheoryWithSupertrend(data *DowTheoryData, supertrend SuperTrendResult) map[string]interface{} {
+func extractCompactDowTheoryWithSupertrend(data *DowTheoryData, supertrend SuperTrendResult, symbol string) map[string]interface{} {
 	result := map[string]interface{}{
 		"trend_direction":   "unknown",
 		"trend_strength":    0.0,
 		"signal_confidence": 0.0,
 		"supertrend": map[string]interface{}{
 			"direction":    supertrend.Direction,
-			"current_line": supertrend.CurrentLine,
-			"upper_line":   supertrend.UpperLine,
-			"lower_line":   supertrend.LowerLine,
+			"current_line": FormatByDataTypeAndSymbol(supertrend.CurrentLine, "price", symbol),
+			"upper_line":   FormatByDataTypeAndSymbol(supertrend.UpperLine, "price", symbol),
+			"lower_line":   FormatByDataTypeAndSymbol(supertrend.LowerLine, "price", symbol),
 		},
 	}
 
 	if data != nil && data.TrendStrength != nil {
 		result["trend_direction"] = data.TrendStrength.Direction
-		result["trend_strength"] = data.TrendStrength.Overall
-		result["signal_confidence"] = data.TrendStrength.Consistency
+		result["trend_strength"] = FormatByDataTypeAndSymbol(data.TrendStrength.Overall, "strength", symbol)
+		result["signal_confidence"] = FormatByDataTypeAndSymbol(data.TrendStrength.Consistency, "confidence", symbol)
 	}
 
 	return result
