@@ -90,7 +90,12 @@ func FormatByDataTypeAndSymbol(value float64, dataType string, symbol string) fl
 	case "slope", "ratio":
 		precision = 4 // 斜率和比率保留4位
 	case "atr", "technical":
-		precision = 2 // 技术指标保留2位
+		// 技术指标精度：基于数值大小统一规则
+		if value < 1.0 {
+			precision = 5 // 小于1的保留5位: 0.38543
+		} else {
+			precision = 2 // 大于等于1的保留2位: 91.23
+		}
 	default:
 		precision = 2 // 默认2位
 	}
