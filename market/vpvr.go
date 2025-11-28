@@ -104,9 +104,16 @@ func (va *VPVRAnalyzer) calculatePriceLevels(klines []Kline) []*PriceLevel {
 	// 转换为切片并排序
 	levels := make([]*PriceLevel, 0, len(levelMap))
 	for _, level := range levelMap {
-		if level.Volume >= va.config.MinVolume {
-			levels = append(levels, level)
-		}
+		// 移除最小成交量硬阈值过滤
+		// 原有过滤: if level.Volume >= va.config.MinVolume
+		// 让AI根据成交量相对重要性进行判断
+		//
+		// if level.Volume >= va.config.MinVolume {
+		//     levels = append(levels, level)
+		// }
+		
+		// 保留所有成交量数据，让AI分析
+		levels = append(levels, level)
 	}
 
 	// 按价格排序

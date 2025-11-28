@@ -102,14 +102,15 @@ func (fa *FibonacciAnalyzer) identifySwingPoints(klines []Kline) []PricePoint {
 				}
 			}
 			
-			// 计算价格波动幅度
-			priceRange := maxPrice - minPrice
-			swingAmplitude := priceRange / ((maxPrice + minPrice) / 2) // 相对幅度
-			
-			// 只有达到最小摆动幅度的才认为是有效摆动点
-			if swingAmplitude < fa.config.MinSwingSize {
-				continue // 跳过幅度太小的摆动点
-			}
+			// 移除最小摆动幅度硬阈值过滤
+			// 原有过滤: 计算价格波动幅度，如果小于阈值则跳过
+			// 让AI根据市场环境和币种特性判断摆动重要性
+			// 
+			// priceRange := maxPrice - minPrice
+			// swingAmplitude := priceRange / ((maxPrice + minPrice) / 2) // 相对幅度
+			// if swingAmplitude < fa.config.MinSwingSize {
+			//     continue // 跳过幅度太小的摆动点
+			// }
 		}
 		
 		// 添加摆动点
@@ -139,14 +140,15 @@ func (fa *FibonacciAnalyzer) calculateRetracements(swingPoints []PricePoint, kli
 		startPoint := swingPoints[i]
 		endPoint := swingPoints[i+1]
 		
-		// 计算价格变动幅度
-		priceMove := abs(endPoint.Price - startPoint.Price)
-		priceMovePercent := priceMove / startPoint.Price
-		
-		// 检查是否满足最小趋势长度要求
-		if priceMovePercent < fa.config.MinTrendLength {
-			continue
-		}
+		// 移除最小趋势长度硬阈值过滤  
+		// 原有过滤: 计算价格变动幅度，如果小于阈值则跳过
+		// 让AI根据币种波动特性判断趋势重要性
+		//
+		// priceMove := abs(endPoint.Price - startPoint.Price)
+		// priceMovePercent := priceMove / startPoint.Price
+		// if priceMovePercent < fa.config.MinTrendLength {
+		//     continue
+		// }
 		
 		// 确定趋势类型
 		var trendType TrendType

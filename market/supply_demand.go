@@ -987,7 +987,10 @@ func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone) []
 	var active []*SupplyDemandZone
 
 	for _, zone := range zones {
-		if zone.IsActive && zone.Strength >= sda.config.QualityThreshold*100 {
+		// 移除质量阈值硬过滤 - 让AI判断区域重要性
+		// 原有过滤: if zone.IsActive && zone.Strength >= sda.config.QualityThreshold*100
+		// 现在只要是活跃状态就保留，让AI根据强度、质量等综合判断
+		if zone.IsActive {
 			active = append(active, zone)
 		}
 	}

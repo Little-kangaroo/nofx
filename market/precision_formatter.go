@@ -162,6 +162,31 @@ func FormatTimeframeAnalysis(tfAnalysis *TimeframeAnalysis, symbol string) {
 		formatFVGList(tfAnalysis.FairValueGaps.BullishFVGs, symbol)
 		formatFVGList(tfAnalysis.FairValueGaps.BearishFVGs, symbol)
 		formatFVGList(tfAnalysis.FairValueGaps.ActiveFVGs, symbol)
+		
+		// 格式化FVG统计数据
+		if tfAnalysis.FairValueGaps.Statistics != nil {
+			formatFVGStatisticsInFormatter(tfAnalysis.FairValueGaps.Statistics, symbol)
+		}
+	}
+
+	// 格式化供需区统计数据
+	if tfAnalysis.SupplyDemand != nil && tfAnalysis.SupplyDemand.Statistics != nil {
+		formatSDStatisticsInFormatter(tfAnalysis.SupplyDemand.Statistics, symbol)
+	}
+
+	// 格式化斐波纳契统计数据  
+	if tfAnalysis.Fibonacci != nil && tfAnalysis.Fibonacci.Statistics != nil {
+		formatFibStatisticsInFormatter(tfAnalysis.Fibonacci.Statistics, symbol)
+	}
+
+	// 格式化支撑阻力统计数据
+	if tfAnalysis.SupportResistance != nil && tfAnalysis.SupportResistance.Statistics != nil {
+		formatSRStatisticsInFormatter(tfAnalysis.SupportResistance.Statistics, symbol)
+	}
+
+	// 格式化支撑阻力级别数据
+	if tfAnalysis.SupportResistance != nil {
+		formatSRLevelsInFormatter(tfAnalysis.SupportResistance.KeyLevels, symbol)
 	}
 }
 
@@ -241,5 +266,62 @@ func formatMediumTermData(data *MediumTermData, symbol string) {
 		data.ATR14 = FormatByDataTypeAndSymbol(data.ATR14, "atr", symbol)
 		data.CurrentVolume = FormatByDataTypeAndSymbol(data.CurrentVolume, "volume", symbol)
 		data.AverageVolume = FormatByDataTypeAndSymbol(data.AverageVolume, "volume", symbol)
+	}
+}
+
+// formatSDStatisticsInFormatter 格式化供需区统计数据（formatter文件中的实现）
+func formatSDStatisticsInFormatter(stats *SDStatistics, symbol string) {
+	if stats == nil {
+		return
+	}
+	
+	stats.AvgZoneStrength = FormatByDataTypeAndSymbol(stats.AvgZoneStrength, "strength", symbol)
+	stats.AvgZoneWidth = FormatByDataTypeAndSymbol(stats.AvgZoneWidth, "price", symbol)
+	stats.SuccessRate = FormatByDataTypeAndSymbol(stats.SuccessRate, "confidence", symbol)
+	stats.BreakoutRate = FormatByDataTypeAndSymbol(stats.BreakoutRate, "confidence", symbol)
+	stats.ReactionRate = FormatByDataTypeAndSymbol(stats.ReactionRate, "confidence", symbol)
+}
+
+// formatFVGStatisticsInFormatter 格式化FVG统计数据（formatter文件中的实现）
+func formatFVGStatisticsInFormatter(stats *FVGStatistics, symbol string) {
+	if stats == nil {
+		return
+	}
+	
+	stats.AvgFVGWidth = FormatByDataTypeAndSymbol(stats.AvgFVGWidth, "price", symbol)
+	stats.AvgFVGStrength = FormatByDataTypeAndSymbol(stats.AvgFVGStrength, "strength", symbol)
+	stats.FillRate = FormatByDataTypeAndSymbol(stats.FillRate, "confidence", symbol)
+	stats.SuccessRate = FormatByDataTypeAndSymbol(stats.SuccessRate, "confidence", symbol)
+	stats.AvgFillTime = FormatByDataTypeAndSymbol(stats.AvgFillTime, "technical", symbol)
+}
+
+// formatFibStatisticsInFormatter 格式化斐波纳契统计数据（formatter文件中的实现）
+func formatFibStatisticsInFormatter(stats *FibStatistics, symbol string) {
+	if stats == nil {
+		return
+	}
+	
+	stats.SuccessRate = FormatByDataTypeAndSymbol(stats.SuccessRate, "confidence", symbol)
+	stats.AvgReactionTime = FormatByDataTypeAndSymbol(stats.AvgReactionTime, "technical", symbol)
+	stats.AvgStrength = FormatByDataTypeAndSymbol(stats.AvgStrength, "strength", symbol)
+}
+
+// formatSRStatisticsInFormatter 格式化支撑阻力统计数据（formatter文件中的实现）
+func formatSRStatisticsInFormatter(stats *SRStatistics, symbol string) {
+	if stats == nil {
+		return
+	}
+	
+	stats.AvgStrength = FormatByDataTypeAndSymbol(stats.AvgStrength, "strength", symbol)
+	stats.AvgHitCount = FormatByDataTypeAndSymbol(stats.AvgHitCount, "technical", symbol)
+}
+
+// formatSRLevelsInFormatter 格式化支撑阻力级别列表（formatter文件中的实现）
+func formatSRLevelsInFormatter(levels []*SRLevel, symbol string) {
+	for _, level := range levels {
+		if level != nil {
+			level.Price = FormatByDataTypeAndSymbol(level.Price, "price", symbol)
+			level.Strength = FormatByDataTypeAndSymbol(level.Strength, "strength", symbol)
+		}
 	}
 }

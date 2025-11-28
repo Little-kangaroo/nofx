@@ -539,7 +539,7 @@ const (
 var defaultVPVRConfig = VPVRConfig{
 	TickSize:         0.01,   // 默认1分精度
 	ValueAreaPercent: 0.70,   // 70%价值区域
-	MinVolume:        0.001,  // 最小成交量
+	MinVolume:        0.001,  // 最小成交量 (已移除硬过滤，仅作参考)
 	TimeFrame:        "4h",   // 4小时时间框架
 	ShowBuySell:      true,   // 显示买卖分布
 	SmoothingFactor:  1.0,    // 无平滑
@@ -577,6 +577,7 @@ type SupplyDemandZone struct {
 	IsActive      bool        `json:"is_active"`      // 是否活跃
 	IsBroken      bool        `json:"is_broken"`      // 是否被突破
 	BreakTime     int64       `json:"break_time"`     // 突破时间
+	Context       *ContextMetrics `json:"ctx"`        // 上下文评分
 }
 
 // ZoneType 区域类型
@@ -704,17 +705,17 @@ const (
 )
 
 var defaultSDConfig = SDConfig{
-	MinImpulsePercent:  0.003,  // 0.3%最小冲击 (大幅放宽，适应连续小阴线)
-	MinBasePercent:     0.001,  // 0.1%最小整理 (大幅放宽)
-	MaxBasePercent:     0.12,   // 12%最大整理 (大幅放宽，适应倾斜/收敛形态)
-	MinVolumeFactor:    0.8,    // 0.8倍成交量 (大幅放宽，允许低量盘整)
+	MinImpulsePercent:  0.003,  // 0.3%最小冲击 (已移除部分硬过滤，AI自主判断)
+	MinBasePercent:     0.001,  // 0.1%最小整理 (已移除部分硬过滤，AI自主判断)
+	MaxBasePercent:     0.12,   // 12%最大整理 (已移除部分硬过滤，AI自主判断)
+	MinVolumeFactor:    0.8,    // 0.8倍成交量 (已移除部分硬过滤，AI自主判断)
 	MaxZoneAge:         200,    // 200根K线 (大幅延长有效期)
 	MaxTouchCount:      8,      // 最大8次触及 (允许更多测试)
 	BreakoutThreshold:  0.02,   // 2%突破阈值 (稍微放宽)
 	ConfirmationBars:   1,      // 1根确认K线 (加快响应)
 	TimeFrames:         []string{"5m", "15m", "30m", "1h", "4h"},
 	EnableValidation:   false,  // 暂时关闭验证，提升识别率
-	QualityThreshold:   0.15,   // 15%质量阈值 (大幅降低，允许弱区域)
+	QualityThreshold:   0.15,   // 15%质量阈值 (已移除硬过滤，AI自主判断)
 }
 
 // Fair Value Gap (FVG) 公平价值缺口相关数据结构
@@ -750,6 +751,7 @@ type FairValueGap struct {
 	IsPartialFill  bool        `json:"is_partial_fill"` // 是否部分填补
 	VolumeContext  *FVGVolume  `json:"volume_context"`  // 成交量上下文
 	Validation     *FVGValidation `json:"validation"`   // 验证信息
+	Context        *ContextMetrics `json:"ctx"`         // 上下文评分
 }
 
 // FVGType FVG类型
@@ -888,9 +890,9 @@ const (
 )
 
 var defaultFVGConfig = FVGConfig{
-	MinGapPercent:    0.002,  // 0.2%最小缺口
-	MaxGapPercent:    0.05,   // 5%最大缺口
-	MinVolumeRatio:   1.2,    // 1.2倍最小成交量比率
+	MinGapPercent:    0.002,  // 0.2%最小缺口 (已移除硬过滤，AI自主判断)
+	MaxGapPercent:    0.05,   // 5%最大缺口 (已移除硬过滤，AI自主判断)
+	MinVolumeRatio:   1.2,    // 1.2倍最小成交量比率 (已移除硬过滤，AI自主判断)
 	MaxAge:           50,     // 50根K线最大存在时间
 	MaxTouchCount:    3,      // 最大3次触及
 	FillThreshold:    0.8,    // 80%填补阈值
@@ -925,6 +927,7 @@ type FibRetracement struct {
 	IsActive     bool           `json:"is_active"`     // 是否活跃
 	TouchCount   map[string]int `json:"touch_count"`  // 各级别触及次数（价格作为字符串键）
 	CreatedAt    int64          `json:"created_at"`    // 创建时间
+	Context      *ContextMetrics `json:"ctx"`          // 上下文评分
 }
 
 // FibExtension 斐波纳契扩展
@@ -1126,7 +1129,7 @@ const (
 
 // 默认斐波纳契配置
 var defaultFibonacciConfig = FibonacciConfig{
-	MinTrendLength:    0.03,  // 3%最小趋势长度
+	MinTrendLength:    0.03,  // 3%最小趋势长度 (已移除硬过滤，AI自主判断)
 	MaxRetracementAge: 100,   // 100根K线最大存在时间
 	TouchSensitivity:  0.002, // 0.2%触及敏感度
 	QualityThreshold:  0.6,   // 60%质量阈值
@@ -1136,6 +1139,6 @@ var defaultFibonacciConfig = FibonacciConfig{
 	VolumeWeight:      0.3,   // 30%成交量权重
 	DefaultRatios:     []float64{0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618, 2.618}, // 标准斐波比率
 	SwingLookback:     15,    // 15周期回望（优化后的值）
-	MinSwingSize:      0.025, // 2.5%最小摆动幅度（过滤噪音）
+	MinSwingSize:      0.025, // 2.5%最小摆动幅度 (已移除硬过滤，AI自主判断)
 }
 

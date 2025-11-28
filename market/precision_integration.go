@@ -94,6 +94,31 @@ func (ca *ComprehensiveAnalyzer) ApplyPrecisionFormatting(result *ComprehensiveR
 	if result.TradingAdvice != nil {
 		result.TradingAdvice.Confidence = FormatByDataTypeAndSymbol(result.TradingAdvice.Confidence, "confidence", symbol)
 	}
+
+	// 格式化供需区统计数据
+	if result.SupplyDemand != nil && result.SupplyDemand.Statistics != nil {
+		formatSDStatistics(result.SupplyDemand.Statistics, symbol)
+	}
+
+	// 格式化FVG统计数据
+	if result.FairValueGaps != nil && result.FairValueGaps.Statistics != nil {
+		formatFVGStatistics(result.FairValueGaps.Statistics, symbol)
+	}
+
+	// 格式化斐波纳契统计数据
+	if result.Fibonacci != nil && result.Fibonacci.Statistics != nil {
+		formatFibStatistics(result.Fibonacci.Statistics, symbol)
+	}
+
+	// 格式化支撑阻力统计数据
+	if result.SupportResistance != nil && result.SupportResistance.Statistics != nil {
+		formatSRStatistics(result.SupportResistance.Statistics, symbol)
+	}
+
+	// 格式化支撑阻力级别数据
+	if result.SupportResistance != nil {
+		formatSRLevels(result.SupportResistance.KeyLevels, symbol)
+	}
 }
 
 // ApplyMultiTimeframePrecisionFormatting 应用精度格式化到多时间框架分析结果
@@ -169,4 +194,61 @@ func ApplyBasicDataPrecisionFormatting(data *Data, symbol string) {
 
 	// 使用precision_formatter.go中的函数格式化基础指标
 	FormatBasicIndicators(data, symbol)
+}
+
+// formatSDStatistics 格式化供需区统计数据
+func formatSDStatistics(stats *SDStatistics, symbol string) {
+	if stats == nil {
+		return
+	}
+	
+	stats.AvgZoneStrength = FormatByDataTypeAndSymbol(stats.AvgZoneStrength, "strength", symbol)
+	stats.AvgZoneWidth = FormatByDataTypeAndSymbol(stats.AvgZoneWidth, "price", symbol)
+	stats.SuccessRate = FormatByDataTypeAndSymbol(stats.SuccessRate, "confidence", symbol)
+	stats.BreakoutRate = FormatByDataTypeAndSymbol(stats.BreakoutRate, "confidence", symbol)
+	stats.ReactionRate = FormatByDataTypeAndSymbol(stats.ReactionRate, "confidence", symbol)
+}
+
+// formatFVGStatistics 格式化FVG统计数据
+func formatFVGStatistics(stats *FVGStatistics, symbol string) {
+	if stats == nil {
+		return
+	}
+	
+	stats.AvgFVGWidth = FormatByDataTypeAndSymbol(stats.AvgFVGWidth, "price", symbol)
+	stats.AvgFVGStrength = FormatByDataTypeAndSymbol(stats.AvgFVGStrength, "strength", symbol)
+	stats.FillRate = FormatByDataTypeAndSymbol(stats.FillRate, "confidence", symbol)
+	stats.SuccessRate = FormatByDataTypeAndSymbol(stats.SuccessRate, "confidence", symbol)
+	stats.AvgFillTime = FormatByDataTypeAndSymbol(stats.AvgFillTime, "technical", symbol)
+}
+
+// formatFibStatistics 格式化斐波纳契统计数据
+func formatFibStatistics(stats *FibStatistics, symbol string) {
+	if stats == nil {
+		return
+	}
+	
+	stats.SuccessRate = FormatByDataTypeAndSymbol(stats.SuccessRate, "confidence", symbol)
+	stats.AvgReactionTime = FormatByDataTypeAndSymbol(stats.AvgReactionTime, "technical", symbol)
+	stats.AvgStrength = FormatByDataTypeAndSymbol(stats.AvgStrength, "strength", symbol)
+}
+
+// formatSRStatistics 格式化支撑阻力统计数据
+func formatSRStatistics(stats *SRStatistics, symbol string) {
+	if stats == nil {
+		return
+	}
+	
+	stats.AvgStrength = FormatByDataTypeAndSymbol(stats.AvgStrength, "strength", symbol)
+	stats.AvgHitCount = FormatByDataTypeAndSymbol(stats.AvgHitCount, "technical", symbol)
+}
+
+// formatSRLevels 格式化支撑阻力级别列表
+func formatSRLevels(levels []*SRLevel, symbol string) {
+	for _, level := range levels {
+		if level != nil {
+			level.Price = FormatByDataTypeAndSymbol(level.Price, "price", symbol)
+			level.Strength = FormatByDataTypeAndSymbol(level.Strength, "strength", symbol)
+		}
+	}
 }

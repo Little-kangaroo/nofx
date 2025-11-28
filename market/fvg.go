@@ -32,18 +32,21 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 		return nil
 	}
 
+	// 创建上下文计算器
+	contextCalc := NewContextCalculator(klines)
+
 	var bullishFVGs []*FairValueGap
 	var bearishFVGs []*FairValueGap
 
 	// 扫描所有K线寻找FVG（从第2根K线开始，需要前两根作为参考）
 	for i := 2; i < len(klines); i++ {
 		// 检查看涨FVG
-		if bullishGap := fvg.identifyBullishFVG(klines, i); bullishGap != nil {
+		if bullishGap := fvg.identifyBullishFVG(klines, i, contextCalc); bullishGap != nil {
 			bullishFVGs = append(bullishFVGs, bullishGap)
 		}
 
 		// 检查看跌FVG
-		if bearishGap := fvg.identifyBearishFVG(klines, i); bearishGap != nil {
+		if bearishGap := fvg.identifyBearishFVG(klines, i, contextCalc); bearishGap != nil {
 			bearishFVGs = append(bearishFVGs, bearishGap)
 		}
 	}
@@ -71,6 +74,9 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 	// 计算统计信息
 	statistics := fvg.calculateStatistics(bullishFVGs, bearishFVGs, activeFVGs)
 
+	// 计算上下文评分 (在所有FVG创建后进行)
+	fvg.CalculateContextScores(allFVGs, contextCalc)
+
 	return &FVGData{
 		BullishFVGs:  bullishFVGs,
 		BearishFVGs:  bearishFVGs,
@@ -82,7 +88,7 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 }
 
 // identifyBullishFVG 识别看涨FVG
-func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int) *FairValueGap {
+func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCalc *ContextCalculator) *FairValueGap {
 	if index < 2 || index >= len(klines) {
 		return nil
 	}
@@ -107,17 +113,28 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int) *FairValue
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapLow * 100
 
-	// 检查缺口大小是否在配置范围内（配置值已经是百分比）
-	if gapWidthPercent < fvg.config.MinGapPercent || gapWidthPercent > fvg.config.MaxGapPercent {
+	// 移除硬阈值过滤 - 让AI自己判断缺口重要性
+	// 原有的硬阈值过滤导致不同币种适配问题：
+	// - MEME币需要大阈值，主流币需要小阈值  
+	// - 一个固定参数无法适配所有币种
+	// 现在让AI根据币种特性和市场环境进行判断
+	//
+	// if gapWidthPercent < fvg.config.MinGapPercent || gapWidthPercent > fvg.config.MaxGapPercent {
+	//     return nil
+	// }
+
+	// 保留基本的数据质量检查：确保缺口确实存在
+	if gapWidth <= 0 {
 		return nil
 	}
 
-	// 检查成交量确认（如果需要）
+	// 成交量确认改为可选，不强制过滤
+	volumeConfirmed := false
 	if fvg.config.RequireVolConf {
 		avgVolume := fvg.calculateAverageVolume(klines, index-10, index)
-		if middleCandle.Volume < avgVolume*fvg.config.MinVolumeRatio {
-			return nil
-		}
+		volumeConfirmed = middleCandle.Volume >= avgVolume*fvg.config.MinVolumeRatio
+	} else {
+		volumeConfirmed = true // 不要求成交量确认时默认为true
 	}
 
 	// 确定形成类型
@@ -151,14 +168,14 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int) *FairValue
 		FillProgress: 0,
 	}
 
-	// 计算成交量上下文
-	gap.VolumeContext = fvg.calculateVolumeContext(klines, index)
+	// 计算成交量上下文，包含确认状态
+	gap.VolumeContext = fvg.calculateVolumeContextWithConfirmation(klines, index, volumeConfirmed)
 
 	return gap
 }
 
 // identifyBearishFVG 识别看跌FVG
-func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int) *FairValueGap {
+func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, contextCalc *ContextCalculator) *FairValueGap {
 	if index < 2 || index >= len(klines) {
 		return nil
 	}
@@ -183,17 +200,28 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int) *FairValue
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapHigh * 100
 
-	// 检查缺口大小是否在配置范围内（配置值已经是百分比）
-	if gapWidthPercent < fvg.config.MinGapPercent || gapWidthPercent > fvg.config.MaxGapPercent {
+	// 移除硬阈值过滤 - 让AI自己判断缺口重要性
+	// 原有的硬阈值过滤导致不同币种适配问题：
+	// - MEME币需要大阈值，主流币需要小阈值  
+	// - 一个固定参数无法适配所有币种
+	// 现在让AI根据币种特性和市场环境进行判断
+	//
+	// if gapWidthPercent < fvg.config.MinGapPercent || gapWidthPercent > fvg.config.MaxGapPercent {
+	//     return nil
+	// }
+
+	// 保留基本的数据质量检查：确保缺口确实存在
+	if gapWidth <= 0 {
 		return nil
 	}
 
-	// 检查成交量确认（如果需要）
+	// 成交量确认改为可选，不强制过滤  
+	volumeConfirmed := false
 	if fvg.config.RequireVolConf {
 		avgVolume := fvg.calculateAverageVolume(klines, index-10, index)
-		if middleCandle.Volume < avgVolume*fvg.config.MinVolumeRatio {
-			return nil
-		}
+		volumeConfirmed = middleCandle.Volume >= avgVolume*fvg.config.MinVolumeRatio
+	} else {
+		volumeConfirmed = true // 不要求成交量确认时默认为true
 	}
 
 	// 确定形成类型
@@ -227,8 +255,8 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int) *FairValue
 		FillProgress: 0,
 	}
 
-	// 计算成交量上下文
-	gap.VolumeContext = fvg.calculateVolumeContext(klines, index)
+	// 计算成交量上下文，包含确认状态
+	gap.VolumeContext = fvg.calculateVolumeContextWithConfirmation(klines, index, volumeConfirmed)
 
 	return gap
 }
@@ -311,6 +339,32 @@ func (fvg *FVGAnalyzer) calculateVolumeContext(klines []Kline, index int) *FVGVo
 		VolumeRatio:        volumeRatio,
 		TouchVolumes:       make([]float64, 0),
 		VolumeConfirmation: volumeRatio >= fvg.config.MinVolumeRatio,
+	}
+}
+
+// calculateVolumeContextWithConfirmation 计算成交量上下文（包含确认状态）
+func (fvg *FVGAnalyzer) calculateVolumeContextWithConfirmation(klines []Kline, index int, volumeConfirmed bool) *FVGVolume {
+	if index < 10 || index >= len(klines) {
+		return &FVGVolume{
+			VolumeConfirmation: volumeConfirmed, // 传递确认状态
+		}
+	}
+
+	// 修正：使用中间K线（产生缺口的关键K线）的成交量
+	formationVolume := klines[index-1].Volume
+	avgVolume := fvg.calculateAverageVolume(klines, index-10, index)
+
+	volumeRatio := 1.0
+	if avgVolume > 0 {
+		volumeRatio = formationVolume / avgVolume
+	}
+
+	return &FVGVolume{
+		FormationVolume:    formationVolume,
+		AverageVolume:      avgVolume,
+		VolumeRatio:        volumeRatio,
+		TouchVolumes:       make([]float64, 0),
+		VolumeConfirmation: volumeConfirmed, // 使用传入的确认状态而非重新计算
 	}
 }
 
