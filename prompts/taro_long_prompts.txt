@@ -86,7 +86,9 @@
                   · 做空：entry_price 位于 supply zone 高度的上 40%；
                 * 止损价 sl 必须放在该供需区的相反边界外侧若干 tick / ATR，而不是区间内部；
                 * 通过 B5 检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求。
-                * 【EDGE 进场确认（5m Rejection）｜硬要求】为减少“供需区被抬走”的快速失败单，EDGE 还必须满足以下任一确认（多空对称）：
+                * 【EDGE 进场确认（5m Rejection）｜软化要求】：
+                   - 特权情况（SNIPE变体）：若 `ctx.strength_z` > 1.5 （极强结构）且顺势，允许使用“限价挂单（Limit Order）”在 Zone 边缘直接入场，无需等待 K 线收盘确认。
+                   - 普通情况：若不满足特权条件，必须满足以下任一确认（多空对称）：
                   · SHORT（依托 supply 上沿试空）：需要出现“5m 拒绝确认”后才允许 open_short：
                     - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：high ≥ supply_high 且 close ≤ supply_high（向上刺破但收回到供给区内/下方）；
                     - Rejection-B（备选）：最近 1~2 根已收盘 5m K 中，至少有 1 根满足：
@@ -117,9 +119,9 @@
                    3) 成交确认（加分但非硬性）：突破K的 volume ≥ 1.2*avg_volume(同周期)
 
                 B) 回踩带（入场允许区）：
-                   - retest_band = [key_level - 0.25*ATR14(5m), key_level + 0.25*ATR14(5m)]
-                   - LONG：突破向上后，只允许在回踩带内的“靠下区域”考虑做多（避免再次追高）
-                   - SHORT：突破向下后，只允许在回踩带内的“靠上区域”考虑做空（避免再次追低）
+                  - 标准回踩：[key_level - 0.5*ATR14(5m), key_level + 0.5*ATR14(5m)]
+                  - 强势回踩（空中加油）：若 5m 动能极强（MACD强劲/大阳线），允许在 key_level 上方/下方 1.5*ATR 范围内；只要出现 5m 停顿或微回调（Flag），即可视为有效回踩，不必触碰 key_level。
+                  - LONG：只允许在上述带内考虑做多；SHORT：只允许在上述带内考虑做空。
 
                 C) 5m 入场确认（硬要求，满足其一）：
                    - Confirm-1（优先）：出现 5m Rejection-A（对 key_level 或相邻 demand/supply 边界的刺破回收）
@@ -1301,9 +1303,12 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
   - 若某 timeframe supertrend.direction 与该 timeframe 的结构/均线趋势相反：
     * 将该 timeframe 的 tf_bias 至少降一级（例如 BULL → NEUTRAL，BEAR → NEUTRAL）；
     * 对开仓增加确认门槛：只允许 EDGE/BO_RETEST（禁止任何追价式入场）。
-  - 若 4h supertrend.direction 反向：
-    * major_bias 不得直接判为强趋势（Strong BULL/BEAR），除非 1h/30m/15m 同向共振且结构空间（R_clean）显著充足；
-    * reasoning 必须明确写出“4h supertrend 与其它信号冲突”的处理结果（降级/观望/仅小仓）。
+  - 若 4h supertrend.direction 反向（冲突处理）：
+      * 原则上 major_bias 应降级；
+      * 但若满足以下“趋势早信（Early Trend）”条件之一，允许无视该冲突，维持 Strong Bias（不降级）：
+        1) 1h 与 30m 的 SuperTrend、MACD、EMA 均已同向共振（表明中短周期已完成反转，4h 尚未跟上）；
+        2) 价格已有效突破 1h 级别的关键供需区或结构位。
+      * 目的：避免在趋势反转初期因大周期指标滞后而踏空。
 
 在为每个 symbol 判定 tf_bias 时，至少要：
 - 明确指出一个核心结构来源（如“4h 道氏空头结构 + 下降通道中上部”或“1h 强 demand zone 上沿”）；
@@ -1649,7 +1654,13 @@ B5) 最近反向结构与 R_clean（定义必须可计算）
     * 若未给出上述任一“最近反向结构”与 R_clean：视为流程不完整，禁止开仓。
     * 若 trade_style="LTF_scalp" 且 R_clean < 1.0：视为“空间不足”，禁止开仓。
     * 若 trade_style="HTF_swing" 且 R_clean < 1.5：默认不得开仓；仅当 setup_grade="A" 且能明确指出更远的次级目标结构提供 ≥2R 空间时才允许例外（必须写清楚）。
-
+  - 穿透规则（Breakout Mode）：
+    * 若当前 trade_style="HTF_swing" 或顺势 A_trend（major_bias同向）：
+    * 且最近的反向结构（阻力位/支撑位）满足以下任一条件：
+      1) 强度较弱（Strength < 60 或 ctx.strength_z < 0.5）；
+      2) 已被多次测试（status="weakened"）；
+      3) 阻力位距离当前价格 Distance < 1.5 * ATR（空间太小，视为噪音/可突破）；
+      - 则允许在计算 R_clean 时“穿透”该阻力，直接以更远处的强结构作为目标位计算。
 
 B6) 执行时效与反延迟闸门（下单前最后一公里｜硬要求）
   - 问：在【实际下单/发送订单】的那一刻，以下条件是否全部满足？
