@@ -697,11 +697,14 @@
          - SHORT：new_stop ≥ last_price + stop_distance_min_ticks*tick_size
        * 若无法满足可执行性约束 ⇒ stop_update:null
 
-  2) 非 ROI 锁盈场景：早期（R_unrealized < break_even_trigger_R）默认不做“推入盈利区”的 stop_update
-     - 若 R_unrealized < break_even_trigger_R 且 roi_unrealized < roi_lock_trigger：
-       * 除非触发“强制减仓/强制平仓”条件，否则禁止把止损推入盈利区：
-         - 必须输出 stop_update:null
-       * 允许的止损调整仅限“风险减载”（例如把 -1R 风险收敛到 -0.5R），但不得跨过 BE_with_costs 进入盈利区
+  2) 非 ROI 锁盈场景：早期（R_unrealized < break_even_trigger_R）——【死区锁定规则】
+       - 核心原则：在浮盈微薄的“噪音区”，必须给予行情呼吸空间，禁止过早收紧止损。
+       - 若 R_unrealized < 0.3R（死区）：
+         * **禁止** 依据 EMA/轨道/指标 移动止损（防止被正常波动洗出）。
+         * **仅允许** 在出现明确的“结构性破坏”时移动止损（例如：5m 形成了新的、更高的 Swing Low 结构，且该结构非常清晰）。
+         * 若无结构性变化，输出 stop_update:null，保持原始止损不动。
+       - 若 0.3R ≤ R_unrealized < break_even_trigger_R：
+         * 允许“风险减载”，可依据轨道缓慢上移止损以减少潜在亏损，但不得跨过 BE_with_costs 进入盈利区。
 
   3) break-even 保护（R 达到阈值后，允许把止损推到成本上方一点点）：
      - 若 R_unrealized ≥ break_even_trigger_R 且 持仓时间 ≥ protect_trigger.time_min：
