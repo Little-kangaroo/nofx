@@ -295,6 +295,9 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 	// 将多时间框架分析添加到结果中（需要在ComprehensiveResult中添加该字段）
 	// result.MultiTimeframeAnalysis = multiTimeframeAnalysis
 
+	// 应用精度格式化
+	ca.ApplyPrecisionFormatting(result, symbol)
+
 	return result
 }
 
@@ -365,6 +368,9 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 
 	// 生成交易建议
 	result.TradingAdvice = ca.generateTradingAdvice(result)
+
+	// 应用精度格式化
+	ca.ApplyPrecisionFormatting(result, symbol)
 
 	return result
 }
@@ -1358,6 +1364,9 @@ func (ca *ComprehensiveAnalyzer) AnalyzeAllTimeframes(symbol string, currentPric
 
 	// 生成综合总结
 	analysis.Summary = ca.generateAnalysisSummary(analysis.Timeframes, currentPrice)
+
+	// 应用多时间框架精度格式化
+	ca.ApplyMultiTimeframePrecisionFormatting(analysis, symbol)
 
 	return analysis
 }

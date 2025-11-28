@@ -704,17 +704,17 @@ const (
 )
 
 var defaultSDConfig = SDConfig{
-	MinImpulsePercent:  0.01,   // 1%最小冲击 (放宽标准)
-	MinBasePercent:     0.003,  // 0.3%最小整理 (放宽标准)
-	MaxBasePercent:     0.05,   // 5%最大整理 (放宽标准)
-	MinVolumeFactor:    1.2,    // 1.2倍成交量 (放宽标准)
-	MaxZoneAge:         100,    // 100根K线 (延长有效期)
-	MaxTouchCount:      5,      // 最大5次触及 (允许更多测试)
-	BreakoutThreshold:  0.015,  // 1.5%突破阈值 (稍微严格)
-	ConfirmationBars:   2,      // 2根确认K线
+	MinImpulsePercent:  0.003,  // 0.3%最小冲击 (大幅放宽，适应连续小阴线)
+	MinBasePercent:     0.001,  // 0.1%最小整理 (大幅放宽)
+	MaxBasePercent:     0.12,   // 12%最大整理 (大幅放宽，适应倾斜/收敛形态)
+	MinVolumeFactor:    0.8,    // 0.8倍成交量 (大幅放宽，允许低量盘整)
+	MaxZoneAge:         200,    // 200根K线 (大幅延长有效期)
+	MaxTouchCount:      8,      // 最大8次触及 (允许更多测试)
+	BreakoutThreshold:  0.02,   // 2%突破阈值 (稍微放宽)
+	ConfirmationBars:   1,      // 1根确认K线 (加快响应)
 	TimeFrames:         []string{"5m", "15m", "30m", "1h", "4h"},
-	EnableValidation:   true,
-	QualityThreshold:   0.4,    // 40%质量阈值 (大幅放宽)
+	EnableValidation:   false,  // 暂时关闭验证，提升识别率
+	QualityThreshold:   0.15,   // 15%质量阈值 (大幅降低，允许弱区域)
 }
 
 // Fair Value Gap (FVG) 公平价值缺口相关数据结构
