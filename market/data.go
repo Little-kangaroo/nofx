@@ -697,12 +697,12 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 	result := make(map[string]interface{})
 
 	// 全局指标（不依赖时间框架）
-	result["price"] = data.CurrentPrice      // 保留原有字段（向后兼容）
-	result["last_price"] = data.CurrentPrice // 新增字段（更清晰的命名）
-	result["funding_rate"] = data.FundingRate
+	result["price"] = FormatByDataTypeAndSymbol(data.CurrentPrice, "price", data.Symbol)      // 保留原有字段（向后兼容）
+	result["last_price"] = FormatByDataTypeAndSymbol(data.CurrentPrice, "price", data.Symbol) // 新增字段（更清晰的命名）
+	result["funding_rate"] = FormatByDataTypeAndSymbol(data.FundingRate, "ratio", data.Symbol)
 	result["oi_latest"] = func() float64 {
 		if data.OpenInterest != nil {
-			return data.OpenInterest.Latest
+			return FormatByDataTypeAndSymbol(data.OpenInterest.Latest, "volume", data.Symbol)
 		}
 		return 0
 	}()
@@ -713,7 +713,7 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		if len(klines5m) >= 13 {
 			price1hAgo := klines5m[len(klines5m)-13].Close
 			if price1hAgo > 0 {
-				result["change_1h"] = ((data.CurrentPrice - price1hAgo) / price1hAgo) * 100
+				result["change_1h"] = FormatByDataTypeAndSymbol(((data.CurrentPrice - price1hAgo) / price1hAgo) * 100, "percentage", data.Symbol)
 			}
 		}
 	}
@@ -722,7 +722,7 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 	if klines4h, exists := timeframeKlines["4h"]; exists && len(klines4h) >= 2 {
 		price4hAgo := klines4h[len(klines4h)-2].Close
 		if price4hAgo > 0 {
-			result["change_4h"] = ((data.CurrentPrice - price4hAgo) / price4hAgo) * 100
+			result["change_4h"] = FormatByDataTypeAndSymbol(((data.CurrentPrice - price4hAgo) / price4hAgo) * 100, "percentage", data.Symbol)
 		}
 	}
 
@@ -2129,7 +2129,7 @@ func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKli
 			"道氏理论数据": extractCompactDowTheoryWithSupertrend(tfData.DowTheory, supertrend, data.Symbol),
 			"超级趋势指标": map[string]interface{}{
 				"direction":    supertrend.Direction,
-				"current_line": supertrend.CurrentLine,
+				"current_line": FormatByDataTypeAndSymbol(supertrend.CurrentLine, "price", data.Symbol),
 			},
 			"通道数据":    extractCompactChannelAnalysis(tfData.ChannelAnalysis, data.Symbol),
 			"VPVR数据":  extractCompactVPVR(tfData.VolumeProfile, data.Symbol),
