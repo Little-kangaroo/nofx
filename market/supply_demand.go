@@ -55,7 +55,7 @@ func (sda *SupplyDemandAnalyzer) Analyze(klines []Kline) *SupplyDemandData {
 
 	// 筛选活跃区域
 	activeZones := sda.filterActiveZones(allZones)
-	
+
 	// 如果复杂模式识别没有找到足够的区域，使用简单的高低点方法作为补充
 	if len(activeZones) < 2 {
 		backupZones := sda.identifyBasicZones(klines)
@@ -111,7 +111,7 @@ func (sda *SupplyDemandAnalyzer) identifySupplyZones(klines []Kline) []*SupplyDe
 
 	// 过滤和优化区域
 	zones = sda.filterOverlappingZones(zones)
-	
+
 	// 计算区域强度和质量
 	for _, zone := range zones {
 		sda.calculateZoneStrength(zone, klines)
@@ -145,7 +145,7 @@ func (sda *SupplyDemandAnalyzer) identifyDemandZones(klines []Kline) []*SupplyDe
 
 	// 过滤和优化区域
 	zones = sda.filterOverlappingZones(zones)
-	
+
 	// 计算区域强度和质量
 	for _, zone := range zones {
 		sda.calculateZoneStrength(zone, klines)
@@ -408,7 +408,7 @@ func (sda *SupplyDemandAnalyzer) identifyFreshSupply(klines []Kline, index int) 
 	// 创建供给区
 	high := klines[index-1].High
 	low := klines[index].Low
-	
+
 	zone := &SupplyDemandZone{
 		ID:           fmt.Sprintf("fresh_supply_%d", index),
 		Type:         SupplyZone,
@@ -455,7 +455,7 @@ func (sda *SupplyDemandAnalyzer) identifyFreshDemand(klines []Kline, index int) 
 	// 创建需求区
 	high := klines[index].High
 	low := klines[index-1].Low
-	
+
 	zone := &SupplyDemandZone{
 		ID:           fmt.Sprintf("fresh_demand_%d", index),
 		Type:         DemandZone,
@@ -482,19 +482,42 @@ func (sda *SupplyDemandAnalyzer) identifyFreshDemand(klines []Kline, index int) 
 }
 
 // findBaseArea 寻找整理区域
+// findBaseArea 寻找整理区域 (修正版：动态扩展)
 func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, isRally bool) (int, int) {
-	start := centerIndex - 3
-	end := centerIndex + 3
+	// 动态向左扩展
+	start := centerIndex
+	for i := centerIndex - 1; i >= 0 && i >= centerIndex-10; i-- { // 最多向左看10根，防止无限循环
+		// 判断是否为Base Candle (实体较小)
+		// 定义：实体长度 < 总长度的 50% 或者 实体长度远小于冲击K线
+		bodySize := math.Abs(klines[i].Close - klines[i].Open)
+		rangeSize := klines[i].High - klines[i].Low
 
-	// 确保索引有效
-	if start < 0 {
-		start = 0
-	}
-	if end >= len(klines) {
-		end = len(klines) - 1
+		// 如果K线实体很小（盘整特征），则纳入Base
+		if rangeSize > 0 && bodySize/rangeSize < 0.6 {
+			start = i
+		} else {
+			// 遇到大实体K线，停止扩展
+			break
+		}
 	}
 
-	// 计算整理区域的���格范围
+	// 动态向右扩展
+	end := centerIndex
+	for i := centerIndex + 1; i < len(klines) && i <= centerIndex+5; i++ { // 向右不需要看太多，通常接着就是冲击
+		bodySize := math.Abs(klines[i].Close - klines[i].Open)
+		rangeSize := klines[i].High - klines[i].Low
+
+		if rangeSize > 0 && bodySize/rangeSize < 0.6 {
+			end = i
+		} else {
+			break
+		}
+	}
+
+	// 确保Base至少包含中心K线，且不超过合理范围
+	// 如果start == end (单根K线Base)，也是允许的
+
+	// 计算整理区域的价格范围
 	high := klines[start].High
 	low := klines[start].Low
 
@@ -507,9 +530,13 @@ func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, i
 		}
 	}
 
-	// 检查整理区域是否符合要求
-	rangePercent := (high - low) / low
-	if rangePercent < sda.config.MinBasePercent || rangePercent > sda.config.MaxBasePercent {
+	// 检查整理区域的紧凑度 (Base通常是窄幅波动的)
+	// 如果高低差太大，说明不是有效的Base，可能是剧烈震荡
+	avgPrice := (high + low) / 2
+	rangePercent := (high - low) / avgPrice
+
+	// 适当放宽最小限制，严格最大限制
+	if rangePercent > sda.config.MaxBasePercent { // Base太宽，无效
 		return -1, -1
 	}
 
@@ -686,7 +713,7 @@ func (sda *SupplyDemandAnalyzer) filterOverlappingZones(zones []*SupplyDemandZon
 	})
 
 	var filtered []*SupplyDemandZone
-	
+
 	for _, zone := range zones {
 		overlaps := false
 		for _, existing := range filtered {
@@ -695,7 +722,7 @@ func (sda *SupplyDemandAnalyzer) filterOverlappingZones(zones []*SupplyDemandZon
 				break
 			}
 		}
-		
+
 		if !overlaps {
 			filtered = append(filtered, zone)
 		}
@@ -831,7 +858,7 @@ func (sda *SupplyDemandAnalyzer) isZoneBroken(zone *SupplyDemandZone, klines []K
 // countZoneTouches 计算区域触及次数
 func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines []Kline) int {
 	count := 0
-	
+
 	for i := zone.Origin.KlineIndex + 1; i < len(klines); i++ {
 		if sda.priceInZone(klines[i].High, klines[i].Low, zone) {
 			count++
@@ -951,12 +978,12 @@ func (sda *SupplyDemandAnalyzer) calculateStatistics(supplyZones, demandZones, a
 	if len(activeZones) > 0 {
 		totalStrength := 0.0
 		totalWidth := 0.0
-		
+
 		for _, zone := range activeZones {
 			totalStrength += zone.Strength
 			totalWidth += zone.WidthPercent
 		}
-		
+
 		stats.AvgZoneStrength = totalStrength / float64(len(activeZones))
 		stats.AvgZoneWidth = totalWidth / float64(len(activeZones))
 	}
@@ -975,7 +1002,7 @@ func (sda *SupplyDemandAnalyzer) calculateStatistics(supplyZones, demandZones, a
 					reactionCount++
 				}
 			}
-			
+
 			if zone.IsBroken {
 				breakoutCount++
 			}
@@ -1032,7 +1059,7 @@ func (sda *SupplyDemandAnalyzer) GenerateSignals(sdData *SupplyDemandData, curre
 func (sda *SupplyDemandAnalyzer) generateZoneSignal(zone *SupplyDemandZone, currentPrice float64, timestamp int64) *SDSignal {
 	// 检查价格是否接近区域
 	distanceToZone := sda.calculateDistanceToZone(zone, currentPrice)
-	
+
 	// 只为接近区域的价格生成信号
 	if distanceToZone > 0.05 { // 5%范围外
 		return nil
@@ -1178,7 +1205,7 @@ func (sda *SupplyDemandAnalyzer) generateFreshZoneSignal(sdData *SupplyDemandDat
 			zone.Status == StatusFresh &&
 			zone.Quality != QualityWeak &&
 			zone.CreationTime > latestTime {
-			
+
 			freshZone = zone
 			latestTime = zone.CreationTime
 		}
@@ -1221,7 +1248,7 @@ func (sda *SupplyDemandAnalyzer) generateFreshZoneSignal(sdData *SupplyDemandDat
 	}
 
 	// 新鲜区域高置信度
-	confidence := freshZone.Strength * 0.9 + 15
+	confidence := freshZone.Strength*0.9 + 15
 
 	return &SDSignal{
 		Type:         SDSignalFreshZone,
@@ -1330,23 +1357,23 @@ func (sda *SupplyDemandAnalyzer) GetStrongestZones(sdData *SupplyDemandData, cou
 // identifyBasicZones 识别基础供需区（基于近期高低点的简单方法）
 func (sda *SupplyDemandAnalyzer) identifyBasicZones(klines []Kline) []*SupplyDemandZone {
 	var zones []*SupplyDemandZone
-	
+
 	if len(klines) < 20 {
 		return zones
 	}
-	
+
 	// 寻找近期重要高低点
 	recentPeriod := 20 // 最近20根K线
 	start := len(klines) - recentPeriod
 	if start < 0 {
 		start = 0
 	}
-	
+
 	// 找到最高点和最低点
 	var highestIndex, lowestIndex int
 	highest := klines[start].High
 	lowest := klines[start].Low
-	
+
 	for i := start; i < len(klines); i++ {
 		if klines[i].High > highest {
 			highest = klines[i].High
@@ -1357,14 +1384,14 @@ func (sda *SupplyDemandAnalyzer) identifyBasicZones(klines []Kline) []*SupplyDem
 			lowestIndex = i
 		}
 	}
-	
+
 	// 创建供给区（基于最高点）
 	if highestIndex > start+2 && highestIndex < len(klines)-2 {
 		supplyUpper := klines[highestIndex].High
 		supplyLower := klines[highestIndex].Low
-		
+
 		// 扩展供给区边界（包含邻近K线）
-		for i := highestIndex-1; i <= highestIndex+1 && i < len(klines); i++ {
+		for i := highestIndex - 1; i <= highestIndex+1 && i < len(klines); i++ {
 			if i >= 0 {
 				if klines[i].High > supplyUpper {
 					supplyUpper = klines[i].High
@@ -1374,7 +1401,7 @@ func (sda *SupplyDemandAnalyzer) identifyBasicZones(klines []Kline) []*SupplyDem
 				}
 			}
 		}
-		
+
 		zone := &SupplyDemandZone{
 			ID:           fmt.Sprintf("basic_supply_%d", highestIndex),
 			Type:         SupplyZone,
@@ -1398,17 +1425,17 @@ func (sda *SupplyDemandAnalyzer) identifyBasicZones(klines []Kline) []*SupplyDem
 			Strength:     60.0, // 中等强度
 			Quality:      QualityModerate,
 		}
-		
+
 		zones = append(zones, zone)
 	}
-	
+
 	// 创建需求区（基于最低点）
 	if lowestIndex > start+2 && lowestIndex < len(klines)-2 {
 		demandUpper := klines[lowestIndex].High
 		demandLower := klines[lowestIndex].Low
-		
+
 		// 扩展需求区边界（包含邻近K线）
-		for i := lowestIndex-1; i <= lowestIndex+1 && i < len(klines); i++ {
+		for i := lowestIndex - 1; i <= lowestIndex+1 && i < len(klines); i++ {
 			if i >= 0 {
 				if klines[i].High > demandUpper {
 					demandUpper = klines[i].High
@@ -1418,7 +1445,7 @@ func (sda *SupplyDemandAnalyzer) identifyBasicZones(klines []Kline) []*SupplyDem
 				}
 			}
 		}
-		
+
 		zone := &SupplyDemandZone{
 			ID:           fmt.Sprintf("basic_demand_%d", lowestIndex),
 			Type:         DemandZone,
@@ -1442,10 +1469,10 @@ func (sda *SupplyDemandAnalyzer) identifyBasicZones(klines []Kline) []*SupplyDem
 			Strength:     60.0, // 中等强度
 			Quality:      QualityModerate,
 		}
-		
+
 		zones = append(zones, zone)
 	}
-	
+
 	return zones
 }
 

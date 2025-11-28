@@ -62,7 +62,7 @@ type SRStatistics struct {
 
 // 默认配置
 var defaultSRConfig = SRConfig{
-	LookbackPeriods:  300,  // 回看300根K线
+	LookbackPeriods:  1000, // 回看1000根K线（最大化结构视野）
 	PivotLeft:        3,    // 左侧3根比较
 	PivotRight:       3,    // 右侧3根比较
 	ClusterTolerance: 0.005, // 0.5%聚类容差

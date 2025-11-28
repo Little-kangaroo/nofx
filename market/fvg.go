@@ -89,9 +89,9 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int) *FairValue
 
 	// 标准FVG三根K线模式：[index-2, index-1, index]
 	// 前2根K线、中间K线、当前K线
-	firstCandle := klines[index-2]   // 第一根K线
-	middleCandle := klines[index-1]  // 中间K线
-	currentCandle := klines[index]   // 当前K线（第三根）
+	firstCandle := klines[index-2]  // 第一根K线
+	middleCandle := klines[index-1] // 中间K线
+	currentCandle := klines[index]  // 当前K线（第三根）
 
 	// 看涨FVG条件：当前K线的低点 > 第一根K线的高点
 	// 说明中间存在向上缺口，表明买方力量强劲
@@ -102,13 +102,13 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int) *FairValue
 	// 按标准FVG计算方式：
 	// 上边界 = 当前K线的低点
 	// 下边界 = 第一根K线的高点
-	gapHigh := currentCandle.Low    // 上边界
-	gapLow := firstCandle.High      // 下边界
+	gapHigh := currentCandle.Low // 上边界
+	gapLow := firstCandle.High   // 下边界
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapLow * 100
 
-	// 检查缺口大小是否在配置范围内
-	if gapWidthPercent < fvg.config.MinGapPercent*100 || gapWidthPercent > fvg.config.MaxGapPercent*100 {
+	// 检查缺口大小是否在配置范围内（配置值已经是百分比）
+	if gapWidthPercent < fvg.config.MinGapPercent || gapWidthPercent > fvg.config.MaxGapPercent {
 		return nil
 	}
 
@@ -133,13 +133,15 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int) *FairValue
 		Width:        gapWidth,
 		WidthPercent: gapWidthPercent,
 		Origin: &FVGOrigin{
-			KlineIndex:    index,
+			KlineIndex:     index,
 			PreviousCandle: fvg.createCandleInfo(&firstCandle, index-2),
 			CurrentCandle:  fvg.createCandleInfo(&middleCandle, index-1),
 			NextCandle:     fvg.createCandleInfo(&currentCandle, index),
-			ImpulsiveMove:  (currentCandle.Close - firstCandle.Close) / firstCandle.Close * 100,
-			TimeFrame:      fvg.config.TimeFrames[0],
-			FormationType:  formationType,
+			// 修正：计算整个FVG形成过���的价格冲击力
+			// 从第一根K线低点到当前K线高点的总体冲击幅度
+			ImpulsiveMove: fvg.calculateBullishImpulsiveMove(firstCandle, middleCandle, currentCandle),
+			TimeFrame:     fvg.config.TimeFrames[0],
+			FormationType: formationType,
 		},
 		Status:       FVGStatusFresh,
 		CreationTime: middleCandle.OpenTime,
@@ -163,9 +165,9 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int) *FairValue
 
 	// 标准FVG三根K线模式：[index-2, index-1, index]
 	// 前2根K线、中间K线、当前K线
-	firstCandle := klines[index-2]   // 第一根K线
-	middleCandle := klines[index-1]  // 中间K线
-	currentCandle := klines[index]   // 当前K线（第三根）
+	firstCandle := klines[index-2]  // 第一根K线
+	middleCandle := klines[index-1] // 中间K线
+	currentCandle := klines[index]  // 当前K线（第三根）
 
 	// 看跌FVG条件：当前K线的高点 < 第一根K线的低点
 	// 说明中间存在向下缺口，表明卖方力量强劲
@@ -176,13 +178,13 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int) *FairValue
 	// 按标准FVG计算方式：
 	// 上边界 = 第一根K线的低点
 	// 下边界 = 当前K线的高点
-	gapHigh := firstCandle.Low       // 上边界
-	gapLow := currentCandle.High     // 下边界
+	gapHigh := firstCandle.Low   // 上边界
+	gapLow := currentCandle.High // 下边界
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapHigh * 100
 
-	// 检查缺口大小是否在配置范围内
-	if gapWidthPercent < fvg.config.MinGapPercent*100 || gapWidthPercent > fvg.config.MaxGapPercent*100 {
+	// 检查缺口大小是否在配置范围内（配置值已经是百分比）
+	if gapWidthPercent < fvg.config.MinGapPercent || gapWidthPercent > fvg.config.MaxGapPercent {
 		return nil
 	}
 
@@ -207,13 +209,15 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int) *FairValue
 		Width:        gapWidth,
 		WidthPercent: gapWidthPercent,
 		Origin: &FVGOrigin{
-			KlineIndex:    index,
+			KlineIndex:     index,
 			PreviousCandle: fvg.createCandleInfo(&firstCandle, index-2),
 			CurrentCandle:  fvg.createCandleInfo(&middleCandle, index-1),
 			NextCandle:     fvg.createCandleInfo(&currentCandle, index),
-			ImpulsiveMove:  (firstCandle.Close - currentCandle.Close) / firstCandle.Close * 100,
-			TimeFrame:      fvg.config.TimeFrames[0],
-			FormationType:  formationType,
+			// 修正：计算整个FVG形成过程的价格冲击力
+			// 从第一根K线高点到当前K线低点的总体冲击幅度
+			ImpulsiveMove: fvg.calculateBearishImpulsiveMove(firstCandle, middleCandle, currentCandle),
+			TimeFrame:     fvg.config.TimeFrames[0],
+			FormationType: formationType,
 		},
 		Status:       FVGStatusFresh,
 		CreationTime: middleCandle.OpenTime,
@@ -292,9 +296,10 @@ func (fvg *FVGAnalyzer) calculateVolumeContext(klines []Kline, index int) *FVGVo
 		return &FVGVolume{}
 	}
 
-	formationVolume := klines[index].Volume
+	// 修正：使用中间K线（产生缺口的关键K线）的成交量
+	formationVolume := klines[index-1].Volume
 	avgVolume := fvg.calculateAverageVolume(klines, index-10, index)
-	
+
 	volumeRatio := 1.0
 	if avgVolume > 0 {
 		volumeRatio = formationVolume / avgVolume
@@ -404,19 +409,19 @@ func (fvg *FVGAnalyzer) calculateFillProgress(gap *FairValueGap, klines []Kline,
 	// 从FVG形成后开始检查价格对缺口的填补程度
 	for i := startIndex + 1; i < len(klines); i++ {
 		kline := klines[i]
-		
+
 		if gap.Type == BullishFVG {
-			// 看涨FVG：检查价格向下填补的程度
-			if kline.Low <= gap.UpperBound {
-				penetration := gap.UpperBound - kline.Low
+			// 看涨FVG：检查价格向下填补到LowerBound的程度
+			if kline.Low <= gap.LowerBound {
+				penetration := gap.LowerBound - kline.Low
 				if penetration > maxPenetration {
 					maxPenetration = penetration
 				}
 			}
 		} else {
-			// 看跌FVG：检查价格向上填补的程度
-			if kline.High >= gap.LowerBound {
-				penetration := kline.High - gap.LowerBound
+			// 看跌FVG：检查价格向上填补到UpperBound的程���
+			if kline.High >= gap.UpperBound {
+				penetration := kline.High - gap.UpperBound
 				if penetration > maxPenetration {
 					maxPenetration = penetration
 				}
@@ -442,7 +447,7 @@ func (fvg *FVGAnalyzer) countTouches(gap *FairValueGap, klines []Kline) int {
 
 	for i := startIndex; i < len(klines); i++ {
 		kline := klines[i]
-		
+
 		// 检查K线是否触及FVG区域
 		if fvg.doesCandleTouchFVG(kline, gap) {
 			touches++
@@ -501,9 +506,9 @@ func (fvg *FVGAnalyzer) calculateFVGStrength(gap *FairValueGap, klines []Kline) 
 		case FormationReversal:
 			strength += 12 // 反转形成加12分
 		case FormationContinuation:
-			strength += 8  // 延续形成加8分
+			strength += 8 // 延续形成加8分
 		case FormationPullback:
-			strength += 5  // 回调形成加5分
+			strength += 5 // 回调形成加5分
 		}
 	}
 
@@ -593,14 +598,14 @@ func (fvg *FVGAnalyzer) checkReaction(gap *FairValueGap, klines []Kline) float64
 
 	for i := startIndex; i < len(klines) && i < startIndex+10; i++ {
 		kline := klines[i]
-		
+
 		// 检查触及FVG后的价格反应
 		if fvg.doesCandleTouchFVG(kline, gap) && i < len(klines)-2 {
 			// 检查接下来几根K线的反应
 			for j := 1; j <= 3 && i+j < len(klines); j++ {
 				nextKline := klines[i+j]
 				var reaction float64
-				
+
 				if gap.Type == BullishFVG {
 					// 看涨FVG：期望价格向上反弹
 					reaction = (nextKline.Close - kline.Low) / kline.Low
@@ -608,7 +613,7 @@ func (fvg *FVGAnalyzer) checkReaction(gap *FairValueGap, klines []Kline) float64
 					// 看跌FVG：期望价格向下反弹
 					reaction = (kline.High - nextKline.Close) / kline.High
 				}
-				
+
 				if reaction > maxReaction {
 					maxReaction = reaction
 				}
@@ -649,7 +654,7 @@ func (fvg *FVGAnalyzer) checkReversalSigns(gap *FairValueGap, klines []Kline) bo
 	}
 
 	trend := fvg.calculateTrend(klines, recentStart, len(klines)-1)
-	
+
 	if gap.Type == BullishFVG && trend < -0.02 {
 		return true // 看涨FVG但价格下跌
 	} else if gap.Type == BearishFVG && trend > 0.02 {
@@ -662,8 +667,8 @@ func (fvg *FVGAnalyzer) checkReversalSigns(gap *FairValueGap, klines []Kline) bo
 // calculateStatistics 计算FVG统计信息
 func (fvg *FVGAnalyzer) calculateStatistics(bullishFVGs, bearishFVGs, activeFVGs []*FairValueGap) *FVGStatistics {
 	stats := &FVGStatistics{
-		TotalBullishFVGs: len(bullishFVGs),
-		TotalBearishFVGs: len(bearishFVGs),
+		TotalBullishFVGs:    len(bullishFVGs),
+		TotalBearishFVGs:    len(bearishFVGs),
 		QualityDistribution: make(map[FVGQuality]int),
 	}
 
@@ -691,10 +696,10 @@ func (fvg *FVGAnalyzer) calculateStatistics(bullishFVGs, bearishFVGs, activeFVGs
 	for _, gap := range allFVGs {
 		totalWidth += gap.WidthPercent
 		totalStrength += gap.Strength
-		
+
 		// 质量分布统计
 		stats.QualityDistribution[gap.Quality]++
-		
+
 		// 填补统计
 		if gap.IsFilled {
 			filledCount++
@@ -703,7 +708,7 @@ func (fvg *FVGAnalyzer) calculateStatistics(bullishFVGs, bearishFVGs, activeFVGs
 				totalFillTime += fillTime
 			}
 		}
-		
+
 		// 成功统计（产生反应的FVG）
 		if gap.Validation != nil && gap.Validation.HasReaction {
 			successCount++
@@ -760,7 +765,7 @@ func (fvg *FVGAnalyzer) GenerateSignals(fvgData *FVGData, currentPrice float64) 
 func (fvg *FVGAnalyzer) generateFVGSignal(gap *FairValueGap, currentPrice float64, timestamp int64) *FVGSignal {
 	// 计算当前价格与FVG的位置关系
 	distanceToFVG := fvg.calculateDistanceToFVG(gap, currentPrice)
-	
+
 	// 检查是否在FVG内
 	inFVG := currentPrice >= gap.LowerBound && currentPrice <= gap.UpperBound
 
@@ -941,7 +946,7 @@ func (fvg *FVGAnalyzer) generateRejectionSignal(gap *FairValueGap, currentPrice 
 		}
 
 		// 高置信度的拒绝信号
-		confidence := gap.Strength * 0.85 + gap.Validation.ReactionStrength*100
+		confidence := gap.Strength*0.85 + gap.Validation.ReactionStrength*100
 
 		signal = &FVGSignal{
 			Type:         FVGSignalRejection,
@@ -1064,4 +1069,42 @@ func (fvg *FVGAnalyzer) GetFVGByID(fvgData *FVGData, id string) *FairValueGap {
 	}
 
 	return nil
+}
+
+// calculateBullishImpulsiveMove 计算看涨FVG的冲击强度（主要权重中间K线爆发力）
+func (fvg *FVGAnalyzer) calculateBullishImpulsiveMove(firstCandle, middleCandle, currentCandle Kline) float64 {
+	// 中间K线的涨幅（核心爆发力）- 权重70%
+	// 确保分母不为0
+	if middleCandle.Open == 0 {
+		return 0
+	}
+	middleBodyMove := (middleCandle.Close - middleCandle.Open) / middleCandle.Open * 100
+	
+	// 总体缺口距离（确保有效缺口）- 权重30%
+	if firstCandle.Low == 0 {
+		return middleBodyMove // 如果无法计算缺口，只使用中间K线强度
+	}
+	totalGapMove := (currentCandle.High - firstCandle.Low) / firstCandle.Low * 100
+	
+	// 加权组合：中间K线爆发力70% + 总缺口距离30%
+	return middleBodyMove*0.7 + totalGapMove*0.3
+}
+
+// calculateBearishImpulsiveMove 计算看跌FVG的冲击强度（主要权重中间K线爆发力）
+func (fvg *FVGAnalyzer) calculateBearishImpulsiveMove(firstCandle, middleCandle, currentCandle Kline) float64 {
+	// 中间K线的跌幅（核心爆发力）- 权重70%
+	// 确保分母不为0
+	if middleCandle.Open == 0 {
+		return 0
+	}
+	middleBodyMove := (middleCandle.Open - middleCandle.Close) / middleCandle.Open * 100
+	
+	// 总体缺口距离（确保有效缺口）- 权重30%
+	if firstCandle.High == 0 {
+		return middleBodyMove // 如果无法计算缺口，只使用中间K线强度
+	}
+	totalGapMove := (firstCandle.High - currentCandle.Low) / firstCandle.High * 100
+	
+	// 加权组合：中间K线爆发力70% + 总缺口距离30%
+	return middleBodyMove*0.7 + totalGapMove*0.3
 }

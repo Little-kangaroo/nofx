@@ -16,12 +16,12 @@ import (
 func Get(symbol string) (*Data, error) {
 	// 技术指标计算总体耗时统计
 	totalStart := time.Now()
-	
+
 	var klines5m, klines15m, klines30m, klines1h, klines4h []Kline
 	var err error
 	// 标准化symbol
 	symbol = Normalize(symbol)
-	
+
 	// K线数据获取阶段耗时统计
 	klinesFetchStart := time.Now()
 	// 获取5分钟K线数据
@@ -65,7 +65,7 @@ func Get(symbol string) (*Data, error) {
 	currentEMA20 := calculateEMA(klines5m, 20)
 	currentMACD := calculateMACD(klines5m)
 	currentRSI7 := calculateRSI(klines5m, 7)
-	
+
 	// 基础指标计算耗时统计
 	basicIndicatorsDuration := time.Since(basicIndicatorsStart)
 	log.Printf("📊 [%s-基础指标] 耗时: %v (Price+EMA20+MACD+RSI7)", symbol, basicIndicatorsDuration)
@@ -124,51 +124,57 @@ func Get(symbol string) (*Data, error) {
 		"1h":  klines1h,
 		"4h":  klines4h,
 	})
-	
+
 	// 高级分析耗时统计
 	advancedAnalysisDuration := time.Since(advancedAnalysisStart)
 	log.Printf("📊 [%s-高级分析] 耗时: %v (道氏理论+VPVR+供需区+FVG+斐波纳契+多时间框架)", symbol, advancedAnalysisDuration)
 
 	data := &Data{
-		Symbol:                  symbol,
-		CurrentPrice:            currentPrice,
-		PriceChange1h:           priceChange1h,
-		PriceChange4h:           priceChange4h,
-		CurrentEMA20:            currentEMA20,
-		CurrentMACD:             currentMACD,
-		CurrentRSI7:             currentRSI7,
-		OpenInterest:            oiData,
-		FundingRate:             fundingRate,
-		IntradaySeries:          intradayData,
-		LongerTermContext:       longerTermData,
-		MediumTerm15m:           mediumTermData15m,
-		MediumTerm30m:           mediumTermData30m,
-		MediumTerm1h:            mediumTermData1h,
-		MultiTimeframeAnalysis:  multiTimeframeAnalysis,
+		Symbol:                 symbol,
+		CurrentPrice:           currentPrice,
+		PriceChange1h:          priceChange1h,
+		PriceChange4h:          priceChange4h,
+		CurrentEMA20:           currentEMA20,
+		CurrentMACD:            currentMACD,
+		CurrentRSI7:            currentRSI7,
+		OpenInterest:           oiData,
+		FundingRate:            fundingRate,
+		IntradaySeries:         intradayData,
+		LongerTermContext:      longerTermData,
+		MediumTerm15m:          mediumTermData15m,
+		MediumTerm30m:          mediumTermData30m,
+		MediumTerm1h:           mediumTermData1h,
+		MultiTimeframeAnalysis: multiTimeframeAnalysis,
 		// 向前兼容的单一分析结果（基于4小时）
-		DowTheory:               comprehensiveResult.DowTheory,
-		ChannelAnalysis:         comprehensiveResult.ChannelAnalysis,
-		VolumeProfile:           comprehensiveResult.VolumeProfile,
-		SupplyDemand:            comprehensiveResult.SupplyDemand,
-		FairValueGaps:           comprehensiveResult.FairValueGaps,
-		Fibonacci:               comprehensiveResult.Fibonacci,
+		DowTheory:       comprehensiveResult.DowTheory,
+		ChannelAnalysis: comprehensiveResult.ChannelAnalysis,
+		VolumeProfile:   comprehensiveResult.VolumeProfile,
+		SupplyDemand:    comprehensiveResult.SupplyDemand,
+		FairValueGaps:   comprehensiveResult.FairValueGaps,
+		Fibonacci:       comprehensiveResult.Fibonacci,
 	}
-	
+
 	// 技术指标计算总体耗时统计
 	totalDuration := time.Since(totalStart)
-	log.Printf("📊 [%s-指标计算总结] 总耗时: %v | K线获取: %v (%.1f%%) | 基础指标: %v (%.1f%%) | 高级分析: %v (%.1f%%)", 
-		symbol, totalDuration, 
+	log.Printf("📊 [%s-指标计算总结] 总耗时: %v | K线获取: %v (%.1f%%) | 基础指标: %v (%.1f%%) | 高级分析: %v (%.1f%%)",
+		symbol, totalDuration,
 		klinesFetchDuration, float64(klinesFetchDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100,
 		basicIndicatorsDuration, float64(basicIndicatorsDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100,
 		advancedAnalysisDuration, float64(advancedAnalysisDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100)
-	
+
 	return data, nil
 }
 
 // calculateEMA 计算EMA
 func calculateEMA(klines []Kline, period int) float64 {
 	if len(klines) < period {
+		log.Printf("🚨🔴 [EMA%d计算] ❌ K线数据不足: 需要%d根，实际%d根 ❌", period, period, len(klines))
 		return 0
+	}
+	// EMA收敛建议：为达到99%精度，建议至少使用 period * 3.5 根K线
+	recommendedKlines := int(float64(period) * 3.5)
+	if len(klines) < recommendedKlines {
+		log.Printf("🟡⚠️ [EMA%d计算] 精度警告: 建议%d根，实际%d根 (可能影响精度) ⚠️🟡", period, recommendedKlines, len(klines))
 	}
 
 	// 计算SMA作为初始EMA
@@ -189,8 +195,14 @@ func calculateEMA(klines []Kline, period int) float64 {
 
 // calculateMACD 计算MACD
 func calculateMACD(klines []Kline) float64 {
-	if len(klines) < 26 {
+	minRequired := 26
+	recommended := int(float64(26) * 3.5) // 约91根K线用于EMA26收敛
+	if len(klines) < minRequired {
+		log.Printf("🚨🔴 [MACD计算] ❌ K线数据不足: 需要%d根，实际%d根 ❌", minRequired, len(klines))
 		return 0
+	}
+	if len(klines) < recommended {
+		log.Printf("🟡⚠️ [MACD计算] 精度警告: 建议%d根，实际%d根 (可能影响精度) ⚠️🟡", recommended, len(klines))
 	}
 
 	// 计算12期和26期EMA
@@ -203,8 +215,14 @@ func calculateMACD(klines []Kline) float64 {
 
 // calculateRSI 计算RSI
 func calculateRSI(klines []Kline, period int) float64 {
+	minRequired := period + 1
+	recommended := period * 3 // RSI建议使用周期的3倍数据
 	if len(klines) <= period {
+		log.Printf("🚨🔴 [RSI%d计算] ❌ K线数据不足: 需要%d根，实际%d根 ❌", period, minRequired, len(klines))
 		return 0
+	}
+	if len(klines) < recommended {
+		log.Printf("🟡⚠️ [RSI%d计算] 稳定性警告: 建议%d根，实际%d根 (可能影响稳定性) ⚠️🟡", period, recommended, len(klines))
 	}
 
 	gains := 0.0
@@ -247,8 +265,14 @@ func calculateRSI(klines []Kline, period int) float64 {
 
 // calculateATR 计算ATR
 func calculateATR(klines []Kline, period int) float64 {
+	minRequired := period + 1
+	recommended := period * 2 // ATR建议使用周期的2倍数据
 	if len(klines) <= period {
+		log.Printf("🚨🔴 [ATR%d计算] ❌ K线数据不足: 需要%d根，实际%d根 ❌", period, minRequired, len(klines))
 		return 0
+	}
+	if len(klines) < recommended {
+		log.Printf("🟡⚠️ [ATR%d计算] 平滑性警告: 建议%d根，实际%d根 (可能影响平滑性) ⚠️🟡", period, recommended, len(klines))
 	}
 
 	trs := make([]float64, len(klines))
@@ -284,12 +308,12 @@ func calculateSMA(klines []Kline, period int) float64 {
 	if len(klines) < period {
 		return 0
 	}
-	
+
 	sum := 0.0
 	for i := len(klines) - period; i < len(klines); i++ {
 		sum += klines[i].Close
 	}
-	
+
 	return sum / float64(period)
 }
 
@@ -298,20 +322,20 @@ func calculateVWAP(klines []Kline) float64 {
 	if len(klines) == 0 {
 		return 0
 	}
-	
+
 	var volumeWeightedSum float64
 	var totalVolume float64
-	
+
 	for _, kline := range klines {
 		typicalPrice := (kline.High + kline.Low + kline.Close) / 3
 		volumeWeightedSum += typicalPrice * kline.Volume
 		totalVolume += kline.Volume
 	}
-	
+
 	if totalVolume == 0 {
 		return 0
 	}
-	
+
 	return volumeWeightedSum / totalVolume
 }
 
@@ -320,22 +344,22 @@ func calculateEMASlope(klines []Kline, period int, lookback int) float64 {
 	if len(klines) < period+lookback {
 		return 0
 	}
-	
+
 	// 计算当前EMA值
 	currentEMA := calculateEMA(klines, period)
-	
+
 	// 计算lookback根K线前的EMA值
 	prevKlines := klines[:len(klines)-lookback]
 	if len(prevKlines) < period {
 		return 0
 	}
 	prevEMA := calculateEMA(prevKlines, period)
-	
+
 	// 计算斜率（变化率）
 	if prevEMA == 0 {
 		return 0
 	}
-	
+
 	return ((currentEMA - prevEMA) / prevEMA) * 100
 }
 
@@ -600,37 +624,37 @@ func FormatAsStructuredData(data *Data) string {
 	if err != nil {
 		return fmt.Sprintf("获取%s结构化数据失败: %v", data.Symbol, err)
 	}
-	
+
 	// 创建完整的数据结构，包含基础指标和多时间框架分析
 	result := map[string]interface{}{
 		data.Symbol: map[string]interface{}{
 			// 基础市场指标 (保持原有格式)
 			"基础指标": map[string]interface{}{
-				"current_price":    data.CurrentPrice,
-				"current_ema20":    data.CurrentEMA20,
-				"current_macd":     data.CurrentMACD,
-				"current_rsi7":     data.CurrentRSI7,
-				"price_change_1h":  data.PriceChange1h,
-				"price_change_4h":  data.PriceChange4h,
-				"open_interest":    data.OpenInterest,
-				"funding_rate":     data.FundingRate,
-				"intraday_series":  data.IntradaySeries,
+				"current_price":       data.CurrentPrice,
+				"current_ema20":       data.CurrentEMA20,
+				"current_macd":        data.CurrentMACD,
+				"current_rsi7":        data.CurrentRSI7,
+				"price_change_1h":     data.PriceChange1h,
+				"price_change_4h":     data.PriceChange4h,
+				"open_interest":       data.OpenInterest,
+				"funding_rate":        data.FundingRate,
+				"intraday_series":     data.IntradaySeries,
 				"longer_term_context": data.LongerTermContext,
-				"medium_term_15m":  data.MediumTerm15m,
-				"medium_term_30m":  data.MediumTerm30m,
-				"medium_term_1h":   data.MediumTerm1h,
+				"medium_term_15m":     data.MediumTerm15m,
+				"medium_term_30m":     data.MediumTerm30m,
+				"medium_term_1h":      data.MediumTerm1h,
 			},
 			// 多时间框架技术分析
 			"多时间框架分析": symbolData,
 		},
 	}
-	
+
 	// 序列化为JSON
 	jsonData, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return fmt.Sprintf("JSON序列化失败: %v", err)
 	}
-	
+
 	return string(jsonData)
 }
 
@@ -640,11 +664,11 @@ func FormatAsCompactData(data *Data) string {
 	// 重新获取K线数据用于超级趋势计算
 	symbol := data.Symbol
 	klines5m, _ := WSMonitorCli.GetCurrentKlines(symbol, "5m")
-	klines15m, _ := WSMonitorCli.GetCurrentKlines(symbol, "15m") 
+	klines15m, _ := WSMonitorCli.GetCurrentKlines(symbol, "15m")
 	klines30m, _ := WSMonitorCli.GetCurrentKlines(symbol, "30m")
 	klines1h, _ := WSMonitorCli.GetCurrentKlines(symbol, "1h")
 	klines4h, _ := WSMonitorCli.GetCurrentKlines(symbol, "4h")
-	
+
 	timeframeKlines := map[string][]Kline{
 		"5m":  klines5m,
 		"15m": klines15m,
@@ -652,26 +676,26 @@ func FormatAsCompactData(data *Data) string {
 		"1h":  klines1h,
 		"4h":  klines4h,
 	}
-	
+
 	result := map[string]interface{}{
 		data.Symbol: map[string]interface{}{
-			"基础指标": calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
+			"基础指标":    calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
 		},
 	}
-	
+
 	jsonData, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return fmt.Sprintf("精简JSON序列化失败: %v", err)
 	}
-	
+
 	return string(jsonData)
 }
 
 // calculateMultiTimeframeBasicIndicators 计算多时间框架基础指标
 func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[string][]Kline) map[string]interface{} {
 	result := make(map[string]interface{})
-	
+
 	// 全局指标（不依赖时间框架）
 	result["price"] = data.CurrentPrice      // 保留原有字段（向后兼容）
 	result["last_price"] = data.CurrentPrice // 新增字段（更清晰的命名）
@@ -682,7 +706,7 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		}
 		return 0
 	}()
-	
+
 	// 价格变化（基于5分钟K线计算）
 	if klines5m, exists := timeframeKlines["5m"]; exists && len(klines5m) > 0 {
 		// 1小时价格变化 = 12个5分钟K线前的价格
@@ -693,7 +717,7 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 			}
 		}
 	}
-	
+
 	// 4小时价格变化（基于4小时K线计算）
 	if klines4h, exists := timeframeKlines["4h"]; exists && len(klines4h) >= 2 {
 		price4hAgo := klines4h[len(klines4h)-2].Close
@@ -701,7 +725,7 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 			result["change_4h"] = ((data.CurrentPrice - price4hAgo) / price4hAgo) * 100
 		}
 	}
-	
+
 	// 各时间框架的基础指标
 	timeframes := []string{"5m", "15m", "30m", "1h", "4h"}
 	for _, tf := range timeframes {
@@ -715,19 +739,31 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 			continue
 		}
 		log.Printf("✓ [基础指标] %s时间框架: %d条K线数据", tf, len(klines))
-		
+
 		// 记录哪些指标可以计算
 		availableIndicators := []string{}
-		if len(klines) >= 20 { availableIndicators = append(availableIndicators, "EMA20/SMA20") }
-		if len(klines) >= 50 { availableIndicators = append(availableIndicators, "EMA50/SMA50") }
-		if len(klines) >= 100 { availableIndicators = append(availableIndicators, "EMA100") }
-		if len(klines) >= 200 { availableIndicators = append(availableIndicators, "EMA200") }
-		if len(klines) >= 53 { availableIndicators = append(availableIndicators, "EMA50斜率") }
-		if len(klines) >= 203 { availableIndicators = append(availableIndicators, "EMA200斜率") }
+		if len(klines) >= 20 {
+			availableIndicators = append(availableIndicators, "EMA20/SMA20")
+		}
+		if len(klines) >= 50 {
+			availableIndicators = append(availableIndicators, "EMA50/SMA50")
+		}
+		if len(klines) >= 100 {
+			availableIndicators = append(availableIndicators, "EMA100")
+		}
+		if len(klines) >= 200 {
+			availableIndicators = append(availableIndicators, "EMA200")
+		}
+		if len(klines) >= 53 {
+			availableIndicators = append(availableIndicators, "EMA50斜率")
+		}
+		if len(klines) >= 203 {
+			availableIndicators = append(availableIndicators, "EMA200斜率")
+		}
 		log.Printf("✓ [基础指标] %s可计算指标: %v", tf, availableIndicators)
-		
+
 		tfData := map[string]interface{}{}
-		
+
 		// === 移动平均线指标 ===
 		// EMA系列
 		if len(klines) >= 20 {
@@ -742,7 +778,7 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		if len(klines) >= 200 {
 			tfData["ema200"] = calculateEMA(klines, 200)
 		}
-		
+
 		// SMA系列
 		if len(klines) >= 20 {
 			tfData["sma20"] = calculateSMA(klines, 20)
@@ -750,12 +786,12 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		if len(klines) >= 50 {
 			tfData["sma50"] = calculateSMA(klines, 50)
 		}
-		
+
 		// VWAP (成交量加权平均价)
 		if len(klines) > 0 {
 			tfData["vwap"] = calculateVWAP(klines)
 		}
-		
+
 		// === EMA斜率指标 (3根K线回看期) ===
 		if len(klines) >= 53 { // 50 + 3
 			tfData["ema50_slope_3"] = calculateEMASlope(klines, 50, 3)
@@ -763,13 +799,13 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		if len(klines) >= 203 { // 200 + 3
 			tfData["ema200_slope_3"] = calculateEMASlope(klines, 200, 3)
 		}
-		
+
 		// === 原有指标保持不变 ===
 		// MACD
 		if len(klines) >= 26 {
 			tfData["macd"] = calculateMACD(klines)
 		}
-		
+
 		// RSI7 和 RSI14
 		if len(klines) >= 8 {
 			tfData["rsi7"] = calculateRSI(klines, 7)
@@ -777,12 +813,12 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		if len(klines) >= 15 {
 			tfData["rsi14"] = calculateRSI(klines, 14)
 		}
-		
+
 		// ATR14
 		if len(klines) >= 15 {
 			tfData["atr14"] = calculateATR(klines, 14)
 		}
-		
+
 		// === 成交量指标 ===
 		if len(klines) > 0 {
 			tfData["volume"] = klines[len(klines)-1].Volume
@@ -793,43 +829,43 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 			}
 			tfData["avg_volume"] = sum / float64(len(klines))
 		}
-		
+
 		// 只有当有数据时才添加到结果中
 		if len(tfData) > 0 {
 			result[tf] = tfData
 		}
 	}
-	
+
 	return result
 }
 
 // extractCompactMultiTimeframeAnalysis 提取精简的多时间框架分析数据
 func extractCompactMultiTimeframeAnalysis(data *Data) map[string]interface{} {
 	result := make(map[string]interface{})
-	
+
 	if data.MultiTimeframeAnalysis == nil || data.MultiTimeframeAnalysis.Timeframes == nil {
 		return result
 	}
-	
+
 	timeframes := []string{"5m", "15m", "30m", "1h", "4h"}
-	
+
 	for _, tf := range timeframes {
 		tfData, exists := data.MultiTimeframeAnalysis.Timeframes[tf]
 		if !exists || tfData == nil {
 			continue
 		}
-		
+
 		result[tf] = map[string]interface{}{
-			"道氏理论数据": extractCompactDowTheory(tfData.DowTheory),
-			"通道数据": extractCompactChannelAnalysis(tfData.ChannelAnalysis),
-			"VPVR数据": extractCompactVPVR(tfData.VolumeProfile),
-			"供需区数据": extractCompactSupplyDemand(tfData.SupplyDemand),
-			"FVG数据": extractCompactFVG(tfData.FairValueGaps),
-			"斐波纳契数据": extractCompactFibonacci(tfData.Fibonacci),
+			"道氏理论数据":  extractCompactDowTheory(tfData.DowTheory),
+			"通道数据":    extractCompactChannelAnalysis(tfData.ChannelAnalysis),
+			"VPVR数据":  extractCompactVPVR(tfData.VolumeProfile),
+			"供需区数据":   extractCompactSupplyDemand(tfData.SupplyDemand),
+			"FVG数据":   extractCompactFVG(tfData.FairValueGaps),
+			"斐波纳契数据":  extractCompactFibonacci(tfData.Fibonacci),
 			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance),
 		}
 	}
-	
+
 	return result
 }
 
@@ -838,25 +874,25 @@ func extractCompactDowTheory(data *DowTheoryData) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
-	
+
 	result := map[string]interface{}{
-		"trend_direction": "unknown",
-		"trend_strength": 0.0,
+		"trend_direction":   "unknown",
+		"trend_strength":    0.0,
 		"signal_confidence": 0.0,
 		"supertrend": map[string]interface{}{
-			"direction": "unknown",
+			"direction":    "unknown",
 			"current_line": 0.0,
-			"upper_line": 0.0,
-			"lower_line": 0.0,
+			"upper_line":   0.0,
+			"lower_line":   0.0,
 		},
 	}
-	
+
 	if data.TrendStrength != nil {
 		result["trend_direction"] = data.TrendStrength.Direction
 		result["trend_strength"] = data.TrendStrength.Overall
 		result["signal_confidence"] = data.TrendStrength.Consistency
 	}
-	
+
 	return result
 }
 
@@ -865,17 +901,17 @@ func extractCompactChannelAnalysis(data *ChannelData) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
-	
+
 	result := map[string]interface{}{
 		"channel_direction": data.Direction,
-		"channel_width": data.Quality * 100,
-		"current_position": data.CurrentPosition,
+		"channel_width":     data.Quality * 100,
+		"current_position":  data.CurrentPosition,
 	}
-	
+
 	if data.ActiveChannel != nil {
 		result["channel_width"] = data.ActiveChannel.Width * 100
 	}
-	
+
 	return result
 }
 
@@ -884,17 +920,17 @@ func extractCompactVPVR(data *VolumeProfile) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
-	
+
 	result := map[string]interface{}{
-		"poc_price": 0.0,
+		"poc_price":       0.0,
 		"value_area_high": data.VAH,
-		"value_area_low": data.VAL,
+		"value_area_low":  data.VAL,
 	}
-	
+
 	if data.POC != nil {
 		result["poc_price"] = data.POC.Price
 	}
-	
+
 	return result
 }
 
@@ -903,9 +939,9 @@ func extractCompactSupplyDemand(data *SupplyDemandData) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
-	
+
 	result := map[string]interface{}{
-		"total_zones": len(data.ActiveZones),
+		"total_zones":  len(data.ActiveZones),
 		"supply_zones": []map[string]interface{}{},
 		"demand_zones": []map[string]interface{}{},
 		"zone_stats": map[string]interface{}{
@@ -914,29 +950,29 @@ func extractCompactSupplyDemand(data *SupplyDemandData) map[string]interface{} {
 			"demand_count": 0,
 		},
 	}
-	
+
 	if len(data.ActiveZones) == 0 {
 		return result
 	}
-	
+
 	var supplyZones, demandZones []map[string]interface{}
 	var strengthSum float64
 	var supplyCount, demandCount int
-	
+
 	// 按强度排序并提取重要的供需区
 	for _, zone := range data.ActiveZones {
 		strengthSum += zone.Strength
-		
+
 		zoneInfo := map[string]interface{}{
 			"price_range": map[string]float64{
 				"low":  zone.LowerBound,
 				"high": zone.UpperBound,
 			},
 			"strength": zone.Strength,
-			"touches": zone.TouchCount,
-			"status": zone.Status,
+			"touches":  zone.TouchCount,
+			"status":   zone.Status,
 		}
-		
+
 		if zone.Type == SupplyZone {
 			supplyZones = append(supplyZones, zoneInfo)
 			supplyCount++
@@ -945,20 +981,20 @@ func extractCompactSupplyDemand(data *SupplyDemandData) map[string]interface{} {
 			demandCount++
 		}
 	}
-	
+
 	// 只保留强度最高的前3个供给区和需求区
 	if len(supplyZones) > 3 {
 		// 按强度排序，保留前3个最强的
 		sortZonesByStrength(supplyZones)
 		supplyZones = supplyZones[:3]
 	}
-	
+
 	if len(demandZones) > 3 {
 		// 按强度排序，保留前3个最强的
 		sortZonesByStrength(demandZones)
 		demandZones = demandZones[:3]
 	}
-	
+
 	result["supply_zones"] = supplyZones
 	result["demand_zones"] = demandZones
 	result["zone_stats"] = map[string]interface{}{
@@ -966,7 +1002,7 @@ func extractCompactSupplyDemand(data *SupplyDemandData) map[string]interface{} {
 		"supply_count": supplyCount,
 		"demand_count": demandCount,
 	}
-	
+
 	return result
 }
 
@@ -988,13 +1024,13 @@ func extractCompactFVG(data *FVGData) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
-	
+
 	result := map[string]interface{}{
 		"active_gaps": len(data.ActiveFVGs),
 		"nearest_gap": 0.0,
-		"gap_type": "unknown",
+		"gap_type":    "unknown",
 	}
-	
+
 	if len(data.ActiveFVGs) > 0 {
 		// 取第一个活跃的FVG作为最近的
 		fvg := data.ActiveFVGs[0]
@@ -1007,7 +1043,7 @@ func extractCompactFVG(data *FVGData) map[string]interface{} {
 			result["gap_type"] = "neutral"
 		}
 	}
-	
+
 	return result
 }
 
@@ -1016,13 +1052,13 @@ func extractCompactFibonacci(data *FibonacciData) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
-	
+
 	result := map[string]interface{}{
 		"active_retracements": 0,
-		"levels": map[string]float64{},
-		"trend_direction": "unknown",
+		"levels":              map[string]float64{},
+		"trend_direction":     "unknown",
 	}
-	
+
 	// 找到最活跃的回调级别并输出所有重要级别
 	if len(data.Retracements) > 0 {
 		activeCount := 0
@@ -1035,7 +1071,7 @@ func extractCompactFibonacci(data *FibonacciData) map[string]interface{} {
 				} else if ret.TrendType == TrendDownward {
 					result["trend_direction"] = "downward"
 				}
-				
+
 				// 提取所有重要的斐波纳契级别
 				levels := make(map[string]float64)
 				for _, level := range ret.Levels {
@@ -1044,18 +1080,18 @@ func extractCompactFibonacci(data *FibonacciData) map[string]interface{} {
 						levels[ratioKey] = level.Price
 					}
 				}
-				
+
 				// 如果找到级别，使用第一个活跃回调的级别
 				if len(levels) > 0 && len(result["levels"].(map[string]float64)) == 0 {
 					result["levels"] = levels
 				}
-				
+
 				break // 只使用第一个活跃的回调
 			}
 		}
 		result["active_retracements"] = activeCount
 	}
-	
+
 	// 如果没有活跃的回调，尝试从扩展级别获取
 	if len(result["levels"].(map[string]float64)) == 0 && len(data.Extensions) > 0 {
 		for _, ext := range data.Extensions {
@@ -1072,7 +1108,7 @@ func extractCompactFibonacci(data *FibonacciData) map[string]interface{} {
 			}
 		}
 	}
-	
+
 	return result
 }
 
@@ -1213,20 +1249,20 @@ func formatVPVRData(data *VolumeProfile) string {
 
 	// POC (Point of Control)
 	if data.POC != nil {
-		sb.WriteString(fmt.Sprintf("  Point of Control (POC): %.4f (%.1f%% volume)\n", 
+		sb.WriteString(fmt.Sprintf("  Point of Control (POC): %.4f (%.1f%% volume)\n",
 			data.POC.Price, data.POC.VolumePercent))
 	}
 
 	// Value Area
 	sb.WriteString(fmt.Sprintf("  Value Area: %.4f - %.4f\n", data.VAL, data.VAH))
 	if data.ValueArea != nil {
-		sb.WriteString(fmt.Sprintf("  Value Area Volume: %.1f%%, Concentration: %.2f\n", 
+		sb.WriteString(fmt.Sprintf("  Value Area Volume: %.1f%%, Concentration: %.2f\n",
 			data.ValueArea.VolumePercent, data.ValueArea.Concentration))
 	}
 
 	// Volume statistics
 	if data.Stats != nil {
-		sb.WriteString(fmt.Sprintf("  Buy/Sell Ratio: %.2f, Avg Price: %.4f\n", 
+		sb.WriteString(fmt.Sprintf("  Buy/Sell Ratio: %.2f, Avg Price: %.4f\n",
 			data.Stats.BuySellRatio, data.Stats.AvgPrice))
 		if data.Stats.MaxLevel != nil {
 			sb.WriteString(fmt.Sprintf("  Highest Volume Level: %.4f\n", data.Stats.MaxLevel.Price))
@@ -1239,7 +1275,7 @@ func formatVPVRData(data *VolumeProfile) string {
 		count := 0
 		for _, level := range data.Levels {
 			if level.VolumePercent > 5.0 && count < 3 { // Top 3 high volume levels
-				sb.WriteString(fmt.Sprintf("    %.4f (%.1f%% volume)\n", 
+				sb.WriteString(fmt.Sprintf("    %.4f (%.1f%% volume)\n",
 					level.Price, level.VolumePercent))
 				count++
 			}
@@ -1270,7 +1306,7 @@ func formatSupplyDemandData(data *SupplyDemandData) string {
 				demandCount++
 			}
 		}
-		sb.WriteString(fmt.Sprintf("  Active Zones: %d total (%d supply, %d demand)\n", 
+		sb.WriteString(fmt.Sprintf("  Active Zones: %d total (%d supply, %d demand)\n",
 			len(data.ActiveZones), supplyCount, demandCount))
 
 		// Show top zones by strength
@@ -1284,7 +1320,7 @@ func formatSupplyDemandData(data *SupplyDemandData) string {
 			if zone.Type == SupplyZone {
 				zoneType = "Supply"
 			}
-			sb.WriteString(fmt.Sprintf("    %s Zone: %.4f-%.4f (Strength: %.1f, Touches: %d)\n", 
+			sb.WriteString(fmt.Sprintf("    %s Zone: %.4f-%.4f (Strength: %.1f, Touches: %d)\n",
 				zoneType, zone.LowerBound, zone.UpperBound, zone.Strength, zone.TouchCount))
 			count++
 		}
@@ -1293,9 +1329,9 @@ func formatSupplyDemandData(data *SupplyDemandData) string {
 	// Statistics
 	if data.Statistics != nil {
 		sb.WriteString(fmt.Sprintf("  Zone Statistics:\n"))
-		sb.WriteString(fmt.Sprintf("    Success Rate: %.1f%%, Average Strength: %.1f\n", 
+		sb.WriteString(fmt.Sprintf("    Success Rate: %.1f%%, Average Strength: %.1f\n",
 			data.Statistics.SuccessRate, data.Statistics.AvgZoneStrength))
-		sb.WriteString(fmt.Sprintf("    Active Supply: %d, Active Demand: %d\n", 
+		sb.WriteString(fmt.Sprintf("    Active Supply: %d, Active Demand: %d\n",
 			data.Statistics.ActiveSupplyZones, data.Statistics.ActiveDemandZones))
 	}
 
@@ -1323,7 +1359,7 @@ func formatFVGData(data *FVGData) string {
 				bearishCount++
 			}
 		}
-		sb.WriteString(fmt.Sprintf("  Active FVGs: %d total (%d bullish, %d bearish)\n", 
+		sb.WriteString(fmt.Sprintf("  Active FVGs: %d total (%d bullish, %d bearish)\n",
 			len(data.ActiveFVGs), bullishCount, bearishCount))
 
 		// Show key FVGs
@@ -1337,7 +1373,7 @@ func formatFVGData(data *FVGData) string {
 			if fvg.Type == BearishFVG {
 				fvgType = "Bearish"
 			}
-			sb.WriteString(fmt.Sprintf("    %s FVG: %.4f-%.4f (Strength: %.1f, Status: %s)\n", 
+			sb.WriteString(fmt.Sprintf("    %s FVG: %.4f-%.4f (Strength: %.1f, Status: %s)\n",
 				fvgType, fvg.LowerBound, fvg.UpperBound, fvg.Strength, fvg.Status))
 			count++
 		}
@@ -1346,9 +1382,9 @@ func formatFVGData(data *FVGData) string {
 	// Statistics
 	if data.Statistics != nil {
 		sb.WriteString("  FVG Statistics:\n")
-		sb.WriteString(fmt.Sprintf("    Fill Rate: %.1f%%, Average Width: %.4f\n", 
+		sb.WriteString(fmt.Sprintf("    Fill Rate: %.1f%%, Average Width: %.4f\n",
 			data.Statistics.FillRate*100, data.Statistics.AvgFVGWidth))
-		sb.WriteString(fmt.Sprintf("    Active Bullish: %d, Active Bearish: %d\n", 
+		sb.WriteString(fmt.Sprintf("    Active Bullish: %d, Active Bearish: %d\n",
 			data.Statistics.ActiveBullishFVGs, data.Statistics.ActiveBearishFVGs))
 	}
 
@@ -1410,7 +1446,7 @@ func formatMultiTimeframeAnalysis(data *MultiTimeframeAnalysis) string {
 		// 风险评估
 		if data.Summary.RiskAssessment != nil {
 			sb.WriteString(fmt.Sprintf("  Risk Assessment: %s (Max Position: %.1f%%)\n",
-				strings.Title(data.Summary.RiskAssessment.OverallRisk), 
+				strings.Title(data.Summary.RiskAssessment.OverallRisk),
 				data.Summary.RiskAssessment.MaxPositionSize*100))
 			if data.Summary.RiskAssessment.ConflictingSignals > 0 {
 				sb.WriteString(fmt.Sprintf("  Conflicting Signals: %d detected\n",
@@ -1458,7 +1494,7 @@ func formatFibonacciData(data *FibonacciData) string {
 			if ret.TrendType == TrendDownward {
 				trendDir = "Downtrend"
 			}
-			
+
 			qualityStr := "High"
 			if ret.Quality == FibQualityMedium {
 				qualityStr = "Medium"
@@ -1466,9 +1502,9 @@ func formatFibonacciData(data *FibonacciData) string {
 				qualityStr = "Low"
 			}
 
-			sb.WriteString(fmt.Sprintf("  • %s Retracement (Quality: %s, Strength: %.1f)\n", 
+			sb.WriteString(fmt.Sprintf("  • %s Retracement (Quality: %s, Strength: %.1f)\n",
 				trendDir, qualityStr, ret.Strength))
-			sb.WriteString(fmt.Sprintf("    Range: %.4f → %.4f\n", 
+			sb.WriteString(fmt.Sprintf("    Range: %.4f → %.4f\n",
 				ret.StartPoint.Price, ret.EndPoint.Price))
 
 			// 显示关键斐波级别
@@ -1478,7 +1514,7 @@ func formatFibonacciData(data *FibonacciData) string {
 					if level.IsGoldenRatio {
 						goldenStar = " ★"
 					}
-					sb.WriteString(fmt.Sprintf("    %.1f%% Level: %.4f%s\n", 
+					sb.WriteString(fmt.Sprintf("    %.1f%% Level: %.4f%s\n",
 						level.Ratio*100, level.Price, goldenStar))
 				}
 			}
@@ -1490,25 +1526,25 @@ func formatFibonacciData(data *FibonacciData) string {
 	if data.GoldenPocket != nil && data.GoldenPocket.IsActive {
 		pocket := data.GoldenPocket
 		sb.WriteString("Golden Pocket (0.618) Analysis:\n")
-		
+
 		qualityStr := "High"
 		if pocket.Quality == FibQualityMedium {
 			qualityStr = "Medium"
 		} else if pocket.Quality == FibQualityLow {
 			qualityStr = "Low"
 		}
-		
+
 		trendContext := "Uptrend Support"
 		if pocket.TrendContext == TrendDownward {
 			trendContext = "Downtrend Resistance"
 		}
 
-		sb.WriteString(fmt.Sprintf("  • Range: %.4f - %.4f (Center: %.4f)\n", 
+		sb.WriteString(fmt.Sprintf("  • Range: %.4f - %.4f (Center: %.4f)\n",
 			pocket.PriceRange.Low, pocket.PriceRange.High, pocket.CenterPrice))
-		sb.WriteString(fmt.Sprintf("  • Quality: %s (Strength: %.1f)\n", 
+		sb.WriteString(fmt.Sprintf("  • Quality: %s (Strength: %.1f)\n",
 			qualityStr, pocket.Strength))
 		sb.WriteString(fmt.Sprintf("  • Context: %s\n", trendContext))
-		
+
 		if len(pocket.TouchEvents) > 0 {
 			recentTouches := len(pocket.TouchEvents)
 			if recentTouches > 3 {
@@ -1529,13 +1565,13 @@ func formatFibonacciData(data *FibonacciData) string {
 			}
 			validExtensions++
 
-			sb.WriteString(fmt.Sprintf("  • Base Wave: %.4f → %.4f\n", 
+			sb.WriteString(fmt.Sprintf("  • Base Wave: %.4f → %.4f\n",
 				ext.BaseWave.StartPoint.Price, ext.BaseWave.EndPoint.Price))
 			sb.WriteString(fmt.Sprintf("    Projected Targets:\n"))
-			
+
 			for _, level := range ext.Levels {
 				if level.Ratio == 1.272 || level.Ratio == 1.618 {
-					sb.WriteString(fmt.Sprintf("    %.3f Extension: %.4f\n", 
+					sb.WriteString(fmt.Sprintf("    %.3f Extension: %.4f\n",
 						level.Ratio, level.Price))
 				}
 			}
@@ -1550,9 +1586,9 @@ func formatFibonacciData(data *FibonacciData) string {
 			if i >= 2 || cluster.Importance < 70 { // 只显示前2个重要的
 				break
 			}
-			sb.WriteString(fmt.Sprintf("  • Zone at %.4f (Importance: %.1f)\n", 
+			sb.WriteString(fmt.Sprintf("  • Zone at %.4f (Importance: %.1f)\n",
 				cluster.CenterPrice, cluster.Importance))
-			sb.WriteString(fmt.Sprintf("    Contains %d fibonacci levels\n", 
+			sb.WriteString(fmt.Sprintf("    Contains %d fibonacci levels\n",
 				cluster.LevelCount))
 		}
 		sb.WriteString("\n")
@@ -1562,14 +1598,14 @@ func formatFibonacciData(data *FibonacciData) string {
 	if data.Statistics != nil {
 		stats := data.Statistics
 		sb.WriteString("Fibonacci Analysis Summary:\n")
-		sb.WriteString(fmt.Sprintf("  • Active Retracements: %d (High Quality: %d)\n", 
+		sb.WriteString(fmt.Sprintf("  • Active Retracements: %d (High Quality: %d)\n",
 			stats.ActiveRetracements, stats.HighQualityCount))
 		if stats.GoldenRatioHits > 0 {
-			sb.WriteString(fmt.Sprintf("  • Golden Ratio Reactions: %d times\n", 
+			sb.WriteString(fmt.Sprintf("  • Golden Ratio Reactions: %d times\n",
 				stats.GoldenRatioHits))
 		}
 		if stats.SuccessRate > 0 {
-			sb.WriteString(fmt.Sprintf("  • Success Rate: %.1f%%\n", 
+			sb.WriteString(fmt.Sprintf("  • Success Rate: %.1f%%\n",
 				stats.SuccessRate*100))
 		}
 		sb.WriteString("\n")
@@ -1637,65 +1673,65 @@ func parseFloat(v interface{}) (float64, error) {
 // GetMultiSymbolAnalysis 获取多个币种的多时间框架分析数据
 func GetMultiSymbolAnalysis(symbols []string) (map[string]map[string]interface{}, error) {
 	result := make(map[string]map[string]interface{})
-	
+
 	for _, symbol := range symbols {
 		// 标准化symbol
 		normalizedSymbol := Normalize(symbol)
-		
+
 		// 获取市场数据
 		data, err := Get(normalizedSymbol)
 		if err != nil {
 			fmt.Printf("获取%s市场数据失败: %v\n", normalizedSymbol, err)
 			continue
 		}
-		
+
 		// 构建时间框架数据
 		symbolData := map[string]interface{}{
 			"5m": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "dow_theory"),
-				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "channel_analysis"),
+				"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "channel_analysis"),
 				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "volume_profile"),
-				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "supply_demand"),
-				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fair_value_gaps"),
+				"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "supply_demand"),
+				"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fair_value_gaps"),
 				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fibonacci"),
 			},
 			"15m": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "dow_theory"),
-				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "channel_analysis"),
+				"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "channel_analysis"),
 				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "volume_profile"),
-				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "supply_demand"),
-				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fair_value_gaps"),
+				"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "supply_demand"),
+				"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fair_value_gaps"),
 				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fibonacci"),
 			},
 			"30m": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "dow_theory"),
-				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "channel_analysis"),
+				"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "channel_analysis"),
 				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "volume_profile"),
-				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "supply_demand"),
-				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fair_value_gaps"),
+				"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "supply_demand"),
+				"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fair_value_gaps"),
 				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fibonacci"),
 			},
 			"1h": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "dow_theory"),
-				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "channel_analysis"),
+				"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "channel_analysis"),
 				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "volume_profile"),
-				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "supply_demand"),
-				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fair_value_gaps"),
+				"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "supply_demand"),
+				"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fair_value_gaps"),
 				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fibonacci"),
 			},
 			"4h": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "dow_theory"),
-				"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "channel_analysis"),
+				"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "channel_analysis"),
 				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "volume_profile"),
-				"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "supply_demand"),
-				"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fair_value_gaps"),
+				"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "supply_demand"),
+				"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fair_value_gaps"),
 				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fibonacci"),
 			},
 		}
-		
+
 		result[normalizedSymbol] = symbolData
 	}
-	
+
 	return result, nil
 }
 
@@ -1704,12 +1740,12 @@ func extractTimeframeData(multiTimeframeAnalysis *MultiTimeframeAnalysis, timefr
 	if multiTimeframeAnalysis == nil || multiTimeframeAnalysis.Timeframes == nil {
 		return map[string]interface{}{}
 	}
-	
+
 	timeframeData, exists := multiTimeframeAnalysis.Timeframes[timeframe]
 	if !exists || timeframeData == nil {
 		return map[string]interface{}{}
 	}
-	
+
 	switch analysisType {
 	case "dow_theory":
 		if timeframeData.DowTheory != nil {
@@ -1736,7 +1772,7 @@ func extractTimeframeData(multiTimeframeAnalysis *MultiTimeframeAnalysis, timefr
 			return timeframeData.Fibonacci
 		}
 	}
-	
+
 	return map[string]interface{}{}
 }
 
@@ -1744,57 +1780,57 @@ func extractTimeframeData(multiTimeframeAnalysis *MultiTimeframeAnalysis, timefr
 func GetSingleSymbolAnalysis(symbol string) (map[string]interface{}, error) {
 	// 标准化symbol
 	normalizedSymbol := Normalize(symbol)
-	
+
 	// 获取市场数据
 	data, err := Get(normalizedSymbol)
 	if err != nil {
 		return nil, fmt.Errorf("获取%s市场数据失败: %v", normalizedSymbol, err)
 	}
-	
+
 	// 构建时间框架数据
 	symbolData := map[string]interface{}{
 		"5m": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "dow_theory"),
-			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "channel_analysis"),
+			"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "channel_analysis"),
 			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "volume_profile"),
-			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "supply_demand"),
-			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fair_value_gaps"),
+			"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "supply_demand"),
+			"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fair_value_gaps"),
 			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fibonacci"),
 		},
 		"15m": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "dow_theory"),
-			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "channel_analysis"),
+			"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "channel_analysis"),
 			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "volume_profile"),
-			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "supply_demand"),
-			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fair_value_gaps"),
+			"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "supply_demand"),
+			"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fair_value_gaps"),
 			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fibonacci"),
 		},
 		"30m": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "dow_theory"),
-			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "channel_analysis"),
+			"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "channel_analysis"),
 			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "volume_profile"),
-			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "supply_demand"),
-			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fair_value_gaps"),
+			"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "supply_demand"),
+			"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fair_value_gaps"),
 			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fibonacci"),
 		},
 		"1h": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "dow_theory"),
-			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "channel_analysis"),
+			"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "channel_analysis"),
 			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "volume_profile"),
-			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "supply_demand"),
-			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fair_value_gaps"),
+			"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "supply_demand"),
+			"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fair_value_gaps"),
 			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fibonacci"),
 		},
 		"4h": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "dow_theory"),
-			"通道数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "channel_analysis"),
+			"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "channel_analysis"),
 			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "volume_profile"),
-			"供需区数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "supply_demand"),
-			"FVG数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fair_value_gaps"),
+			"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "supply_demand"),
+			"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fair_value_gaps"),
 			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fibonacci"),
 		},
 	}
-	
+
 	return symbolData, nil
 }
 
@@ -1858,8 +1894,6 @@ func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 	return data
 }
 
-
-
 // SuperTrendResult 超级趋势计算结果
 type SuperTrendResult struct {
 	Direction   string  // "bullish" or "bearish"
@@ -1869,6 +1903,7 @@ type SuperTrendResult struct {
 }
 
 // calculateSupertrend 计算超级趋势线（标准实现）
+// calculateSupertrend 计算超级趋势线（修正版：优化ATR计算+修复方向初始化）
 func calculateSupertrend(klines []Kline, atrPeriod int, factor float64) SuperTrendResult {
 	result := SuperTrendResult{
 		Direction:   "unknown",
@@ -1876,100 +1911,114 @@ func calculateSupertrend(klines []Kline, atrPeriod int, factor float64) SuperTre
 		UpperLine:   0.0,
 		LowerLine:   0.0,
 	}
-	
-	if len(klines) < atrPeriod+1 {
+
+	minRequired := atrPeriod + 1
+	recommended := atrPeriod * 3 // 建议使用ATR周期的3倍数据以确保稳定性
+	if len(klines) < minRequired {
+		log.Printf("🚨🔴 [SuperTrend计算] ❌ K线数据不足: 需要%d根，实际%d根 ❌", minRequired, len(klines))
 		return result
 	}
-	
-	// 计算所有价格点的SuperTrend线
+	if len(klines) < recommended {
+		log.Printf("🟡⚠️ [SuperTrend计算] 稳定性警告: 建议%d根，实际%d根 (可能影响趋势稳定性) ⚠️🟡", recommended, len(klines))
+	}
+
 	length := len(klines)
+	// 1. 预先计算ATR序列 (使用Wilder平滑，符合TradingView标准)
+	atrs := make([]float64, length)
+
+	// 计算第一个ATR (SMA)
+	sumTR := 0.0
+	for i := 1; i <= atrPeriod; i++ {
+		high := klines[i].High
+		low := klines[i].Low
+		prevClose := klines[i-1].Close
+		tr := math.Max(high-low, math.Max(math.Abs(high-prevClose), math.Abs(low-prevClose)))
+		sumTR += tr
+	}
+	atrs[atrPeriod] = sumTR / float64(atrPeriod)
+
+	// 计算后续ATR (RMA)
+	for i := atrPeriod + 1; i < length; i++ {
+		high := klines[i].High
+		low := klines[i].Low
+		prevClose := klines[i-1].Close
+		tr := math.Max(high-low, math.Max(math.Abs(high-prevClose), math.Abs(low-prevClose)))
+		atrs[i] = (atrs[i-1]*float64(atrPeriod-1) + tr) / float64(atrPeriod)
+	}
+
+	// 2. 计算SuperTrend
 	supertrendLines := make([]float64, length)
-	directions := make([]string, length)
+	directions := make([]string, length) // "bullish" 或 "bearish"
 	upperBands := make([]float64, length)
 	lowerBands := make([]float64, length)
-	
-	for i := atrPeriod; i < length; i++ {
-		// 计算ATR（使用到当前位置的数据）
-		atr := calculateATRAtIndex(klines, i, atrPeriod)
-		if atr == 0 {
-			continue
-		}
-		
+
+	// 初始化第一个点
+	hl2 := (klines[atrPeriod].High + klines[atrPeriod].Low) / 2
+	upperBands[atrPeriod] = hl2 + (factor * atrs[atrPeriod])
+	lowerBands[atrPeriod] = hl2 - (factor * atrs[atrPeriod])
+
+	// 显式初始化方向：如果收盘价在下轨之上，则看多，否则看空
+	if klines[atrPeriod].Close > lowerBands[atrPeriod] {
+		directions[atrPeriod] = "bullish"
+		supertrendLines[atrPeriod] = lowerBands[atrPeriod]
+	} else {
+		directions[atrPeriod] = "bearish"
+		supertrendLines[atrPeriod] = upperBands[atrPeriod]
+	}
+
+	for i := atrPeriod + 1; i < length; i++ {
 		// 计算基础带
 		hl2 := (klines[i].High + klines[i].Low) / 2
-		upperBand := hl2 + (factor * atr)
-		lowerBand := hl2 - (factor * atr)
-		
-		// 计算最终带（带过滤）
-		if i == atrPeriod {
-			// 初始值
-			upperBands[i] = upperBand
-			lowerBands[i] = lowerBand
+		currATR := atrs[i]
+
+		basicUpper := hl2 + (factor * currATR)
+		basicLower := hl2 - (factor * currATR)
+
+		// 核心逻辑：带的平滑处理
+		// 上轨：只能下降，除非价格突破了前一根的上轨
+		if basicUpper < upperBands[i-1] || klines[i-1].Close > upperBands[i-1] {
+			upperBands[i] = basicUpper
 		} else {
-			// 上带过滤：如果当前上带小于前一个上带，且前一根K线收盘价大于前一个上带，则使用前一个上带
-			if upperBand < upperBands[i-1] || klines[i-1].Close > upperBands[i-1] {
-				upperBands[i] = upperBand
-			} else {
-				upperBands[i] = upperBands[i-1]
+			upperBands[i] = upperBands[i-1]
+		}
+
+		// 下轨：只能上升，除非价格跌破了前一根的下轨
+		if basicLower > lowerBands[i-1] || klines[i-1].Close < lowerBands[i-1] {
+			lowerBands[i] = basicLower
+		} else {
+			lowerBands[i] = lowerBands[i-1]
+		}
+
+		// 确定方向
+		prevDir := directions[i-1]
+		currDir := prevDir // 默认延续
+
+		if prevDir == "bullish" {
+			if klines[i].Close < lowerBands[i] {
+				currDir = "bearish"
 			}
-			
-			// 下带过滤：如果当前下带大于前一个下带，且前一根K线收盘价小于前一个下带，则使用前一个下带
-			if lowerBand > lowerBands[i-1] || klines[i-1].Close < lowerBands[i-1] {
-				lowerBands[i] = lowerBand
-			} else {
-				lowerBands[i] = lowerBands[i-1]
+		} else { // bearish
+			if klines[i].Close > upperBands[i] {
+				currDir = "bullish"
 			}
 		}
-		
-		// 确定趋势方向和SuperTrend线
-		if i == atrPeriod {
-			// 初始方向判断
-			if klines[i].Close <= lowerBands[i] {
-				directions[i] = "bearish"
-				supertrendLines[i] = upperBands[i]
-			} else {
-				directions[i] = "bullish"
-				supertrendLines[i] = lowerBands[i]
-			}
+		directions[i] = currDir
+
+		// 确定当前趋势线数值
+		if currDir == "bullish" {
+			supertrendLines[i] = lowerBands[i]
 		} else {
-			// 趋势延续逻辑（SuperTrend核心��
-			prevDirection := directions[i-1]
-			
-			if prevDirection == "bullish" {
-				// 前一根为多头
-				if klines[i].Close < lowerBands[i] {
-					// 价格跌破下带，转为空头
-					directions[i] = "bearish"
-					supertrendLines[i] = upperBands[i]
-				} else {
-					// 继续多头
-					directions[i] = "bullish"
-					supertrendLines[i] = lowerBands[i]
-				}
-			} else {
-				// 前一根为空头
-				if klines[i].Close > upperBands[i] {
-					// 价格突破上带，转为多头
-					directions[i] = "bullish"
-					supertrendLines[i] = lowerBands[i]
-				} else {
-					// 继续空头
-					directions[i] = "bearish"
-					supertrendLines[i] = upperBands[i]
-				}
-			}
+			supertrendLines[i] = upperBands[i]
 		}
 	}
-	
-	// 返回最新的结果
+
+	// 返回最新结果
 	lastIdx := length - 1
-	if lastIdx >= atrPeriod && directions[lastIdx] != "" {
-		result.Direction = directions[lastIdx]
-		result.CurrentLine = supertrendLines[lastIdx]
-		result.UpperLine = upperBands[lastIdx]
-		result.LowerLine = lowerBands[lastIdx]
-	}
-	
+	result.Direction = directions[lastIdx]
+	result.CurrentLine = supertrendLines[lastIdx]
+	result.UpperLine = upperBands[lastIdx]
+	result.LowerLine = lowerBands[lastIdx]
+
 	return result
 }
 
@@ -1978,70 +2027,70 @@ func calculateATRAtIndex(klines []Kline, endIndex, period int) float64 {
 	if endIndex < period {
 		return 0
 	}
-	
+
 	startIndex := endIndex - period + 1
 	if startIndex < 1 {
 		startIndex = 1
 	}
-	
+
 	trs := make([]float64, 0, period)
 	for i := startIndex; i <= endIndex; i++ {
 		high := klines[i].High
 		low := klines[i].Low
 		prevClose := klines[i-1].Close
-		
+
 		tr1 := high - low
 		tr2 := math.Abs(high - prevClose)
 		tr3 := math.Abs(low - prevClose)
-		
+
 		tr := math.Max(tr1, math.Max(tr2, tr3))
 		trs = append(trs, tr)
 	}
-	
+
 	// 计算平均TR作为ATR
 	sum := 0.0
 	for _, tr := range trs {
 		sum += tr
 	}
-	
+
 	return sum / float64(len(trs))
 }
 
 // extractCompactMultiTimeframeAnalysisWithSupertrend 提取包含超级趋势的多时间框架分析
 func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKlines map[string][]Kline) map[string]interface{} {
 	result := make(map[string]interface{})
-	
+
 	if data.MultiTimeframeAnalysis == nil || data.MultiTimeframeAnalysis.Timeframes == nil {
 		return result
 	}
-	
+
 	timeframes := []string{"5m", "15m", "30m", "1h", "4h"}
-	
+
 	for _, tf := range timeframes {
 		tfData, exists := data.MultiTimeframeAnalysis.Timeframes[tf]
 		if !exists || tfData == nil {
 			continue
 		}
-		
+
 		// 计算该时间框架的超级趋势线
 		klines := timeframeKlines[tf]
 		supertrend := calculateSupertrend(klines, 20, 5.0)
-		
+
 		result[tf] = map[string]interface{}{
-			"道氏理论数据": extractCompactDowTheory(tfData.DowTheory),
+			"道氏理论数据": extractCompactDowTheoryWithSupertrend(tfData.DowTheory, supertrend),
 			"超级趋势指标": map[string]interface{}{
-				"direction": supertrend.Direction,
+				"direction":    supertrend.Direction,
 				"current_line": supertrend.CurrentLine,
 			},
-			"通道数据": extractCompactChannelAnalysis(tfData.ChannelAnalysis),
-			"VPVR数据": extractCompactVPVR(tfData.VolumeProfile),
-			"供需区数据": extractCompactSupplyDemand(tfData.SupplyDemand),
-			"FVG数据": extractCompactFVG(tfData.FairValueGaps),
-			"斐波纳契数据": extractCompactFibonacci(tfData.Fibonacci),
+			"通道数据":    extractCompactChannelAnalysis(tfData.ChannelAnalysis),
+			"VPVR数据":  extractCompactVPVR(tfData.VolumeProfile),
+			"供需区数据":   extractCompactSupplyDemand(tfData.SupplyDemand),
+			"FVG数据":   extractCompactFVG(tfData.FairValueGaps),
+			"斐波纳契数据":  extractCompactFibonacci(tfData.Fibonacci),
 			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance),
 		}
 	}
-	
+
 	return result
 }
 
@@ -2051,77 +2100,76 @@ func extractCompactSupportResistance(data *SupportResistanceData) map[string]int
 		return map[string]interface{}{
 			"support_resistance_lines": []map[string]interface{}{},
 			"summary": map[string]interface{}{
-				"total_lines": 0,
-				"support_lines": 0,
+				"total_lines":      0,
+				"support_lines":    0,
 				"resistance_lines": 0,
 			},
 		}
 	}
-	
+
 	result := map[string]interface{}{
 		"support_resistance_lines": []map[string]interface{}{},
 		"summary": map[string]interface{}{
-			"total_lines": 0,
-			"support_lines": 0,
+			"total_lines":      0,
+			"support_lines":    0,
 			"resistance_lines": 0,
 		},
 	}
-	
+
 	if len(data.KeyLevels) == 0 {
 		return result
 	}
-	
+
 	var lines []map[string]interface{}
 	supportCount := 0
 	resistanceCount := 0
-	
+
 	// 提取关键水平线信息
 	for _, level := range data.KeyLevels {
 		lineInfo := map[string]interface{}{
-			"price": level.Price,
-			"type": level.Type,
-			"strength": level.Strength,
+			"price":     level.Price,
+			"type":      level.Type,
+			"strength":  level.Strength,
 			"hit_count": level.HitCount,
 		}
 		lines = append(lines, lineInfo)
-		
+
 		if level.Type == "support" {
 			supportCount++
 		} else if level.Type == "resistance" {
 			resistanceCount++
 		}
 	}
-	
+
 	result["support_resistance_lines"] = lines
 	result["summary"] = map[string]interface{}{
-		"total_lines": len(data.KeyLevels),
-		"support_lines": supportCount,
+		"total_lines":      len(data.KeyLevels),
+		"support_lines":    supportCount,
 		"resistance_lines": resistanceCount,
 	}
-	
+
 	return result
 }
 
 // extractCompactDowTheoryWithSupertrend 提取包含超级趋势的道氏理论数据
 func extractCompactDowTheoryWithSupertrend(data *DowTheoryData, supertrend SuperTrendResult) map[string]interface{} {
 	result := map[string]interface{}{
-		"trend_direction": "unknown",
-		"trend_strength": 0.0,
+		"trend_direction":   "unknown",
+		"trend_strength":    0.0,
 		"signal_confidence": 0.0,
 		"supertrend": map[string]interface{}{
-			"direction": supertrend.Direction,
+			"direction":    supertrend.Direction,
 			"current_line": supertrend.CurrentLine,
-			"upper_line": supertrend.UpperLine,
-			"lower_line": supertrend.LowerLine,
+			"upper_line":   supertrend.UpperLine,
+			"lower_line":   supertrend.LowerLine,
 		},
 	}
-	
+
 	if data != nil && data.TrendStrength != nil {
 		result["trend_direction"] = data.TrendStrength.Direction
 		result["trend_strength"] = data.TrendStrength.Overall
 		result["signal_confidence"] = data.TrendStrength.Consistency
 	}
-	
+
 	return result
 }
-

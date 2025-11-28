@@ -2,6 +2,7 @@ package market
 
 import (
 	"fmt"
+	"log"
 	"sort"
 	"time"
 )
@@ -1368,11 +1369,17 @@ func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe string, klines
 		Weight:    weight,
 	}
 
-	// 根据时间框架确定最小数据要求
+	// 根据时间框架确定最小数据要求与升级后的校验
 	minDataPoints := ca.getMinDataPoints(timeframe)
+	recommendedDataPoints := minDataPoints * 2 // 建议数据量为最小的2倍
+	
 	if len(klines) < minDataPoints {
+		log.Printf("🚨🔴 [综合分析] ❌ %s时间框架数据不足: 需要%d根，实际%d根 ❌", timeframe, minDataPoints, len(klines))
 		tfAnalysis.Reliability = 0.0
 		return tfAnalysis
+	}
+	if len(klines) < recommendedDataPoints {
+		log.Printf("🟡⚠️ [综合分析] %s时间框架数据警告: 建议%d根，实际%d根 (可能影响精度) ⚠️🟡", timeframe, recommendedDataPoints, len(klines))
 	}
 
 	// 执行各种分析

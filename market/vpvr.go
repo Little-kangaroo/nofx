@@ -1,6 +1,7 @@
 package market
 
 import (
+	"log"
 	"math"
 	"sort"
 	"time"
@@ -27,8 +28,19 @@ func NewVPVRAnalyzerWithConfig(config VPVRConfig) *VPVRAnalyzer {
 
 // Analyze 分析K线数据生成成交量分布
 func (va *VPVRAnalyzer) Analyze(klines []Kline) *VolumeProfile {
+	minRequired := 50   // 最小需要50根K线进行成交量分布分析
+	recommended := 200  // 建议200根以上获得更准确的价量分布
+	
 	if len(klines) == 0 {
+		log.Printf("🚨🔴 [VPVR分析] ❌ 无K线数据 ❌")
 		return nil
+	}
+	if len(klines) < minRequired {
+		log.Printf("🚨🔴 [VPVR分析] ❌ K线数据不足: 需要%d根，实际%d根 ❌", minRequired, len(klines))
+		return nil
+	}
+	if len(klines) < recommended {
+		log.Printf("🟡⚠️ [VPVR分析] 价量分析警告: 建议%d根，实际%d根 (可能影响分布精度) ⚠️🟡", recommended, len(klines))
 	}
 
 	// 计算价格级别
@@ -139,53 +151,117 @@ func (va *VPVRAnalyzer) findPriceRange(klines []Kline) (float64, float64) {
 	return minPrice, maxPrice
 }
 
-// distributePriceVolume 将K线的成交量分配到相应的价格级别
+// distributePriceVolume 将K线的成交量分配到相应的价格级别（修复版）
 func (va *VPVRAnalyzer) distributePriceVolume(kline Kline, levelMap map[float64]*PriceLevel, minPrice float64) {
+	// 数据有效性检查
+	if kline.Volume <= 0 {
+		return
+	}
+	
 	// 计算K线的价格范围
 	priceRange := kline.High - kline.Low
-	if priceRange == 0 {
-		priceRange = va.config.TickSize
-	}
-
-	// 将成交量按价格范围均匀分配
-	// 这是一个简化的分配方法，实际应用中可能需要更复杂的模型
-	numLevels := int(priceRange/va.config.TickSize) + 1
-	if numLevels == 0 {
-		numLevels = 1
-	}
-
-	volumePerLevel := kline.Volume / float64(numLevels)
 	
-	// 估算买卖成交量分配
-	// 如果收盘价高于开盘价，认为买盘更强
-	buyRatio := 0.5
-	if kline.Close > kline.Open {
-		buyRatio = 0.6 + 0.2*(kline.Close-kline.Open)/(kline.High-kline.Low)
-	} else if kline.Close < kline.Open {
-		buyRatio = 0.4 - 0.2*(kline.Open-kline.Close)/(kline.High-kline.Low)
+	// 修复1: 处理价格范围为零的情况（无价格变化K线）
+	if priceRange <= 0 {
+		// 将所有成交量分配给收盘价位置
+		va.addVolumeToSingleLevel(kline.Close, kline.Volume, levelMap, minPrice)
+		return
 	}
-	buyRatio = math.Max(0.1, math.Min(0.9, buyRatio))
 
-	buyVolumePerLevel := volumePerLevel * buyRatio
-	sellVolumePerLevel := volumePerLevel * (1 - buyRatio)
+	// 修复2: 安全的买卖比例计算，避免除零错误
+	buyRatio := va.calculateSafeBuySellRatio(kline, priceRange)
+	buyVolume := kline.Volume * buyRatio
+	sellVolume := kline.Volume * (1 - buyRatio)
 
-	// 分配到各个价格级别
-	for price := kline.Low; price <= kline.High; price += va.config.TickSize {
-		levelPrice := va.roundToTick(price, minPrice)
-		
-		level, exists := levelMap[levelPrice]
-		if !exists {
-			level = &PriceLevel{
-				Price: levelPrice,
+	// 修复3: 使用价格权重分配模型，替代简单均匀分配
+	priceWeights := va.calculatePriceWeights(kline)
+	
+	// 修复4: 按权重分配成交量到关键价位
+	for _, weight := range priceWeights {
+		if weight.weight > 0 {
+			levelPrice := va.roundToTick(weight.price, minPrice)
+			
+			level, exists := levelMap[levelPrice]
+			if !exists {
+				level = &PriceLevel{
+					Price: levelPrice,
+				}
+				levelMap[levelPrice] = level
 			}
-			levelMap[levelPrice] = level
-		}
 
-		level.Volume += volumePerLevel
-		level.BuyVolume += buyVolumePerLevel
-		level.SellVolume += sellVolumePerLevel
-		level.Transactions++
+			// 按权重分配成交量，避免成交量重复计算
+			volumeToAdd := kline.Volume * weight.weight
+			level.Volume += volumeToAdd
+			level.BuyVolume += buyVolume * weight.weight
+			level.SellVolume += sellVolume * weight.weight
+			level.Transactions++
+		}
 	}
+}
+
+// 价格权重结构
+type PriceWeight struct {
+	price  float64
+	weight float64
+}
+
+// calculatePriceWeights 计算各价格点的权重分配
+func (va *VPVRAnalyzer) calculatePriceWeights(kline Kline) []PriceWeight {
+	// 基于真实交易行为的价格权重模型：
+	// - 收盘价最重要（交易者最关注的价格）
+	// - 开盘价次重要（开盘交易活跃）
+	// - 最高价和最低价代表极值关注
+	// - 中位价代表区间中心
+	
+	weights := []PriceWeight{
+		{price: kline.Open, weight: 0.25},    // 开盘价权重25%
+		{price: kline.High, weight: 0.15},    // 最高价权重15%
+		{price: kline.Low, weight: 0.15},     // 最低价权重15%
+		{price: kline.Close, weight: 0.35},   // 收盘价权重35%（最重要）
+		{price: (kline.High + kline.Low) / 2, weight: 0.10}, // 中位价权重10%
+	}
+	
+	return weights
+}
+
+// calculateSafeBuySellRatio 安全计算买卖比例，避免除零错误
+func (va *VPVRAnalyzer) calculateSafeBuySellRatio(kline Kline, priceRange float64) float64 {
+	// 修复除零风险：priceRange已经在调用前确保>0
+	
+	// 计算价格变化强度（标准化到价格范围）
+	priceMovement := (kline.Close - kline.Open) / priceRange
+	
+	// 计算收盘价在区间中的相对位置
+	closePosition := (kline.Close - kline.Low) / priceRange
+	
+	// 综合买卖压力评估
+	// 基于价格变化方向和收盘位置
+	movementBias := 0.3 * priceMovement  // 价格变化影响（±30%）
+	positionBias := 0.2 * (closePosition - 0.5) // 位置偏向（±10%）
+	
+	buyRatio := 0.5 + movementBias + positionBias
+	
+	// 确保买卖比例在合理范围内[10%, 90%]
+	return math.Max(0.1, math.Min(0.9, buyRatio))
+}
+
+// addVolumeToSingleLevel 将成交量添加到单一价格级别
+func (va *VPVRAnalyzer) addVolumeToSingleLevel(price, volume float64, levelMap map[float64]*PriceLevel, minPrice float64) {
+	levelPrice := va.roundToTick(price, minPrice)
+	
+	level, exists := levelMap[levelPrice]
+	if !exists {
+		level = &PriceLevel{
+			Price: levelPrice,
+		}
+		levelMap[levelPrice] = level
+	}
+	
+	level.Volume += volume
+	// 对于无价格变化的K线，买卖比例设为中性
+	level.BuyVolume += volume * 0.5
+	level.SellVolume += volume * 0.5
+	level.Transactions++
 }
 
 // roundToTick 将价格舍入到指定的tick大小

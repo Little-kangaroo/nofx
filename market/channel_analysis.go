@@ -70,11 +70,8 @@ func (ca *ChannelAnalyzer) Analyze(klines []Kline, currentPrice float64) *Channe
 		}
 	}
 
-	// 使用最近300根K线进行分析
+	// 使用全部K线进行分析（最大优化结构视野）
 	analysisData := klines
-	if len(klines) > 300 {
-		analysisData = klines[len(klines)-300:]
-	}
 
 	// 1. 识别摆动点
 	swingPoints := ca.identifySwingPoints(analysisData)

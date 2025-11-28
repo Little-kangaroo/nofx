@@ -1,6 +1,7 @@
 package market
 
 import (
+	"log"
 	"math"
 	"sort"
 	"time"
@@ -20,17 +21,33 @@ func NewDowTheoryAnalyzer() *DowTheoryAnalyzer {
 
 // Analyze 执行道氏理论分析（专注趋势识别，不包含通道）
 func (dta *DowTheoryAnalyzer) Analyze(klines3m, klines4h []Kline, currentPrice float64) *DowTheoryData {
-	// 使用最近300根4小时数据进行主要分析
-	analysisKlines := klines4h
-	if len(klines4h) > 300 {
-		analysisKlines = klines4h[len(klines4h)-300:]
+	// 数据量校验
+	minRequired4h := 100  // 最小需要100根K线进行结构分析
+	recommended4h := 500 // 建议500根以上获得更好的结构视野
+	minRequired3m := 50  // 最小需蔂50根K线进行短期分析
+	recommended3m := 200 // 建议200根以上获得更好的精度
+	
+	if len(klines4h) < minRequired4h {
+		log.Printf("🚨🔴 [道氏理论] ❌ 4h K线数据不足: 需要%d根，实际%d根 ❌", minRequired4h, len(klines4h))
+		return &DowTheoryData{}
+	}
+	if len(klines3m) < minRequired3m {
+		log.Printf("🚨🔴 [道氏理论] ❌ 5m K线数据不足: 需要%d根，实际%d根 ❌", minRequired3m, len(klines3m))
+		return &DowTheoryData{}
 	}
 	
-	// 使用最近300根5分钟数据进行短期分析
-	shortTermKlines := klines3m
-	if len(klines3m) > 300 {
-		shortTermKlines = klines3m[len(klines3m)-300:]
+	if len(klines4h) < recommended4h {
+		log.Printf("🟡⚠️ [道氏理论] 结构视野警告: 建议%d根，实际%d根 (可能影响结构识别精度) ⚠️🟡", recommended4h, len(klines4h))
 	}
+	if len(klines3m) < recommended3m {
+		log.Printf("🟡⚠️ [道氏理论] 短期分析警告: 建议%d根，实际%d根 (可能影响趋势精度) ⚠️🟡", recommended3m, len(klines3m))
+	}
+	
+	// 使用全部4小时数据进行主要分析（最大优化结构视野）
+	analysisKlines := klines4h
+	
+	// 使用全部5分钟数据进行短期分析（最大优化精度）
+	shortTermKlines := klines3m
 
 	swingPoints := dta.identifySwingPoints(analysisKlines)
 	trendLines := dta.calculateTrendLines(swingPoints)
@@ -440,18 +457,43 @@ func (dta *DowTheoryAnalyzer) buildParallelChannel(trendLines []*TrendLine, swin
 	}
 }
 
-// areParallel 判断两条趋势线是否平行
+// areParallel 判断两条趋势线是否平行（修复版）
 func (dta *DowTheoryAnalyzer) areParallel(line1, line2 *TrendLine) bool {
-	slopeDiff := math.Abs(line1.Slope - line2.Slope)
+	slope1 := line1.Slope
+	slope2 := line2.Slope
 	tolerance := dta.config.ChannelConfig.ParallelTolerance
 
-	// 计算相对于斜率的容忍度
-	avgSlope := (math.Abs(line1.Slope) + math.Abs(line2.Slope)) / 2
-	if avgSlope == 0 {
-		return slopeDiff < tolerance
+	// 修复1: 验证同向性 - 斜率符号必须相同
+	// 如果一个是正斜率，一个是负斜率，则绝对不平行
+	if slope1*slope2 < 0 {
+		return false
 	}
 
-	return slopeDiff/avgSlope < tolerance
+	// 修复2: 处理零斜率的特殊情况
+	if slope1 == 0 && slope2 == 0 {
+		return true // 两条水平线总是平行
+	}
+	
+	if slope1 == 0 || slope2 == 0 {
+		// 只有一条是水平线，另一条不是，则不平行
+		return false
+	}
+
+	// 修复3: 智能容忍度计算
+	slopeDiff := math.Abs(slope1 - slope2)
+	
+	// 使用两个斜率的平均绝对值作为基准（保持原始意图但修复计算）
+	avgSlopeMagnitude := (math.Abs(slope1) + math.Abs(slope2)) / 2
+	
+	// 对于极小斜率，使用绝对容忍度；对于较大斜率，使用相对容忍度
+	if avgSlopeMagnitude < 0.0001 {
+		// 极小斜率使用绝对容忍度
+		return slopeDiff < tolerance * 0.0001
+	}
+
+	// 修复4: 相对容忍度计算
+	relativeDiff := slopeDiff / avgSlopeMagnitude
+	return relativeDiff < tolerance
 }
 
 // constructParallelLine 构建平行线
@@ -660,23 +702,25 @@ func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, sw
 	}
 }
 
-// calculateShortTermStrength 计算短期趋势强度
+// calculateShortTermStrength 计算短期趋势强度（修复版）
 func (dta *DowTheoryAnalyzer) calculateShortTermStrength(klines []Kline) float64 {
-	if len(klines) < 12 {
+	// 修复1: 增加最小K线数要求，确保能计算最长的指标
+	if len(klines) < 30 {
 		return 0
 	}
 
-	// 使用最近12个5分钟K线
-	recentKlines := klines[len(klines)-12:]
-
-	// 计算价格动量
+	// 使用最近30个K线确保有足够数据计算所有指标
+	recentKlines := klines[len(klines)-30:]
+	
+	// 计算价格动量（保留方向性）
 	priceChange := (recentKlines[len(recentKlines)-1].Close - recentKlines[0].Open) / recentKlines[0].Open
 
-	// 计算移动平均趋势
+	// 修复2: 使用有效的MA周期（确保数据充足）
 	ma5 := dta.calculateMA(recentKlines, 5)
 	ma10 := dta.calculateMA(recentKlines, 10)
 	ma20 := dta.calculateMA(recentKlines, 20)
 
+	// 修复3: 保留MA趋势的方向性
 	maTrend := 0.0
 	if ma5 > ma10 && ma10 > ma20 {
 		maTrend = 1.0 // 多头排列
@@ -684,16 +728,36 @@ func (dta *DowTheoryAnalyzer) calculateShortTermStrength(klines []Kline) float64
 		maTrend = -1.0 // 空头排列
 	}
 
-	// 计算波动性
+	// 计算波动性（标准化到0-1范围）
 	volatility := dta.calculateVolatility(recentKlines)
+	
+	// 修复4: 安全的波动性处理，避免负值
+	volatilityScore := math.Max(0, math.Min(1, 1-volatility*10)) // 将波动性映射到0-1分数
 
-	// 综合计算短期强度
-	strength := math.Abs(priceChange)*50 + math.Abs(maTrend)*30 + (1-volatility)*20
+	// 修复5: 标准化计算，保留方向性
+	// 价格动量分量（-50到+50）
+	momentumScore := math.Max(-50, math.Min(50, priceChange*100*10)) // priceChange*1000标准化
+	
+	// MA趋势分量（-30到+30）
+	trendScore := maTrend * 30
+	
+	// 波动性分量（0到+20）
+	volScore := volatilityScore * 20
 
-	return math.Min(strength, 100.0)
+	// 修复6: 综合计算保留方向，范围-80到+100
+	rawStrength := momentumScore + trendScore + volScore
+	
+	// 标准化到0-100范围，但保留强弱信息
+	if rawStrength >= 0 {
+		// 正值：强度越高分数越高
+		return math.Min(50 + rawStrength*0.5, 100.0)
+	} else {
+		// 负值：转换为低分数（0-50范围）
+		return math.Max(50 + rawStrength*0.5, 0.0)
+	}
 }
 
-// calculateLongTermStrength 计算长期趋势强度
+// calculateLongTermStrength 计算长期趋势强度（修复版）
 func (dta *DowTheoryAnalyzer) calculateLongTermStrength(klines []Kline) float64 {
 	if len(klines) < 50 {
 		return 0
@@ -707,13 +771,14 @@ func (dta *DowTheoryAnalyzer) calculateLongTermStrength(klines []Kline) float64 
 
 	recentKlines := klines[len(klines)-periodLength:]
 
-	// 计算趋势斜率
+	// 构建价格序列
 	prices := make([]float64, len(recentKlines))
 	for i, k := range recentKlines {
 		prices[i] = k.Close
 	}
 
-	slope := dta.calculateTrendSlope(prices)
+	// 修复"资产歧视"：使用百分比斜率而非绝对价格斜率
+	percentageSlope := dta.calculatePercentageTrendSlope(prices)
 
 	// 计算R-squared（趋势的线性度）
 	rSquared := dta.calculateRSquared(prices)
@@ -723,17 +788,35 @@ func (dta *DowTheoryAnalyzer) calculateLongTermStrength(klines []Kline) float64 
 	ma50 := dta.calculateMA(klines, 50)
 	currentPrice := recentKlines[len(recentKlines)-1].Close
 
+	// 修复MA位置判断重复逻辑
 	maPosition := 0.0
 	if currentPrice > ma20 && ma20 > ma50 {
-		maPosition = 1.0
+		maPosition = 1.0  // 多头排列
 	} else if currentPrice < ma20 && ma20 < ma50 {
-		maPosition = 1.0
+		maPosition = -1.0 // 空头排列（修复：不再给相同分数）
 	}
 
-	// 综合计算长期强度
-	strength := math.Abs(slope)*40 + rSquared*40 + maPosition*20
+	// 修复：标准化计算，保留方向性
+	// 百分比斜率分量（-40到+40），标准化处理
+	slopeScore := math.Max(-40, math.Min(40, percentageSlope*1000)) // 百分比斜率*1000标准化
 
-	return math.Min(strength, 100.0)
+	// R²分量（0到40），表示趋势线性度
+	rSquaredScore := rSquared * 40
+
+	// MA位置分量（-20到+20），保留方向性
+	maScore := maPosition * 20
+
+	// 综合计算（范围-60到+100）
+	rawStrength := slopeScore + rSquaredScore + maScore
+
+	// 标准化到0-100范围，保留强弱信息
+	if rawStrength >= 0 {
+		// 正值：强度越高分数越高
+		return math.Min(50 + rawStrength*0.5, 100.0)
+	} else {
+		// 负值：转换为低分数（0-50范围）
+		return math.Max(50 + rawStrength*0.5, 0.0)
+	}
 }
 
 // calculateMA 计算简单移动平均
@@ -778,7 +861,7 @@ func (dta *DowTheoryAnalyzer) calculateVolatility(klines []Kline) float64 {
 	return math.Sqrt(variance)
 }
 
-// calculateTrendSlope 计算趋势斜率
+// calculateTrendSlope 计算趋势斜率（保留原函数用于向后兼容）
 func (dta *DowTheoryAnalyzer) calculateTrendSlope(prices []float64) float64 {
 	n := float64(len(prices))
 	if n < 2 {
@@ -800,6 +883,50 @@ func (dta *DowTheoryAnalyzer) calculateTrendSlope(prices []float64) float64 {
 
 	slope := (n*sumXY - sumX*sumY) / (n*sumX2 - sumX*sumX)
 	return slope
+}
+
+// calculatePercentageTrendSlope 计算百分比趋势斜率（修复"资产歧视"漏洞）
+func (dta *DowTheoryAnalyzer) calculatePercentageTrendSlope(prices []float64) float64 {
+	n := len(prices)
+	if n < 2 {
+		return 0
+	}
+
+	// 修复"资产歧视"：使用对数价格消除绝对价格依赖
+	logPrices := make([]float64, n)
+	for i, price := range prices {
+		if price <= 0 {
+			return 0 // 避免对数计算错误
+		}
+		logPrices[i] = math.Log(price)
+	}
+
+	// 使用对数价格计算线性回归斜率
+	sumX := 0.0
+	sumY := 0.0
+	sumXY := 0.0
+	sumX2 := 0.0
+
+	for i, logPrice := range logPrices {
+		x := float64(i)
+		sumX += x
+		sumY += logPrice
+		sumXY += x * logPrice
+		sumX2 += x * x
+	}
+
+	nFloat := float64(n)
+	denominator := nFloat*sumX2 - sumX*sumX
+	if math.Abs(denominator) < 1e-10 {
+		return 0 // 避免除零
+	}
+
+	// 对数斜率，表示每个时间单位的百分比变化率
+	logSlope := (nFloat*sumXY - sumX*sumY) / denominator
+	
+	// 转换为百分比变化率（每时间单位）
+	// logSlope = ln(P_end/P_start) / periods ≈ percentage_change / periods
+	return logSlope // 这是标准化的百分比斜率，不依赖绝对价格
 }
 
 // calculateRSquared 计算R平方

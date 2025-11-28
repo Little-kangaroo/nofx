@@ -103,7 +103,7 @@ func (m *WSMonitor) initializeHistoricalData() error {
 			}
 
 			for tf, dataMap := range timeframes {
-				klines, err := apiClient.GetKlines(s, tf, 300)
+				klines, err := apiClient.GetKlines(s, tf, 1000)
 				if err != nil {
 					log.Printf("获取 %s %s历史数据失败: %v", s, tf, err)
 					continue
@@ -248,10 +248,10 @@ func (m *WSMonitor) processKlineUpdate(symbol string, wsData KlineWSData, _time 
 			// 添加新K线
 			klines = append(klines, kline)
 
-			// 保持数据长度为300条（确保技术指标计算准确性）
-			const REQUIRED_KLINES = 300
+			// 保持数据长度为1000条（确保技术指标计算准确性）
+			const REQUIRED_KLINES = 1000
 			if len(klines) > REQUIRED_KLINES {
-				// 保持最新的300条数据，删除最老的数据
+				// 保持最新的1000条数据，删除最老的数据
 				klines = klines[len(klines)-REQUIRED_KLINES:]
 			}
 		}
@@ -269,7 +269,7 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, erro
 		log.Printf("📊 [K线获取] %s %s时间框架缓存未命中，使用API获取", symbol, _time)
 		// 如果Ws数据未初始化完成时,单独使用api获取 - 兼容性代码 (防止在未初始化完成是,已经有交易员运行)
 		apiClient := NewAPIClient()
-		klines, err := apiClient.GetKlines(symbol, _time, 300)
+		klines, err := apiClient.GetKlines(symbol, _time, 1000)
 		if err != nil {
 			log.Printf("❌ [K线获取] API获取%s %s失败: %v", symbol, _time, err)
 			return nil, fmt.Errorf("获取%v分钟K线失败: %v", _time, err)
@@ -289,9 +289,9 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, erro
 	klines := value.([]Kline)
 	log.Printf("✓ [K线获取] %s %s缓存命中: %d条数据", symbol, _time, len(klines))
 	
-	// 🔍 临时检查：验证实际K线数量是否为300条
-	if len(klines) != 300 {
-		log.Printf("⚠️ [K线数量检查] %s %s 实际数量: %d条 (期望300条)", symbol, _time, len(klines))
+	// 🔍 临时检查：验证实际K线数量是否为1000条
+	if len(klines) != 1000 {
+		log.Printf("⚠️ [K线数量检查] %s %s 实际数量: %d条 (期望1000条)", symbol, _time, len(klines))
 	}
 	return klines, nil
 }
