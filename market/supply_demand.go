@@ -76,6 +76,10 @@ func (sda *SupplyDemandAnalyzer) Analyze(klines []Kline) *SupplyDemandData {
 		}
 	}
 
+	// 计算上下文评分 (在所有供需区创建后进行)
+	contextCalc := NewContextCalculator(klines)
+	sda.CalculateContextScores(allZones, contextCalc)
+
 	// 计算统计信息
 	stats := sda.calculateStatistics(supplyZones, demandZones, activeZones)
 

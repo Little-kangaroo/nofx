@@ -836,6 +836,9 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		}
 	}
 
+	// 应用精度格式化到所有基础指标数据
+	formatBasicIndicatorsData(result, data.Symbol)
+
 	return result
 }
 

@@ -46,6 +46,10 @@ func (fa *FibonacciAnalyzer) Analyze(klines []Kline) *FibonacciData {
 	// 分析黄金口袋
 	goldenPocket := fa.analyzeGoldenPocket(retracements, klines)
 	
+	// 计算上下文评分 (在所有斐波纳契回调创建后进行)
+	contextCalc := NewContextCalculator(klines)
+	fa.CalculateContextScores(retracements, contextCalc)
+	
 	// 计算统计信息
 	statistics := fa.calculateStatistics(retracements, extensions, clusters, goldenPocket)
 

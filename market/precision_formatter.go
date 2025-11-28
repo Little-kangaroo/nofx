@@ -200,6 +200,9 @@ func formatSupplyDemandZones(zones []*SupplyDemandZone, symbol string) {
 			zone.Width = FormatByDataTypeAndSymbol(zone.Width, "price", symbol)
 			zone.WidthPercent = FormatByDataTypeAndSymbol(zone.WidthPercent, "percentage", symbol)
 			zone.Strength = FormatByDataTypeAndSymbol(zone.Strength, "strength", symbol)
+			
+			// 格式化上下文评分
+			formatContextMetrics(zone.Context, symbol)
 		}
 	}
 }
@@ -214,6 +217,9 @@ func formatFVGList(fvgs []*FairValueGap, symbol string) {
 			fvg.Width = FormatByDataTypeAndSymbol(fvg.Width, "price", symbol)
 			fvg.WidthPercent = FormatByDataTypeAndSymbol(fvg.WidthPercent, "percentage", symbol)
 			fvg.Strength = FormatByDataTypeAndSymbol(fvg.Strength, "strength", symbol)
+			
+			// 格式化上下文评分
+			formatContextMetrics(fvg.Context, symbol)
 		}
 	}
 }
@@ -324,4 +330,71 @@ func formatSRLevelsInFormatter(levels []*SRLevel, symbol string) {
 			level.Strength = FormatByDataTypeAndSymbol(level.Strength, "strength", symbol)
 		}
 	}
+}
+
+// formatBasicIndicatorsData 格式化基础指标数据的精度
+func formatBasicIndicatorsData(data map[string]interface{}, symbol string) {
+	if data == nil {
+		return
+	}
+
+	for _, tfData := range data {
+		if tfDataMap, ok := tfData.(map[string]interface{}); ok {
+			formatTimeframeBasicIndicators(tfDataMap, symbol)
+		}
+	}
+}
+
+// formatTimeframeBasicIndicators 格式化单个时间框架的基础指标
+func formatTimeframeBasicIndicators(tfData map[string]interface{}, symbol string) {
+	if tfData == nil {
+		return
+	}
+
+	// 定义需要格式化的字段及其类型
+	fieldFormats := map[string]string{
+		// 价格和移动平均线
+		"ema20": "technical", "ema50": "technical", "ema100": "technical", "ema200": "technical",
+		"sma20": "technical", "sma50": "technical", "vwap": "technical",
+		
+		// 技术指标
+		"atr14": "atr", "macd": "technical", "rsi14": "rsi", "rsi7": "rsi",
+		
+		// 斜率
+		"ema50_slope_3": "slope", "ema200_slope_3": "slope",
+		
+		// 成交量
+		"volume": "volume", "avg_volume": "volume",
+		
+		// 价格变化
+		"change_1h": "percentage", "change_4h": "percentage",
+		
+		// 价格
+		"price": "price", "last_price": "price",
+		
+		// 其他指标
+		"funding_rate": "ratio", "oi_latest": "volume",
+	}
+
+	// 遍历并格式化所有字段
+	for field, dataType := range fieldFormats {
+		if value, exists := tfData[field]; exists {
+			if floatValue, ok := value.(float64); ok {
+				tfData[field] = FormatByDataTypeAndSymbol(floatValue, dataType, symbol)
+			}
+		}
+	}
+}
+
+// formatContextMetrics 格式化上下文评分数据
+func formatContextMetrics(ctx *ContextMetrics, symbol string) {
+	if ctx == nil {
+		return
+	}
+	
+	ctx.StrengthZ = FormatByDataTypeAndSymbol(ctx.StrengthZ, "ratio", symbol)
+	ctx.WidthATR = FormatByDataTypeAndSymbol(ctx.WidthATR, "ratio", symbol) 
+	ctx.VolRatio = FormatByDataTypeAndSymbol(ctx.VolRatio, "ratio", symbol)
+	ctx.TimeScore = FormatByDataTypeAndSymbol(ctx.TimeScore, "ratio", symbol)
+	ctx.RankPct = FormatByDataTypeAndSymbol(ctx.RankPct, "ratio", symbol)
 }
