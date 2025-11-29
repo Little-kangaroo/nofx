@@ -11,6 +11,14 @@ type Data struct {
 	CurrentEMA20      float64
 	CurrentMACD       float64
 	CurrentRSI7       float64
+	
+	// OHLC数据 (5m级别)
+	OHLC5mLastClosed  *OHLCData // 5m最新已收盘K线OHLC
+	OHLC5mPrevClosed  *OHLCData // 5m上一根已收盘K线OHLC
+	
+	// OHLC数据 (4h级别)
+	OHLC4hLastClose   *OHLCData // 4h最新已收盘K线OHLC
+	
 	OpenInterest      *OIData
 	FundingRate       float64
 	IntradaySeries    *IntradayData
@@ -115,6 +123,17 @@ type OIData struct {
 	Average float64
 }
 
+// OHLCData OHLC数据结构
+type OHLCData struct {
+	Open      float64 `json:"open"`       // 开盘价
+	High      float64 `json:"high"`       // 最高价
+	Low       float64 `json:"low"`        // 最低价
+	Close     float64 `json:"close"`      // 收盘价
+	Volume    float64 `json:"volume"`     // 成交量
+	OpenTime  int64   `json:"open_time"`  // 开盘时间戳
+	CloseTime int64   `json:"close_time"` // 收盘时间戳
+}
+
 // IntradayData 日内数据(5分钟间隔)
 type IntradayData struct {
 	MidPrices   []float64
@@ -149,6 +168,10 @@ type MediumTermData struct {
 	AverageVolume float64   // 平均成交量
 	MACDValues    []float64 // MACD序列
 	RSI14Values   []float64 // RSI14序列
+	
+	// OHLC数据
+	OHLCLastClosed *OHLCData // 最新已收盘K线OHLC
+	OHLCPrevClosed *OHLCData // 上一根已收盘K线OHLC (仅15m级别使用，1h可为nil)
 }
 
 // Binance API 响应结构

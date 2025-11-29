@@ -129,6 +129,18 @@ func Get(symbol string) (*Data, error) {
 	advancedAnalysisDuration := time.Since(advancedAnalysisStart)
 	log.Printf("📊 [%s-高级分析] 耗时: %v (道氏理论+VPVR+供需区+FVG+斐波纳契+多时间框架)", symbol, advancedAnalysisDuration)
 
+	// OHLC数据提取阶段
+	ohlcExtractionStart := time.Now()
+	
+	// 提取5m级别OHLC数据 (last_closed + prev_closed)
+	ohlc5mLastClosed, ohlc5mPrevClosed := extract5mOHLCData(klines5m)
+	
+	// 提取4h级别OHLC数据 (last_close only)  
+	ohlc4hLastClose := extract4hOHLCData(klines4h)
+	
+	ohlcExtractionDuration := time.Since(ohlcExtractionStart)
+	log.Printf("📊 [%s-OHLC提取] 耗时: %v (5m+4h级别)", symbol, ohlcExtractionDuration)
+
 	data := &Data{
 		Symbol:                 symbol,
 		CurrentPrice:           currentPrice,
@@ -137,6 +149,12 @@ func Get(symbol string) (*Data, error) {
 		CurrentEMA20:           currentEMA20,
 		CurrentMACD:            currentMACD,
 		CurrentRSI7:            currentRSI7,
+		
+		// OHLC数据
+		OHLC5mLastClosed:       ohlc5mLastClosed,
+		OHLC5mPrevClosed:       ohlc5mPrevClosed,
+		OHLC4hLastClose:        ohlc4hLastClose,
+		
 		OpenInterest:           oiData,
 		FundingRate:            fundingRate,
 		IntradaySeries:         intradayData,
@@ -163,6 +181,50 @@ func Get(symbol string) (*Data, error) {
 		advancedAnalysisDuration, float64(advancedAnalysisDuration.Nanoseconds())/float64(totalDuration.Nanoseconds())*100)
 
 	return data, nil
+}
+
+// extractOHLCData 从K线数据中提取OHLC数据
+func extractOHLCData(kline Kline) *OHLCData {
+	return &OHLCData{
+		Open:      kline.Open,
+		High:      kline.High,
+		Low:       kline.Low,
+		Close:     kline.Close,
+		Volume:    kline.Volume,
+		OpenTime:  kline.OpenTime,
+		CloseTime: kline.CloseTime,
+	}
+}
+
+// extract5mOHLCData 提取5m级别的OHLC数据 (last_closed + prev_closed)
+func extract5mOHLCData(klines5m []Kline) (*OHLCData, *OHLCData) {
+	if len(klines5m) < 2 {
+		log.Printf("⚠️ [5m OHLC] K线数据不足，无法提取prev_closed")
+		if len(klines5m) >= 1 {
+			// 只有last_closed
+			lastClosed := extractOHLCData(klines5m[len(klines5m)-1])
+			return lastClosed, nil
+		}
+		return nil, nil
+	}
+	
+	// 最新已收盘K线(倒数第1根)
+	lastClosed := extractOHLCData(klines5m[len(klines5m)-1])
+	// 上一根已收盘K线(倒数第2根)
+	prevClosed := extractOHLCData(klines5m[len(klines5m)-2])
+	
+	return lastClosed, prevClosed
+}
+
+// extract4hOHLCData 提取4h级别的OHLC数据 (last_close only)
+func extract4hOHLCData(klines4h []Kline) *OHLCData {
+	if len(klines4h) < 1 {
+		log.Printf("⚠️ [4h OHLC] K线数据不足，无法提取last_close")
+		return nil
+	}
+	
+	// 最新已收盘K线
+	return extractOHLCData(klines4h[len(klines4h)-1])
 }
 
 // calculateEMA 计算EMA
@@ -830,6 +892,38 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 			tfData["avg_volume"] = sum / float64(len(klines))
 		}
 
+		// === OHLC数据 ===
+		switch tf {
+		case "5m":
+			// 5m级别: ohlc_last_closed + ohlc_prev_closed
+			if data.OHLC5mLastClosed != nil {
+				tfData["ohlc_last_closed"] = formatOHLCData(data.OHLC5mLastClosed, data.Symbol)
+			}
+			if data.OHLC5mPrevClosed != nil {
+				tfData["ohlc_prev_closed"] = formatOHLCData(data.OHLC5mPrevClosed, data.Symbol)
+			}
+		case "15m":
+			// 15m级别: ohlc_last_closed + ohlc_prev_closed
+			if data.MediumTerm15m != nil {
+				if data.MediumTerm15m.OHLCLastClosed != nil {
+					tfData["ohlc_last_closed"] = formatOHLCData(data.MediumTerm15m.OHLCLastClosed, data.Symbol)
+				}
+				if data.MediumTerm15m.OHLCPrevClosed != nil {
+					tfData["ohlc_prev_closed"] = formatOHLCData(data.MediumTerm15m.OHLCPrevClosed, data.Symbol)
+				}
+			}
+		case "1h":
+			// 1h级别: ohlc_last_close only
+			if data.MediumTerm1h != nil && data.MediumTerm1h.OHLCLastClosed != nil {
+				tfData["ohlc_last_close"] = formatOHLCData(data.MediumTerm1h.OHLCLastClosed, data.Symbol)
+			}
+		case "4h":
+			// 4h级别: ohlc_last_close only
+			if data.OHLC4hLastClose != nil {
+				tfData["ohlc_last_close"] = formatOHLCData(data.OHLC4hLastClose, data.Symbol)
+			}
+		}
+
 		// 只有当有数据时才添加到结果中
 		if len(tfData) > 0 {
 			result[tf] = tfData
@@ -840,6 +934,23 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 	formatBasicIndicatorsData(result, data.Symbol)
 
 	return result
+}
+
+// formatOHLCData 格式化OHLC数据，应用适当的精度
+func formatOHLCData(ohlcData *OHLCData, symbol string) map[string]interface{} {
+	if ohlcData == nil {
+		return nil
+	}
+	
+	return map[string]interface{}{
+		"open":       FormatByDataTypeAndSymbol(ohlcData.Open, "price", symbol),
+		"high":       FormatByDataTypeAndSymbol(ohlcData.High, "price", symbol),
+		"low":        FormatByDataTypeAndSymbol(ohlcData.Low, "price", symbol),
+		"close":      FormatByDataTypeAndSymbol(ohlcData.Close, "price", symbol),
+		"volume":     FormatByDataTypeAndSymbol(ohlcData.Volume, "volume", symbol),
+		"open_time":  ohlcData.OpenTime,
+		"close_time": ohlcData.CloseTime,
+	}
 }
 
 // extractCompactMultiTimeframeAnalysis 提取精简的多时间框架分析数据
@@ -1921,6 +2032,22 @@ func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 			sum += k.Volume
 		}
 		data.AverageVolume = sum / float64(len(klines))
+	}
+
+	// 根据时间框架提取OHLC数据
+	if timeframe == "15m" {
+		// 15m级别: 提取last_closed + prev_closed
+		if len(klines) >= 2 {
+			data.OHLCLastClosed = extractOHLCData(klines[len(klines)-1])
+			data.OHLCPrevClosed = extractOHLCData(klines[len(klines)-2])
+		} else if len(klines) >= 1 {
+			data.OHLCLastClosed = extractOHLCData(klines[len(klines)-1])
+		}
+	} else if timeframe == "1h" {
+		// 1h级别: 仅提取last_close
+		if len(klines) >= 1 {
+			data.OHLCLastClosed = extractOHLCData(klines[len(klines)-1])
+		}
 	}
 
 	// 计算MACD和RSI序列（最近10个数据点）

@@ -121,12 +121,12 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 	if len(aiResponse) > 1000 {
 		log.Printf("🤖 [AI响应] 后500字符: %s", aiResponse[len(aiResponse)-500:])
 	}
-	
+
 	// 检查响应是否可能被截断
 	if len(aiResponse) >= 30000 { // 接近32K token限制
 		log.Printf("⚠️ [AI响应] 响应长度接近token限制，可能被截断！")
 	}
-	
+
 	// 检查JSON完整性
 	jsonStart := strings.Index(aiResponse, "[")
 	if jsonStart > 0 {
@@ -218,7 +218,7 @@ func fetchMarketDataForContext(ctx *Context) error {
 
 	// 总体K线数据获取耗时统计
 	allDataDuration := time.Since(allDataStart)
-	log.Printf("📊 [拉取K线数据统计] 总耗时: %v，币种数量: %d���平均每币种: %v", 
+	log.Printf("📊 [拉取K线数据统计] 总耗时: %v，币种数量: %d���平均每币种: %v",
 		allDataDuration, len(ctx.MarketDataMap), allDataDuration/time.Duration(1+len(ctx.MarketDataMap)))
 
 	// 加载OI Top数据（不影响主流程）
@@ -308,7 +308,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	}
 
 	// 2. 硬约束（风险控制）- 动态生成
-	sb.WriteString("# 硬约束（风险控制）\n\n")
+	/*sb.WriteString("# 硬约束（风险控制）\n\n")
 	sb.WriteString("1. 风险回报比: 必须 ≥ 1:3（冒1%风险，赚3%+收益）\n")
 	sb.WriteString("2. 最多持仓: 3个币种（质量>数量）\n")
 	sb.WriteString(fmt.Sprintf("3. 单币仓位: 山寨%.0f-%.0f U(%dx杠杆) | BTC/ETH %.0f-%.0f U(%dx杠杆)\n",
@@ -327,7 +327,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("字段说明:\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
 	sb.WriteString("- `confidence`: 0-100（开仓建议≥75）\n")
-	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n\n")
+	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n\n")*/
 
 	return sb.String()
 }
@@ -335,6 +335,9 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 // buildUserPrompt 构建 User Prompt（动态数据）
 func buildUserPrompt(ctx *Context) string {
 	var sb strings.Builder
+
+	// 🔧 关键修复：记录已输出完整市场数据的币种，防止重复输出
+	outputtedSymbols := make(map[string]bool)
 
 	// 系统状态
 	sb.WriteString(fmt.Sprintf("时间: %s | 周期: #%d | 运行: %d分钟\n\n",
@@ -392,10 +395,13 @@ func buildUserPrompt(ctx *Context) string {
 				sb.WriteString(fmt.Sprintf("%s: %.4f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
 					pos.Symbol, marketData.CurrentPrice, marketData.PriceChange1h, marketData.PriceChange4h,
 					marketData.CurrentMACD, marketData.CurrentRSI7))
-				
+
 				// 使用FormatAsCompactData输出精简市场数据
 				sb.WriteString(market.FormatAsCompactData(marketData))
 				sb.WriteString("\n")
+
+				// 🔧 关键修复：记录已输出完整市场数据的币种
+				outputtedSymbols[pos.Symbol] = true
 			}
 		}
 	} else {
@@ -424,16 +430,22 @@ func buildUserPrompt(ctx *Context) string {
 		sb.WriteString(fmt.Sprintf("%s: %.4f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
 			coin.Symbol, marketData.CurrentPrice, marketData.PriceChange1h, marketData.PriceChange4h,
 			marketData.CurrentMACD, marketData.CurrentRSI7))
-		
-		// 使用FormatAsCompactData输出精简市场数据
-		sb.WriteString(market.FormatAsCompactData(marketData))
+
+		// 🔧 关键修复：检查是否已输出过完整市场数据，避免重复输出
+		if outputtedSymbols[coin.Symbol] {
+			// 币种已在持仓中输出过完整数据，这里只显示简化信息
+			sb.WriteString("(市场数据详情见上方持仓部分)\n")
+		} else {
+			// 使用FormatAsCompactData输出精简市场数据
+			sb.WriteString(market.FormatAsCompactData(marketData))
+		}
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
 
 	// 夏普比率（直接传值，不要复杂格式化）
 	if ctx.Performance != nil {
-		// 直接从interface{}中提取SharpeRatio
+		// 直接���interface{}中提取SharpeRatio
 		type PerformanceData struct {
 			SharpeRatio float64 `json:"sharpe_ratio"`
 		}
@@ -511,7 +523,7 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 func extractCoTTrace(response string) string {
 	// 记录思维链提取过程
 	log.Printf("🧠 [CoT提取] 开始提取思维链，响应长度: %d", len(response))
-	
+
 	// 查找JSON数组的开始位置
 	jsonStart := strings.Index(response, "[")
 
@@ -519,30 +531,29 @@ func extractCoTTrace(response string) string {
 		// 思维链是JSON数组之前的内容
 		cotTrace := strings.TrimSpace(response[:jsonStart])
 		log.Printf("🧠 [CoT提取] 提取到思维链，长度: %d 字符", len(cotTrace))
-		
+
 		// 检查思维链是否被截断（末尾没有明确的结束标志）
-		if !strings.HasSuffix(cotTrace, "。") && !strings.HasSuffix(cotTrace, ".") && 
-		   !strings.HasSuffix(cotTrace, "```") && !strings.HasSuffix(cotTrace, "\n") &&
-		   len(cotTrace) > 100 { // 避免短文本误判
+		if !strings.HasSuffix(cotTrace, "。") && !strings.HasSuffix(cotTrace, ".") &&
+			!strings.HasSuffix(cotTrace, "```") && !strings.HasSuffix(cotTrace, "\n") &&
+			len(cotTrace) > 100 { // 避免短文本误判
 			log.Printf("⚠️ [CoT提取] 思维链可能被截断，末尾没有结束标志")
 		}
-		
+
 		return cotTrace
 	}
 
 	// 如果找不到JSON，检查是否是纯思维链或响应被截断
 	trimmedResponse := strings.TrimSpace(response)
 	log.Printf("🧠 [CoT提取] 未找到JSON，将整个响应作为思维链，长度: %d 字符", len(trimmedResponse))
-	
+
 	// 检查是否可能是截断的响应
-	if len(trimmedResponse) >= 3800 && !strings.Contains(trimmedResponse, "```json") && 
-	   !strings.Contains(trimmedResponse, "[") {
+	if len(trimmedResponse) >= 3800 && !strings.Contains(trimmedResponse, "```json") &&
+		!strings.Contains(trimmedResponse, "[") {
 		log.Printf("⚠️ [CoT提取] 响应可能被截断，未找到JSON结构")
 	}
-	
+
 	return trimmedResponse
 }
-
 
 // extractDecisionsWithContext 提取JSON决策列表（带账户上下文）
 func extractDecisionsWithContext(response string, accountEquity float64, btcEthLeverage, altcoinLeverage int, templateName string) ([]Decision, error) {
@@ -558,7 +569,7 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 	if arrayEnd == -1 {
 		log.Printf("🔍 AI响应JSON不完整，尝试自动修复...")
 		log.Printf("🔍 原始响应片段: %s", response[arrayStart:min(arrayStart+300, len(response))])
-		
+
 		// 尝试修复不完整的JSON
 		jsonContent = tryFixIncompleteJSON(response[arrayStart:])
 		if jsonContent == "" {
@@ -570,10 +581,10 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 	} else {
 		jsonContent = strings.TrimSpace(response[arrayStart : arrayEnd+1])
 		log.Printf("🔍 找到完整JSON: %s", jsonContent[:min(200, len(jsonContent))])
-	log.Printf("🔍 [调试] JSON内容特征检查:")
-	log.Printf("🔍 [调试] 包含转义引号 \\\": %v", strings.Contains(jsonContent, "\\\""))
-	log.Printf("🔍 [调试] 包含正常引号 \": %v", strings.Contains(jsonContent, "\""))
-	log.Printf("🔍 [调试] 包含混合转义模式: %v", strings.Contains(jsonContent, "{\\\"symbol") || strings.Contains(jsonContent, "\\\"symbol\\\":"))
+		log.Printf("🔍 [调试] JSON内容特征检查:")
+		log.Printf("🔍 [调试] 包含转义引号 \\\": %v", strings.Contains(jsonContent, "\\\""))
+		log.Printf("🔍 [调试] 包含正常引号 \": %v", strings.Contains(jsonContent, "\""))
+		log.Printf("🔍 [调试] 包含混合转义模式: %v", strings.Contains(jsonContent, "{\\\"symbol") || strings.Contains(jsonContent, "\\\"symbol\\\":"))
 	}
 
 	// 🔧 修复常见���JSON格式错误：缺少引号的字段值
@@ -593,16 +604,16 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 	// 🎯 智能解析器选择：根据模板名优先选择对应的解析器
 	log.Printf("🔍 [调试] 检测到模板: %s，选择对应解析策略", templateName)
 	log.Printf("🔍 [调试] JSON内容前200字符: %s", jsonContent[:min(200, len(jsonContent))])
-	
+
 	if strings.Contains(strings.ToLower(templateName), "taro") {
 		// taro模板优先使用taro解析器
 		log.Printf("🎯 [调试] 使用taro模板，优先尝试taro格式解析器")
-		
+
 		taroDecisions, taroErr := parseTaroFormatDecisions(jsonContent)
 		if taroErr == nil {
 			log.Printf("🔍 [调试] taro格式解析成功，数量: %d", len(taroDecisions))
 			for i, d := range taroDecisions {
-				log.Printf("🔍 [调试] taro决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f", 
+				log.Printf("🔍 [调试] taro决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f",
 					i+1, d.Symbol, d.Action, d.StopLoss)
 			}
 			return taroDecisions, nil
@@ -616,13 +627,13 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 		// 调试日志：打印解析后的决策内容
 		log.Printf("🔍 [调试] 标准格式解析成功，数量: %d", len(decisions))
 		for i, d := range decisions {
-			log.Printf("🔍 [调试] 决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f, TakeProfit=%.6f", 
+			log.Printf("🔍 [调试] 决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f, TakeProfit=%.6f",
 				i+1, d.Symbol, d.Action, d.StopLoss, d.TakeProfit)
 		}
-		
+
 		// 🔧 增强处理：检查是否有taro格式的字段需要转换
 		decisions = enhanceDecisionsWithTaroFields(jsonContent, decisions)
-		
+
 		return decisions, nil
 	}
 	log.Printf("⚠️ [调试] 标准格式解析失败，尝试其他格式")
@@ -633,7 +644,7 @@ func extractDecisionsWithContext(response string, accountEquity float64, btcEthL
 		if taroErr == nil {
 			log.Printf("🔍 [调试] 兜底taro格式解析成功，数量: %d", len(taroDecisions))
 			for i, d := range taroDecisions {
-				log.Printf("🔍 [调试] 兜底taro决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f", 
+				log.Printf("🔍 [调试] 兜底taro决策#%d: Symbol=%s, Action=%s, StopLoss=%.6f",
 					i+1, d.Symbol, d.Action, d.StopLoss)
 			}
 			return taroDecisions, nil
@@ -656,20 +667,20 @@ func parseTaroFormatDecisions(jsonContent string) ([]Decision, error) {
 	// 定义taro格式的决策结构
 	var taroResponse struct {
 		Analysis struct {
-			Symbol   string `json:"symbol"`
-			MtfView  interface{} `json:"mtf_view"`
-			Consensus string `json:"consensus"`
-			Notes    string `json:"notes"`
+			Symbol    string      `json:"symbol"`
+			MtfView   interface{} `json:"mtf_view"`
+			Consensus string      `json:"consensus"`
+			Notes     string      `json:"notes"`
 		} `json:"analysis"`
 		Actions []struct {
-			Type         string  `json:"type"`          // "open|hold|reduce|close|update_stop" - 旧格式
-			Decision     string  `json:"decision"`      // "OPEN|HOLD|CLOSE|REDUCE" - taro模板v1.9.2新格式
-			Side         string  `json:"side"`          // "LONG|SHORT"
-			Qty          interface{} `json:"qty"`       // "number or percent for reduce" - 可能是字符串或数字
-			Entry        interface{} `json:"entry"`     // "if open" - 可能是字符串或数字
-			Stop         interface{} `json:"stop"`      // "new stop if any" - 关键字段，可能是字符串或数字
-			TakeProfitHint string `json:"take_profit_hint"` // "可选：分段 TP 参考价/规则"
-			Reason       string  `json:"reason"`        // "简洁、与模板规则一一对应"
+			Type           string      `json:"type"`             // "open|hold|reduce|close|update_stop" - 旧格式
+			Decision       string      `json:"decision"`         // "OPEN|HOLD|CLOSE|REDUCE" - taro模板v1.9.2新格式
+			Side           string      `json:"side"`             // "LONG|SHORT"
+			Qty            interface{} `json:"qty"`              // "number or percent for reduce" - 可能是字符串或数字
+			Entry          interface{} `json:"entry"`            // "if open" - 可能是字符串或数字
+			Stop           interface{} `json:"stop"`             // "new stop if any" - 关键字段，可能是字符串或数字
+			TakeProfitHint string      `json:"take_profit_hint"` // "可选：分段 TP 参考价/规则"
+			Reason         string      `json:"reason"`           // "简洁、与模板规则一一对应"
 		} `json:"actions"`
 	}
 
@@ -694,9 +705,9 @@ func parseTaroFormatDecisions(jsonContent string) ([]Decision, error) {
 		if actionType == "" {
 			actionType = action.Type
 		}
-		
+
 		log.Printf("🔍 [调试] taro解析: decision='%s', type='%s', 使用='%s'", action.Decision, action.Type, actionType)
-		
+
 		decision := Decision{
 			Symbol:    symbol,
 			Action:    convertTaroActionToStandard(actionType),
@@ -784,7 +795,7 @@ func parseTaroFormatDecisions(jsonContent string) ([]Decision, error) {
 
 	log.Printf("🔍 [调试] taro格式解析完成，共解析出%d个有效决策", len(decisions))
 	for i, d := range decisions {
-		log.Printf("🔍 [调试] 决策#%d: Action=%s, Symbol=%s, StopLoss=%.6f", 
+		log.Printf("🔍 [调试] 决策#%d: Action=%s, Symbol=%s, StopLoss=%.6f",
 			i+1, d.Action, d.Symbol, d.StopLoss)
 	}
 
@@ -857,7 +868,6 @@ func extractDecisions(response string) ([]Decision, error) {
 	return parseComplexAIDecisions(jsonContent, 100.0) // 使用100 USDT作为默认账户净值
 }
 
-
 // parseMixedFormatDecisions 解析混合格式决策（标准格式但某些字段类型不匹配）
 func parseMixedFormatDecisions(jsonContent string, accountEquity float64) ([]Decision, error) {
 	// 定义灵活的决策结构，允许take_profit既可以是数字也可以是数组
@@ -923,31 +933,31 @@ func parseMixedFormatDecisions(jsonContent string, accountEquity float64) ([]Dec
 func parseComplexAIDecisions(jsonContent string, accountEquity float64) ([]Decision, error) {
 	// 定义AI返回的复杂格式结构
 	var complexDecisions []struct {
-		Symbol     string `json:"symbol"`
-		Open       bool   `json:"open"`
-		Side       string `json:"side"`
-		Playbook   string `json:"playbook"`
-		Entry      struct {
+		Symbol   string `json:"symbol"`
+		Open     bool   `json:"open"`
+		Side     string `json:"side"`
+		Playbook string `json:"playbook"`
+		Entry    struct {
 			Type      string  `json:"type"`
 			Price     float64 `json:"price"`
 			Tolerance float64 `json:"tolerance"`
 		} `json:"entry"`
-		StopLoss   float64   `json:"stop_loss"`
-		TakeProfit []float64 `json:"take_profit"` // 注意这是数组
-		MinRR      float64   `json:"min_rr"`
-		Confluence float64   `json:"confluence_score"`
-		Confidence int       `json:"confidence"`
+		StopLoss    float64   `json:"stop_loss"`
+		TakeProfit  []float64 `json:"take_profit"` // 注意这是数组
+		MinRR       float64   `json:"min_rr"`
+		Confluence  float64   `json:"confluence_score"`
+		Confidence  int       `json:"confidence"`
 		Positioning struct {
-			RiskPerTrade    float64 `json:"risk_per_trade"`
-			LeverageHint    int     `json:"leverage_hint"`
-			SizeSafeguard   string  `json:"size_safeguard"`
+			RiskPerTrade  float64 `json:"risk_per_trade"`
+			LeverageHint  int     `json:"leverage_hint"`
+			SizeSafeguard string  `json:"size_safeguard"`
 		} `json:"positioning"`
 		Routing struct {
-			PostOnly     bool   `json:"post_only"`
-			TimeInForce  string `json:"time_in_force"`
+			PostOnly    bool   `json:"post_only"`
+			TimeInForce string `json:"time_in_force"`
 		} `json:"routing"`
-		Reason            string   `json:"reason"`
-		InsufficientData  []string `json:"insufficient_data"`
+		Reason           string   `json:"reason"`
+		InsufficientData []string `json:"insufficient_data"`
 	}
 
 	// 解析复杂格式
@@ -989,9 +999,9 @@ func parseComplexAIDecisions(jsonContent string, accountEquity float64) ([]Decis
 			if decision.Leverage <= 0 {
 				decision.Leverage = 5 // 默认5倍杠杆
 			}
-			
+
 			decision.StopLoss = complex.StopLoss
-			
+
 			// 取第一个止盈价格
 			if len(complex.TakeProfit) > 0 {
 				decision.TakeProfit = complex.TakeProfit[0]
@@ -1043,34 +1053,34 @@ func parseComplexAIDecisions(jsonContent string, accountEquity float64) ([]Decis
 // tryFixIncompleteJSON 尝试修复不完整的JSON数组
 func tryFixIncompleteJSON(jsonFragment string) string {
 	jsonFragment = strings.TrimSpace(jsonFragment)
-	
+
 	// 如果不是以[开始，返回空
 	if !strings.HasPrefix(jsonFragment, "[") {
 		return ""
 	}
-	
+
 	// 检查是否是��单的缺少]的情况
 	openCount := strings.Count(jsonFragment, "[")
 	closeCount := strings.Count(jsonFragment, "]")
-	
+
 	if openCount > closeCount {
 		// 尝试添加缺失的]
 		needed := openCount - closeCount
 		for i := 0; i < needed; i++ {
 			jsonFragment += "]"
 		}
-		
+
 		// 验证修复后的JSON是否有效
 		var test []interface{}
 		if err := json.Unmarshal([]byte(jsonFragment), &test); err == nil {
 			return jsonFragment
 		}
 	}
-	
+
 	// 尝试修复不完整的对象
 	braceOpenCount := strings.Count(jsonFragment, "{")
 	braceCloseCount := strings.Count(jsonFragment, "}")
-	
+
 	if braceOpenCount > braceCloseCount {
 		// 添加缺失的}
 		needed := braceOpenCount - braceCloseCount
@@ -1081,14 +1091,14 @@ func tryFixIncompleteJSON(jsonFragment string) string {
 		if !strings.HasSuffix(jsonFragment, "]") {
 			jsonFragment += "]"
 		}
-		
+
 		// 验证修复后的JSON是否有效
 		var test []interface{}
 		if err := json.Unmarshal([]byte(jsonFragment), &test); err == nil {
 			return jsonFragment
 		}
 	}
-	
+
 	// 尝试查找最后一个完整的对象
 	lastBrace := strings.LastIndex(jsonFragment, "}")
 	if lastBrace == -1 {
@@ -1106,28 +1116,28 @@ func tryFixIncompleteJSON(jsonFragment string) string {
 				}
 			}
 			truncated += "]"
-			
+
 			// 验证修���后的JSON是否有效
 			var test []interface{}
 			if err := json.Unmarshal([]byte(truncated), &test); err == nil {
 				return truncated
 			}
 		}
-		
+
 		// 最后尝试：创建空数组
 		log.Printf("⚠️ JSON修复失败，返回空数组。原始片段: %s", jsonFragment[:min(100, len(jsonFragment))])
 		return "[]"
 	}
-	
+
 	// 截取到最后一个完整对象，然后添加]
 	fixedJSON := jsonFragment[:lastBrace+1] + "]"
-	
+
 	// 验证修复后的JSON是否有效
 	var test []interface{}
 	if err := json.Unmarshal([]byte(fixedJSON), &test); err == nil {
 		return fixedJSON
 	}
-	
+
 	// 如果所有修复尝试都失败，返回空数组以避免系统崩溃
 	log.Printf("⚠️ JSON修复最终失败，返回空数组。原始片段: %s", jsonFragment[:min(100, len(jsonFragment))])
 	return "[]"
@@ -1153,17 +1163,17 @@ func minFloat(a, b float64) float64 {
 func isValidDecisionArray(jsonContent string) bool {
 	// 去除首尾空格
 	jsonContent = strings.TrimSpace(jsonContent)
-	
+
 	// 必须以[]括起来
 	if !strings.HasPrefix(jsonContent, "[") || !strings.HasSuffix(jsonContent, "]") {
 		return false
 	}
-	
+
 	// 检查是否为空数组
 	if jsonContent == "[]" {
 		return true
 	}
-	
+
 	// 检查是否是纯数字数组（如[3292.86,3624.165]）
 	var numbers []float64
 	if err := json.Unmarshal([]byte(jsonContent), &numbers); err == nil {
@@ -1171,30 +1181,30 @@ func isValidDecisionArray(jsonContent string) bool {
 		log.Printf("⚠️ AI返回了数字数组而非决策数组")
 		return false
 	}
-	
+
 	// 检查是否包含决策对象的基本字段
 	// 至少应该包含 "symbol" 字段
 	if !strings.Contains(jsonContent, `"symbol"`) && !strings.Contains(jsonContent, `symbol`) {
 		log.Printf("⚠️ AI返回的JSON不包含symbol字段")
 		return false
 	}
-	
+
 	// 检查是否是持仓数据而不是决策数据
 	// 持仓数据通常包含: "side", "entry", "pnl_pct", "liq_price" 等字段
 	// 决策数据应该包含: "action", "leverage", "position_size_usd" 等字段
-	hasPositionFields := strings.Contains(jsonContent, `"side"`) && 
-						strings.Contains(jsonContent, `"entry"`) && 
-						strings.Contains(jsonContent, `"pnl_pct"`)
-	
-	hasDecisionFields := strings.Contains(jsonContent, `"action"`) || 
-						strings.Contains(jsonContent, `"leverage"`) || 
-						strings.Contains(jsonContent, `"position_size_usd"`)
-	
+	hasPositionFields := strings.Contains(jsonContent, `"side"`) &&
+		strings.Contains(jsonContent, `"entry"`) &&
+		strings.Contains(jsonContent, `"pnl_pct"`)
+
+	hasDecisionFields := strings.Contains(jsonContent, `"action"`) ||
+		strings.Contains(jsonContent, `"leverage"`) ||
+		strings.Contains(jsonContent, `"position_size_usd"`)
+
 	if hasPositionFields && !hasDecisionFields {
 		log.Printf("⚠️ AI返回了持仓数据而非交易决策数据。包含字段: side, entry, pnl_pct")
 		return false
 	}
-	
+
 	return true
 }
 
@@ -1205,53 +1215,53 @@ func fixMissingQuotes(jsonStr string) string {
 		log.Printf("⚠️ [JSON清理] 检测到无效UTF-8字符，正在清理...")
 		jsonStr = strings.ToValidUTF8(jsonStr, "")
 	}
-	
+
 	// 🔧 关键修复：处理JSON字符串值内部的未转义双引号
 	// 使用正则表达式找到所有JSON字符串值，并转义其中的双引号
 	jsonStr = fixUnescapedQuotesInJSONValues(jsonStr)
-	
+
 	// 处理中文引号
 	jsonStr = strings.ReplaceAll(jsonStr, "\u201c", "\"") // "
 	jsonStr = strings.ReplaceAll(jsonStr, "\u201d", "\"") // "
 	jsonStr = strings.ReplaceAll(jsonStr, "\u2018", "'")  // '
 	jsonStr = strings.ReplaceAll(jsonStr, "\u2019", "'")  // '
-	
+
 	// 处理数学符号和特殊符号
-	jsonStr = strings.ReplaceAll(jsonStr, "≈", "约")       // 约等于符号
-	jsonStr = strings.ReplaceAll(jsonStr, "≤", "<=")      // 小于等于
-	jsonStr = strings.ReplaceAll(jsonStr, "≥", ">=")      // 大于等于
-	jsonStr = strings.ReplaceAll(jsonStr, "–", "-")       // en dash转普通连字符
-	jsonStr = strings.ReplaceAll(jsonStr, "—", "-")       // em dash转普通连字符
-	jsonStr = strings.ReplaceAll(jsonStr, "…", "...")     // 省略号
-	
+	jsonStr = strings.ReplaceAll(jsonStr, "≈", "约")  // 约等于符号
+	jsonStr = strings.ReplaceAll(jsonStr, "≤", "<=")  // 小于等于
+	jsonStr = strings.ReplaceAll(jsonStr, "≥", ">=")  // 大于等于
+	jsonStr = strings.ReplaceAll(jsonStr, "–", "-")   // en dash转普通连字符
+	jsonStr = strings.ReplaceAll(jsonStr, "—", "-")   // em dash转普通连字符
+	jsonStr = strings.ReplaceAll(jsonStr, "…", "...") // 省略号
+
 	// 处理其他可能的编码问题字符
-	jsonStr = strings.ReplaceAll(jsonStr, "æ", "")        // 移除异常字符æ
-	jsonStr = strings.ReplaceAll(jsonStr, "ï", "")        // 移除异常字符ï
-	jsonStr = strings.ReplaceAll(jsonStr, "»", "")        // 移除异常字符»
-	jsonStr = strings.ReplaceAll(jsonStr, "¿", "")        // 移除异常字符¿
-	jsonStr = strings.ReplaceAll(jsonStr, "â", "")        // 移除异常字符â
-	jsonStr = strings.ReplaceAll(jsonStr, "€", "")        // 移除异常字符€
-	jsonStr = strings.ReplaceAll(jsonStr, "Â", "")        // 移除异常字符Â
-	jsonStr = strings.ReplaceAll(jsonStr, "Ã", "")        // 移除异常字符Ã
-	jsonStr = strings.ReplaceAll(jsonStr, "Æ", "")        // 移除异常字符Æ
-	
+	jsonStr = strings.ReplaceAll(jsonStr, "æ", "") // 移除异常字符æ
+	jsonStr = strings.ReplaceAll(jsonStr, "ï", "") // 移除异常字符ï
+	jsonStr = strings.ReplaceAll(jsonStr, "»", "") // 移除异常字符»
+	jsonStr = strings.ReplaceAll(jsonStr, "¿", "") // 移除异常字符¿
+	jsonStr = strings.ReplaceAll(jsonStr, "â", "") // 移除异常字符â
+	jsonStr = strings.ReplaceAll(jsonStr, "€", "") // 移除异常字符€
+	jsonStr = strings.ReplaceAll(jsonStr, "Â", "") // 移除异常字符Â
+	jsonStr = strings.ReplaceAll(jsonStr, "Ã", "") // 移除异常字符Ã
+	jsonStr = strings.ReplaceAll(jsonStr, "Æ", "") // 移除异常字符Æ
+
 	// 处理全角字符
-	jsonStr = strings.ReplaceAll(jsonStr, "：", ":")      // 全角冒号
-	jsonStr = strings.ReplaceAll(jsonStr, "，", ",")      // 全角逗号
-	jsonStr = strings.ReplaceAll(jsonStr, "｛", "{")      // 全角左大括号
-	jsonStr = strings.ReplaceAll(jsonStr, "｝", "}")      // 全角右大括号
-	jsonStr = strings.ReplaceAll(jsonStr, "［", "[")      // 全角左方括号
-	jsonStr = strings.ReplaceAll(jsonStr, "］", "]")      // 全角右方括号
-	
+	jsonStr = strings.ReplaceAll(jsonStr, "：", ":") // 全角冒号
+	jsonStr = strings.ReplaceAll(jsonStr, "，", ",") // 全角逗号
+	jsonStr = strings.ReplaceAll(jsonStr, "｛", "{") // 全角左大括号
+	jsonStr = strings.ReplaceAll(jsonStr, "｝", "}") // 全角右大括号
+	jsonStr = strings.ReplaceAll(jsonStr, "［", "[") // 全角左方括号
+	jsonStr = strings.ReplaceAll(jsonStr, "］", "]") // 全角右方括号
+
 	// 移除或替换可能导致JSON解析错误的特殊字符
-	jsonStr = strings.ReplaceAll(jsonStr, "\ufeff", "")   // BOM字符
-	jsonStr = strings.ReplaceAll(jsonStr, "\u00a0", " ")  // 不间断空格
-	jsonStr = strings.ReplaceAll(jsonStr, "\u200b", "")   // 零宽空格
-	jsonStr = strings.ReplaceAll(jsonStr, "\u200c", "")   // 零宽非连字符
-	jsonStr = strings.ReplaceAll(jsonStr, "\u200d", "")   // 零宽连字符
-	jsonStr = strings.ReplaceAll(jsonStr, "\u2028", "")   // 行分隔符
-	jsonStr = strings.ReplaceAll(jsonStr, "\u2029", "")   // 段分隔符
-	
+	jsonStr = strings.ReplaceAll(jsonStr, "\ufeff", "")  // BOM字符
+	jsonStr = strings.ReplaceAll(jsonStr, "\u00a0", " ") // 不间断空格
+	jsonStr = strings.ReplaceAll(jsonStr, "\u200b", "")  // 零宽空格
+	jsonStr = strings.ReplaceAll(jsonStr, "\u200c", "")  // 零宽非连字符
+	jsonStr = strings.ReplaceAll(jsonStr, "\u200d", "")  // 零宽连字符
+	jsonStr = strings.ReplaceAll(jsonStr, "\u2028", "")  // 行分隔符
+	jsonStr = strings.ReplaceAll(jsonStr, "\u2029", "")  // 段分隔符
+
 	// 移除控制字符（保留换行和制表符）
 	var cleaned strings.Builder
 	for _, r := range jsonStr {
@@ -1260,15 +1270,15 @@ func fixMissingQuotes(jsonStr string) string {
 		}
 		cleaned.WriteRune(r)
 	}
-	
+
 	result := cleaned.String()
-	
+
 	// 最终验证UTF-8编码
 	if !utf8.ValidString(result) {
 		log.Printf("⚠️ [JSON清理] 清理后仍有UTF-8问题，进行最终修复...")
 		result = strings.ToValidUTF8(result, "?")
 	}
-	
+
 	return result
 }
 
@@ -1277,7 +1287,7 @@ func fixUnescapedQuotesInJSONValues(jsonStr string) string {
 	var result strings.Builder
 	inString := false
 	escaped := false
-	
+
 	for i, r := range jsonStr {
 		if escaped {
 			// 如果前一个字符是转义符，直接添加当前字符
@@ -1285,14 +1295,14 @@ func fixUnescapedQuotesInJSONValues(jsonStr string) string {
 			escaped = false
 			continue
 		}
-		
+
 		if r == '\\' {
 			// 转义符
 			result.WriteRune(r)
 			escaped = true
 			continue
 		}
-		
+
 		if r == '"' {
 			if !inString {
 				// 开始一个字符串
@@ -1302,7 +1312,7 @@ func fixUnescapedQuotesInJSONValues(jsonStr string) string {
 				// 可能是字符串结束，或者是字符串内部的未转义引号
 				// 检查下一个非空白字符
 				nextChar := getNextNonWhitespaceChar(jsonStr, i+1)
-				
+
 				if nextChar == ',' || nextChar == '}' || nextChar == ']' || nextChar == -1 {
 					// 这是字符串结束
 					inString = false
@@ -1317,7 +1327,7 @@ func fixUnescapedQuotesInJSONValues(jsonStr string) string {
 			result.WriteRune(r)
 		}
 	}
-	
+
 	return result.String()
 }
 
@@ -1397,7 +1407,7 @@ func validateHoldWaitSemantics(d *Decision, ctx *Context) error {
 	// 检查该标的是否有持仓
 	hasPosition := false
 	var existingPosition *PositionInfo
-	
+
 	for i := range ctx.Positions {
 		if ctx.Positions[i].Symbol == d.Symbol {
 			hasPosition = true
@@ -1413,11 +1423,11 @@ func validateHoldWaitSemantics(d *Decision, ctx *Context) error {
 		if !hasPosition {
 			return fmt.Errorf("语义错误: 标的 %s 当前没有持仓，应使用 WAIT 而不是 HOLD", d.Symbol)
 		}
-		log.Printf("✅ [HOLD语义验证] %s 有持仓(%s %.6f)，使用HOLD正确", 
+		log.Printf("✅ [HOLD语义验证] %s 有持仓(%s %.6f)，使用HOLD正确",
 			d.Symbol, existingPosition.Side, existingPosition.Quantity)
 	} else if action == "wait" {
 		if hasPosition {
-			return fmt.Errorf("语义错误: 标的 %s 当前有持仓(%s %.6f)，应使用 HOLD 而不是 WAIT", 
+			return fmt.Errorf("语义错误: 标的 %s 当前有持仓(%s %.6f)，应使用 HOLD 而不是 WAIT",
 				d.Symbol, existingPosition.Side, existingPosition.Quantity)
 		}
 		log.Printf("✅ [WAIT语义验证] %s 无持仓，使用WAIT正确", d.Symbol)
@@ -1430,37 +1440,37 @@ func validateHoldWaitSemantics(d *Decision, ctx *Context) error {
 func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, templateName string) error {
 	// 验证action并标准化动作名称
 	validActions := map[string]bool{
-		"open_long":           true,
-		"open_short":          true,
-		"close_long":          true,
-		"close_short":         true,
-		"reduce":              true, // 减仓操作
-		"reduce_long":         true, // 减多仓
-		"reduce_short":        true, // 减空仓
-		"update_stop":         true, // 更新止损（taro模板）
-		"update_stop_loss":    true, // 更新止损（adaptive模板）
-		"update_take_profit":  true, // 更新止盈
-		"partial_close":       true, // 部分平仓
-		"open":                true, // 通用开仓（需要结合side判断）
-		"close":               true, // 通用平仓
-		"hold":                true,
-		"wait":                true,
-		"buy_to_enter":        true, // 兼容提示词模板中的动作名
-		"sell_to_enter":       true, // 兼容提示词模板中的动作名
-		"buy":                 true, // 兼容简单的买入指令
-		"sell":                true, // 兼容简单的卖出指令
+		"open_long":          true,
+		"open_short":         true,
+		"close_long":         true,
+		"close_short":        true,
+		"reduce":             true, // 减仓操作
+		"reduce_long":        true, // 减多仓
+		"reduce_short":       true, // 减空仓
+		"update_stop":        true, // 更新止损（taro模板）
+		"update_stop_loss":   true, // 更新止损（adaptive模板）
+		"update_take_profit": true, // 更新止盈
+		"partial_close":      true, // 部分平仓
+		"open":               true, // 通用开仓（需要结合side判断）
+		"close":              true, // 通用平仓
+		"hold":               true,
+		"wait":               true,
+		"buy_to_enter":       true, // 兼容提示词模板中的动作名
+		"sell_to_enter":      true, // 兼容提示词模板中的动作名
+		"buy":                true, // 兼容简单的买入指令
+		"sell":               true, // 兼容简单的卖出指令
 		// 支持taro模板的大写格式
-		"OPEN":                true,
-		"CLOSE":               true,
-		"REDUCE":              true,
-		"HOLD":                true,
-		"WAIT":                true,
-		"OPEN_LONG":           true,
-		"OPEN_SHORT":          true,
-		"CLOSE_LONG":          true,
-		"CLOSE_SHORT":         true,
-		"REDUCE_LONG":         true,
-		"REDUCE_SHORT":        true,
+		"OPEN":         true,
+		"CLOSE":        true,
+		"REDUCE":       true,
+		"HOLD":         true,
+		"WAIT":         true,
+		"OPEN_LONG":    true,
+		"OPEN_SHORT":   true,
+		"CLOSE_LONG":   true,
+		"CLOSE_SHORT":  true,
+		"REDUCE_LONG":  true,
+		"REDUCE_SHORT": true,
 	}
 
 	// 标准化动作名称
@@ -1470,9 +1480,9 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	case "sell_to_enter":
 		d.Action = "open_short"
 	case "buy":
-		d.Action = "open_long"    // 默认将buy解释为开多
+		d.Action = "open_long" // 默认将buy解释为开多
 	case "sell":
-		d.Action = "open_short"   // 默认将sell解释为开空
+		d.Action = "open_short" // 默认将sell解释为开空
 	case "reduce":
 		// reduce需要根据当前持仓方向确定是reduce_long还是reduce_short
 		// 这个逻辑在执行阶段处理，这里保持原样
@@ -1530,14 +1540,14 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			// 自动调整到上限而不是拒绝执行
 			originalSize := d.PositionSizeUSD
 			d.PositionSizeUSD = maxPositionValue
-			
+
 			coinType := "山寨币"
 			multiple := "1.5倍"
 			if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
 				coinType = "BTC/ETH"
 				multiple = "10倍"
 			}
-			
+
 			log.Printf("  ⚠️ %s 仓位超限，自动调整: %.0f USDT → %.0f USDT (%s%s账户净值上限)",
 				d.Symbol, originalSize, d.PositionSizeUSD, coinType, multiple)
 		}
@@ -1554,7 +1564,7 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		if err == nil {
 			currentPrice = marketData.CurrentPrice
 		}
-		
+
 		if d.Action == "open_long" {
 			// 做多：止损 < 入场价 < 止盈（如果设置了止盈）
 			if d.StopLoss >= currentPrice {
@@ -1618,7 +1628,7 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 				// adaptive等其他模板：使用严格标准
 				minRiskRewardRatio = 3.0
 			}
-			
+
 			// 风险回报比不足时，不报错而是改为wait并说明原因
 			if riskRewardRatio < minRiskRewardRatio {
 				d.Action = "wait"
@@ -1636,7 +1646,7 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		if d.StopLoss <= 0 {
 			return fmt.Errorf("update_stop动作必须提供有效的止损价格，当前为: %.6f", d.StopLoss)
 		}
-		
+
 		// 获取当前市价用于合理性验证
 		marketData, err := market.Get(d.Symbol)
 		if err == nil {
@@ -1654,7 +1664,7 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		if d.TakeProfit <= 0 {
 			return fmt.Errorf("update_take_profit动作必须提供有效的止盈价格，当前为: %.6f", d.TakeProfit)
 		}
-		
+
 		// 获取当前市价用于合理性验证
 		marketData, err := market.Get(d.Symbol)
 		if err == nil {
@@ -1678,28 +1688,28 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 		log.Printf("⚠️ [调试] 无法解析JSON为通用格式，跳过taro字段增强: %v", err)
 		return decisions
 	}
-	
+
 	if len(rawDecisions) != len(decisions) {
 		log.Printf("⚠️ [调试] 原始JSON和解析后决策数量不匹配，跳过增强")
 		return decisions
 	}
-	
+
 	log.Printf("🔧 [调试] 开始增强决策，检查taro字段...")
 	log.Printf("🔧 [调试] 原始JSON片段: %s", jsonContent[:min(300, len(jsonContent))])
-	
+
 	for i := 0; i < len(decisions); i++ {
 		rawDecision := rawDecisions[i]
 		decision := &decisions[i]
-		
+
 		// 调试：打印原始JSON对象的关键字段
-		log.Printf("🔧 [调试] 决策#%d 原始字段: type=%v, decision=%v, action=%v, symbol=%v, side=%v, stop_update=%v", 
+		log.Printf("🔧 [调试] 决策#%d 原始字段: type=%v, decision=%v, action=%v, symbol=%v, side=%v, stop_update=%v",
 			i+1, rawDecision["type"], rawDecision["decision"], rawDecision["action"], rawDecision["symbol"], rawDecision["side"], rawDecision["stop_update"])
-		
+
 		// 🔧 【新增】检查并处理stop_update嵌套对象
 		if stopUpdate, exists := rawDecision["stop_update"]; exists && stopUpdate != nil {
 			if stopUpdateMap, ok := stopUpdate.(map[string]interface{}); ok {
 				log.Printf("🔧 [调试] 发现stop_update嵌套对象: %v", stopUpdateMap)
-				
+
 				// 提取new_stop作为新的止损价格
 				if newStopValue, newStopExists := stopUpdateMap["new_stop"]; newStopExists {
 					var newStopPrice float64
@@ -1717,9 +1727,9 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 						// 修改action为update_stop
 						decision.Action = "update_stop"
 						decision.StopLoss = newStopPrice
-						log.Printf("🔧 [调试] 增强决策#%d: 发现stop_update，转换为action='update_stop', StopLoss=%.6f", 
+						log.Printf("🔧 [调试] 增强决策#%d: 发现stop_update，转换为action='update_stop', StopLoss=%.6f",
 							i+1, newStopPrice)
-						
+
 						// 同时记录原因
 						if reasonValue, reasonExists := stopUpdateMap["reason"]; reasonExists {
 							if reasonStr, ok := reasonValue.(string); ok {
@@ -1730,12 +1740,12 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 				}
 			}
 		}
-		
+
 		// 🔧 【新增】检查并处理entry_plan嵌套对象
 		if entryPlan, exists := rawDecision["entry_plan"]; exists {
 			if entryPlanMap, ok := entryPlan.(map[string]interface{}); ok {
 				log.Printf("🔧 [调试] 发现entry_plan嵌套对象: %v", entryPlanMap)
-				
+
 				// 提取leverage（关键修复）
 				if leverageValue, leverageExists := entryPlanMap["leverage"]; leverageExists && decision.Leverage == 0 {
 					var leverage int
@@ -1754,7 +1764,7 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 						log.Printf("🔧 [调试] 增强决策#%d: 从entry_plan提取leverage=%d", i+1, leverage)
 					}
 				}
-				
+
 				// 提取position_size_usd
 				if qtyValue, qtyExists := entryPlanMap["qty"]; qtyExists && decision.PositionSizeUSD == 0 {
 					var qty float64
@@ -1783,12 +1793,12 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 						}
 						if price > 0 {
 							decision.PositionSizeUSD = qty * price
-							log.Printf("🔧 [调试] 增强决策#%d: 计算position_size_usd = qty(%.6f) × price(%.2f) = %.2f", 
+							log.Printf("🔧 [调试] 增强决策#%d: 计算position_size_usd = qty(%.6f) × price(%.2f) = %.2f",
 								i+1, qty, price, decision.PositionSizeUSD)
 						}
 					}
 				}
-				
+
 				// 提取init_stop -> StopLoss
 				if stopValue, stopExists := entryPlanMap["init_stop"]; stopExists && decision.StopLoss == 0 {
 					var stopPrice float64
@@ -1807,7 +1817,7 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 						log.Printf("🔧 [调试] 增强决策#%d: 从entry_plan提取init_stop=%.6f -> StopLoss", i+1, stopPrice)
 					}
 				}
-				
+
 				// 提取take_profit
 				if tpValue, tpExists := entryPlanMap["take_profit"]; tpExists && decision.TakeProfit == 0 {
 					var tpPrice float64
@@ -1830,7 +1840,7 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 				}
 			}
 		}
-		
+
 		// 检查并处理stop字段 -> StopLoss（向后兼容）
 		if stopValue, exists := rawDecision["stop"]; exists && decision.StopLoss == 0 {
 			var stopPrice float64
@@ -1846,19 +1856,19 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 			case int:
 				stopPrice = float64(v)
 			}
-			
+
 			if stopPrice > 0 {
 				decision.StopLoss = stopPrice
-				log.Printf("🔧 [调试] 增强决策#%d: 发现stop字段=%.6f，设置StopLoss=%.6f", 
+				log.Printf("🔧 [调试] 增强决策#%d: 发现stop字段=%.6f，设置StopLoss=%.6f",
 					i+1, stopValue, stopPrice)
 			}
 		}
-		
+
 		// 检查并处理type字段 -> Action字段（关键修复）
 		if typeValue, exists := rawDecision["type"]; exists && decision.Action == "" {
 			if typeStr, ok := typeValue.(string); ok && typeStr != "" {
 				originalAction := decision.Action
-				
+
 				// 处理side字段来确定具体的动作
 				convertedAction := convertTaroActionToStandard(typeStr)
 				if sideValue, sideExists := rawDecision["side"]; sideExists {
@@ -1884,23 +1894,23 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 						}
 					}
 				}
-				
+
 				decision.Action = convertedAction
-				log.Printf("🔧 [调试] 增强决策#%d: 发现type字段='%s' -> Action='%s' (原值:'%s')", 
+				log.Printf("🔧 [调试] 增强决策#%d: 发现type字段='%s' -> Action='%s' (原值:'%s')",
 					i+1, typeStr, decision.Action, originalAction)
 			}
 		}
-		
+
 		// 兼容处理：也检查decision字段（向后兼容）
 		if decisionValue, exists := rawDecision["decision"]; exists && decision.Action == "" {
 			if decisionStr, ok := decisionValue.(string); ok && decisionStr != "" {
 				originalAction := decision.Action
 				decision.Action = convertTaroActionToStandard(decisionStr)
-				log.Printf("🔧 [调试] 增强决策#%d: 发现decision字段='%s' -> Action='%s' (原值:'%s')", 
+				log.Printf("🔧 [调试] 增强决策#%d: 发现decision字段='%s' -> Action='%s' (原值:'%s')",
 					i+1, decisionStr, decision.Action, originalAction)
 			}
 		}
-		
+
 		// 检查并处理take_profit字段的其他格式（向后兼容）
 		if tpValue, exists := rawDecision["take_profit"]; exists && decision.TakeProfit == 0 {
 			var tpPrice float64
@@ -1916,14 +1926,14 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 			case int:
 				tpPrice = float64(v)
 			}
-			
+
 			if tpPrice > 0 {
 				decision.TakeProfit = tpPrice
 				log.Printf("🔧 [调试] 增强决策#%d: 发现take_profit字段=%.6f", i+1, tpPrice)
 			}
 		}
 	}
-	
+
 	log.Printf("🔧 [调试] 决策增强完成")
 	return decisions
 }

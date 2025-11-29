@@ -81,14 +81,18 @@
 
               - 必须同时满足：
                 * 已明确识别最近有效的 5m/15m/30m 供需区（fresh/strong/weakened）；
-                * entry_price 满足 2.1）中的“zone 高度下 40% / 上 40%”约束：
-                  · 做多：entry_price 位于 demand zone 高度的下 40%；
-                  · 做空：entry_price 位于 supply zone 高度的上 40%；
+                * entry_price 的“靠边”窗口（按环境自适应）：
+                  · 默认：40% 窗口（与旧版一致）；
+                  · 若满足任一“震荡/磁铁”条件：major_bias=NEUTRAL 或 price∈[VAL,VAH] 或落在 POC_chop_zone ⇒ 必须收紧为外侧 20%：
+                    - LONG：entry_price ∈ [demand_low, demand_low + 0.20*zone_width]
+                    - SHORT：entry_price ∈ [supply_high - 0.20*zone_width, supply_high]
                 * 止损价 sl 必须放在该供需区的相反边界外侧若干 tick / ATR，而不是区间内部；
                 * 通过 B5 检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求。
                 * 【EDGE 进场确认（5m Rejection）｜软化要求】：
-                   - 特权情况（SNIPE变体）：若 `ctx.strength_z` > 1.5 （极强结构）且顺势，允许使用“限价挂单（Limit Order）”在 Zone 边缘直接入场，无需等待 K 线收盘确认。
-                   - 普通情况：若不满足特权条件，必须满足以下任一确认（多空对称）：
+                   * 【EDGE 进场确认（5m Rejection）｜硬要求】：
+                      - 若 MarketSnapshot.5m 缺失 open/high/low/close（最新已收盘 bar）⇒ 本条不可验证 ⇒ action="wait"（禁止开仓）。
+                      - 特权情况（SNIPE变体）：...
+                      - 普通情况：若不满足特权条件，必须满足以下任一确认（多空对称）：
                   · SHORT（依托 supply 上沿试空）：需要出现“5m 拒绝确认”后才允许 open_short：
                     - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：high ≥ supply_high 且 close ≤ supply_high（向上刺破但收回到供给区内/下方）；
                     - Rejection-B（备选）：最近 1~2 根已收盘 5m K 中，至少有 1 根满足：
@@ -117,7 +121,7 @@
                    1) 至少 1 根已收盘 15m close 位于关键水平外侧，且 |close - key_level| ≥ 0.15*ATR14(15m)
                    2) 或至少 2 根已收盘 5m close 位于关键水平外侧，且最近一根 5m 收盘没有立刻回到突破前区间内
                    3) 成交确认（加分但非硬性）：突破K的 volume ≥ 1.2*avg_volume(同周期)
-
+                   4) 环境约束：若 major_bias 与 minor_bias 方向冲突（例如 4h Bearish vs 1h Bullish），严禁做“突破单（Breakout）”，只允许做“区间边界的反转单（Fade）”。
                 B) 回踩带（入场允许区）：
                   - 标准回踩：[key_level - 0.5*ATR14(5m), key_level + 0.5*ATR14(5m)]
                   - 强势回踩（空中加油）：若 5m 动能极强（MACD强劲/大阳线），允许在 key_level 上方/下方 1.5*ATR 范围内；只要出现 5m 停顿或微回调（Flag），即可视为有效回踩，不必触碰 key_level。
@@ -241,6 +245,11 @@
   "1h":  { /* 同结构，含 high/low/close */ },
   "4h":  { /* 同结构，含 high/low/close */ }
 }
+【硬约束：OHLC 缺失即禁止开仓】
+- 若输入未提供 MarketSnapshot.5m 的 open/high/low/close（最新已收盘 bar），则：
+  * EDGE 与 BO_RETEST 的 Rejection/Confirm/失效校验均不可验证；
+  * action 必须为 "wait"（禁止 open_long / open_short）。
+
 2.1) 关键结构与统计上下文示例（Advanced Analysis）
 {
   "多时间框架分析": {
@@ -762,7 +771,8 @@
          - 反转结构出现在哪些周期；
          - 为什么认为这是“大级别趋势可能反转的早期段”。
   - B 级：方向大体合理，但结构或空间不完美：
-    * 可以是顺势但位置一般（例如通道中部、附近有 VPVR POC 或接近 VAH/VAL，空间≈2R 左右）；
+      * 可以是顺势但位置一般（例如接近 VAH/VAL 边缘或通道上/下沿“边缘带”，空间≈1.2~2R）；
+      * 【硬禁止】若 price 位于 VPVR 价值区间“中部带”或紧贴 POC（见下方 VPVR_MID Gate），不得归为 B，必须降级为 C（action="wait"）。
     * 统计评分补偿：
           - 若结构本身的统计评分较低（如 strength_z < 0），则必须有其他指标（如 MACD/RSI/SuperTrend）的强力补偿；
           - 若结构评分极低（如 strength_z < -1.5），即使方向顺势，也应降级为 C。
@@ -777,10 +787,12 @@
         或 clear breakout + 回踩确认）；
       - 从合理止损位到最近反向结构的空间通常只有 ≈1~1.5R，而不是 3R+ 的大波段；
       - 这类机会适合用较小仓位 + 较短时间窗口试单，而不是重仓博大级别趋势。
-
+    * 震荡过滤：
+          - 若 `major_bias` 与 `minor_bias` 冲突（一多一空），且当前价格不在 4h/1h 级别的大区间边界（Range High/Low）：
+          - 强制降级为 "C"，action="wait"（禁止在震荡区间内部做短线方向猜测）。
   - C 级：结构混乱或性价比差：
-    * major_bias 与 minor_bias/micro_bias 冲突、供需区 / 通道 / VPVR 信号相互打架；
-    * 或价格位于明显盘整区中部、上下都很近有强结构，潜在空间 ≤ 1.5R；
+      * ... 或价格位于明显盘整区中部、上下都很近有强结构，潜在空间 ≤ 1.5R；
+      * 【硬禁止】或 price 位于 VPVR 价值区间中部带 / 紧贴 POC（尤其当 major_bias=NEUTRAL 或 channel_direction=flat）；
     * 或 RSI 明显极值（超买/超卖）但方向与大级别不一致。
 
 - 分级后，必须遵守：
@@ -1276,16 +1288,21 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
     * 不要仅看 status="fresh/weakened"，必须参考 `ctx` 数据：
     * 若 `strength_z` > 1.0 且 `vol_ratio` > 1.2：视为“机构级关键位”，即使 status="tested" 仍视为强支撑/阻力；
     * 若 `strength_z` < -0.5：视为“弱结构”，仅在多周期共振时作为次要参考，不可直接挂 Limit 单。
-  - 拥挤度与失效：
-    * 参考 `touches`。若 touches > 5 且 strength_z 开始下降，视为流动性耗尽，警惕突破。
+  - 拥挤度与吸筹判定（致命陷阱）：
+    * 硬约束：若 `touches` > 8（高频测试），无论 `strength_z` 和 `vol_ratio` 有多高，该区域都**失效**，禁止作为 EDGE 阻力/支撑开单。
+    * 吸筹识别：若区域 `touches` > 5 且 `vol_ratio` > 2.0（巨量测试但不反弹），视为**吸筹/出货（Absorption）**，价格将大概率**突破**该区域，而非反转。
   - 作用：
     * Price 贴近强 Demand Zone → 倾向 BULL（但在弱 Zone 需警惕跌破）；
     * Price 贴近强 Supply Zone → 倾向 BEAR。
 - VPVR 分析（仅使用输入字段：poc_price / value_area_high / value_area_low）：
   - POC（poc_price）：成交最密集的“磁吸区/盘整区”：
-    * price 靠近 POC → 更可能震荡、假突破增多，R/R 需更苛刻；
+    * 定义 POC_chop_zone：|price - poc_price| ≤ 0.25 * atr14(15m)（若无 15m atr，则用 5m atr 代替但阈值降为 0.15）。
+    * 若 price 落在 POC_chop_zone：
+      - 禁止使用 BO_RETEST 与 顺势 EDGE 开仓（假突破概率高）；
+      - 仅允许“均值回归”型尝试：必须靠近 VAH/VAL 边界（而非 POC 附近），且必须有 5m Rejection-A，并满足更高门槛：LTF_scalp R_clean ≥ 1.2；
+      - 否则 action="wait"。
   - 价值区边界（VAH/VAL）：
-    * price 在 [VAL, VAH] 内 → 偏“均值回归/震荡思维”，避免在区间中部追单；
+    * price 在 [VAL, VAH] 内且靠近 POC ⇒ 视为“区间中部” ⇒ 必须 wait（禁止开新仓）。
     * price 明确站上 VAH → 才视为“价值区上沿突破后的扩展段”，但必须用 BO_RETEST 回踩确认，禁止直接追价；
     * price 明确跌破 VAL → 对称处理。
   - 约束：若输入未提供 HVN/LVN 字段，严禁在 reasoning 中声称“HVN/LVN/低密度节点”，只能讨论 POC/VAH/VAL。
@@ -1646,28 +1663,42 @@ B5) 最近反向结构与 R_clean（定义必须可计算）
                 1) 忽略 `strength_z` < -1.0 的极弱供需区；
                 2) 忽略 `rank_pct` < 0.2 且 `vol_ratio` < 0.8 的微小 FVG；
                 3) 忽略 `status`="weakened" 且无成交量支持的区域。
-              - 有效反向结构定义：
+              - 有效反向结构定义（用于 R_clean 的“最近反向结构”必须从这里选）：
                 1) 具有统计显著性（Strength Z > -0.5 或 rank > 30%）的供需区/FVG；
-                2) 通道边界、SuperTrend 线、VPVR 的 VAL/VAH/POC。
-              - R_clean 计算：
-                · R_clean_pts = |有效反向结构 - entry_price|
-                · R_clean = R_clean_pts / R_struct
-      · R_clean_pts = |nearest_opposite_structure - entry_price|
-      · R_clean = R_clean_pts / R_struct
+                2) 支撑阻力转换线（support_resistance_lines，取“最近的反向线”；若 strength>=1 或 hit_count>=10 视为强结构，必须纳入）；
+                3) 通道边界、SuperTrend 线；
+                4) VPVR 的 VAL/VAH/POC。
+              - nearest_opposite_structure 选择规则（硬约束）：
+                1) 先按“统计噪音过滤”剔除无效结构（保留强结构）
+                2) 在剩余【有效反向结构】中，按“与 entry_price 的方向距离”取最近者：
+                   - LONG：仅考虑 entry_price 上方的反向结构，取 Δ = structure_price - entry_price 的最小正值
+                   - SHORT：仅考虑 entry_price 下方的反向结构，取 Δ = entry_price - structure_price 的最小正值
+                   => nearest_opposite_structure = argmin(Δ)
+                3) R_clean_pts = Δ(nearest_opposite_structure, entry_price)
+                   R_clean     = R_clean_pts / R_struct
+              - 禁止使用 current price 替代 entry_price；禁止跳过“最近的强结构”。
     * 若未给出上述任一“最近反向结构”与 R_clean：视为流程不完整，禁止开仓。
     * 若 trade_style="LTF_scalp" 且 R_clean < 1.0：视为“空间不足”，禁止开仓。
     * 若 trade_style="HTF_swing" 且 R_clean < 1.5：默认不得开仓；仅当 setup_grade="A" 且能明确指出更远的次级目标结构提供 ≥2R 空间时才允许例外（必须写清楚）。
   - 穿透规则（Breakout Mode）：
-    * 若当前 trade_style="HTF_swing" 或顺势 A_trend（major_bias同向）：
-    * 且最近的反向结构（阻力位/支撑位）满足以下任一条件：
-      1) 强度较弱（Strength < 60 或 ctx.strength_z < 0.5）；
-      2) 已被多次测试（status="weakened"）；
-      3) 阻力位距离当前价格 Distance < 1.5 * ATR（空间太小，视为噪音/可突破）；
-      - 则允许在计算 R_clean 时“穿透”该阻力，直接以更远处的强结构作为目标位计算。
+    - 穿透规则（Breakout Mode｜仅用于“远目标推演”，不得用于放行开仓）：
+      * 禁止：trade_style="LTF_scalp" 一律不得使用穿透规则。
+      * 允许：仅当 trade_style="HTF_swing" 且 setup_grade="A" 且 major_bias 同向时，才可“额外”推演 TP2/更远目标。
+      * 重要：R_clean（开仓闸门）必须始终按“最近有效反向结构”计算，穿透规则不得用于满足/绕过 R_clean 门槛。
+      * 删除“Distance < 1.5*ATR 视为噪音可穿透”的判定；相反：
+      - 若最近反向结构距离过近 ⇒ 说明空间不足 ⇒ 应直接 wait，而不是穿透到更远结构来虚构空间。
 
 B6) 执行时效与反延迟闸门（下单前最后一公里｜硬要求）
   - 问：在【实际下单/发送订单】的那一刻，以下条件是否全部满足？
     （此项由执行端强制校验；AI 也必须在 reasoning 中自检并给出结论。）
+    0) 输入可验证性闸门（Hard Gate｜缺数据直接止血）
+    - 必须提供：kline_5m = {open, high, low, close, close_ts, x}
+    - 且 x=true 的那根必须与 close_ts 对应“最新已收盘 5m K”
+    - 若本轮计划 pattern ∈ {EDGE, BO_RETEST, Rejection-A, Rejection-B}：
+        * 任一字段缺失 => action 必须="wait"
+        * reasoning 必须写明：missing_ohlc=true（禁止用“推测/猜测/应该是收阴”）
+    - 推荐同时提供：kline_15m、kline_30m 的 {open, high, low, close, close_ts}
+      （用于 BO_RETEST 的区间回到/未回到判断、以及 VPVR_MID 的 tf=30m 校验）
     1) K线对齐：本次开仓信号必须基于“最新已收盘 5m K”（Binance kline_5m 的 x=true 那根）。
        * 若在下单时已经出现了新一根 5m 收盘（bar 已推进），则该信号视为过期：
          - action 必须为 "wait"（禁止下单）；
@@ -1685,10 +1716,10 @@ B6) 执行时效与反延迟闸门（下单前最后一公里｜硬要求）
        * 对 BO_RETEST（突破-回踩）：
          · SHORT：最近 1 根已收盘 5m 的 close 不得重新回到“突破前的区间内部”，且仍位于 retest 附近；
          · LONG：对称处理。
-    4) zone 位置仍满足 2.1）“靠边进场”要求：
-       * SHORT：live_price 仍位于 supply 的上 40% 区间；
-       * LONG：live_price 仍位于 demand 的下 40% 区间；
-       * 若 live_price 已滑出该区域：视为性价比变差/追单，禁止开仓，action="wait"。
+    4) zone 位置仍满足“靠边进场”要求（与 EDGE 开仓窗口一致）：
+       * 默认：live_price 仍在 40% 窗口内；
+       * 若 major_bias=NEUTRAL 或 price∈[VAL,VAH] 或落在 POC_chop_zone：live_price 必须仍在“外侧20%窗口”内；
+       * 若 live_price 已滑出对应窗口：视为追单/错位，action="wait"（禁止开仓）。
 
 ——————————
 C. 方向一致性检查
@@ -1834,12 +1865,12 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 - 在没有持仓或允许加仓（且未违反禁止摊平亏损规则）时，用来开新仓。
 - 必须提供：
   - symbol, type, side, confidence（0-100）, reason；
-  - entry_plan：price, qty, leverage, init_stop, take_profit(通常为 null), entry_order_policy。
-    * entry_order_policy.tp_activation 必须包含：
-      - enable（true/false）
-      - first_when（按风格分层：LTF_scalp 建议 R>=0.8，HTF_swing 建议 R>=1.5，或 protect_triggered）
-      - price_logic（建议固定为 "structure_first_then_rail_fast"）
-      - reduce_only（true）
+  - entry_plan：price, qty, leverage, init_stop, take_profit(通常为 null), entry_order_policy；
+  - 并在 entry_plan 内额外提供（用于执行端强校验与回测归因）：
+    * nearest_opposite_structure_type（zone/sr_line/vpvr_poc/vpvr_vah/vpvr_val/supertrend/channel_edge/fvg/fib）
+    * nearest_opposite_structure_value（具体价格）
+    * R_struct 与 R_clean（必须与 reasoning 一致）
+
 
 
 2. action="close"
