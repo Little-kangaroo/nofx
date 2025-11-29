@@ -192,123 +192,70 @@
 
 
 ——————————————————————————————————————
-一、输入数据（严格约定）
+一、输入数据（Matrix Compressed Protocol - Verified）
 ——————————————————————————————————————
-1) 账户状态（Account）
-{
-  "equity": 98.60,
-  "margin_usage": 0.922,
-  "max_leverage": 10,
-  "positions": [
-    {
-      "symbol": "BTCUSDT",
-      "side": "SHORT",                // LONG 或 SHORT
-      "entry_price": 99102.6,
-      "qty": 0.01,
-      "leverage": 5,
-      "unrealized_pnl_pct": -0.13,
-      "liq_price": 118084.24,
-      "time_in_position_min": 41,
-      "stop_price": 100200.0,
-      "r_multiple_locked": 0.0
-    }
-  ]
-}
+【严重警告】
+输入数据已高度压缩。你必须严格按照以下索引（Index）解码，**严禁猜测**。
 
-2) 基础指标（MarketSnapshot）——覆盖多时间框架
-{
-  "last_price": 45000.0,
-  "price": 45000.0,
-  "funding_rate": 0.0001,
-  "oi_latest": 1500000000,
-  "change_1h": 0.5,
-  "change_4h": -1.2,
-  "5m": {
-    "ema20": 44995.5,
-    "ema50": 44990.2,
-    "ema100": 44985.8,
-    "ema200": 44980.1,
-    "sma20": 44996.0,
-    "sma50": 44991.5,
-    "vwap": 44992.3,
-    "ema50_slope_3": 0.15,
-    "ema200_slope_3": 0.05,
-    "macd": 12.5,                     // 直方图口径
-    "rsi7": 65.2,
-    "rsi14": 58.7,
-    "atr14": 125.6,
-    "volume": 1250.5,
-    "avg_volume": 1100.8,
-    "ohlc_last_closed": {
-     "close": 90447,
-     "close_time": 1764397799999,
-      "high": 90787.1,
-      "low": 90272.6,
-      "open": 90784.1,
-      "open_time": 1764396900000,
-       "volume": 2059}
-  },
-   "15m": { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
-   "30m": { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
-   "1h":  { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
-   "4h":  { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ }
- }
- 【硬约束：5m 关键K线字段缺失即禁止开仓】
- - 若输入未提供 MarketSnapshot.5m 的 open/high/low/close/close_time/x（且 x 必须为 true，表示“最新已收盘 5m bar”），则：
-   * EDGE 与 BO_RETEST 的 Rejection/Confirm/失效校验均不可验证；
-   * action 必须为 "wait"（禁止 open_long / open_short）。
+【全局定义】
+- TF (Timeframe Index): 0=5m, 1=15m, 2=30m, 3=1h, 4=4h
+- Boolean: 1=True, 0=False
 
+1) 全局概览 (Root)
+   - s: Symbol
+   - p: Current Price
+   - g: [Change1h%, Change4h%, FundingRate, Price, OpenInterest]
 
-2.1) 关键结构与统计上下文示例（Advanced Analysis）
-{
-  "多时间框架分析": {
-    "15m": {
-      "供需区数据": {
-        "active_zones": [
-          {
-            "type": "demand",
-            "price_range": {"high": 90500, "low": 90000},
-            "status": "fresh",
-            "strength": 75,
-            "ctx": {             // ★ 核心统计字段
-              "strength_z": 1.8, // Z-Score > 1.0 (显著强)
-              "vol_ratio": 2.1,  // 成交量 2.1倍 (主力参与)
-              "width_atr": 1.2,  // 宽度 1.2 ATR (中等偏宽)
-              "rank_pct": 0.85   // 强于 85% 的历史结构
-            }
-          }
-        ]
-      },
-      "FVG数据": {
-        "active_gaps": 1,
-        "nearest_gap": 91200,
-        "gap_type": "bearish",
-        "ctx": { "strength_z": -0.5, "vol_ratio": 0.9 } // 弱结构示例
-      }
-    }
-  }
-}
-3) 交易环境（ExchangeMeta）
-{
-  "tick_size": 0.1,
-  "lot_size": 0.001,
-  "taker_fee_bps": 5,
-  "maker_fee_bps": 2,
-  "slippage_bps_minor": 5,
-  "slippage_bps_major": 15,
-  "trigger_type": "MARK_PRICE"        // 与执行端统一：MARK_PRICE/INDEX_PRICE/LAST_PRICE
-}
-【价格源统一（必须）】
-    - last_price：本模板所有判断/ROI/可执行性校验使用的“触发价”，其来源必须与 ExchangeMeta.trigger_type 一致
-      - trigger_type="MARK_PRICE"  => last_price 必须是 mark price
-      - trigger_type="LAST_PRICE"  => last_price 才是 last traded price
-      - trigger_type="INDEX_PRICE" => last_price 必须是 index price
-    - 变量别名（为兼容模板中大量使用的 price 变量）：
-      - 约定：price := last_price
-      - 若上游仍提供 price 字段，则必须保证 price == last_price（禁止两者不一致）
-    - 兼容约定：本系统同时提供 price 与 last_price，且两者恒等（price == last_price）。
-      后续计算若引用任一字段，均视为同一“触发价”（由 ExchangeMeta.trigger_type 决定其来源）。
+2) 基础指标 (I) - 列式存储
+   格式: "I": { "key": [TF0, TF1, TF2, TF3, TF4] }
+   - 包含: e20/e50/e100/e200 (EMA), e50s/e200s (Slope), s20/s50 (SMA), r7/r14 (RSI), macd, atr, vol, avg_v, vwap
 
+3) 高级分析 (A) - 矩阵解码表
+   数据为二维数组 `Array[Row][Col]`。
+
+   ➤ SD (供需区 - 详情):
+   [0:TF, 1:Type, 2:High, 3:Low, 4:Str, 5:Touch, 6:Active, 7:Fresh, 8:Rank, 9:Z-Score, 10:Time, 11:VolRatio, 12:WidthATR]
+   * Type: 0=Demand, 1=Supply
+   * 统计核心: strength_z=Col[9], vol_ratio=Col[11]
+
+   ➤ SD_M (供需区 - 统计):
+   [0:TF, 1:TotalCount, 2:AvgStr, 3:DemCount, 4:SupCount]
+
+   ➤ G (FVG缺口 - 详情):
+   [0:TF, 1:Type, 2:High, 3:Low, 4:Str, 5:Touch, 6:Qual, 7:Stat, 8:Fresh, 9:Rank, 10:Z-Score, 11:Time, 12:VolRatio, 13:WidthATR]
+   * Type: 0=Bullish, 1=Bearish
+   * 统计核心: strength_z=Col[10], vol_ratio=Col[12]
+
+   ➤ G_M (FVG缺口 - 统计):
+   [0:TF, 1:ActiveCount, 2:GapType(0:Neut,1:Bull,2:Bear), 3:NearestPrice]
+
+   ➤ SR (支撑阻力线 - 详情):
+   [0:TF, 1:Price, 2:Str, 3:Hits, 4:Type]
+   * Type: 0=Support, 1=Resistance
+
+   ➤ SR_M (支撑阻力线 - 统计):
+   [0:TF, 1:ResLines, 2:SupLines, 3:TotalLines]
+
+   ➤ F (斐波那契 - 水平位):
+   [0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618, 2.618]
+   * 每一行直接对应 TF 索引 (Row 0 = 5m Levels)
+
+   ➤ F_M (斐波那契 - 状态):
+   [0:TF, 1:Active, 2:Trend(0:Neut,1:Up,2:Down)]
+
+   ➤ ST (超级趋势):
+   [0:TF, 1:CurrentLine, 2:Direction(1:Bull,2:Bear)]
+
+   ➤ CH (通道分析):
+   [0:TF, 1:Dir(1:Flat,2:Up,3:Down), 2:Width, 3:Pos(0:Low,0.5:Mid,1:Up)]
+
+   ➤ DOW (道氏理论):
+   [0:TF, 1:Confidence, 2:TrendDir(1:Neut,2:Bull,3:Bear), 3:Strength, 4:ST_Line, 5:ST_Dir, 6:LowerLine, 7:UpperLine]
+   * 这里的 ST_Line/Lower/Upper 对应原始数据中道氏理论下的 supertrend 对象
+
+   ➤ VP (成交量分布):
+   [0:POC, 1:VAH, 2:VAL]
+   * 每一行直接对应 TF 索引
 ——————————————————————————————————————
 二、参数（默认稳健，可按需微调）
 ——————————————————————————————————————
