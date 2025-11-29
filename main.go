@@ -174,13 +174,13 @@ func main() {
 			logger.LogInfo("🎯 启动市场分析演示模式...")
 			fmt.Println("🎯 启动市场分析演示模式...")
 			fmt.Println()
-			market.DemoMain()
+			fmt.Println("演示功能已暂时禁用")
 			return
 		case "market", "-market", "--market":
 			// 运行市场分析示例
 			fmt.Println("📊 启动市场分析示例...")
 			fmt.Println()
-			market.RunAllExamples()
+			fmt.Println("示例功能已暂时禁用")
 			return
 		case "fvg", "-fvg", "--fvg":
 			// 只运行FVG演示
