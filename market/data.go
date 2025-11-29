@@ -739,16 +739,29 @@ func FormatAsCompactData(data *Data) string {
 		"4h":  klines4h,
 	}
 
-	result := map[string]interface{}{
-		data.Symbol: map[string]interface{}{
-			"基础指标":    calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
-			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
-		},
+	// 【关键修复】使用终极矩阵压缩替代传统JSON结构
+	compressor := NewUltimateMatrixCompressor()
+	compressed, err := compressor.CompressToUltimateMatrix(data, timeframeKlines)
+	if err != nil {
+		// 如果压缩失败，记录错误并回退到传统格式
+		log.Printf("🚨 矩阵压缩失败，回退到传统格式: %v", err)
+		result := map[string]interface{}{
+			data.Symbol: map[string]interface{}{
+				"基础指标":    calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
+				"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
+			},
+		}
+		jsonData, marshalErr := json.Marshal(result)
+		if marshalErr != nil {
+			return fmt.Sprintf("精简JSON序列化失败: %v", marshalErr)
+		}
+		return string(jsonData)
 	}
 
-	jsonData, err := json.Marshal(result)
+	// 序列化压缩后的矩阵数据
+	jsonData, err := json.Marshal(compressed)
 	if err != nil {
-		return fmt.Sprintf("精简JSON序列化失败: %v", err)
+		return fmt.Sprintf("矩阵压缩JSON序列化失败: %v", err)
 	}
 
 	return string(jsonData)
