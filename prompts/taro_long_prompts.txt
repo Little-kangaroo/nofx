@@ -88,11 +88,11 @@
                     - SHORT：entry_price ∈ [supply_high - 0.20*zone_width, supply_high]
                 * 止损价 sl 必须放在该供需区的相反边界外侧若干 tick / ATR，而不是区间内部；
                 * 通过 B5 检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求。
-                * 【EDGE 进场确认（5m Rejection）｜软化要求】：
-                   * 【EDGE 进场确认（5m Rejection）｜硬要求】：
-                      - 若 MarketSnapshot.5m 缺失 open/high/low/close（最新已收盘 bar）⇒ 本条不可验证 ⇒ action="wait"（禁止开仓）。
-                      - 特权情况（SNIPE变体）：...
-                      - 普通情况：若不满足特权条件，必须满足以下任一确认（多空对称）：
+                【EDGE 进场确认（5m Rejection｜硬要求）】：
+                - 若 MarketSnapshot.5m 缺失 open/high/low/close/close_ts/x，或 x!=true
+                  ⇒ 本条不可验证 ⇒ action="wait"（禁止开仓）。
+                - 特权情况（SNIPE变体）：...
+                - 普通情况：若不满足特权条件，必须满足以下任一确认（多空对称）：
                   · SHORT（依托 supply 上沿试空）：需要出现“5m 拒绝确认”后才允许 open_short：
                     - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：high ≥ supply_high 且 close ≤ supply_high（向上刺破但收回到供给区内/下方）；
                     - Rejection-B（备选）：最近 1~2 根已收盘 5m K 中，至少有 1 根满足：
@@ -105,7 +105,8 @@
                       * close > open（收阳）；
                       * 且（RSI7 ≥ 40 或 MACD ≥ 0）；
                       * 且收盘价仍位于 demand 的下 40% 区间（不允许拉回 zone 中部）。
-                * 若无法给出上述任一 “5m 拒绝确认”，则本次 EDGE 必须降级为 setup_grade="C"，action="wait"/"hold"（禁止以 EDGE 新开仓）。
+                - 若无法给出上述任一 “5m 拒绝确认”，则本次 EDGE 必须降级为 setup_grade="C"，action="wait"/"hold"（禁止以 EDGE 新开仓）。
+
 
               - 禁止的 EDGE 伪形态：
                 * entry_price 落在 zone 中部甚至靠近对侧边缘；
@@ -238,17 +239,25 @@
     "atr14": 125.6,
     "volume": 1250.5,
     "avg_volume": 1100.8,
-    "high": 45080.0, "low": 44910.0, "close": 45000.0
+    "ohlc_last_closed": {
+     "close": 90447,
+     "close_time": 1764397799999,
+      "high": 90787.1,
+      "low": 90272.6,
+      "open": 90784.1,
+      "open_time": 1764396900000,
+       "volume": 2059}
   },
-  "15m": { /* 同结构，含 high/low/close */ },
-  "30m": { /* 同结构，含 high/low/close */ },
-  "1h":  { /* 同结构，含 high/low/close */ },
-  "4h":  { /* 同结构，含 high/low/close */ }
-}
-【硬约束：OHLC 缺失即禁止开仓】
-- 若输入未提供 MarketSnapshot.5m 的 open/high/low/close（最新已收盘 bar），则：
-  * EDGE 与 BO_RETEST 的 Rejection/Confirm/失效校验均不可验证；
-  * action 必须为 "wait"（禁止 open_long / open_short）。
+   "15m": { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
+   "30m": { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
+   "1h":  { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
+   "4h":  { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ }
+ }
+ 【硬约束：5m 关键K线字段缺失即禁止开仓】
+ - 若输入未提供 MarketSnapshot.5m 的 open/high/low/close/close_time/x（且 x 必须为 true，表示“最新已收盘 5m bar”），则：
+   * EDGE 与 BO_RETEST 的 Rejection/Confirm/失效校验均不可验证；
+   * action 必须为 "wait"（禁止 open_long / open_short）。
+
 
 2.1) 关键结构与统计上下文示例（Advanced Analysis）
 {
@@ -772,7 +781,7 @@
          - 为什么认为这是“大级别趋势可能反转的早期段”。
   - B 级：方向大体合理，但结构或空间不完美：
       * 可以是顺势但位置一般（例如接近 VAH/VAL 边缘或通道上/下沿“边缘带”，空间≈1.2~2R）；
-      * 【硬禁止】若 price 位于 VPVR 价值区间“中部带”或紧贴 POC（见下方 VPVR_MID Gate），不得归为 B，必须降级为 C（action="wait"）。
+            * 【硬禁止】若 price 位于 VPVR 价值区间“中部带”或紧贴 POC（见「VPVR 分析：POC_chop_zone / 价值区边界（VAH/VAL）」），不得归为 B，必须降级为 C（action="wait"）。
     * 统计评分补偿：
           - 若结构本身的统计评分较低（如 strength_z < 0），则必须有其他指标（如 MACD/RSI/SuperTrend）的强力补偿；
           - 若结构评分极低（如 strength_z < -1.5），即使方向顺势，也应降级为 C。
@@ -1302,7 +1311,7 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
       - 仅允许“均值回归”型尝试：必须靠近 VAH/VAL 边界（而非 POC 附近），且必须有 5m Rejection-A，并满足更高门槛：LTF_scalp R_clean ≥ 1.2；
       - 否则 action="wait"。
   - 价值区边界（VAH/VAL）：
-    * price 在 [VAL, VAH] 内且靠近 POC ⇒ 视为“区间中部” ⇒ 必须 wait（禁止开新仓）。
+    * price 在 [VAL, VAH] 内且落在 POC_chop_zone ⇒ 视为“区间中部” ⇒ 必须 wait（禁止开新仓）。
     * price 明确站上 VAH → 才视为“价值区上沿突破后的扩展段”，但必须用 BO_RETEST 回踩确认，禁止直接追价；
     * price 明确跌破 VAL → 对称处理。
   - 约束：若输入未提供 HVN/LVN 字段，严禁在 reasoning 中声称“HVN/LVN/低密度节点”，只能讨论 POC/VAH/VAL。
@@ -1692,17 +1701,17 @@ B6) 执行时效与反延迟闸门（下单前最后一公里｜硬要求）
   - 问：在【实际下单/发送订单】的那一刻，以下条件是否全部满足？
     （此项由执行端强制校验；AI 也必须在 reasoning 中自检并给出结论。）
     0) 输入可验证性闸门（Hard Gate｜缺数据直接止血）
-    - 必须提供：kline_5m = {open, high, low, close, close_ts, x}
-    - 且 x=true 的那根必须与 close_ts 对应“最新已收盘 5m K”
-    - 若本轮计划 pattern ∈ {EDGE, BO_RETEST, Rejection-A, Rejection-B}：
-        * 任一字段缺失 => action 必须="wait"
-        * reasoning 必须写明：missing_ohlc=true（禁止用“推测/猜测/应该是收阴”）
-    - 推荐同时提供：kline_15m、kline_30m 的 {open, high, low, close, close_ts}
-      （用于 BO_RETEST 的区间回到/未回到判断、以及 VPVR_MID 的 tf=30m 校验）
-    1) K线对齐：本次开仓信号必须基于“最新已收盘 5m K”（Binance kline_5m 的 x=true 那根）。
-       * 若在下单时已经出现了新一根 5m 收盘（bar 已推进），则该信号视为过期：
-         - action 必须为 "wait"（禁止下单）；
-         - 需等待下一轮重新评估，不得用旧信号追价。
+        - 必须提供：MarketSnapshot.5m 至少包含 {open, high, low, close, close_ts, x}
+        - 且 x=true 的那根必须对应“最新已收盘 5m K”（以 close_ts 为准）
+        - 若本轮计划 pattern ∈ {EDGE, BO_RETEST, Rejection-A, Rejection-B}：
+            * 任一字段缺失 => action 必须="wait"
+            * reasoning 必须写明：missing_ohlc=true（禁止用“推测/猜测/应该是收阴”）
+        - 推荐同时提供：MarketSnapshot.15m、MarketSnapshot.30m 的 {open, high, low, close, close_ts}
+          （用于 BO_RETEST 的区间回到/未回到判断、以及 VPVR_MID 的 tf=30m 校验）
+        1) K线对齐：本次开仓信号必须基于“最新已收盘 5m K”（MarketSnapshot.5m 的 x=true 那根）。
+           * 若在下单时已经出现了新一根 5m 收盘（bar 已推进），则该信号视为过期：
+             - action 必须为 "wait"（禁止下单）；
+             - 需等待下一轮重新评估，不得用旧信号追价。
     2) 价差/滑点闸门：|live_price - entry_price| ≤ 0.25 * R_struct（可配置 0.2~0.35）。
        * 若超出：视为延迟导致的追单/错位：
          - action="wait"（或重新计算 entry/stop 后再评估）；

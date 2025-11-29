@@ -712,7 +712,7 @@ func FormatAsStructuredData(data *Data) string {
 	}
 
 	// 序列化为JSON
-	jsonData, err := json.MarshalIndent(result, "", "  ")
+	jsonData, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Sprintf("JSON序列化失败: %v", err)
 	}
@@ -746,7 +746,7 @@ func FormatAsCompactData(data *Data) string {
 		},
 	}
 
-	jsonData, err := json.MarshalIndent(result, "", "  ")
+	jsonData, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Sprintf("精简JSON序列化失败: %v", err)
 	}
