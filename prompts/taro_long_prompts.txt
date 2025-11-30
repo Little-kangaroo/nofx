@@ -63,8 +63,10 @@ V-10.0 (Matrix Input / Full V8.9 Rules / V8.4 Output Compatible)
 任何开仓(Open)操作前必须通过以下检查，否则 ACTION="wait"。
 
 G1. 僵尸/吸筹判定 (Zombie Zone):
-   - SD.Touches > 8 ⇒ 区域失效（流动性耗尽）。
-   - SD.Touches > 5 AND VolRatio > 2.0 ⇒ 吸筹/出货模式（巨量不反弹），预期突破，禁止反转。
+   G1. 僵尸/吸筹/巨量突破判定:
+      - 僵尸: SD.Touches > 8 ⇒ 区域失效。
+      - 吸筹/出货: SD.Touches > 5 AND VolRatio > 2.0 ⇒ 视为吸筹/出货，禁止反转。
+      - 【新增】巨量异动: 若结构为 Fresh (Touches=0) 但 VolRatio > 5.0 (5倍以上巨量) ⇒ 视为“机构强力介入”，大概率直接突破/反转，禁止在该区域边缘做逆势 Fade（即：禁止在巨量 Supply 做空，禁止在巨量 Demand 做多），必须等待回踩确认。
 
 G2. 铁墙判定 (Iron Wall):
    - SR.Hits >= 10 OR Strength >= 0.9 ⇒ 视为铁墙。
@@ -126,7 +128,7 @@ G5. 统计噪音过滤 (Statistical Noise):
 - Grade B (Sub):
   * 结构: Minor 顺势，Major 中性。
   * 统计: 若 Z < 0，必须有 MACD/RSI 强动能补偿。
-  * 降级: 若价格位于区间中部且方向冲突 ⇒ 降级为 C。
+  * 降级: 若 Major=Neutral (震荡)，且价格位于 4h/1h 供需区的中部 50% 区域 ⇒ 强制降级为 C (禁止开仓)，除非有 Grade A 级的极强共振。
 - Grade C (Reject):
   * 严重冲突 / R不足 / 结构极弱 (Z<-1.0)。Action="wait"。
 
