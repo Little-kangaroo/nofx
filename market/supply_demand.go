@@ -902,16 +902,20 @@ func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines
 	lastTouchIndex := -1
 	minGapBetweenTouches := 5 // 【优化】至少间隔5根K线才算新的触及（更严格聚类）
 	
-	// 【优化】进一步限制搜索范围，减少历史数据影响
-	maxLookback := 100 // 5m时间框架约8小时的数据（从16小时缩减到8小时）
+	// 【修复幽灵支撑Bug】从区域诞生开始检查完整历史，不截断数据
+	// 必须检查完整生命周期以发现历史的Zone Broken事件
 	startIndex := zone.Origin.KlineIndex + 1
 	endIndex := len(klines)
 	
-	// 如果历史数据太长，只看最近的数据
-	if endIndex - startIndex > maxLookback {
-		startIndex = endIndex - maxLookback
+	// 【安全检查】确保索引有效
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	if startIndex >= endIndex {
+		return 0 // 没有后续数据可检查
 	}
 	
+	// 【完整历史扫描】不使用maxLookback截断，确保技术分析的准确性
 	for i := startIndex; i < endIndex; i++ {
 		if sda.priceInZone(klines[i].High, klines[i].Low, zone) {
 			// 聚类机制：只有与上次触及间隔足够远才计为新触及
