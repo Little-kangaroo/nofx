@@ -86,7 +86,10 @@ G5. 统计噪音过滤 (Statistical Noise):
    - 计算 R_clean 时，必须自动忽略以下弱结构（视为无阻力）：
      * StrengthZ < -1.0 的极弱供需区。
      * Rank < 0.2 且 VolRatio < 0.8 的微小 FVG。
-
+G6. 趋势尾声禁区 (Exhaustion):
+   - 若 4h_RSI > 70 (多) 或 < 30 (空) 且 价格紧贴 通道/供需区边界：
+     * 严禁顺势开仓 (HTF/LTF 均禁止)。
+     * 仅允许做从 A_reversal (逆势反转) 或 wait。
 ——————————————————————————————————————
 三、交易模式与入场 (Patterns & Execution)
 ——————————————————————————————————————
@@ -104,8 +107,8 @@ G5. 统计噪音过滤 (Statistical Noise):
      * 收紧: 若环境为震荡 (Major=Neut 或 位于POC区)，必须收紧至 Zone 外侧 20% 以内。
 
 【形态要求】(仅限以下两类):
-   1. EDGE (边缘): 依托 SD/SR + 5m Rejection (刺破收回/吞没).
-   2. BO_RETEST (回踩): 突破 KeyLevel + 回踩 [Level ± 0.5*ATR].
+   1. EDGE (边缘): 依托 SD/SR + 5m Rejection (必须满足: Close回到Zone内 OR (Close<Open 且 RSI回落)).
+   2. BO_RETEST (回踩): 突破(收盘在Level外) + 回踩 [Level ± 0.5*ATR] + 5m Confirm(不跌回原区间/出现Rejection).
 
 ——————————————————————————————————————
 四、Setup 质量分级 (Grading)
@@ -135,7 +138,8 @@ G5. 统计噪音过滤 (Statistical Noise):
 ——————————————————————————————————————
 五、风控与出场 (Risk Management)
 ——————————————————————————————————————
-- 动态仓位: `Qty = (Equity * Risk%) / |Entry - Stop|`
+- 动态仓位: Qty = (Equity * Risk%) / R_struct.
+  * 约束: Notional ≥ 150 USDT. 若计算出的 Notional < 150 且无法通过 Leverage<10 满足 ⇒ ACTION "wait" (资金不足).
 - 止损锚定: 基于结构 (Zone边界/前高低) + ATR 缓冲。禁止裸点数止损。
 - 空间测算 (R_clean 强制计算过程):
   1. 遍历寻找阻力: 扫描 SR 矩阵、SD 矩阵(Type=Opposite)、VP[0](POC)。
@@ -147,7 +151,9 @@ G5. 统计噪音过滤 (Statistical Noise):
   * LTF: 0.5R→锁0.25; 1.0R→锁0.7.
   * HTF: 1.0R→BE; 1.5R→锁0.5.
 - 死区保护: R_unrealized < 0.3R 时，禁止移动止损 (防止噪音洗出)。
-
+- 保护增强 (Micro):
+  * TimeGuard: 持仓 > 3min 且 ROI > 5% 方可激活 ROI Lock。
+  * MicroFlip: 若 5m 结构在开仓后迅速反向(EMA/MACD翻转) ⇒ 忽略 R_Lock，强制收紧止损至保本或微亏离场。
 ——————————————————————————————————————
 六、输出格式 (Strict JSON - V8.4/8.9 Compatible)
 ——————————————————————————————————————
@@ -187,7 +193,7 @@ G5. 统计噪音过滤 (Statistical Noise):
          }
        },
        // ★ V8.9 核心归因字段 (必须保留) ★
-       "nearest_opposite_structure_type": string, // e.g. "zone", "sr_line", "vpvr_poc"
+       "nearest_opposite_structure_type": string, // e.g. "zone", "sr_line", "vpvr_poc,zone/line/poc/fib"
        "nearest_opposite_structure_value": float,
        "R_struct": float,
        "R_clean": float
