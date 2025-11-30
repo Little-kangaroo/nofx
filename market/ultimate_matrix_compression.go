@@ -2,6 +2,7 @@ package market
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"time"
@@ -784,9 +785,87 @@ func (c *UltimateMatrixCompressor) compressDowTheoryMatrix(data *Data) [][]float
 	return matrix
 }
 
-// ToJSON 转换为JSON
-func (u *UltimateCompleteMatrixFormat) ToJSON() ([]byte, error) {
-	return json.Marshal(u)
+// ToJSONWithPrecision 转换为保持精度的JSON
+func (u *UltimateCompleteMatrixFormat) ToJSONWithPrecision() ([]byte, error) {
+	// 创建一个map来控制精度
+	result := map[string]interface{}{
+		"s": u.Symbol,
+		"p": formatFloat(u.Price, getPrecisionForSymbol(u.Symbol, "price")),
+		"t": u.Timestamp,
+		"g": formatFloatArray(u.Global, u.Symbol),
+		"I": formatIndicatorsMatrix(u.Indicators, u.Symbol),
+		"A": u.Analysis, // 分析矩阵保持原样，已经格式化过
+	}
+	
+	return json.Marshal(result)
+}
+
+// formatFloat 格式化单个浮点数为字符串，保持指定精度
+func formatFloat(value float64, precision int) string {
+	return fmt.Sprintf("%."+fmt.Sprintf("%d", precision)+"f", value)
+}
+
+// formatFloatArray 格式化浮点数组
+func formatFloatArray(arr []float64, symbol string) []string {
+	result := make([]string, len(arr))
+	for i, v := range arr {
+		precision := 4 // 全局数据默认4位
+		if i == 3 { // last_price使用价格精度
+			precision = getPrecisionForSymbol(symbol, "price")
+		}
+		result[i] = formatFloat(v, precision)
+	}
+	return result
+}
+
+// formatIndicatorsMatrix 格式化指标矩阵
+func formatIndicatorsMatrix(indicators UltimateCompleteIndicatorsMatrix, symbol string) map[string][]string {
+	pricePrecision := getPrecisionForSymbol(symbol, "price")
+	
+	return map[string][]string{
+		"atr":   formatIndicatorArray(indicators.ATR14, pricePrecision),
+		"avg_v": formatIndicatorArray(indicators.AvgVolume, 0),
+		"e20":   formatIndicatorArray(indicators.EMA20, pricePrecision),
+		"e50":   formatIndicatorArray(indicators.EMA50, pricePrecision),
+		"e100":  formatIndicatorArray(indicators.EMA100, pricePrecision),
+		"e200":  formatIndicatorArray(indicators.EMA200, pricePrecision),
+		"e50s":  formatIndicatorArray(indicators.EMA50Slope, 4),
+		"e200s": formatIndicatorArray(indicators.EMA200Slope, 4),
+		"macd":  formatIndicatorArray(indicators.MACD, 2),
+		"r7":    formatIndicatorArray(indicators.RSI7, 1),
+		"r14":   formatIndicatorArray(indicators.RSI14, 1),
+		"s20":   formatIndicatorArray(indicators.SMA20, pricePrecision),
+		"s50":   formatIndicatorArray(indicators.SMA50, pricePrecision),
+		"vol":   formatIndicatorArray(indicators.Volume, 0),
+		"vwap":  formatIndicatorArray(indicators.VWAP, pricePrecision),
+		"ohlc":  formatIndicatorArray(indicators.OHLC, pricePrecision),
+	}
+}
+
+// formatIndicatorArray 格式化指标数组
+func formatIndicatorArray(arr []float64, precision int) []string {
+	result := make([]string, len(arr))
+	for i, v := range arr {
+		result[i] = formatFloat(v, precision)
+	}
+	return result
+}
+
+// getPrecisionForSymbol 获取币种的价格精度
+func getPrecisionForSymbol(symbol string, dataType string) int {
+	config, exists := TradingSymbolPrecision[symbol]
+	if !exists {
+		return 4 // 默认精度
+	}
+	
+	switch dataType {
+	case "price":
+		return config.Price
+	case "percentage":
+		return config.Percentage
+	default:
+		return 2
+	}
 }
 
 // ToJSONPretty 转换为格式化JSON

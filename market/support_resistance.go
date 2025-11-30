@@ -228,10 +228,10 @@ func (sra *SupportResistanceAnalyzer) isPivotLow(klines []Kline, index int) bool
 	return true
 }
 
-// clusterPivotPoints 聚类转折点（修复版：避免HitCount爆炸）
+// clusterPivotPoints 聚类转折点（V-10.0优化版：严格控制HitCount）
 func (sra *SupportResistanceAnalyzer) clusterPivotPoints(pivotPoints []*PivotPoint) []*PriceCluster {
 	var clusters []*PriceCluster
-	maxClusterSize := 20 // 【重要】每个簇最多20个pivot点，防止HitCount爆炸
+	maxClusterSize := 8 // 【关键优化】每个簇最多8个pivot点，适配AI V-10.0严格规则
 
 	for _, point := range pivotPoints {
 		assigned := false
@@ -249,8 +249,8 @@ func (sra *SupportResistanceAnalyzer) clusterPivotPoints(pivotPoints []*PivotPoi
 				canAdd := true
 				for _, existingPoint := range cluster.Points {
 					timeDiff := math.Abs(float64(point.Timestamp - existingPoint.Timestamp))
-					// 如果间隔少于3小时（3*3600*1000毫秒），跳过
-					if timeDiff < 3*3600*1000 {
+					// 【优化】如果间隔少于6小时，跳过（更严格的时间过滤）
+					if timeDiff < 6*3600*1000 {
 						canAdd = false
 						break
 					}

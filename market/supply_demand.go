@@ -900,10 +900,10 @@ func (sda *SupplyDemandAnalyzer) isZoneBroken(zone *SupplyDemandZone, klines []K
 func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines []Kline) int {
 	count := 0
 	lastTouchIndex := -1
-	minGapBetweenTouches := 3 // 至少间隔3根K线才算新的触及
+	minGapBetweenTouches := 5 // 【优化】至少间隔5根K线才算新的触及（更严格聚类）
 	
-	// 限制搜索范围：只看最近的一定数量K线，避免累积历史所有触碰
-	maxLookback := 200 // 5m时间框架约16小时的数据
+	// 【优化】进一步限制搜索范围，减少历史数据影响
+	maxLookback := 100 // 5m时间框架约8小时的数据（从16小时缩减到8小时）
 	startIndex := zone.Origin.KlineIndex + 1
 	endIndex := len(klines)
 	
@@ -919,9 +919,9 @@ func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines
 				count++
 				lastTouchIndex = i
 				
-				// 【重要】限制最大触及次数，防止异常情况
-				if count >= 15 {
-					break
+				// 【关键优化】严格限制最大触及次数，适配AI V-10.0规则（Touches>8废弃）
+				if count >= 8 {
+					break // 最多8次触及，确保通过AI验证
 				}
 			}
 		}
