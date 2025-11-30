@@ -34,6 +34,7 @@ type UltimateCompleteIndicatorsMatrix struct {
 	SMA50       []float64 `json:"s50"`   // sma50
 	Volume      []float64 `json:"vol"`   // volume
 	VWAP        []float64 `json:"vwap"`  // vwap
+	OHLC        []float64 `json:"ohlc"`  // 5m K线OHLC数据 [Open, High, Low, Close, Volume]
 }
 
 // UltimateCompleteAnalysisMatrix 完整8模块分析矩阵
@@ -130,6 +131,7 @@ func (c *UltimateMatrixCompressor) compressIndicatorsMatrix(data *Data, timefram
 		SMA50:       make([]float64, 5),
 		Volume:      make([]float64, 5),
 		VWAP:        make([]float64, 5),
+		OHLC:        make([]float64, 5), // 5m K线OHLC数据
 	}
 	
 	// 如果没有提供K线数据，使用已计算的基础指标
@@ -173,6 +175,26 @@ func (c *UltimateMatrixCompressor) compressIndicatorsMatrix(data *Data, timefram
 			indicators.AvgVolume[3] = FormatByDataTypeAndSymbol(data.MediumTerm1h.AverageVolume, "volume", c.symbol)
 		}
 		
+		// 【关键修复】提取5m K线OHLC数据
+		if data.OHLC5mLastClosed != nil {
+			indicators.OHLC = []float64{
+				FormatByDataTypeAndSymbol(data.OHLC5mLastClosed.Open, "price", c.symbol),
+				FormatByDataTypeAndSymbol(data.OHLC5mLastClosed.High, "price", c.symbol),
+				FormatByDataTypeAndSymbol(data.OHLC5mLastClosed.Low, "price", c.symbol),
+				FormatByDataTypeAndSymbol(data.OHLC5mLastClosed.Close, "price", c.symbol),
+				FormatByDataTypeAndSymbol(data.OHLC5mLastClosed.Volume, "volume", c.symbol),
+			}
+		} else {
+			// 如果没有5m OHLC数据，使用当前价格作为fallback
+			indicators.OHLC = []float64{
+				FormatByDataTypeAndSymbol(data.CurrentPrice, "price", c.symbol),
+				FormatByDataTypeAndSymbol(data.CurrentPrice, "price", c.symbol),
+				FormatByDataTypeAndSymbol(data.CurrentPrice, "price", c.symbol),
+				FormatByDataTypeAndSymbol(data.CurrentPrice, "price", c.symbol),
+				0,
+			}
+		}
+		
 		return indicators
 	}
 	
@@ -195,6 +217,18 @@ func (c *UltimateMatrixCompressor) compressIndicatorsMatrix(data *Data, timefram
 		indicators.VWAP[i] = FormatByDataTypeAndSymbol(calculateVWAP(klines), "price", c.symbol)
 		indicators.EMA50Slope[i] = FormatByDataTypeAndSymbol(calculateEMASlope(klines, 50, 3), "percentage", c.symbol)
 		indicators.EMA200Slope[i] = FormatByDataTypeAndSymbol(calculateEMASlope(klines, 200, 3), "percentage", c.symbol)
+		
+		// 【关键修复】只为5m时间框架添加OHLC数据
+		if tf == "5m" {
+			lastKline := klines[len(klines)-1]
+			indicators.OHLC = []float64{
+				FormatByDataTypeAndSymbol(lastKline.Open, "price", c.symbol),
+				FormatByDataTypeAndSymbol(lastKline.High, "price", c.symbol),
+				FormatByDataTypeAndSymbol(lastKline.Low, "price", c.symbol),
+				FormatByDataTypeAndSymbol(lastKline.Close, "price", c.symbol),
+				FormatByDataTypeAndSymbol(lastKline.Volume, "volume", c.symbol),
+			}
+		}
 		}
 	}
 	
