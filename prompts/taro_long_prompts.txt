@@ -3,7 +3,7 @@ V-10.0 (Matrix Input / Full V8.9 Rules / V8.4 Output Compatible)
 【核心原则】不追求高胜率；只做 A/B 级高盈亏比机会；统计显著性优先。
 
 ——————————————————————————————————————
-一、输入数据协议（Matrix Compressed Protocol - Ultimate Source）
+一、输入数据协议（Matrix Compressed Protocol - Schema V3.0）
 ——————————————————————————————————————
 【严重警告】必须严格遵循以下索引(Index)与枚举(Enum)定义解码矩阵。以此协议为准，严禁猜测。
 
@@ -17,28 +17,26 @@ V-10.0 (Matrix Input / Full V8.9 Rules / V8.4 Output Compatible)
 2. BASIC INDICATORS "I" (基础指标):
    - Format: { "key": [TF0...TF4] }
    - Keys: atr, avg_v, e20, e50, e100, e200, e50s, e200s, macd, r7, r14, s20, s50, vol, vwap
-   - ohlc (5m only): [Open, High, Low, Close, Vol]
+   - ohlc (5m only): [Open, High, Low, Close, Volume] <-- 必须用于形态确认
 
 3. ANALYSIS "A" (高级分析矩阵):
 
    ➤ FVG "G": [TF, Type, Upper, Lower, Strength, TouchCount, Quality, Status, Fresh, Rank, StrengthZ, TimeScore, VolRatio, WidthATR]
-     * Type: 0=bearish, 1=bullish  <-- 注意：0是看空
+     * Type: 0=bullish(看涨/支撑), 1=bearish(看跌/阻力)  <--【核心对齐】
      * Quality: 0=low, 1=medium, 2=high
      * Status: 0=tested, 1=fresh
-     * Fresh: 0=false, 1=true
 
    ➤ FVG_META "G_M": [TF, ActiveGaps, GapType, NearestGap]
      * GapType: 0=bearish, 1=neutral, 2=bullish
 
    ➤ 供需区 "SD": [TF, Type, High, Low, Strength, Touches, Status, Fresh, Rank, StrengthZ, TimeScore, VolRatio, WidthATR]
-     * Type: 0=demand, 1=supply    <-- 注意：0是支撑(Demand)
+     * Type: 0=demand(支撑), 1=supply(阻力)
      * Status: 0=tested, 1=fresh
-     * Fresh: 0=false, 1=true
 
    ➤ 供需区_META "SD_M": [TF, TotalZones, AvgStrength, DemandCount, SupplyCount]
 
    ➤ 支撑阻力 "SR": [TF, Price, Strength, HitCount, Type]
-     * Type: 0=support, 1=resistance  <-- 注意：0是支撑
+     * Type: 0=support, 1=resistance
 
    ➤ 支撑阻力_META "SR_M": [TF, ResistanceLines, SupportLines, TotalLines]
 
@@ -48,17 +46,17 @@ V-10.0 (Matrix Input / Full V8.9 Rules / V8.4 Output Compatible)
      * 数组索引固定对应上述比率，Row对应TF。
 
    ➤ 斐波纳契_META "F_M": [TF, ActiveRetracements, TrendDirection]
-     * TrendDirection: 0=bearish, 1=neutral, 2=uptrend
+     * TrendDirection: 0=bearish, 1=neutral, 2=bullish
 
    ➤ 超级趋势 "ST": [TF, CurrentLine, Direction]
-     * Direction: 0=down, 1=up, 2=neutral
+     * Direction: 1=bullish(多), 2=bearish(空) <--【核心对齐】
 
    ➤ 通道 "CH": [TF, ChannelDirection, ChannelWidth, CurrentPosition]
-     * ChannelDirection: 0=down, 1=sideways, 2=ascending
+     * ChannelDirection: 0=bearish(降), 1=sideways(平), 2=bullish(升)
 
    ➤ 道氏理论 "DOW": [TF, SignalConfidence, TrendDirection, TrendStrength, STCurrentLine, STDirection, STLowerLine, STUpperLine]
      * TrendDirection: 0=bearish, 1=neutral, 2=bullish
-     * STDirection: 0=down, 1=up, 2=neutral
+     * STDirection: 1=up, 2=down
 ——————————————————————————————————————
 二、硬性过滤器 (Blood Rules - V8.9 Kernel)
 ——————————————————————————————————————
