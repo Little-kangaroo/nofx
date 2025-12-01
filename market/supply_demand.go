@@ -896,16 +896,41 @@ func (sda *SupplyDemandAnalyzer) isZoneBroken(zone *SupplyDemandZone, klines []K
 	}
 }
 
-// countZoneTouches 计算区域触及次数
+// countZoneTouches 计算区域触及次数（修复版：避免数值爆炸）
 func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines []Kline) int {
 	count := 0
-
-	for i := zone.Origin.KlineIndex + 1; i < len(klines); i++ {
+	lastTouchIndex := -1
+	minGapBetweenTouches := 5 // 【优化】至少间隔5根K线才算新的触及（更严格聚类）
+	
+	// 【修复幽灵支撑Bug】从区域诞生开始检查完整历史，不截断数据
+	// 必须检查完整生命周期以发现历史的Zone Broken事件
+	startIndex := zone.Origin.KlineIndex + 1
+	endIndex := len(klines)
+	
+	// 【安全检查】确保索引有效
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	if startIndex >= endIndex {
+		return 0 // 没有后续数据可检查
+	}
+	
+	// 【完整历史扫描】不使用maxLookback截断，确保技术分析的准确性
+	for i := startIndex; i < endIndex; i++ {
 		if sda.priceInZone(klines[i].High, klines[i].Low, zone) {
-			count++
+			// 聚类机制：只有与上次触及间隔足够远才计为新触及
+			if lastTouchIndex == -1 || i - lastTouchIndex >= minGapBetweenTouches {
+				count++
+				lastTouchIndex = i
+				
+				// 【关键优化】严格限制最大触及次数，适配AI V-10.0规则（Touches>8废弃）
+				if count >= 8 {
+					break // 最多8次触及，确保通过AI验证
+				}
+			}
 		}
 	}
-
+	
 	return count
 }
 

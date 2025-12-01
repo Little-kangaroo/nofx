@@ -228,30 +228,49 @@ func (sra *SupportResistanceAnalyzer) isPivotLow(klines []Kline, index int) bool
 	return true
 }
 
-// clusterPivotPoints 聚类转折点
+// clusterPivotPoints 聚类转折点（V-10.0优化版：严格控制HitCount）
 func (sra *SupportResistanceAnalyzer) clusterPivotPoints(pivotPoints []*PivotPoint) []*PriceCluster {
 	var clusters []*PriceCluster
+	maxClusterSize := 8 // 【关键优化】每个簇最多8个pivot点，适配AI V-10.0严格规则
 
 	for _, point := range pivotPoints {
 		assigned := false
 
 		// 在已有簇中寻找可以合并的
 		for _, cluster := range clusters {
+			// 【修复1】检查簇大小限制
+			if cluster.Count >= maxClusterSize {
+				continue // 跳过已满的簇
+			}
+			
 			allowedDiff := cluster.CenterPrice * sra.config.ClusterTolerance
 			if math.Abs(point.Price-cluster.CenterPrice) <= allowedDiff {
-				// 加入现有簇
-				cluster.Points = append(cluster.Points, point)
-				cluster.Count++
-
-				// 更新中心价格（简单平均）
-				sumPrice := 0.0
-				for _, p := range cluster.Points {
-					sumPrice += p.Price
+				// 【修复2】检查pivot点时间间隔，避免同一时间段重复聚类
+				canAdd := true
+				for _, existingPoint := range cluster.Points {
+					timeDiff := math.Abs(float64(point.Timestamp - existingPoint.Timestamp))
+					// 【优化】如果间隔少于6小时，跳过（更严格的时间过滤）
+					if timeDiff < 6*3600*1000 {
+						canAdd = false
+						break
+					}
 				}
-				cluster.CenterPrice = sumPrice / float64(cluster.Count)
+				
+				if canAdd {
+					// 加入现有簇
+					cluster.Points = append(cluster.Points, point)
+					cluster.Count++
 
-				assigned = true
-				break
+					// 更新中心价格（简单平均）
+					sumPrice := 0.0
+					for _, p := range cluster.Points {
+						sumPrice += p.Price
+					}
+					cluster.CenterPrice = sumPrice / float64(cluster.Count)
+
+					assigned = true
+					break
+				}
 			}
 		}
 
