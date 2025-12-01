@@ -199,9 +199,9 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	case ProviderQwen:
 		maxTokens = 32768 // Qwen 支持更高的 token 限制
 	case ProviderCustom:
-		maxTokens = 32768 // 自定义 API 默认使用较高限制
+		maxTokens = 4096 // 自定义 API 默认使用较高限制
 	default:
-		maxTokens = 8192 // 默认使用较保守的限制
+		maxTokens = 4096 // 默认使用较保守的限制
 	}
 
 	// 构建请求体 - 支持新旧API格式，兼容ChatGPT-5
@@ -211,7 +211,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		// 移除temperature等采样参数以兼容ChatGPT-5和新版API
 		// 让模型使用默认参数以获得最佳性能
 	}
-	
+
 	// 根据不同的API提供商使用不同的token限制参数名
 	// 新版OpenAI API要求使用max_completion_tokens而不是max_tokens
 	switch client.Provider {
@@ -236,21 +236,21 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	log.Printf("📤 [MCP] AI请求参数:")
 	log.Printf("   Provider: %s", client.Provider)
 	log.Printf("   Model: %s", client.Model)
-	
+
 	// 显示实际使用的参数
 	if temp, hasTemp := requestBody["temperature"]; hasTemp {
 		log.Printf("   Temperature: %v", temp)
 	} else {
 		log.Printf("   Temperature: 默认值 (兼容ChatGPT-5)")
 	}
-	
+
 	// 显示实际使用的token参数名
 	if _, hasMaxTokens := requestBody["max_tokens"]; hasMaxTokens {
 		log.Printf("   Max Tokens (max_tokens): %d", maxTokens)
 	} else {
 		log.Printf("   Max Completion Tokens (max_completion_tokens): %d", maxTokens)
 	}
-	
+
 	log.Printf("   Messages Count: %d", len(messages))
 	if systemPrompt != "" {
 		log.Printf("   System Prompt Length: %d chars", len(systemPrompt))
@@ -310,20 +310,20 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 			DisableKeepAlives:     false,             // 启用keep-alive
 		},
 	}
-	
+
 	// 记录请求开始时间
 	requestStart := time.Now()
 	log.Printf("📡 [MCP] 开始发送AI请求: %v", requestStart.Format("15:04:05"))
 	resp, err := httpClient.Do(req)
 	requestDuration := time.Since(requestStart)
 	log.Printf("📊 [AI请求耗时] HTTP请求耗时: %v", requestDuration)
-	
+
 	if err != nil {
 		log.Printf("❌ [MCP] 请求失败，耗时: %v, 错误: %v", requestDuration, err)
 		return "", fmt.Errorf("发送请求失败: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	log.Printf("✅ [MCP] 请求成功，耗时: %v, 状态码: %d, 协议: %s", requestDuration, resp.StatusCode, resp.Proto)
 
 	// 读取和处理响应阶段耗时统计
@@ -356,26 +356,26 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	}
 
 	responseContent := result.Choices[0].Message.Content
-	
+
 	// 响应处理耗时统计
 	responseProcessDuration := time.Since(responseProcessStart)
 	totalRequestDuration := time.Since(requestStart)
-	
+
 	// 🔧 重要修复：将AI响应内容也写入调试文件
 	writeAPIResponseToFile(systemPrompt, userPrompt, requestBody, jsonData, responseContent, client)
-	
+
 	// AI请求完整耗时统计
-	log.Printf("📊 [AI请求耗时统计] 总耗时: %v | HTTP请求: %v (%.1f%%) | 响应处理: %v (%.1f%%)", 
-		totalRequestDuration, 
+	log.Printf("📊 [AI请求耗时统计] 总耗时: %v | HTTP请求: %v (%.1f%%) | 响应处理: %v (%.1f%%)",
+		totalRequestDuration,
 		requestDuration, float64(requestDuration.Nanoseconds())/float64(totalRequestDuration.Nanoseconds())*100,
 		responseProcessDuration, float64(responseProcessDuration.Nanoseconds())/float64(totalRequestDuration.Nanoseconds())*100)
-	
+
 	// 记录响应信息和潜在的截断警告
 	log.Printf("📥 [MCP] AI响应接收: %d 字符", len(responseContent))
 	if len(responseContent) >= 30000 { // 接近32K字符限制
 		log.Printf("⚠️ [MCP] 响应长度接近token限制，检查是否被截断")
 	}
-	
+
 	// 检查响应的结束是否自然
 	trimmedResponse := strings.TrimSpace(responseContent)
 	if len(trimmedResponse) > 0 {
@@ -385,7 +385,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 			strings.HasSuffix(trimmedResponse, "}") ||
 			strings.HasSuffix(trimmedResponse, "]") ||
 			strings.HasSuffix(trimmedResponse, "\n")
-		
+
 		if !endsNaturally {
 			// 获取最后几个字符用于调试显示
 			start := len(trimmedResponse) - 10
@@ -406,8 +406,8 @@ func isRetryableError(err error) bool {
 	// 超时错误不重试，避免额外费用
 	timeoutErrors := []string{
 		"timeout",
-		"context deadline exceeded",               // 上下文超时
-		"Client.Timeout exceeded",                 // 客户端超时
+		"context deadline exceeded",                // 上下文超时
+		"Client.Timeout exceeded",                  // 客户端超时
 		"http2: timeout awaiting response headers", // HTTP/2响应头超时
 	}
 	for _, timeoutErr := range timeoutErrors {
@@ -416,7 +416,7 @@ func isRetryableError(err error) bool {
 			return false // 超时错误不重试
 		}
 	}
-	
+
 	// 只对真正的网络连接问题重试
 	retryableErrors := []string{
 		"EOF",
@@ -441,23 +441,23 @@ func writeAPICallDetailsToFile(systemPrompt, userPrompt string, requestBody map[
 	if model == "" {
 		model = "unknown"
 	}
-	
+
 	// 使用时间戳和模型信息创建文件名
 	timestamp := time.Now().Format("20060102_150405")
 	filename := fmt.Sprintf("ai_api_call_%s_%s_%s.txt", provider, model, timestamp)
-	
+
 	file, err := os.Create(filename)
 	if err != nil {
 		log.Printf("⚠️  无法创建AI API调试文件: %v", err)
 		return
 	}
 	defer file.Close()
-	
+
 	// 写入详细信息
 	fmt.Fprintf(file, "=== AI API 调用详细参数 ===\n")
 	fmt.Fprintf(file, "时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(file, "JSON请求体大小: %d bytes\n\n", len(jsonData))
-	
+
 	// 请求配置
 	fmt.Fprintf(file, "--- 请求配置 ---\n")
 	if model, ok := requestBody["model"]; ok {
@@ -473,15 +473,15 @@ func writeAPICallDetailsToFile(systemPrompt, userPrompt string, requestBody map[
 	} else if maxCompletionTokens, ok := requestBody["max_completion_tokens"]; ok {
 		fmt.Fprintf(file, "Max Completion Tokens (max_completion_tokens): %v\n", maxCompletionTokens)
 	}
-	
+
 	// System Prompt
 	fmt.Fprintf(file, "\n--- System Prompt (%d 字符) ---\n", len(systemPrompt))
 	fmt.Fprintf(file, "%s\n", systemPrompt)
-	
+
 	// User Prompt
 	fmt.Fprintf(file, "\n--- User Prompt (%d 字符) ---\n", len(userPrompt))
 	fmt.Fprintf(file, "%s\n", userPrompt)
-	
+
 	// 完整JSON请求体
 	fmt.Fprintf(file, "\n--- 完整JSON请求体 ---\n")
 	var prettyJSON bytes.Buffer
@@ -490,7 +490,7 @@ func writeAPICallDetailsToFile(systemPrompt, userPrompt string, requestBody map[
 	} else {
 		fmt.Fprintf(file, "%s\n", string(jsonData))
 	}
-	
+
 	log.Printf("📝 AI API调用参数已写入文件: %s", filename)
 }
 
@@ -502,28 +502,28 @@ func writeAPIResponseToFile(systemPrompt, userPrompt string, requestBody map[str
 	if model == "" {
 		model = "unknown"
 	}
-	
+
 	// 使用时间戳和模型信息创建文件名
 	timestamp := time.Now().Format("20060102_150405")
 	filename := fmt.Sprintf("ai_response_%s_%s_%s.txt", provider, model, timestamp)
-	
+
 	file, err := os.Create(filename)
 	if err != nil {
 		log.Printf("⚠️ 无法创建AI响应调试文件: %v", err)
 		return
 	}
 	defer file.Close()
-	
+
 	// 只记录AI响应的关键信息
 	fmt.Fprintf(file, "=== AI 响应内容记录 ===\n")
 	fmt.Fprintf(file, "时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(file, "模型: %s (%s)\n", model, provider)
 	fmt.Fprintf(file, "AI响应大小: %d 字符\n\n", len(responseContent))
-	
+
 	// 🔧 核心内容：AI原始响应
 	fmt.Fprintf(file, "--- AI 原始响应内容 ---\n")
 	fmt.Fprintf(file, "%s\n", responseContent)
-	
+
 	// 检查响应的特征（用于快速诊断）
 	fmt.Fprintf(file, "\n--- 响应特征分析 ---\n")
 	fmt.Fprintf(file, "包含思维链: %v\n", strings.Contains(responseContent, "[") && strings.Contains(responseContent, "]"))
@@ -531,6 +531,6 @@ func writeAPIResponseToFile(systemPrompt, userPrompt string, requestBody map[str
 	fmt.Fprintf(file, "包含正常引号 \": %v\n", strings.Contains(responseContent, "\""))
 	fmt.Fprintf(file, "包含混合转义模式 {\\\"symbol\": %v\n", strings.Contains(responseContent, "{\\\"symbol"))
 	fmt.Fprintf(file, "包含正确JSON格式 {\"symbol\": %v\n", strings.Contains(responseContent, "{\"symbol"))
-	
+
 	log.Printf("📝 AI响应内容已写入文件: %s", filename)
 }
