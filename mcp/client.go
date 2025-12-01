@@ -199,9 +199,9 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	case ProviderQwen:
 		maxTokens = 32768 // Qwen 支持更高的 token 限制
 	case ProviderCustom:
-		maxTokens = 4096 // 自定义 API 默认使用较高限制
+		maxTokens = 8192 // 自定义 API 默认使用较高限制
 	default:
-		maxTokens = 4096 // 默认使用较保守的限制
+		maxTokens = 8192 // 默认使用较保守的限制
 	}
 
 	// 构建请求体 - 支持新旧API格式，兼容ChatGPT-5
@@ -262,9 +262,6 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		return "", fmt.Errorf("序列化请求失败: %w", err)
 	}
 	log.Printf("📤 [MCP] JSON请求体大小: %d bytes", len(jsonData))
-
-	// 写入详细参数到文件用于调试
-	writeAPICallDetailsToFile(systemPrompt, userPrompt, requestBody, jsonData, client)
 
 	// 创建HTTP请求
 	var url string
@@ -361,8 +358,8 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	responseProcessDuration := time.Since(responseProcessStart)
 	totalRequestDuration := time.Since(requestStart)
 
-	// 🔧 重要修复：将AI响应内容也写入调试文件
-	writeAPIResponseToFile(systemPrompt, userPrompt, requestBody, jsonData, responseContent, client)
+	// 写入单纯的请求和响应体到文件
+	writeSimpleAPILog(jsonData, responseContent, client)
 
 	// AI请求完整耗时统计
 	log.Printf("📊 [AI请求耗时统计] 总耗时: %v | HTTP请求: %v (%.1f%%) | 响应处理: %v (%.1f%%)",
@@ -433,104 +430,38 @@ func isRetryableError(err error) bool {
 	return false
 }
 
-// writeAPICallDetailsToFile 将AI API调用的详细参数写入文件用于调试
-func writeAPICallDetailsToFile(systemPrompt, userPrompt string, requestBody map[string]interface{}, jsonData []byte, client *Client) {
+// writeSimpleAPILog 写入单纯的请求和响应体到文件
+func writeSimpleAPILog(requestJSON []byte, responseContent string, client *Client) {
 	// 获取模型信息
 	provider := string(client.Provider)
 	model := client.Model
 	if model == "" {
 		model = "unknown"
 	}
-
+	
 	// 使用时间戳和模型信息创建文件名
 	timestamp := time.Now().Format("20060102_150405")
-	filename := fmt.Sprintf("ai_api_call_%s_%s_%s.txt", provider, model, timestamp)
-
+	filename := fmt.Sprintf("ai_log_%s_%s_%s.txt", provider, model, timestamp)
+	
 	file, err := os.Create(filename)
 	if err != nil {
-		log.Printf("⚠️  无法创建AI API调试文件: %v", err)
+		log.Printf("⚠️ 无法创建AI日志文件: %v", err)
 		return
 	}
 	defer file.Close()
-
-	// 写入详细信息
-	fmt.Fprintf(file, "=== AI API 调用详细参数 ===\n")
-	fmt.Fprintf(file, "时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(file, "JSON请求体大小: %d bytes\n\n", len(jsonData))
-
-	// 请求配置
-	fmt.Fprintf(file, "--- 请求配置 ---\n")
-	if model, ok := requestBody["model"]; ok {
-		fmt.Fprintf(file, "模型: %s\n", model)
-	}
-	if temp, ok := requestBody["temperature"]; ok {
-		fmt.Fprintf(file, "Temperature: %v\n", temp)
-	} else {
-		fmt.Fprintf(file, "Temperature: 默认值 (兼容ChatGPT-5)\n")
-	}
-	if maxTokens, ok := requestBody["max_tokens"]; ok {
-		fmt.Fprintf(file, "Max Tokens (max_tokens): %v\n", maxTokens)
-	} else if maxCompletionTokens, ok := requestBody["max_completion_tokens"]; ok {
-		fmt.Fprintf(file, "Max Completion Tokens (max_completion_tokens): %v\n", maxCompletionTokens)
-	}
-
-	// System Prompt
-	fmt.Fprintf(file, "\n--- System Prompt (%d 字符) ---\n", len(systemPrompt))
-	fmt.Fprintf(file, "%s\n", systemPrompt)
-
-	// User Prompt
-	fmt.Fprintf(file, "\n--- User Prompt (%d 字符) ---\n", len(userPrompt))
-	fmt.Fprintf(file, "%s\n", userPrompt)
-
-	// 完整JSON请求体
-	fmt.Fprintf(file, "\n--- 完整JSON请求体 ---\n")
+	
+	// 写入请求体
+	fmt.Fprintf(file, "=== REQUEST BODY ===\n")
 	var prettyJSON bytes.Buffer
-	if err := json.Indent(&prettyJSON, jsonData, "", "  "); err == nil {
+	if err := json.Indent(&prettyJSON, requestJSON, "", "  "); err == nil {
 		fmt.Fprintf(file, "%s\n", prettyJSON.String())
 	} else {
-		fmt.Fprintf(file, "%s\n", string(jsonData))
+		fmt.Fprintf(file, "%s\n", string(requestJSON))
 	}
-
-	log.Printf("📝 AI API调用参数已写入文件: %s", filename)
-}
-
-// writeAPIResponseToFile 将AI响应内容写入文件用于调试
-func writeAPIResponseToFile(systemPrompt, userPrompt string, requestBody map[string]interface{}, jsonData []byte, responseContent string, client *Client) {
-	// 获取模型信息
-	provider := string(client.Provider)
-	model := client.Model
-	if model == "" {
-		model = "unknown"
-	}
-
-	// 使用时间戳和模型信息创建文件名
-	timestamp := time.Now().Format("20060102_150405")
-	filename := fmt.Sprintf("ai_response_%s_%s_%s.txt", provider, model, timestamp)
-
-	file, err := os.Create(filename)
-	if err != nil {
-		log.Printf("⚠️ 无法创建AI响应调试文件: %v", err)
-		return
-	}
-	defer file.Close()
-
-	// 只记录AI响应的关键信息
-	fmt.Fprintf(file, "=== AI 响应内容记录 ===\n")
-	fmt.Fprintf(file, "时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(file, "模型: %s (%s)\n", model, provider)
-	fmt.Fprintf(file, "AI响应大小: %d 字符\n\n", len(responseContent))
-
-	// 🔧 核心内容：AI原始响应
-	fmt.Fprintf(file, "--- AI 原始响应内容 ---\n")
+	
+	// 写入响应体
+	fmt.Fprintf(file, "\n=== RESPONSE BODY ===\n")
 	fmt.Fprintf(file, "%s\n", responseContent)
-
-	// 检查响应的特征（用于快速诊断）
-	fmt.Fprintf(file, "\n--- 响应特征分析 ---\n")
-	fmt.Fprintf(file, "包含思维链: %v\n", strings.Contains(responseContent, "[") && strings.Contains(responseContent, "]"))
-	fmt.Fprintf(file, "包含转义引号 \\\": %v\n", strings.Contains(responseContent, "\\\""))
-	fmt.Fprintf(file, "包含正常引号 \": %v\n", strings.Contains(responseContent, "\""))
-	fmt.Fprintf(file, "包含混合转义模式 {\\\"symbol\": %v\n", strings.Contains(responseContent, "{\\\"symbol"))
-	fmt.Fprintf(file, "包含正确JSON格式 {\"symbol\": %v\n", strings.Contains(responseContent, "{\"symbol"))
-
-	log.Printf("📝 AI响应内容已写入文件: %s", filename)
+	
+	log.Printf("📝 AI请求响应已写入文件: %s", filename)
 }
