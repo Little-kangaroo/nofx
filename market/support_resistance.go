@@ -13,11 +13,12 @@ type SupportResistanceAnalyzer struct {
 
 // SRConfig 支撑阻力分析配置
 type SRConfig struct {
-	LookbackPeriods int     `json:"lookback_periods"` // 回看K线数量
-	PivotLeft       int     `json:"pivot_left"`       // 转折点左侧比较根数
-	PivotRight      int     `json:"pivot_right"`      // 转折点右侧比较根数
-	ClusterTolerance float64 `json:"cluster_tolerance"` // 聚类容差百分比
-	MinHits         int     `json:"min_hits"`         // 最小命中次数
+	LookbackPeriods   int     `json:"lookback_periods"`    // 回看K线数量
+	PivotLeft         int     `json:"pivot_left"`          // 转折点左侧比较根数
+	PivotRight        int     `json:"pivot_right"`         // 转折点右侧比较根数
+	ClusterTolerance  float64 `json:"cluster_tolerance"`   // 聚类容差百分比
+	MinHits           int     `json:"min_hits"`            // 最小命中次数
+	MaxDistancePercent float64 `json:"max_distance_percent"` // 最大距离百分比
 }
 
 // PivotPoint 转折点
@@ -35,7 +36,7 @@ type PriceCluster struct {
 	Count       int           `json:"count"`        // 命中次数
 }
 
-// SRLevel 支撑阻力级别（简化版 - 只返回4根关键水平线）
+// SRLevel 支撑阻力级别（简化版 - 只返回3根关键水平线）
 type SRLevel struct {
 	Price    float64 `json:"price"`     // 价格
 	HitCount int     `json:"hit_count"` // 命中次数
@@ -45,7 +46,7 @@ type SRLevel struct {
 
 // SupportResistanceData 支撑阻力分析结果
 type SupportResistanceData struct {
-	KeyLevels    []*SRLevel    `json:"key_levels"`    // 4根关键水平线
+	KeyLevels    []*SRLevel    `json:"key_levels"`    // 3根关键水平线
 	Statistics   *SRStatistics `json:"statistics"`    // 统计信息
 	Config       *SRConfig     `json:"config"`        // 配置信息
 	LastAnalysis int64         `json:"last_analysis"` // 最后分析时间
@@ -62,11 +63,12 @@ type SRStatistics struct {
 
 // 默认配置
 var defaultSRConfig = SRConfig{
-	LookbackPeriods:  1000, // 回看1000根K线（最大化结构视野）
-	PivotLeft:        3,    // 左侧3根比较
-	PivotRight:       3,    // 右侧3根比较
-	ClusterTolerance: 0.005, // 0.5%聚类容差
-	MinHits:          3,    // 至少3次命中
+	LookbackPeriods:    1000, // 回看1000根K线（最大化结构视野）
+	PivotLeft:          3,    // 左侧3根比较
+	PivotRight:         3,    // 右侧3根比较
+	ClusterTolerance:   0.005, // 0.5%聚类容差
+	MinHits:            3,    // 至少3次命中
+	MaxDistancePercent: 0.10, // 最大距离10%
 }
 
 // NewSupportResistanceAnalyzer 创建支撑阻力分析器
@@ -93,8 +95,8 @@ func (sra *SupportResistanceAnalyzer) Analyze(klines []Kline) *SupportResistance
 	// 2. 计算统计信息
 	statistics := sra.calculateStatistics(levels)
 
-	// 3. 筛选活跃级别（只返回最重要的4根水平线）
-	activeLevels := sra.selectKeyLevels(levels, klines[len(klines)-1].Close, 4)
+	// 3. 筛选活跃级别（只返回最重要的3根水平线）
+	activeLevels := sra.selectKeyLevels(levels, klines[len(klines)-1].Close, 3)
 
 	return &SupportResistanceData{
 		KeyLevels:    activeLevels,
@@ -370,23 +372,41 @@ func (sra *SupportResistanceAnalyzer) calculateLevelConfidence(cluster *PriceClu
 	return confidence
 }
 
-// selectKeyLevels 选择关键水平线（只返回4根最重要的）
+// calculateDistancePercent 计算价格到支撑阻力的百分比距离
+func (sra *SupportResistanceAnalyzer) calculateDistancePercent(levelPrice, currentPrice float64) float64 {
+	return math.Abs(levelPrice-currentPrice) / currentPrice
+}
+
+// selectKeyLevels 选择关键水平线（3根，支撑和阻力至少各一条）
 func (sra *SupportResistanceAnalyzer) selectKeyLevels(levels []*SRLevel, currentPrice float64, maxCount int) []*SRLevel {
 	if len(levels) == 0 {
 		return []*SRLevel{}
 	}
 
-	// 按强度排序，选择最强的级别
-	sort.Slice(levels, func(i, j int) bool {
-		return levels[i].Strength > levels[j].Strength
+	// 第一步：距离过滤 - 只保留在指定距离范围内的水平线
+	var validLevels []*SRLevel
+	for _, level := range levels {
+		distancePercent := sra.calculateDistancePercent(level.Price, currentPrice)
+		if distancePercent <= sra.config.MaxDistancePercent {
+			validLevels = append(validLevels, level)
+		}
+	}
+
+	// 如果距离过滤后没有水平线，返回空
+	if len(validLevels) == 0 {
+		return []*SRLevel{}
+	}
+
+	// 第二步：按强度排序，选择最强的级别
+	sort.Slice(validLevels, func(i, j int) bool {
+		return validLevels[i].Strength > validLevels[j].Strength
 	})
 
-	var selectedLevels []*SRLevel
 	var supportLevels []*SRLevel
 	var resistanceLevels []*SRLevel
 
 	// 分类收集支撑和阻力位
-	for _, level := range levels {
+	for _, level := range validLevels {
 		if level.Price < currentPrice {
 			// 当前价格下方 = 支撑
 			level.Type = "support"
@@ -408,39 +428,49 @@ func (sra *SupportResistanceAnalyzer) selectKeyLevels(levels []*SRLevel, current
 		return resistanceLevels[i].Price < resistanceLevels[j].Price
 	})
 
-	// 选择最多2个支撑位和2个阻力位，确保总数不超过maxCount
+	var selectedLevels []*SRLevel
+	
+	// 确保支撑和阻力至少各有一条（如果存在的话）
 	supportCount := len(supportLevels)
 	resistanceCount := len(resistanceLevels)
 	
-	maxSupport := maxCount / 2
-	maxResistance := maxCount / 2
-	
-	// 如果某一方不足，另一方可以多选
-	if supportCount < maxSupport {
-		maxResistance += maxSupport - supportCount
-		maxSupport = supportCount
-	}
-	if resistanceCount < maxResistance {
-		maxSupport += maxResistance - resistanceCount
-		maxResistance = resistanceCount
+	if supportCount == 0 && resistanceCount == 0 {
+		return []*SRLevel{}
 	}
 
-	// 确保不超过实际数量
-	if maxSupport > supportCount {
-		maxSupport = supportCount
-	}
-	if maxResistance > resistanceCount {
-		maxResistance = resistanceCount
-	}
-
-	// 添加选中的支撑位
-	for i := 0; i < maxSupport; i++ {
-		selectedLevels = append(selectedLevels, supportLevels[i])
-	}
-
-	// 添加选中的阻力位
-	for i := 0; i < maxResistance; i++ {
-		selectedLevels = append(selectedLevels, resistanceLevels[i])
+	if supportCount > 0 && resistanceCount > 0 {
+		// 两种都有：至少各选1个，剩下的1个给强度更高的
+		selectedLevels = append(selectedLevels, supportLevels[0])     // 最近的支撑
+		selectedLevels = append(selectedLevels, resistanceLevels[0])  // 最近的阻力
+		
+		// 第3个位置：从剩余的中选择强度最高的
+		var remainingLevels []*SRLevel
+		if len(supportLevels) > 1 {
+			remainingLevels = append(remainingLevels, supportLevels[1:]...)
+		}
+		if len(resistanceLevels) > 1 {
+			remainingLevels = append(remainingLevels, resistanceLevels[1:]...)
+		}
+		
+		if len(remainingLevels) > 0 {
+			// 按强度排序，选择最强的
+			sort.Slice(remainingLevels, func(i, j int) bool {
+				return remainingLevels[i].Strength > remainingLevels[j].Strength
+			})
+			selectedLevels = append(selectedLevels, remainingLevels[0])
+		}
+	} else if supportCount > 0 {
+		// 只有支撑：最多选3个
+		maxSupport := minInt(maxCount, supportCount)
+		for i := 0; i < maxSupport; i++ {
+			selectedLevels = append(selectedLevels, supportLevels[i])
+		}
+	} else {
+		// 只有阻力：最多选3个
+		maxResistance := minInt(maxCount, resistanceCount)
+		for i := 0; i < maxResistance; i++ {
+			selectedLevels = append(selectedLevels, resistanceLevels[i])
+		}
 	}
 
 	// 最终按价格排序输出

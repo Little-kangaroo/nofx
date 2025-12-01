@@ -55,9 +55,6 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 	allFVGs := append(bullishFVGs, bearishFVGs...)
 	fvg.updateFVGStatuses(allFVGs, klines)
 
-	// 筛选活跃FVG
-	activeFVGs := fvg.filterActiveFVGs(allFVGs)
-
 	// 计算FVG强度和质量
 	for _, gap := range allFVGs {
 		fvg.calculateFVGStrength(gap, klines)
@@ -71,11 +68,22 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 		}
 	}
 
-	// 计算统计信息
-	statistics := fvg.calculateStatistics(bullishFVGs, bearishFVGs, activeFVGs)
-
 	// 计算上下文评分 (在所有FVG创建后进行)
 	fvg.CalculateContextScores(allFVGs, contextCalc)
+
+	// 使用新的过滤逻辑筛选活跃FVG
+	var activeFVGs []*FairValueGap
+	if len(klines) > 0 {
+		currentPrice := klines[len(klines)-1].Close
+		atr := fvg.calculateATR(klines, 14) // 使用14期ATR
+		activeFVGs = fvg.filterActiveFVGsWithContext(allFVGs, currentPrice, atr, klines)
+	} else {
+		// 降级处理：如果没有价格数据，使用原有逻辑
+		activeFVGs = fvg.filterActiveFVGs(allFVGs)
+	}
+
+	// 计算统计信息
+	statistics := fvg.calculateStatistics(bullishFVGs, bearishFVGs, activeFVGs)
 
 	return &FVGData{
 		BullishFVGs:  bullishFVGs,
@@ -85,6 +93,29 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 		Statistics:   statistics,
 		LastAnalysis: time.Now().UnixMilli(),
 	}
+}
+
+// calculateATR 计算ATR（内部辅助方法）
+func (fvg *FVGAnalyzer) calculateATR(klines []Kline, period int) float64 {
+	if len(klines) < period+1 {
+		return 0
+	}
+
+	var sum float64
+	for i := 1; i <= period; i++ {
+		tr := fvg.calculateTrueRange(klines[len(klines)-i], klines[len(klines)-i-1])
+		sum += tr
+	}
+
+	return sum / float64(period)
+}
+
+// calculateTrueRange 计算真实范围
+func (fvg *FVGAnalyzer) calculateTrueRange(current, previous Kline) float64 {
+	tr1 := current.High - current.Low
+	tr2 := math.Abs(current.High - previous.Close)
+	tr3 := math.Abs(current.Low - previous.Close)
+	return math.Max(tr1, math.Max(tr2, tr3))
 }
 
 // identifyBullishFVG 识别看涨FVG
@@ -520,8 +551,10 @@ func (fvg *FVGAnalyzer) doesCandleTouchFVG(kline Kline, gap *FairValueGap) bool 
 	return !(kline.High < gap.LowerBound || kline.Low > gap.UpperBound)
 }
 
-// filterActiveFVGs 筛选活跃FVG
+// filterActiveFVGs 筛选活跃FVG - 使用"先截断后打分"策略
 func (fvg *FVGAnalyzer) filterActiveFVGs(gaps []*FairValueGap) []*FairValueGap {
+	// 需要当前价格和ATR数据，但这里没有传入
+	// 这个函数需要重构为 filterActiveFVGsWithContext
 	var activeFVGs []*FairValueGap
 
 	for _, gap := range gaps {
@@ -531,6 +564,56 @@ func (fvg *FVGAnalyzer) filterActiveFVGs(gaps []*FairValueGap) []*FairValueGap {
 	}
 
 	return activeFVGs
+}
+
+// filterActiveFVGsWithContext 使用上下文信息筛选活跃FVG - "先截断后打分"策略
+func (fvg *FVGAnalyzer) filterActiveFVGsWithContext(gaps []*FairValueGap, currentPrice float64, atr float64, klines []Kline) []*FairValueGap {
+	var candidates []*FairValueGap
+
+	// 第一刀：硬截断 - 基础过滤
+	for _, gap := range gaps {
+		// 基础有效性检查
+		if !gap.IsActive || gap.IsFilled {
+			continue
+		}
+
+		// 第二刀：完全回补检查
+		if gap.FillProgress >= 95.0 {
+			continue // 几乎完全回补，直接过滤
+		}
+
+		// 第一刀：距离硬截断（5 ATR）
+		if atr > 0 {
+			distanceATR := fvg.calculateDistanceInATR(gap, currentPrice, atr)
+			if distanceATR > fvg.config.MaxDistanceATR {
+				continue // 距离太远，直接过滤
+			}
+		}
+
+		candidates = append(candidates, gap)
+	}
+
+	// 如果候选数量已经在限制内，直接返回
+	if len(candidates) <= fvg.config.MaxActiveFVGs {
+		return candidates
+	}
+
+	// 第三步：综合评分排序
+	for i := range candidates {
+		candidates[i].Score = fvg.calculateFVGScore(candidates[i], currentPrice, atr, klines)
+	}
+
+	// 按评分降序排序
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].Score > candidates[j].Score
+	})
+
+	// 第四步：数量限制 - 取前N个最高分的FVG
+	if len(candidates) > fvg.config.MaxActiveFVGs {
+		candidates = candidates[:fvg.config.MaxActiveFVGs]
+	}
+
+	return candidates
 }
 
 // calculateFVGStrength 计算FVG强度
@@ -1019,6 +1102,52 @@ func (fvg *FVGAnalyzer) generateRejectionSignal(gap *FairValueGap, currentPrice 
 	}
 
 	return signal
+}
+
+// calculateDistanceInATR 计算FVG到当前价格的ATR倍数
+func (fvg *FVGAnalyzer) calculateDistanceInATR(gap *FairValueGap, currentPrice float64, atr float64) float64 {
+	if atr <= 0 {
+		return 999 // ATR无效时返回极大值
+	}
+	
+	// 计算价格到FVG的最短距离
+	var distance float64
+	if currentPrice >= gap.LowerBound && currentPrice <= gap.UpperBound {
+		return 0 // 在FVG内，距离为0
+	} else if currentPrice > gap.UpperBound {
+		distance = currentPrice - gap.UpperBound // 价格在FVG上方
+	} else {
+		distance = gap.LowerBound - currentPrice // 价格在FVG下方
+	}
+	
+	return distance / atr
+}
+
+// calculateFVGScore 计算FVG综合评分（质量40% + 距离40% + 新鲜度20%）
+func (fvg *FVGAnalyzer) calculateFVGScore(gap *FairValueGap, currentPrice float64, atr float64, klines []Kline) float64 {
+	score := 0.0
+	
+	// 1. 质量权重 40%
+	qualityScore := gap.Strength / 100.0 * 40.0
+	
+	// 2. 距离权重 40% - 越近分数越高
+	distanceATR := fvg.calculateDistanceInATR(gap, currentPrice, atr)
+	maxDistanceATR := fvg.config.MaxDistanceATR
+	distanceScore := 0.0
+	if distanceATR <= maxDistanceATR {
+		distanceScore = (1.0 - distanceATR/maxDistanceATR) * 40.0
+	}
+	
+	// 3. 新鲜度权重 20% - 越新越好
+	age := fvg.calculateAge(gap, klines)
+	maxAge := float64(fvg.config.MaxAge)
+	freshnessScore := 0.0
+	if age < int(maxAge) {
+		freshnessScore = (1.0 - float64(age)/maxAge) * 20.0
+	}
+	
+	score = qualityScore + distanceScore + freshnessScore
+	return score
 }
 
 // calculateDistanceToFVG 计算价格到FVG的距离

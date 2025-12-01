@@ -775,6 +775,7 @@ type FairValueGap struct {
 	VolumeContext  *FVGVolume  `json:"volume_context"`  // 成交量上下文
 	Validation     *FVGValidation `json:"validation"`   // 验证信息
 	Context        *ContextMetrics `json:"ctx"`         // 上下文评分
+	Score          float64     `json:"score"`           // 综合评分（用于排序筛选）
 }
 
 // FVGType FVG类型
@@ -864,6 +865,8 @@ type FVGConfig struct {
 	MinVolumeRatio    float64   `json:"min_volume_ratio"`    // 最小成交量比率
 	MaxAge            int       `json:"max_age"`             // 最大存在时间（K线数）
 	MaxTouchCount     int       `json:"max_touch_count"`     // 最大触及次数
+	MaxActiveFVGs     int       `json:"max_active_fvgs"`     // 最大活跃FVG保留数量
+	MaxDistanceATR    float64   `json:"max_distance_atr"`    // 最大距离（ATR倍数）
 	FillThreshold     float64   `json:"fill_threshold"`      // 填补阈值（百分比）
 	TimeFrames        []string  `json:"time_frames"`         // 分析时间框架
 	EnableValidation  bool      `json:"enable_validation"`   // 是否启用验证
@@ -917,7 +920,9 @@ var defaultFVGConfig = FVGConfig{
 	MaxGapPercent:    0.05,   // 5%最大缺口 (已移除硬过滤，AI自主判断)
 	MinVolumeRatio:   1.2,    // 1.2倍最小成交量比率 (已移除硬过滤，AI自主判断)
 	MaxAge:           50,     // 50根K线最大存在时间
-	MaxTouchCount:    3,      // 最大3次触及
+	MaxTouchCount:    3,      // 最大3���触及
+	MaxActiveFVGs:    3,      // 最多保留3个活跃FVG
+	MaxDistanceATR:   5.0,    // 最大距离5倍ATR
 	FillThreshold:    0.8,    // 80%填补阈值
 	TimeFrames:       []string{"5m", "15m", "30m", "1h", "4h"},
 	EnableValidation: true,
