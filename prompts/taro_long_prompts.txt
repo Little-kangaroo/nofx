@@ -262,31 +262,42 @@
 2.1) 关键结构与统计上下文示例（Advanced Analysis）
 {
   "多时间框架分析": {
-    "15m": {
-      "供需区数据": {
-        "active_zones": [
-          {
-            "type": "demand",
-            "price_range": {"high": 90500, "low": 90000},
-            "status": "fresh",
-            "strength": 75,
-            "ctx": {             // ★ 核心统计字段
-              "strength_z": 1.8, // Z-Score > 1.0 (显著强)
-              "vol_ratio": 2.1,  // 成交量 2.1倍 (主力参与)
-              "width_atr": 1.2,  // 宽度 1.2 ATR (中等偏宽)
-              "rank_pct": 0.85   // 强于 85% 的历史结构
-            }
-          }
-        ]
-      },
-      "FVG数据": {
-        "active_gaps": 1,
-        "nearest_gap": 91200,
-        "gap_type": "bearish",
-        "ctx": { "strength_z": -0.5, "vol_ratio": 0.9 } // 弱结构示例
-      }
-    }
-  }
+    "5m": {
+          "FVG数据": {
+            "gaps": [
+              {
+                "type": "bullish",
+                "lower_bound": 90100, "upper_bound": 90200,
+                "ctx": { "is_fresh": true, "strength_z": 2.1, "vol_ratio": 2.8 }
+              }
+            ]
+          },
+          "VPVR数据": { "poc_price": 90350, "value_area_low": 89900 },
+          "供需区数据": {
+            "demand_zones": [
+              {
+                "status": "fresh",
+                "price_range": { "high": 90050, "low": 89980 },
+                "ctx": { "strength_z": 1.85, "vol_ratio": 3.1, "rank_pct": 0.9 }
+              }
+            ],
+            "supply_zones": [
+              { "price_range": { "high": 90800, "low": 90720 }, "ctx": { "strength_z": -0.5 } }
+            ]
+          },
+          "支撑阻力转换线": {
+            "support_resistance_lines": [
+              { "type": "support", "price": 90120, "hit_count": 4, "strength": 0.85 }
+            ]
+          },
+          "斐波纳契数据": { "levels": { "fib_0.618": 90300, "fib_0.382": 90600 } },
+          "超级趋势指标": { "direction": "bullish", "current_line": 90050 },
+          "道氏理论数据": { "trend_direction": "up", "trend_strength": 65 }
+   }
+      "15m": { /* 同结构 */ },
+      "30m": { /* 同结构 */ },
+      "1h":  { /* 同结构 */ },
+      "4h":  { /* 同结构 */ }
 }
 3) 交易环境（ExchangeMeta）
 {

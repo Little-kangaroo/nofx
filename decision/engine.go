@@ -399,9 +399,8 @@ func buildUserPrompt(ctx *Context) string {
 
 		// 添加清晰的市场价格信息显示（类似BTC格式）
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n", displayedCount, coin.Symbol, sourceTags))
-		sb.WriteString(fmt.Sprintf("%s: %.4f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
-			coin.Symbol, marketData.CurrentPrice, marketData.PriceChange1h, marketData.PriceChange4h,
-			marketData.CurrentMACD, marketData.CurrentRSI7))
+		sb.WriteString(fmt.Sprintf("%s: %.4f (1h: %+.2f%%, 4h: %+.2f%%)",
+			coin.Symbol, marketData.CurrentPrice, marketData.PriceChange1h, marketData.PriceChange4h))
 
 		// 🔧 关键修复：检查是否已输出过完整市场数据，避免重复输出
 		if outputtedSymbols[coin.Symbol] {

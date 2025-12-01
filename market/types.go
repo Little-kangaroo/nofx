@@ -12,12 +12,12 @@ type Data struct {
 	CurrentMACD       float64
 	CurrentRSI7       float64
 	
-	// OHLC数据 (5m级别)
-	OHLC5mLastClosed  *OHLCData // 5m最新已收盘K线OHLC
-	OHLC5mPrevClosed  *OHLCData // 5m上一根已收盘K线OHLC
+	// OHLC数据 (统一使用上一根已收盘命名)
+	OHLC5mPrevClosed    *OHLCData // 5m上一根已收盘K线OHLC（主要数据）
+	OHLC5mEarlierClosed *OHLCData // 5m更早已收盘K线OHLC（用于对比分析）
 	
 	// OHLC数据 (4h级别)
-	OHLC4hLastClose   *OHLCData // 4h最新已收盘K线OHLC
+	OHLC4hPrevClosed    *OHLCData // 4h上一根已收盘K线OHLC
 	
 	OpenInterest      *OIData
 	FundingRate       float64
@@ -169,9 +169,9 @@ type MediumTermData struct {
 	MACDValues    []float64 // MACD序列
 	RSI14Values   []float64 // RSI14序列
 	
-	// OHLC数据
-	OHLCLastClosed *OHLCData // 最新已收盘K线OHLC
-	OHLCPrevClosed *OHLCData // 上一根已收盘K线OHLC (仅15m级别使用，1h可为nil)
+	// OHLC数据 (统一使用上一根已收盘)
+	OHLCLastClosed *OHLCData // 上一根已收盘K线OHLC（主要数据）
+	OHLCPrevClosed *OHLCData // 更早已收盘K线OHLC（仅15m级别使用，1h可为nil）
 }
 
 // Binance API 响应结构
