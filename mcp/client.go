@@ -199,9 +199,9 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	case ProviderQwen:
 		maxTokens = 32768 // Qwen 支持更高的 token 限制
 	case ProviderCustom:
-		maxTokens = 7000 // 自定义 API 默认使用较高限制
+		maxTokens = 8000 // 自定义 API 默认使用较高限制
 	default:
-		maxTokens = 7000 // 默认使用较保守的限制
+		maxTokens = 8000 // 默认使用较保守的限制
 	}
 
 	// 构建请求体 - 支持新旧API格式，兼容ChatGPT-5和GPT-5.1
@@ -224,7 +224,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	case ProviderCustom:
 		// 自定义API（通常是OpenAI兼容）- 支持GPT-5.1参数
 		requestBody["max_completion_tokens"] = maxTokens
-		
+
 		// GPT-5.1专用参数
 		if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
 			requestBody["reasoning_effort"] = "none"
@@ -233,7 +233,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	default:
 		// 默认使用新格式，支持GPT-5.1参数
 		requestBody["max_completion_tokens"] = maxTokens
-		
+
 		// GPT-5.1专用参数
 		if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
 			requestBody["reasoning_effort"] = "none"
