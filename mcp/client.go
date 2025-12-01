@@ -199,9 +199,9 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	case ProviderQwen:
 		maxTokens = 32768 // Qwen 支持更高的 token 限制
 	case ProviderCustom:
-		maxTokens = 8192 // 自定义 API 默认使用较高限制
+		maxTokens = 6000 // 自定义 API 默认使用较高限制
 	default:
-		maxTokens = 8192 // 默认使用较保守的限制
+		maxTokens = 6000 // 默认使用较保守的限制
 	}
 
 	// 构建请求体 - 支持新旧API格式，兼容ChatGPT-5
@@ -438,18 +438,18 @@ func writeSimpleAPILog(requestJSON []byte, responseContent string, client *Clien
 	if model == "" {
 		model = "unknown"
 	}
-	
+
 	// 使用时间戳和模型信息创建文件名
 	timestamp := time.Now().Format("20060102_150405")
 	filename := fmt.Sprintf("ai_log_%s_%s_%s.txt", provider, model, timestamp)
-	
+
 	file, err := os.Create(filename)
 	if err != nil {
 		log.Printf("⚠️ 无法创建AI日志文件: %v", err)
 		return
 	}
 	defer file.Close()
-	
+
 	// 写入请求体
 	fmt.Fprintf(file, "=== REQUEST BODY ===\n")
 	var prettyJSON bytes.Buffer
@@ -458,10 +458,10 @@ func writeSimpleAPILog(requestJSON []byte, responseContent string, client *Clien
 	} else {
 		fmt.Fprintf(file, "%s\n", string(requestJSON))
 	}
-	
+
 	// 写入响应体
 	fmt.Fprintf(file, "\n=== RESPONSE BODY ===\n")
 	fmt.Fprintf(file, "%s\n", responseContent)
-	
+
 	log.Printf("📝 AI请求响应已写入文件: %s", filename)
 }
