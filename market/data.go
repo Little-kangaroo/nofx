@@ -950,6 +950,7 @@ func formatOHLCData(ohlcData *OHLCData, symbol string) map[string]interface{} {
 		"volume":     FormatByDataTypeAndSymbol(ohlcData.Volume, "volume", symbol),
 		"open_time":  ohlcData.OpenTime,
 		"close_time": ohlcData.CloseTime,
+		"x":          true, // 表示已收盘的K线bar，满足taro模板要求
 	}
 }
 
