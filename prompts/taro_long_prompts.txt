@@ -2131,34 +2131,63 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 - 当 action 为 "open_long"/"open_short" 时，必须额外提供 "entry_plan" 字段；
 - 其他字段可以存在（例如内部调试字段），但不会被下单系统使用。
 
-12. 输出说明（reasoning）电报体 + 数据引用（硬约束）
+12. 输出说明（reasoning）超电报体 + 基础指标/多时间框架/止损锁盈（硬约束）
 - 最终必须输出 JSON 数组（仅 JSON；不得有任何额外文字），否则后端报错。
-- reasoning 一律电报体：单行不换行；<= 220 字符；只用 ';' 或 '|' 分隔；
-  禁止长句与连词（因为/所以/但是/同时/此外/而且/然后/并且/因此/从而）。
-
+- reasoning 一律超电报体：单行不换行；建议 ≤150 字符（硬上限 240）；只用 ';' 或 '|' 分隔；禁止长句与连词（因为/所以/但是/同时/此外/而且/然后/并且/因此/从而）。
 - reasoning 必须按固定顺序输出 4 段（缺段视为无效）：
-  1) B: MB=<U/D/N>, mB=<U/D/N>, μB=<U/D/N>; src=<2~3 tags>
-  2) K: 从 {SZ,SR,VP,ST,FVG,FIB,CH,DT} 选 2~3 个；每个必须带 1 个数字或区间
-  3) R: Rclean≈x; style=<HTF/LTF>; （若 open_*）r%≈y; lev≈z
-  4) X: open=>entry@p/zone; wait=>trig@p/zone; hold=>trail@rule
+
+  1) B:（必须同时包含：基础指标字段 + 多时间框架分析字段）
+     固定格式：
+     B: MB=<U/D/N>, mB=<U/D/N>, μB=<U/D/N>; sn=4h(<emaSig>,m<+|0|->,r14<n>)/1h(<emaSig>,m<+|0|->,r14<n>)/15m(e20<e50|e20>e50,m<+|0|->,r14<n>)/5m(x<T|F>,e20<e50|e20>e50,m<+|0|->,r7<n>,vR<n>); src=<2~3tags>
+     约束：
+     - MB/mB/μB 必须来自「多时间框架分析」的结论（禁止凭空判断/只看价格脑补）。
+     - sn 中所有值必须来自 MarketSnapshot 各 tf：
+       * <emaSig> 仅用 "p>e20>e50" 或 "p<e20<e50"（p=MarketSnapshot.price; e20/e50=对应 tf 的 ema20/ema50）
+       * m=macd 直方图符号（+ 正；- 负；0 近零）；r14=rsi14；r7=rsi7；vR=volume/avg_volume（保留1位小数）
+       * x 必须引用 MarketSnapshot.5m 的“最新已收盘”标志（x=true 才写 xT；否则写 xF）
+     - 若 5m 缺少 open/high/low/close/close_time 或 x!=true：action 必须为 "wait"（禁止 open_long/open_short），且 B 段必须写 xF。
+
+  2) K:（必须包含：多时间框架分析结构 + ctx 统计指标）
+     规则：
+     - 从 {SZ,SR,VP,ST,FVG,FIB,CH,DT} 选 2~3 个；每个必须带 1 个数字或区间（区间用字符串，不得用数组）。
+     - 至少 1 个锚点必须来自 `多时间框架分析[tf]` 的结构对象，并在该锚点末尾附带 ctx（来自该结构的 ctx 字段）：
+       ctx=z<strength_z> v<vol_ratio> (w<width_atr>) (r<rank_pct*100>)
+       * z/v 必须写；w/r 可选（字符不够时优先保留 z/v）
+     - 若关键锚点无 ctx：必须写 "ctxNA"，并强制降级（setup_grade 最高只能为 C；且不得评 A）。
+
+  3) R:（风险 + 止损锁盈逻辑：必须出现 SL 与 TP；若 hold 必须出现 Trail/Lock）
+     固定格式：
+     R: Rc≈<n>; style=<HTF/LTF>; SL=<p|zone|inv@p>; TP1=<p|zone>; TP2=<p|zone|NA>; BE=<R|p|NA>; Trail=<rule|NA>; Part=<p%>@<TP1|TP2|NA>
+     约束：
+     - 所有价格/区间必须引用 K 段锚点或其相邻合理外延（不得凭空写“一个大概的止损”）。
+     - open_* 必须给：SL + TP1（TP2 可 NA）；BE 可选；Trail 可选；Part 可选。
+     - hold 必须给：Trail 或 Lock（至少一个非 NA）。若采用锁盈，写法并入 Trail 字段，例如：
+       * Trail=lock@+1R->BE; or Trail=ATR(15m)*1.2; or Trail=lastHL(5m)
+     - wait 也必须给：SL/TP 全部写 NA（避免误解为已有计划）。
+     - SL 规则：
+       * 多头：SL 必须低于关键 demand/SR 或失效位（inv@p）；空头反之。
+       * 若使用 inv@p 表示“结构失效价”：SL=inv@<p>（推荐，最省 token）。
+     - TP 规则：
+       * TP1 必须对应最近一层对手区（例如 supply/上方 SR/VPVR VAH/POC/FVG/通道上沿）
+       * TP2 可对应更高一级对手区；否则 NA。
+     - BE（保本）规则：
+       * 若给 BE=R1，表示盈利到 +1R 即推保本；若给 BE=@p 表示到指定价推保本。
+     - Part（分批止盈）规则（可选）：
+       * Part=50%@TP1 表示 TP1 出 50%。
+
+  4) X:（动作剧本：必须反映开仓/触发/移动止损或锁盈）
+     固定格式（按 action 取一条）：
+     - open_*：X: open=><oL|oS>@<entry@p/zone>; add=<NA|rule>; mg=<NA|rule>
+     - wait ：X: wait=>trig@<p/zone+cond>; fail=>ctxNA|xF|noRT
+     - hold ：X: hold=>trail@<Trail-rule>; exit=>break@<inv@p|cond>
+     约束：
+     - 若 open_*：entry 必须是 K 段锚点价/区间（或其确认触发后的回踩区间），不得凭空写。
+     - 若 hold：trail@ 规则必须与 R 段 Trail 一致（避免自相矛盾）。
 
 - 缩写与含义：
   U=BULL, D=BEAR, N=NEUTRAL
   SZ=供需区（SZd demand / SZs supply），SR=支撑阻力线，VP=VPVR(POC/VAH/VAL)，ST=supertrend(如 ST4h/ST15m)，FVG=gap，FIB=回撤位，CH=通道，DT=道氏结构。
-  src/k tags 允许拼接：SZd/SZs, SR, VP(POC/VAH/VAL), ST4h/ST15m, FVG#, FIB#, CH, DT, RSI, MACD。
-
-- 结构引用底线：
-  禁止只写“RSI/MACD”；结构类标签（SZ/SR/VP/ST/FVG/FIB/CH/DT）至少出现 1 个。
-
-- wait/hold 触发条件硬约束：
-  若 action="wait" 或 "hold"，X 段必须给出下一次触发条件（价格区间或关键线/区边界），不得为空。
-
-- 字段约束不变：
-  "setup_grade","edge_score" 字段在任何 action 下都不能省略。
-
-- 禁止创建任何“候选 symbol”对象：
-  * 例如 "ETHUSDT_candidate"、"ADAUSDT_candidate" 等名称都是错误的；
-  * 若要表达“是否考虑再开一笔”的评估，只能写在该 symbol 的 reasoning 文本中。
-
-
+  结构失效：inv@p；rt=break+retest；Rej5m=5m拒绝；lastHL/lastLH=最近高低点结构。
+  src/k tags 允许拼接：SZd/SZs, SR, VP(POC/VAH/VAL), ST4h/ST15m, FVG#, FIB#, CH, DT, sn, ctx, RSI, MACD。
+- 结构引用底线：禁止只写“RSI/MACD”；结构类标签（SZ/SR/VP/ST/FVG/FIB/CH/DT）至少出现 1 个。
 （完）
