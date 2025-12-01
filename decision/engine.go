@@ -106,7 +106,7 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 	}
 
 	// 2. 构建 System Prompt（固定规则）和 User Prompt（动态数据）
-	systemPrompt := buildSystemPromptWithCustom(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, customPrompt, overrideBase, templateName)
+	systemPrompt := buildSystemPromptWithCustom(customPrompt, overrideBase, templateName)
 	userPrompt := buildUserPrompt(ctx)
 
 	// 3. 调用AI API（使用 system + user prompt）
@@ -254,14 +254,14 @@ func calculateMaxCandidates(ctx *Context) int {
 }
 
 // buildSystemPromptWithCustom 构建包含自定义内容的 System Prompt
-func buildSystemPromptWithCustom(accountEquity float64, btcEthLeverage, altcoinLeverage int, customPrompt string, overrideBase bool, templateName string) string {
+func buildSystemPromptWithCustom(customPrompt string, overrideBase bool, templateName string) string {
 	// 如果覆盖基础prompt且有自定义prompt，只使用自定义prompt
 	if overrideBase && customPrompt != "" {
 		return customPrompt
 	}
 
 	// 获取基础prompt（使用指定的模板）
-	basePrompt := buildSystemPrompt(accountEquity, btcEthLeverage, altcoinLeverage, templateName)
+	basePrompt := buildSystemPrompt(templateName)
 
 	// 如果没有自定义prompt，直接返回基础prompt
 	if customPrompt == "" {
@@ -280,11 +280,10 @@ func buildSystemPromptWithCustom(accountEquity float64, btcEthLeverage, altcoinL
 	return sb.String()
 }
 
-// buildSystemPrompt 构建 System Prompt（使用模板+动态部分）
-func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage int, templateName string) string {
-	var sb strings.Builder
+// buildSystemPrompt 构建 System Prompt（仅固定模板内容）
+func buildSystemPrompt(templateName string) string {
 
-	// 1. 加载提示词模板（核心交易策略部分）
+	// 加载提示词模板（核心交易策略部分）- 纯固定内容
 	if templateName == "" {
 		templateName = "default" // 默认使用 default 模板
 	}
@@ -297,39 +296,12 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 		if err != nil {
 			// 如果连 default 都不存在，使用内置的简化版本
 			log.Printf("❌ 无法加载任何提示词模板，使用内置简化版本")
-			sb.WriteString("你是专业的加密货币交易AI。请根据市场数据做出交易决策。\n\n")
-		} else {
-			sb.WriteString(template.Content)
-			sb.WriteString("\n\n")
+			return "你是专业的加密货币交易AI。请根据市场数据做出交易决策。"
 		}
-	} else {
-		sb.WriteString(template.Content)
-		sb.WriteString("\n\n")
 	}
 
-	// 2. 硬约束（风险控制）- 动态生成
-	/*sb.WriteString("# 硬约束（风险控制）\n\n")
-	sb.WriteString("1. 风险回报比: 必须 ≥ 1:3（冒1%风险，赚3%+收益）\n")
-	sb.WriteString("2. 最多持仓: 3个币种（质量>数量）\n")
-	sb.WriteString(fmt.Sprintf("3. 单币仓位: 山寨%.0f-%.0f U(%dx杠杆) | BTC/ETH %.0f-%.0f U(%dx杠杆)\n",
-		accountEquity*0.8, accountEquity*1.5, altcoinLeverage, accountEquity*5, accountEquity*10, btcEthLeverage))
-	sb.WriteString("4. 保证金: 总使用率 ≤ 90%\n\n")
-
-	// 3. 输出格式 - 动态生成
-	sb.WriteString("#输出格式\n\n")
-	sb.WriteString("第一步: 思维链（纯文本）\n")
-	sb.WriteString("简洁分析你的思考过程\n\n")
-	sb.WriteString("第二步: JSON决策数组\n\n")
-	sb.WriteString("```json\n[\n")
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n", btcEthLeverage, accountEquity*5))
-	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
-	sb.WriteString("]\n```\n\n")
-	sb.WriteString("字段说明:\n")
-	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
-	sb.WriteString("- `confidence`: 0-100（开仓建议≥75）\n")
-	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n\n")*/
-
-	return sb.String()
+	// 只返回固定的模板内容，不包含任何动态变量
+	return template.Content
 }
 
 // buildUserPrompt 构建 User Prompt（动态数据）

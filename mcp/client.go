@@ -204,7 +204,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		maxTokens = 7000 // 默认使用较保守的限制
 	}
 
-	// 构建请求体 - 支持新旧API格式，兼容ChatGPT-5
+	// 构建请求体 - 支持新旧API格式，兼容ChatGPT-5和GPT-5.1
 	requestBody := map[string]interface{}{
 		"model":    client.Model,
 		"messages": messages,
@@ -222,11 +222,23 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		requestBody["max_tokens"] = maxTokens // Qwen仍使用max_tokens
 		requestBody["temperature"] = 0.5      // Qwen支持temperature参数
 	case ProviderCustom:
-		// 自定义API（通常是OpenAI兼容）不设置temperature等采样参数
+		// 自定义API（通常是OpenAI兼容）- 支持GPT-5.1参数
 		requestBody["max_completion_tokens"] = maxTokens
+		
+		// GPT-5.1专用参数
+		if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
+			requestBody["reasoning_effort"] = "none"
+			requestBody["prompt_cache_retention"] = "24h"
+		}
 	default:
-		// 默认使用新格式，不设置采样参数
+		// 默认使用新格式，支持GPT-5.1参数
 		requestBody["max_completion_tokens"] = maxTokens
+		
+		// GPT-5.1专用参数
+		if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
+			requestBody["reasoning_effort"] = "none"
+			requestBody["prompt_cache_retention"] = "24h"
+		}
 	}
 
 	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持
@@ -249,6 +261,14 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		log.Printf("   Max Tokens (max_tokens): %d", maxTokens)
 	} else {
 		log.Printf("   Max Completion Tokens (max_completion_tokens): %d", maxTokens)
+	}
+
+	// 显示GPT-5.1专用参数
+	if reasoningEffort, hasReasoning := requestBody["reasoning_effort"]; hasReasoning {
+		log.Printf("   Reasoning Effort: %v", reasoningEffort)
+	}
+	if cacheRetention, hasCache := requestBody["prompt_cache_retention"]; hasCache {
+		log.Printf("   Prompt Cache Retention: %v", cacheRetention)
 	}
 
 	log.Printf("   Messages Count: %d", len(messages))
