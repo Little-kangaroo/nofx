@@ -48,7 +48,7 @@ export default function HeaderBar({ isLoggedIn = false, isHomePage = false, curr
           <a href='/' className='flex items-center gap-3 hover:opacity-80 transition-opacity cursor-pointer'>
 
             <span className='text-xl font-bold' style={{ color: 'var(--brand-yellow)' }}>
-              小新
+              A&T
             </span>
             <span className='text-sm hidden sm:block' style={{ color: 'var(--text-secondary)' }}>
               Agentic Trading OS

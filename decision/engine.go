@@ -430,7 +430,7 @@ func buildUserPrompt(ctx *Context) string {
 	}
 
 	sb.WriteString("---\n\n")
-	sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
+	sb.WriteString("现在请严格按照 System Prompt 定义的协议格式，仅输出 JSON 数组；除 JSON 外禁止输出任何字符。所有依据仅写入 JSON 的 reasoning 字段，并按第12条电报体与字数上限执行；禁止输出思维链。\n")
 
 	return sb.String()
 }
