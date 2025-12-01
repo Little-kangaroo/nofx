@@ -199,9 +199,9 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	case ProviderQwen:
 		maxTokens = 32768 // Qwen 支持更高的 token 限制
 	case ProviderCustom:
-		maxTokens = 6000 // 自定义 API 默认使用较高限制
+		maxTokens = 7000 // 自定义 API 默认使用较高限制
 	default:
-		maxTokens = 6000 // 默认使用较保守的限制
+		maxTokens = 7000 // 默认使用较保守的限制
 	}
 
 	// 构建请求体 - 支持新旧API格式，兼容ChatGPT-5
