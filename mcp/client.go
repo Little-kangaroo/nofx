@@ -227,7 +227,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 
 		// GPT-5.1专用参数
 		if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
-			requestBody["reasoning_effort"] = "medium"
+			requestBody["reasoning_effort"] = "low"
 			requestBody["prompt_cache_retention"] = "24h"
 		}
 	default:
@@ -236,7 +236,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 
 		// GPT-5.1专用参数
 		if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
-			requestBody["reasoning_effort"] = "medium"
+			requestBody["reasoning_effort"] = "low"
 			requestBody["prompt_cache_retention"] = "24h"
 		}
 	}
