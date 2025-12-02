@@ -1054,6 +1054,18 @@ func extractCompactVPVR(data *VolumeProfile, symbol string) map[string]interface
 		result["poc_price"] = FormatByDataTypeAndSymbol(data.POC.Price, "price", symbol)
 	}
 
+	// 添加上下文评分信息
+	if data.Context != nil {
+		result["ctx"] = map[string]interface{}{
+			"strength_z": FormatByDataTypeAndSymbol(data.Context.StrengthZ, "ratio", symbol),
+			"width_atr":  FormatByDataTypeAndSymbol(data.Context.WidthATR, "ratio", symbol),
+			"vol_ratio":  FormatByDataTypeAndSymbol(data.Context.VolRatio, "ratio", symbol),
+			"is_fresh":   data.Context.IsFresh,
+			"time_score": FormatByDataTypeAndSymbol(data.Context.TimeScore, "ratio", symbol),
+			"rank_pct":   FormatByDataTypeAndSymbol(data.Context.RankPct, "ratio", symbol),
+		}
+	}
+
 	return result
 }
 

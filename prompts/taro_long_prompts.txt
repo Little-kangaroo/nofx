@@ -89,8 +89,7 @@
                 * 止损价 sl 必须放在该供需区的相反边界外侧若干 tick / ATR，而不是区间内部；
                 * 通过 B5 检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求。
                 【EDGE 进场确认（5m Rejection｜硬要求）】：
-                - 若 MarketSnapshot.5m 缺失 open/high/low/close/close_ts/x，或 x!=true
-                  ⇒ 本条不可验证 ⇒ action="wait"（禁止开仓）。
+                - 若 MarketSnapshot.5m 缺失 open/high/low/close/close_time/x，或 x!=true,本条不可验证 ⇒ action="wait"（禁止开仓）。
                 - 特权情况（SNIPE变体）：...
                 - 普通情况：若不满足特权条件，必须满足以下任一确认（多空对称）：
                   · SHORT（依托 supply 上沿试空）：需要出现“5m 拒绝确认”后才允许 open_short：
@@ -114,7 +113,6 @@
                   这些都应视为“被结构噪音扫掉”的高风险行为。
 
             2）BO_RETEST（突破-回踩形态｜可执行剧本）
-
               - 核心思路：先确认“有效突破”，再只在“回踩带”入场；禁止在突破后的第一波延伸追价。
 
               - 关键定义：
@@ -135,21 +133,34 @@
               - 入场与止损（多空对称）：
                 * entry_price：必须位于 retest_band 内；若价格未回踩而直接拉开 → 一律 wait（禁止追价）。
                 * sl_struct：放在 key_level 的“错误一侧”之外，并留出 buffer（建议 ≥ 0.2*ATR14(5m) 或若干 tick）。
-                * 必须通过 B5：R_clean ≥ 1.0（LTF_scalp）/ ≥ 1.5（HTF_swing）。
-
+                * 必须通过 B5：R_clean ≥ 0.5（LTF_scalp；其中 0.8~1.0 仅限“趋势尾声反转型 LTF”例外）/ ≥ 1.5（HTF_swing）。
 
               - 禁止的 BO_RETEST 伪形态：
                 * 仅凭一次“刺穿”高/低点但收盘价仍在区间内，就认定为突破；
-                * 在刚刚突破、尚未出现任何回踩的 K 上直接追价，
-                  且无法给出清晰的 retest 结构。
+                * 在刚刚突破、尚未出现任何回踩的 K 上直接追价，且无法给出清晰的 retest 结构。
 
-            - 总结（LTF_scalp 形态过滤）：
-              * 若 trade_style="LTF_scalp" 且当前机会不属于 EDGE 或 BO_RETEST 之一，
-                即便多周期 bias 和指标方向看起来“还行”，
-                也必须将该机会整体评为 setup_grade="C"，action="wait" / "hold"；
-              * reasoning 中必须显式标出：
-                “trade_style=LTF_scalp，pattern=EDGE/BO_RETEST，结构依据为……”，
-                否则视为未满足形态要求。
+            3）MOMENTUM_BREAK（动能突破形态｜强趋势专用）
+                          - 核心思路：当市场出现极强单边动能，价格以“饱满实体 + 巨量”直接击穿关键结构（供需区/SR线/通道边界）时，
+                            往往不会给出回踩（Retest）机会。此时允许直接跟随动能介入。
+
+                          - 必须同时满足（硬指标）：
+                            1) 突破力度：5m K线收盘价必须清晰地位于关键结构之外，且实体部分穿越了结构边界（非仅引线刺破）；
+                            2) 量能确认：突破 K 线的 `vol_ratio` (vR) 必须 ≥ 2.0（两倍以上均量），或 `ctx.strength_z` > 1.5；
+                            3) 动能连续性：最近 3 根 5m K 线中至少 2 根同向，且没有极长的反向影线。
+
+                          - 入场与止损：
+                            * entry_price：5m 收盘确认突破后，直接以现价（Market）或挂在 K 线收盘价附近的 Limit 进场；
+                            * sl_struct：
+                              - 激进：放在突破 K 线的开盘价或中点（Mid-point）外侧；
+                              - 稳健：放在被突破结构的反向边界外侧。
+                            * R_clean：必须 ≥ 1.0（前方无紧邻的阻力/支撑）。
+
+                          - 适用场景：
+                            * 用于解决“单边行情踏空”问题；
+                            * 即使 4h RSI 较低/较高，只要 5m 爆发力足够强（vR>3.0），可视为“趋势加速段”豁免部分超卖/超买限制。
+              - 总结（LTF_scalp 形态过滤）：
+                * 若 trade_style="LTF_scalp" 且当前机会不属于 EDGE 或 BO_RETEST 之一，即便多周期 bias 和指标方向看起来“还行”，也必须将该机会整体评为 setup_grade="C"，action="wait" / "hold"；
+                * reasoning 中必须显式标出：“trade_style=LTF_scalp，pattern=EDGE/BO_RETEST，结构依据为……”，否则视为未满足形态要求。
 
         3）中期动能不过度极端：
             - 做空 HTF_swing 时：4h RSI14 应 ≥ 35；
@@ -239,14 +250,16 @@
     "atr14": 125.6,
     "volume": 1250.5,
     "avg_volume": 1100.8,
-    "ohlc_last_closed": {
-     "close": 90447,
-     "close_time": 1764397799999,
-      "high": 90787.1,
-      "low": 90272.6,
-      "open": 90784.1,
-      "open_time": 1764396900000,
-       "volume": 2059}
+     "ohlc_last_closed": {
+       "close": 86590.2,
+       "close_time": 1764629099999,
+       "high": 86663.6,
+       "low": 86238.1,
+       "open": 86378.3,
+       "open_time": 1764628200000,
+       "volume": 1088,
+       "x": true
+     }
   },
    "15m": { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
    "30m": { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
@@ -254,7 +267,7 @@
    "4h":  { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ }
  }
  【硬约束：5m 关键K线字段缺失即禁止开仓】
- - 若输入未提供 MarketSnapshot.5m 的 open/high/low/close/close_time/x（且 x 必须为 true，表示“最新已收盘 5m bar”），则：
+ - 若输入未提供 MarketSnapshot.5m.ohlc_last_closed 的 open/high/low/close/close_time/x（且 x 必须为 true，表示“最新已收盘 5m bar”），则：
    * EDGE 与 BO_RETEST 的 Rejection/Confirm/失效校验均不可验证；
    * action 必须为 "wait"（禁止 open_long / open_short）。
 
@@ -784,8 +797,7 @@
            · 如空头中连续低点不再创新低，出现明显 higher low + 破前高；
            · 或 MACD / RSI 出现明显底背离/顶背离；
          - 15m/5m 已经形成一段 **与原趋势反向的趋势**（而不是只有一两根K的噪音）；
-       * 从“反转无效的合理止损位”（比如 demand 区下沿/前低）到上方最近主要反向结构，
-         仍有 ≥2R 的空间；
+       * 从“反转无效的合理止损位”（比如 demand 区下沿/前低）到上方最近主要反向结构，仍有 ≥2R 的空间；
        * 在 reasoning 中必须标明这是 “A_reversal 反转 setup”，并说明：
          - 原大趋势；
          - 反转结构出现在哪些周期；
@@ -861,10 +873,10 @@
       - 条件（需同时满足）：
         * major_bias = BEAR，且
         * 4h RSI14 < 30（明显超卖），且
-        * price 位于或紧贴 4h/1h 通道下沿，或位于关键 4h/1h demand 区内部 / 刚扎入区域；
-      → 视为当前下跌趋势进入中后段 / 尾声。
+        * price 位于或紧贴 4h/1h 通道下沿，或位于关键 4h/1h demand 区内部 / 刚扎入区域；视为当前下跌趋势进入中后段 / 尾声。
       在空头尾声区内：
-        * 禁止新增 SHORT 仓位（包括 trade_style="LTF_scalp" 的顺势空）；
+        * 原则上禁止新增 SHORT 仓位；
+        * 【唯一例外】：若出现 `pattern=MOMENTUM_BREAK` 且 5m 成交量极度放大（vR ≥ 2.5），视为“恐慌抛售（Capitulation）”或“加速赶底”，允许以 0.5倍 risk 尝试追空 LTF_scalp，但必须严格带紧移动止损。
         * 仅允许：
           · 对已有 SHORT 仓位做风险管理（reduce / close / move_stop 等），或
           · 等待明确反转结构出现后，再按逆势多单规则小仓尝试 LONG；
@@ -1240,11 +1252,11 @@ G) 基础指标视角（必须引用）
      - 做多：5m 出现 ema20 上穿 ema50、macd 由负转正、rsi7 自 <40 上穿 50；
      - 做空：5m 出现 ema20 下穿 ema50、macd 由正转负、rsi7 自 >60 下穿 50。
 - RSI 统一分档（所有周期）：
-  * rsi < 30：超卖区（短期极弱）；
-  * 30 ≤ rsi < 45：偏弱；
+  * rsi < 20：超卖区（短期极弱）；
+  * 20 ≤ rsi < 45：偏弱；
   * 45 ≤ rsi ≤ 55：中性；
-  * 55 < rsi ≤ 70：偏强；
-  * rsi > 70：超买区（短期极强）。
+  * 55 < rsi ≤ 80：偏强；
+  * rsi > 80：超买区（短期极强）。
 - 基础指标参与的硬性限制示例（用于“防追单”，但允许结构性例外）：
   1) 追涨 / 追跌限制（两层阈值，先硬后软）
      - Layer-1【强极端｜绝对禁止开新仓】：
@@ -1266,7 +1278,7 @@ G) 基础指标视角（必须引用）
            A) pattern=BO_RETEST：
               - entry_price 位于回踩带内（距关键水平 ≤ 0.25*ATR14(5m)），且不在突破后的第一波延伸追价；
               - 最近 1 根已收盘 5m K 给出方向确认（见 BO_RETEST 章节的确认规则）；
-              - 通过 B5：R_clean ≥ 1.0（LTF_scalp）/ ≥ 1.5（HTF_swing）。
+              - 通过 B5：R_clean ≥ 0.5（LTF_scalp；其中 0.5~1.0 仅限“趋势尾声反转型 LTF”例外）/ ≥ 1.5（HTF_swing）。
            B) pattern=EDGE：
               - entry_price 仍在 demand 下40%（做多）/ supply 上40%（做空），且出现 5m Rejection-A/B；
               - 通过 B5：R_clean ≥ 1.0。
@@ -1490,10 +1502,15 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
 - 你必须经过如下步骤，才允许把 "wait" 升级为 "open_long" 或 "open_short"：
 
   1) multi_tf_bias 对齐检查：
-     - 计划做多：major_bias 必须为 BULL 或至少不为强 BEAR；若 major_bias=BEAR，则视为逆势，除非有极端反转结构，否则禁止开多。
-     - 计划做空：major_bias 必须为 BEAR 或至少不为强 BULL；若 major_bias=BULL，则视为逆势，除非有极端反转结构，否则禁止开空。
-     - 若 major_bias 与 minor_bias + micro_bias 同时强烈反向（例如 major=BULL 而 minor/micro 都是强 BEAR），视为方向冲突：
-       * 不允许在该方向新增仓位，必须选择 "wait" 或仅在更清晰的结构共振点再评估。
+     - 计划做多：
+       · major_bias 必须为 BULL 或至少不为强 BEAR；
+       · 若 major_bias=BEAR：HTF_swing 一律视为逆势禁止开多；
+         但若 trade_style="LTF_scalp" 且满足“趋势尾声反转型 LTF”例外（见 C7/一致性闸门），则允许小仓 open_long。
+     - 计划做空（对称）：
+       · major_bias 必须为 BEAR 或至少不为强 BULL；
+       · 若 major_bias=BULL：HTF_swing 一律视为逆势禁止开空；
+         但若 trade_style="LTF_scalp" 且满足“趋势尾声反转型 LTF”例外（见 C7/一致性闸门），则允许小仓 open_short。
+
 
   2) setup 级别检查（配合 setup_grade）：
      - 若 setup_grade = "C"：
@@ -1514,18 +1531,27 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
        * 逆势 LTF_scalp（进场方向与 major_bias 相反）：
          - 仅当 edge_score ≥ 0.8 且 confidence ≥ 72 时，才允许小仓试单；
          - 若未达到上述门槛，即使结构看似合理，也应选择 "wait"。
-       * 且 multi_tf_bias 必须满足方向一致性的硬约束：
-         - 三个 bias（major_bias / minor_bias / micro_bias）中，至少有 2 个与计划进场方向同向，剩余 1 个最多为 NEUTRAL；
-         - 若仅有 1 个同向、1 个反向、1 个 NEUTRAL，或 3 个 bias 方向互相拉扯、难以判断主导方向，
-           则该机会不得评为 "B"，必须降为 "C"，并保持 "wait" / "hold"，禁止 open_long / open_short。
-     - 对于 trade_style="LTF_scalp" 且 setup_grade="B" 的机会，必须再次满足下列多周期一致性硬约束：
-        · 三个 bias（major_bias / minor_bias / micro_bias）中，至少有 2 个与计划进场方向同向，
-          剩余 1 个最多为 NEUTRAL；
-        · 若出现 “1 个多头 + 1 个空头 + 1 个中性” 或类似互相拉扯的组合
-          （例如 4h 偏弱/中性，1h/30m 明显偏多，而 micro_bias=BEAR）：
-            - 则该机会不得视为可交易的 B 级 setup；
-            - 必须直接视为 setup_grade="C"，并将 action 固定为 "wait" / "hold"，
-              禁止 open_long / open_short。
+       * 且 multi_tf_bias 需满足方向一致性闸门（默认硬约束；允许“趋势尾声反转型 LTF”例外）：
+         - 基准规则（默认）：
+           · 三个 bias（major_bias / minor_bias / micro_bias）中，至少有 2 个与计划进场方向同向，
+             剩余 1 个最多为 NEUTRAL；
+           · 若仅出现 “1 个同向 + 1 个反向 + 1 个 NEUTRAL” 或 3 个 bias 互相拉扯难以判断主导方向，
+             则默认不得评为可交易的 B 级 setup：必须降为 setup_grade="C"，action="wait"/"hold"，禁止 open_long/open_short。
+
+         - 例外（仅限“趋势尾声反转型 LTF_scalp”，用于解决大级别趋势尾声的反弹/回撤机会）：
+           在同时满足以下全部条件时，允许 “1 同向 + 1 反向 + 1 NEUTRAL” 仍保留为 setup_grade="B" 并小仓试单：
+           (a) 命中「趋势尾声区过滤」的反转方向条件：
+               · major_bias=BEAR 且 4h RSI14 < 30 → 只允许 LTF_scalp 做多反转（禁止顺势追空）；
+               · major_bias=BULL 且 4h RSI14 > 70 → 只允许 LTF_scalp 做空反转（禁止顺势追多）。
+           (b) 位置必须在“边界”而非“中部”：
+               · entry 靠近 4h/1h 关键 demand/supply 边界 或 通道上下沿；
+               · 或处于 VPVR 价值区外侧/边缘（靠近 VAH/VAL 的外侧 20% 区间）；
+               · 禁止在 VPVR 中部带/紧贴 POC 的 POC_chop_zone 中部追价入场。
+           (c) pattern 必须是 EDGE 或 BO_RETEST，且满足 5m Confirm-1/Confirm-2（不允许无确认试单）。
+           (d) edge_score ≥ 0.65 且 confidence ≥ 70。
+           (e) R_clean ≥ 0.8（见 B5 的 R_clean 门槛调整）。
+           (f) 风险档固定为 reduced risk（≤ 正常的一半），并强制启用 LTF_scalp 的 -0.5R~-0.7R 早切损规则。
+
 
  3）入场时机与小级别反转结构：
     - 当 HTF_swing 依托 30m / 15m supply（做空）或 demand（做多）进场时，不能仅因为“价格刚进入该 zone”就立即开仓；
@@ -1657,11 +1683,14 @@ A3) 极端 RSI 追涨 / 追跌检查（与前文 Layer-1/Layer-2 保持一致）
       · 绝对禁止在当前价位新开仓或加大仓位；
       · 仅允许 reduce/close 或 wait。
     * 若触发 Layer-2（偏极端）：
-      · 禁止“追价式入场”（见定义：偏离 ema20/ema50 过大）；
-      · 但允许“结构性例外”：
-        - pattern=BO_RETEST（必须在回踩带入场 + 5m确认 + R_clean达标）
-        - pattern=EDGE（必须在 zone 边缘 + 5m Rejection 确认 + R_clean达标）
-      · 不满足例外 → action="wait"。
+          · 禁止无理由的“追价式入场”；
+          · 但允许以下“结构性例外”：
+            A) pattern=BO_RETEST（回踩确认）；
+            B) pattern=EDGE（边缘拒绝）；
+            C) pattern=MOMENTUM_BREAK（动能突破）：
+               - 必须满足 vR ≥ 2.0 的量能硬指标；
+               - 必须有明确的结构被击穿（Breakdown/Breakout）；
+               - 允许在偏离 EMA 的情况下进场（视为加速段）。
 
 
 ——————————
@@ -1701,7 +1730,7 @@ B5) 最近反向结构与 R_clean（定义必须可计算）
                    R_clean     = R_clean_pts / R_struct
               - 禁止使用 current price 替代 entry_price；禁止跳过“最近的强结构”。
     * 若未给出上述任一“最近反向结构”与 R_clean：视为流程不完整，禁止开仓。
-    * 若 trade_style="LTF_scalp" 且 R_clean < 1.0：视为“空间不足”，禁止开仓。
+    * 若 trade_style="LTF_scalp" 且 R_clean < 0.5：视为“空间不足”，禁止开仓；若 R_clean ∈ [0.5, 1.0) 仅允许在“趋势尾声反转型 LTF_scalp”例外条件下小仓试单（见 C7）。
     * 若 trade_style="HTF_swing" 且 R_clean < 1.5：默认不得开仓；仅当 setup_grade="A" 且能明确指出更远的次级目标结构提供 ≥2R 空间时才允许例外（必须写清楚）。
   - 穿透规则（Breakout Mode）：
     - 穿透规则（Breakout Mode｜仅用于“远目标推演”，不得用于放行开仓）：
@@ -1715,12 +1744,12 @@ B6) 执行时效与反延迟闸门（下单前最后一公里｜硬要求）
   - 问：在【实际下单/发送订单】的那一刻，以下条件是否全部满足？
     （此项由执行端强制校验；AI 也必须在 reasoning 中自检并给出结论。）
     0) 输入可验证性闸门（Hard Gate｜缺数据直接止血）
-        - 必须提供：MarketSnapshot.5m 至少包含 {open, high, low, close, close_ts, x}
-        - 且 x=true 的那根必须对应“最新已收盘 5m K”（以 close_ts 为准）
+        - 必须提供：MarketSnapshot.5m 至少包含 {open, high, low, close, close_time, x}
+        - 且 x=true 的那根必须对应“最新已收盘 5m K”（以 close_time 为准）
         - 若本轮计划 pattern ∈ {EDGE, BO_RETEST, Rejection-A, Rejection-B}：
             * 任一字段缺失 => action 必须="wait"
             * reasoning 必须写明：missing_ohlc=true（禁止用“推测/猜测/应该是收阴”）
-        - 推荐同时提供：MarketSnapshot.15m、MarketSnapshot.30m 的 {open, high, low, close, close_ts}
+        - 推荐同时提供：MarketSnapshot.15m、MarketSnapshot.30m 的 {open, high, low, close, close_time}
           （用于 BO_RETEST 的区间回到/未回到判断、以及 VPVR_MID 的 tf=30m 校验）
         1) K线对齐：本次开仓信号必须基于“最新已收盘 5m K”（MarketSnapshot.5m 的 x=true 那根）。
            * 若在下单时已经出现了新一根 5m 收盘（bar 已推进），则该信号视为过期：
@@ -2002,7 +2031,17 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                  - 给出该距离的点数和折算后的 R 值（记为 R_clean）：
                    · 例如："最近反向结构为 15m supply 87200-87500，entry→supply_low≈0.8R"；
                  - 若 R_clean < 1.0：
-                   · 必须在 reasoning 中解释为何仍考虑开仓（例如这是 HTF_swing 加仓、结构极强等特殊情况），否则应将 action 改为 "wait" 或仅管理既有仓位。
+                     · 视为“空间不足”，默认不得作为常规模型的新开仓信号；
+                     · 但对 trade_style="LTF_scalp" 允许更细分的门槛（用于提升短线开仓频率，同时保留质量约束）：
+                       (a) 若 trade_style="LTF_scalp" 且 R_clean < 0.5：
+                           - 仍视为“空间严重不足”，action 必须为 "wait"/"hold"，禁止新建 open_long/open_short。
+                       (b) 若 trade_style="LTF_scalp" 且 R_clean ∈ [0.5, 1.0)：
+                           - 仅允许在“趋势尾声反转型 LTF_scalp”例外场景下小仓试单（见 C7 一致性闸门的例外条件），
+                             且必须满足：pattern∈{EDGE, BO_RETEST} + 5m Confirm-1/2 + edge_score ≥ 0.65 + confidence ≥ 70；否则一律 wait。
+                       (c) 若 trade_style="HTF_swing"：
+                           - 仍按原逻辑：R_clean < 1.0 默认不得开仓；
+                           - 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚）。
+
         6. 若是开仓（open_long/open_short），还需明确说明本次止损 sl_struct 依托的结构：
           - 对多单：例如“sl_struct 设在最近 15m demand 区下沿 2.065，再下方留出 ≈0.2*ATR 作为缓冲”；
           - 对空单：例如“sl_struct 设在最近 30m supply 区上沿 0.1459，上方留出若干 tick 作为缓冲”；

@@ -488,6 +488,7 @@ type VolumeProfile struct {
 	Levels    []*PriceLevel   `json:"levels"`     // 所有价格级别
 	Config    *VPVRConfig     `json:"config"`     // VPVR配置
 	Stats     *VolumeStats    `json:"stats"`      // 成交量统计
+	Context   *ContextMetrics `json:"ctx"`        // 上下文评分
 }
 
 // PriceLevel 价格级别
