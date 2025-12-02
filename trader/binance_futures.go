@@ -367,12 +367,24 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 
 		if quantity == 0 {
 			log.Printf("❌ [CloseLong] 最终数量为0，可能持仓已被其他方式平掉")
-			// 🔧 修复：返回特殊的"已平仓"标识而不是错误，让上层处理数据库同步
+			
+			// 🔧 改进：获取更多信息用于数据库同步
+			// 尝试获取当前价格作为推测平仓价格
+			currentPrice := 0.0
+			if marketPrice, priceErr := t.GetMarketPrice(symbol); priceErr == nil {
+				currentPrice = marketPrice
+			}
+			
+			// 返回特殊的"已平仓"标识，包含更多同步所需信息
 			return map[string]interface{}{
-				"orderId": "ALREADY_CLOSED",
-				"symbol":  symbol,
-				"status":  "ALREADY_CLOSED",
-				"message": "持仓不存在，可能已被其他方式平掉",
+				"orderId":          "ALREADY_CLOSED",
+				"symbol":           symbol,
+				"status":           "ALREADY_CLOSED", 
+				"message":          "持仓不存在，可能已被其他方式平掉",
+				"estimated_price":  currentPrice, // 添加估算平仓价格
+				"close_reason":     "external",   // 标识为外部平仓
+				"sync_required":    true,         // 标识需要数据库同步
+				"detection_method": "position_check", // 检测方法
 			}, nil
 		}
 	}
@@ -811,6 +823,74 @@ func (t *FuturesTrader) GetOpenOrders(symbol string) ([]map[string]interface{}, 
 			order.OrderID, order.Type, order.Side, order.PositionSide, 
 			order.OrigQuantity, order.Price, order.StopPrice)
 	}
+	
+	return result, nil
+}
+
+// GetOrderHistory 获取指定币种的订单历史
+func (t *FuturesTrader) GetOrderHistory(symbol string, limit int) ([]map[string]interface{}, error) {
+	log.Printf("🔍 [Binance] 查询 %s 的订单历史 (最近%d个订单)...", symbol, limit)
+	
+	// 调用币安API获取订单历史
+	service := t.client.NewListOrdersService().Symbol(symbol)
+	if limit > 0 && limit <= 1000 { // 币安API限制最多1000个订单
+		service = service.Limit(limit)
+	}
+	
+	orders, err := service.Do(context.Background())
+	if err != nil {
+		log.Printf("❌ [Binance] 获取订单历史失败: %v", err)
+		return nil, fmt.Errorf("获取订单历史失败: %w", err)
+	}
+	
+	log.Printf("📋 [Binance] %s 找到 %d 个历史订单", symbol, len(orders))
+	
+	// 转换为统一格式，只保留已完成的订单
+	var result []map[string]interface{}
+	stopLossCount := 0
+	takeProfitCount := 0
+	
+	for _, order := range orders {
+		// 只处理已完成的订单
+		if order.Status != "FILLED" {
+			continue
+		}
+		
+		orderMap := map[string]interface{}{
+			"symbol":       order.Symbol,
+			"orderId":      order.OrderID,
+			"type":         string(order.Type),
+			"side":         string(order.Side),
+			"quantity":     order.OrigQuantity,
+			"price":        order.Price,
+			"avgPrice":     order.AvgPrice, // 实际成交价格
+			"stopPrice":    order.StopPrice,
+			"status":       string(order.Status),
+			"timeInForce":  string(order.TimeInForce),
+			"reduceOnly":   order.ReduceOnly,
+			"positionSide": string(order.PositionSide),
+			"updateTime":   order.UpdateTime,
+			"workingType":  string(order.WorkingType),
+		}
+		
+		// 统计止损止盈订单
+		if order.Type == "STOP_MARKET" || order.Type == "STOP" {
+			stopLossCount++
+			log.Printf("  📄 止损单: ID=%d, %s %s %s, 止损价:%s, 成交价:%s, 时间:%d", 
+				order.OrderID, order.Type, order.Side, order.PositionSide, 
+				order.StopPrice, order.AvgPrice, order.UpdateTime)
+		} else if order.Type == "TAKE_PROFIT_MARKET" || order.Type == "TAKE_PROFIT" {
+			takeProfitCount++
+			log.Printf("  📄 止盈单: ID=%d, %s %s %s, 止盈价:%s, 成交价:%s, 时间:%d", 
+				order.OrderID, order.Type, order.Side, order.PositionSide, 
+				order.StopPrice, order.AvgPrice, order.UpdateTime)
+		}
+		
+		result = append(result, orderMap)
+	}
+	
+	log.Printf("📊 [Binance] %s 历史订单统计: 总计%d个已完成订单 (止损:%d, 止盈:%d)", 
+		symbol, len(result), stopLossCount, takeProfitCount)
 	
 	return result, nil
 }

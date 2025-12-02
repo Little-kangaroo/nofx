@@ -1031,22 +1031,46 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 	if orderIDValue, exists := order["orderId"]; exists && orderIDValue == "ALREADY_CLOSED" {
 		log.Printf("  ℹ️ %s 多仓已被其他方式平掉，同步更新数据库状态", decision.Symbol)
 		
+		// 🔧 改进：利用新增的字段信息进行更准确的同步
+		estimatedPrice := actualMarketPrice
+		closeReason := "unknown_external"
+		detectionMethod := "basic"
+		
+		// 从返回信息中提取更多详细信息
+		if estPrice, exists := order["estimated_price"]; exists {
+			if price, ok := estPrice.(float64); ok && price > 0 {
+				estimatedPrice = price
+				log.Printf("  📊 使用估算平仓价格: %.6f", estimatedPrice)
+			}
+		}
+		if reason, exists := order["close_reason"]; exists {
+			if reasonStr, ok := reason.(string); ok {
+				closeReason = reasonStr
+			}
+		}
+		if method, exists := order["detection_method"]; exists {
+			if methodStr, ok := method.(string); ok {
+				detectionMethod = methodStr
+			}
+		}
+		
 		// 同步更新数据库状态为已关闭
 		if at.database != nil {
 			log.Printf("🔍 [调试] 同步关闭已平仓位updateTradeInDatabase参数:")
 			log.Printf("    trader_id: '%s'", at.id)
 			log.Printf("    symbol: '%s'", decision.Symbol)
 			log.Printf("    side: 'long'")
-			log.Printf("    actualMarketPrice: %.6f", actualMarketPrice)
+			log.Printf("    estimatedPrice: %.6f", estimatedPrice)
 			log.Printf("    orderID: 'SYNC_CLOSE'")
-			log.Printf("    closeReason: 'sync_close'")
+			log.Printf("    closeReason: '%s'", closeReason)
+			log.Printf("    detectionMethod: '%s'", detectionMethod)
 			
 			log.Printf("  🔄 正在同步更新数据库中的交易记录状态...")
-			at.updateTradeInDatabase(decision.Symbol, "long", actualMarketPrice, 
-				"SYNC_CLOSE", "sync_close")
+			at.updateTradeInDatabase(decision.Symbol, "long", estimatedPrice, 
+				"SYNC_CLOSE", closeReason)
 		}
 		
-		log.Printf("  ✓ 同步关闭完成，平仓价格: %.4f", actualMarketPrice)
+		log.Printf("  ✓ 同步关闭完成，平仓价格: %.4f (方法: %s)", estimatedPrice, detectionMethod)
 		return nil
 	}
 
@@ -1114,22 +1138,46 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	if orderIDValue, exists := order["orderId"]; exists && orderIDValue == "ALREADY_CLOSED" {
 		log.Printf("  ℹ️ %s 空仓已被其他方式平掉，同步更新数据库状态", decision.Symbol)
 		
+		// 🔧 改进：利用新增的字段信息进行更准确的同步
+		estimatedPrice := actualMarketPrice
+		closeReason := "unknown_external"
+		detectionMethod := "basic"
+		
+		// 从返回信息中提取更多详细信息
+		if estPrice, exists := order["estimated_price"]; exists {
+			if price, ok := estPrice.(float64); ok && price > 0 {
+				estimatedPrice = price
+				log.Printf("  📊 使用估算平仓价格: %.6f", estimatedPrice)
+			}
+		}
+		if reason, exists := order["close_reason"]; exists {
+			if reasonStr, ok := reason.(string); ok {
+				closeReason = reasonStr
+			}
+		}
+		if method, exists := order["detection_method"]; exists {
+			if methodStr, ok := method.(string); ok {
+				detectionMethod = methodStr
+			}
+		}
+		
 		// 同步更新数据库状态为已关闭
 		if at.database != nil {
 			log.Printf("🔍 [调试] 同步关闭已平仓位updateTradeInDatabase参数:")
 			log.Printf("    trader_id: '%s'", at.id)
 			log.Printf("    symbol: '%s'", decision.Symbol)
 			log.Printf("    side: 'short'")
-			log.Printf("    actualMarketPrice: %.6f", actualMarketPrice)
+			log.Printf("    estimatedPrice: %.6f", estimatedPrice)
 			log.Printf("    orderID: 'SYNC_CLOSE'")
-			log.Printf("    closeReason: 'sync_close'")
+			log.Printf("    closeReason: '%s'", closeReason)
+			log.Printf("    detectionMethod: '%s'", detectionMethod)
 			
 			log.Printf("  🔄 正在同步更新数据库中的交易记录状态...")
-			at.updateTradeInDatabase(decision.Symbol, "short", actualMarketPrice,
-				"SYNC_CLOSE", "sync_close")
+			at.updateTradeInDatabase(decision.Symbol, "short", estimatedPrice,
+				"SYNC_CLOSE", closeReason)
 		}
 		
-		log.Printf("  ✓ 同步关闭完成，平仓价格: %.4f", actualMarketPrice)
+		log.Printf("  ✓ 同步关闭完成，平仓价格: %.4f (方法: %s)", estimatedPrice, detectionMethod)
 		return nil
 	}
 
@@ -2183,6 +2231,13 @@ func (at *AutoTrader) checkPendingStopOrders(record *logger.DecisionRecord) erro
 		log.Printf("⚠️ 检查所有持仓止损单失败: %v", err)
 	}
 	
+	// 3. 定期全量检查：每10个周期执行一次深度检查
+	if at.callCount%10 == 0 {
+		if err := at.performPeriodicStopLossAudit(record); err != nil {
+			log.Printf("⚠️ 定期止损单审计失败: %v", err)
+		}
+	}
+	
 	return nil
 }
 
@@ -2375,39 +2430,63 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 						}
 					}
 					
-					// 🔧 关键判断：只有持仓完全消失才认为是真正的止损成交
-					if !hasCurrentPosition {
-						log.Printf("    ✅ 确认真正的止损成交: %s %s 持仓已完全平仓", symbol, side)
+					// 🔧 改进的验证逻辑：检测持仓完全平仓或显著减少
+					positionClosed := !hasCurrentPosition
+					positionReduced := false
+					var reductionAmount float64
+					
+					if hasCurrentPosition {
+						// 计算持仓减少量（如果当前持仓小于之前记录的持仓）
+						if currentPosQuantity < posQuantity {
+							positionReduced = true
+							reductionAmount = posQuantity - currentPosQuantity
+							log.Printf("    📊 检测到持仓减少: %s %s 从%.6f减少到%.6f (减少%.6f)", 
+								symbol, side, posQuantity, currentPosQuantity, reductionAmount)
+						}
+					}
+					
+					// 🔧 灵活的止损检测：持仓完全平仓 OR 持仓显著减少
+					if positionClosed || positionReduced {
+						if positionClosed {
+							log.Printf("    ✅ 确认止损成交: %s %s 持仓已完全平仓", symbol, side)
+						} else {
+							log.Printf("    ✅ 确认部分止损成交: %s %s 持仓减少%.6f", symbol, side, reductionAmount)
+						}
 						
 						// 获取止损单详细信息
 						stopPrice := 0.0
-						quantity := posQuantity // 使用上次记录的持仓数量
+						executedQuantity := posQuantity // 默认使用完整持仓数量
 						if stopPriceStr, ok := lastOrder["stopPrice"].(string); ok {
 							stopPrice, _ = strconv.ParseFloat(stopPriceStr, 64)
 						}
 						
-						// 严格验证：只有在确实有数量且价格合理时才记录止损成交
-						if quantity > 0 && stopPrice > 0 {
-							log.Printf("    ✅ 记录真正的止损成交: %s %s 数量=%.6f 止损价=%.6f", 
-								symbol, side, quantity, stopPrice)
+						// 🔧 改进：对于部分平仓，使用减少的数量作为止损成交数量
+						if positionReduced && !positionClosed {
+							executedQuantity = reductionAmount
+						}
+						
+						// 验证数据有效性：止损价格和数量都必须合理
+						if executedQuantity > 0 && stopPrice > 0 {
+							log.Printf("    ✅ 记录止损成交: %s %s 成交数量=%.6f 止损价=%.6f", 
+								symbol, side, executedQuantity, stopPrice)
 							
 							pendingOrder := &PendingStopOrder{
 								Symbol:         symbol,
 								Side:           side,
 								OrderID:        lastOrderID,
 								StopPrice:      stopPrice,
-								Quantity:       quantity,
+								Quantity:       executedQuantity, // 使用实际成交数量
 								CreateTime:     time.Now(),
 								OriginalAction: "stop_loss_detected",
 							}
 							
 							at.recordStopLossExecution(pendingOrder, record)
 						} else {
-							log.Printf("    ❌ 验证失败，跳过记录: quantity=%.6f, stopPrice=%.6f", 
-								quantity, stopPrice)
+							log.Printf("    ❌ 验证失败，跳过记录: executedQuantity=%.6f, stopPrice=%.6f", 
+								executedQuantity, stopPrice)
 						}
 					} else {
-						log.Printf("    ⚠️ 止损单消失但持仓仍存在(%.6f)，可能是止损更新而非成交，跳过记录", 
+						log.Printf("    ⚠️ 止损单消失但持仓无变化(%.6f)，可能是止损更新而非成交，跳过记录", 
 							currentPosQuantity)
 					}
 				}
@@ -2439,6 +2518,31 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 
 // recordStopLossExecution 记录止损单成交
 func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, record *logger.DecisionRecord) {
+	// 🔧 数据验证：确保pendingOrder数据有效
+	if pendingOrder == nil {
+		log.Printf("❌ [止损记录] pendingOrder为nil，无法记录止损成交")
+		return
+	}
+	
+	if pendingOrder.Symbol == "" {
+		log.Printf("❌ [止损记录] pendingOrder.Symbol为空，无法记录止损成交")
+		return
+	}
+	
+	if pendingOrder.StopPrice <= 0 {
+		log.Printf("❌ [止损记录] pendingOrder.StopPrice无效(%.6f)，无法记录止损成交", pendingOrder.StopPrice)
+		return
+	}
+	
+	if pendingOrder.Quantity <= 0 {
+		log.Printf("❌ [止损记录] pendingOrder.Quantity无效(%.6f)，无法记录止损成交", pendingOrder.Quantity)
+		return
+	}
+	
+	log.Printf("📋 [止损记录] 开始记录止损成交: %s %s 订单ID=%d 数量=%.6f 止损价=%.6f", 
+		pendingOrder.Symbol, pendingOrder.Side, pendingOrder.OrderID, 
+		pendingOrder.Quantity, pendingOrder.StopPrice)
+	
 	// 🔧 修复：使用止损价格作为成交价，而不是市场价格
 	// 止损单成交时，成交价格应该接近止损价格
 	executionPrice := pendingOrder.StopPrice
@@ -2446,18 +2550,25 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 	// 获取当前市场价格用于验证和日志记录
 	marketData, err := market.Get(pendingOrder.Symbol)
 	if err != nil {
-		log.Printf("⚠️ 获取 %s 市场价格失败: %v", pendingOrder.Symbol, err)
+		log.Printf("⚠️ [止损记录] 获取 %s 市场价格失败: %v", pendingOrder.Symbol, err)
+		log.Printf("📊 [止损记录] 继续使用止损价格(%.6f)作为成交价格", executionPrice)
 		// 继续使用止损价格，不因市场价格获取失败而中断
 	} else {
 		// 记录市场价格与止损价格的差异（用于调试）
 		priceDiff := math.Abs(marketData.CurrentPrice - pendingOrder.StopPrice)
-		log.Printf("🔍 止损成交验证: 市场价=%.6f, 止损价=%.6f, 差异=%.6f", 
-			marketData.CurrentPrice, pendingOrder.StopPrice, priceDiff)
+		priceDiffPct := (priceDiff / pendingOrder.StopPrice) * 100
+		log.Printf("🔍 [止损记录] 价格验证: 市场价=%.6f, 止损价=%.6f, 差异=%.6f (%.2f%%)", 
+			marketData.CurrentPrice, pendingOrder.StopPrice, priceDiff, priceDiffPct)
+		
+		// 如果价格差异过大，可能是数据异常，记录警告
+		if priceDiffPct > 5.0 {
+			log.Printf("⚠️ [止损记录] 警告：市场价格与止损价格差异较大(%.2f%%)，可能存在数据异常", priceDiffPct)
+		}
 	}
 	
 	// 🔧 关键修复：更新数据库中的交易记录状态
 	if at.database != nil {
-		log.Printf("🔍 [调试] 被动止损updateTradeInDatabase参数:")
+		log.Printf("📋 [止损记录] 开始更新数据库交易记录...")
 		log.Printf("    trader_id: '%s'", at.id)
 		log.Printf("    symbol: '%s'", pendingOrder.Symbol)
 		log.Printf("    side: '%s'", pendingOrder.Side)
@@ -2465,25 +2576,76 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 		log.Printf("    orderID: '%d'", pendingOrder.OrderID)
 		log.Printf("    closeReason: 'stop_loss'")
 		
-		log.Printf("🔄 正在更新数据库中的交易记录状态...")
-		at.updateTradeInDatabase(pendingOrder.Symbol, pendingOrder.Side, executionPrice, 
-			fmt.Sprintf("%d", pendingOrder.OrderID), "stop_loss")
-	}
-	
-	// 计算盈亏（简化计算，实际盈亏已在updateTradeInDatabase中精确计算）
-	var pnl float64
-	if pendingOrder.Side == "long" {
-		// 多仓止损：一般是亏损
-		pnl = (executionPrice - pendingOrder.StopPrice) * pendingOrder.Quantity
+		// 🔧 增强错误处理：检查是否存在对应的开仓记录
+		openTrade, checkErr := at.database.GetOpenTrade(at.id, pendingOrder.Symbol, pendingOrder.Side)
+		if checkErr != nil {
+			log.Printf("❌ [止损记录] 未找到对应的开仓记录: %v", checkErr)
+			log.Printf("📋 [止损记录] 查找参数: trader_id='%s', symbol='%s', side='%s'", 
+				at.id, pendingOrder.Symbol, pendingOrder.Side)
+			
+			// 记录到trade_actions表，即使没有对应的开仓记录
+			log.Printf("📝 [止损记录] 将止损成交记录到trade_actions表作为独立记录")
+			at.recordStopLossAsTradeAction(pendingOrder, executionPrice)
+		} else {
+			log.Printf("✅ [止损记录] 找到对应开仓记录: ID=%s, 开仓价=%.6f, 保证金=%.2f", 
+				openTrade.ID, openTrade.OpenPrice, openTrade.MarginUsed)
+			
+			// 正常更新交易记录
+			log.Printf("🔄 [止损记录] 正在更新数据库中的交易记录状态...")
+			at.updateTradeInDatabase(pendingOrder.Symbol, pendingOrder.Side, executionPrice, 
+				fmt.Sprintf("%d", pendingOrder.OrderID), "stop_loss")
+		}
 	} else {
-		// 空仓止损：一般是亏损
-		pnl = (pendingOrder.StopPrice - executionPrice) * pendingOrder.Quantity
+		log.Printf("⚠️ [止损记录] 数据库连接不可用，跳过数据库更新")
 	}
 	
-	log.Printf("📊 记录止损成交: %s %s 数量=%.4f 价格=%.6f 预估盈亏=%.2f", 
-		pendingOrder.Symbol, pendingOrder.Side, pendingOrder.Quantity, executionPrice, pnl)
+	// 🔧 增强盈亏计算：提供更准确的盈亏估算和详细日志
+	var pnl float64
+	var pnlCalculationMethod string
 	
-	// 创建交易记录
+	// 尝试从数据库获取开仓价格进行精确计算
+	if at.database != nil {
+		openTrade, err := at.database.GetOpenTrade(at.id, pendingOrder.Symbol, pendingOrder.Side)
+		if err == nil && openTrade != nil {
+			// 使用实际开仓价格计算精确盈亏
+			if pendingOrder.Side == "long" {
+				pnl = (executionPrice - openTrade.OpenPrice) * pendingOrder.Quantity
+			} else {
+				pnl = (openTrade.OpenPrice - executionPrice) * pendingOrder.Quantity
+			}
+			pnlCalculationMethod = "precise_with_open_price"
+			log.Printf("💰 [止损记录] 精确盈亏计算: 开仓价=%.6f, 止损价=%.6f, 盈亏=%.2f USDT", 
+				openTrade.OpenPrice, executionPrice, pnl)
+		} else {
+			// 退化到简化计算（使用止损价格作为基准）
+			if pendingOrder.Side == "long" {
+				// 多仓止损：通常是亏损
+				pnl = (executionPrice - pendingOrder.StopPrice) * pendingOrder.Quantity
+			} else {
+				// 空仓止损：通常是亏损
+				pnl = (pendingOrder.StopPrice - executionPrice) * pendingOrder.Quantity
+			}
+			pnlCalculationMethod = "simplified_estimation"
+			log.Printf("💰 [止损记录] 简化盈亏估算: 止损价=%.6f, 估算盈亏=%.2f USDT (方法: %s)", 
+				pendingOrder.StopPrice, pnl, pnlCalculationMethod)
+		}
+	} else {
+		// 无数据库连接，使用简化计算
+		if pendingOrder.Side == "long" {
+			pnl = (executionPrice - pendingOrder.StopPrice) * pendingOrder.Quantity
+		} else {
+			pnl = (pendingOrder.StopPrice - executionPrice) * pendingOrder.Quantity
+		}
+		pnlCalculationMethod = "no_database_estimation"
+		log.Printf("💰 [止损记录] 无数据库盈亏估算: 盈亏=%.2f USDT", pnl)
+	}
+	
+	log.Printf("📊 [止损记录] 止损成交汇总: %s %s 数量=%.6f 价格=%.6f 盈亏=%.2f USDT (计算方法: %s)", 
+		pendingOrder.Symbol, pendingOrder.Side, pendingOrder.Quantity, executionPrice, pnl, pnlCalculationMethod)
+	
+	// 🔧 增强交易记录创建：添加更多元数据和验证
+	log.Printf("📝 [止损记录] 创建交易动作记录...")
+	
 	actionRecord := &logger.DecisionAction{
 		Symbol:    pendingOrder.Symbol,
 		Action:    fmt.Sprintf("stop_loss_%s", pendingOrder.Side), // stop_loss_long 或 stop_loss_short
@@ -2493,41 +2655,99 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 		Success:   true,
 		Timestamp: time.Now(),
 		Error:     "",
+		// Leverage: 无法从PendingStopOrder获取，使用默认值或从数据库查询
 	}
 	
-	// 🔧 关键修改：将止损成交信息添加到对应币种的现有决策记录中
-	// 查找该币种的现有决策记录并添加止损成交信息
-	found := false
-	if record.Decisions != nil {
-		for i := range record.Decisions {
-			if record.Decisions[i].Symbol == pendingOrder.Symbol {
-				// 找到对应币种的决策，在其Error字段中添加止损成交信息
-				// 使用特殊格式，前端可以解析并显示在对应行
-				stopLossInfo := fmt.Sprintf("💥 止损成交 %.4f@%.6f (PnL: %.2f)", 
-					pendingOrder.Quantity, executionPrice, pnl)
-				
-				if record.Decisions[i].Error == "" {
-					record.Decisions[i].Error = stopLossInfo
-				} else {
-					record.Decisions[i].Error += " | " + stopLossInfo
+	// 记录详细的成交信息到错误字段（用于前端显示额外信息）
+	additionalInfo := fmt.Sprintf("原始动作=%s, 创建时间=%s, PnL=%.2f", 
+		pendingOrder.OriginalAction, pendingOrder.CreateTime.Format("15:04:05"), pnl)
+	log.Printf("📋 [止损记录] 附加信息: %s", additionalInfo)
+	
+	// 🔧 增强决策记录更新：提供更详细的记录和错误处理
+	if record == nil {
+		log.Printf("⚠️ [止损记录] record为nil，无法更新决策记录")
+	} else {
+		log.Printf("📋 [止损记录] 正在更新决策记录...")
+		
+		// 查找该币种的现有决策记录并添加止损成交信息
+		found := false
+		if record.Decisions != nil {
+			for i := range record.Decisions {
+				if record.Decisions[i].Symbol == pendingOrder.Symbol {
+					log.Printf("📍 [止损记录] 找到对应币种(%s)的现有决策记录，添加止损信息", pendingOrder.Symbol)
+					
+					// 使用增强的格式，包含更多信息
+					stopLossInfo := fmt.Sprintf("💥 止损成交 %.6f@%.6f (PnL: %.2f USDT, 方法: %s)", 
+						pendingOrder.Quantity, executionPrice, pnl, pnlCalculationMethod)
+					
+					if record.Decisions[i].Error == "" {
+						record.Decisions[i].Error = stopLossInfo
+					} else {
+						record.Decisions[i].Error += " | " + stopLossInfo
+					}
+					found = true
+					log.Printf("✅ [止损记录] 已更新现有决策记录的Error字段")
+					break
 				}
-				found = true
-				break
 			}
 		}
-	}
-	
-	// 如果没有找到对应币种的决策记录，创建独立的止损记录
-	if !found {
-		if record.Decisions == nil {
-			record.Decisions = []logger.DecisionAction{}
+		
+		// 如果没有找到对应币种的决策记录，创建独立的止损记录
+		if !found {
+			log.Printf("📝 [止损记录] 未找到对应币种的现有决策记录，创建独立止损记录")
+			
+			if record.Decisions == nil {
+				record.Decisions = []logger.DecisionAction{}
+				log.Printf("📋 [止损记录] 初始化Decisions数组")
+			}
+			record.Decisions = append(record.Decisions, *actionRecord)
+			log.Printf("✅ [止损记录] 已添加独立的止损成交记录")
+		} else {
+			log.Printf("📋 [止损记录] 止损信息已合并到现有决策记录中")
 		}
-		record.Decisions = append(record.Decisions, *actionRecord)
 	}
 	
-	// 后端日志记录
-	log.Printf("💾 止损成交已记录: %s %s @%.6f (PnL: %.2f)", 
-		pendingOrder.Symbol, strings.ToUpper(pendingOrder.Side), executionPrice, pnl)
+	// 🔧 增强后端日志记录：提供完整的成交摘要
+	log.Printf("💾 [止损记录] 止损成交记录完成:")
+	log.Printf("    币种: %s %s", pendingOrder.Symbol, strings.ToUpper(pendingOrder.Side))
+	log.Printf("    订单ID: %d", pendingOrder.OrderID)
+	log.Printf("    数量: %.6f", pendingOrder.Quantity)
+	log.Printf("    成交价格: %.6f", executionPrice)
+	log.Printf("    盈亏: %.2f USDT (%s)", pnl, pnlCalculationMethod)
+	log.Printf("    原始动作: %s", pendingOrder.OriginalAction)
+	log.Printf("    创建时间: %s", pendingOrder.CreateTime.Format("2006-01-02 15:04:05"))
+	log.Printf("🎯 [止损记录] =================================")
+}
+
+// recordStopLossAsTradeAction 将止损成交记录为独立的交易动作（当无法找到对应开仓记录时）
+func (at *AutoTrader) recordStopLossAsTradeAction(pendingOrder *PendingStopOrder, executionPrice float64) {
+	if at.database == nil {
+		log.Printf("⚠️ [止损记录] 数据库连接不可用，跳过独立止损记录")
+		return
+	}
+	
+	log.Printf("📝 [止损记录] 创建独立的止损成交记录...")
+	
+	// 创建独立的交易动作记录
+	actionRecord := &config.TradeActionRecord{
+		TraderID:     at.id,
+		Action:       fmt.Sprintf("stop_loss_%s_detected", pendingOrder.Side),
+		Symbol:       pendingOrder.Symbol,
+		Quantity:     pendingOrder.Quantity,
+		Price:        executionPrice,
+		Leverage:     0, // 无法获取杠杆信息
+		OrderID:      fmt.Sprintf("%d", pendingOrder.OrderID),
+		Timestamp:    time.Now(),
+		Success:      true,
+		ErrorMessage: fmt.Sprintf("独立止损记录 - 原始动作: %s, 创建时间: %s", 
+			pendingOrder.OriginalAction, pendingOrder.CreateTime.Format("15:04:05")),
+	}
+	
+	if err := at.database.CreateTradeAction(actionRecord); err != nil {
+		log.Printf("❌ [止损记录] 创建独立止损记录失败: %v", err)
+	} else {
+		log.Printf("✅ [止损记录] 成功创建独立止损记录: ID=%s", actionRecord.ID)
+	}
 }
 
 // recordTradeToDatabase 将交易记录到数据库
@@ -2582,16 +2802,57 @@ func (at *AutoTrader) recordTradeToDatabase(symbol, side string, quantity float6
 func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closePrice float64, 
 	closeOrderID, closeReason string) {
 	if at.database == nil {
+		log.Printf("⚠️ [数据库更新] 数据库连接不可用，跳过交易记录更新")
 		return
 	}
 
+	log.Printf("🔄 [数据库更新] 开始更新交易记录: %s %s", symbol, side)
+	
 	// 查找对应的开仓记录
 	openTrade, err := at.database.GetOpenTrade(at.id, symbol, side)
 	if err != nil {
-		log.Printf("  ❌ [严重错误] 无法找到开仓记录: %v", err)
-		log.Printf("  🔍 查找参数: trader_id='%s', symbol='%s', side='%s'", at.id, symbol, side)
+		log.Printf("❌ [数据库更新] [严重错误] 无法找到开仓记录: %v", err)
+		log.Printf("📋 [数据库更新] 查找参数: trader_id='%s', symbol='%s', side='%s'", at.id, symbol, side)
+		
+		// 🔧 增强错误处理：尝试查找最近的相关记录
+		if recentTrades, err := at.database.GetTraderTrades(at.id, 10); err == nil {
+			log.Printf("📊 [数据库更新] 最近10笔交易记录:")
+			for i, trade := range recentTrades {
+				if trade.Symbol == symbol {
+					log.Printf("  [%d] %s %s %s 开仓价=%.6f 状态=%s", 
+						i+1, trade.Symbol, trade.Side, trade.Status, trade.OpenPrice, trade.Status)
+				}
+			}
+		}
+		
+		// 记录为独立的平仓动作
+		log.Printf("📝 [数据库更新] 创建独立的平仓动作记录...")
+		actionRecord := &config.TradeActionRecord{
+			TraderID:     at.id,
+			Action:       fmt.Sprintf("close_%s_orphaned", side),
+			Symbol:       symbol,
+			Quantity:     0, // 无法获取数量
+			Price:        closePrice,
+			OrderID:      closeOrderID,
+			Timestamp:    time.Now(),
+			Success:      true,
+			ErrorMessage: fmt.Sprintf("孤立平仓 - 未找到开仓记录, 原因: %s", closeReason),
+		}
+		
+		if err := at.database.CreateTradeAction(actionRecord); err != nil {
+			log.Printf("❌ [数据库更新] 创建孤立平仓记录失败: %v", err)
+		} else {
+			log.Printf("✅ [数据库更新] 成功创建孤立平仓记录")
+		}
 		return
 	}
+
+	log.Printf("✅ [数据库更新] 找到对应开仓记录:")
+	log.Printf("    交易ID: %s", openTrade.ID)
+	log.Printf("    开仓价格: %.6f", openTrade.OpenPrice)
+	log.Printf("    持仓数量: %.6f", openTrade.Quantity)
+	log.Printf("    保证金: %.2f USDT", openTrade.MarginUsed)
+	log.Printf("    开仓时间: %s", openTrade.OpenTime.Format("2006-01-02 15:04:05"))
 
 	// 计算盈亏
 	var pnl float64
@@ -2601,19 +2862,39 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closePrice floa
 		pnl = openTrade.Quantity * (openTrade.OpenPrice - closePrice)
 	}
 	
-	pnlPct := (pnl / openTrade.MarginUsed) * 100
+	pnlPct := 0.0
+	if openTrade.MarginUsed > 0 {
+		pnlPct = (pnl / openTrade.MarginUsed) * 100
+	}
+	
 	closeTime := time.Now()
 	durationSecs := int(closeTime.Sub(openTrade.OpenTime).Seconds())
-
-	log.Printf("  🔄 正在更新数据库: tradeID=%s, closePrice=%.6f, pnl=%.2f", 
-		openTrade.ID, closePrice, pnl)
 	
+	log.Printf("💰 [数据库更新] 盈亏计算结果:")
+	log.Printf("    盈亏金额: %.2f USDT", pnl)
+	log.Printf("    盈亏百分比: %.2f%%", pnlPct)
+	log.Printf("    持续时间: %d秒 (%.1f分钟)", durationSecs, float64(durationSecs)/60)
+
+	log.Printf("🔄 [数据库更新] 正在更新数据库: tradeID=%s, closePrice=%.6f, pnl=%.2f", 
+		openTrade.ID, closePrice, pnl)
+
 	if err := at.database.UpdateTrade(openTrade.ID, closePrice, closeTime, 
 		"closed", closeReason, closeOrderID, pnl, pnlPct, durationSecs); err != nil {
-		log.Printf("  ❌ [严重错误] 数据库更新失败: %v", err)
-		log.Printf("  🔍 更新参数: ID=%s, status='closed', reason='%s'", openTrade.ID, closeReason)
+		log.Printf("❌ [数据库更新] [严重错误] 数据库更新失败: %v", err)
+		log.Printf("📋 [数据库更新] 更新参数: ID=%s, status='closed', reason='%s'", openTrade.ID, closeReason)
+		
+		// 🔧 增强错误处理：记录更新失败的详细信息
+		log.Printf("⚠️ [数据库更新] 更新失败详细信息:")
+		log.Printf("    更新目标: 交易记录 %s", openTrade.ID)
+		log.Printf("    预期状态: closed")
+		log.Printf("    平仓价格: %.6f", closePrice)
+		log.Printf("    平仓原因: %s", closeReason)
+		log.Printf("    订单ID: %s", closeOrderID)
 	} else {
-		log.Printf("  ✅ 数据库更新成功: 状态已改为closed, PnL=%.2f USDT", pnl)
+		log.Printf("✅ [数据库更新] 数据库更新成功:")
+		log.Printf("    状态: open → closed")
+		log.Printf("    盈亏: %.2f USDT (%.2f%%)", pnl, pnlPct)
+		log.Printf("    平仓原因: %s", closeReason)
 	}
 }
 
@@ -2643,4 +2924,634 @@ func (at *AutoTrader) saveToDatabaseRecord(record *logger.DecisionRecord) error 
 	}
 	
 	return at.database.CreateDecisionRecord(dbRecord)
+}
+
+// performPeriodicStopLossAudit 执行定期止损单全量审计
+// 每10个周期执行一次，用于检测可能被遗漏的止损单成交
+func (at *AutoTrader) performPeriodicStopLossAudit(record *logger.DecisionRecord) error {
+	log.Printf("🔍 [定期审计] 开始执行止损单全量检查 (周期 #%d)", at.callCount)
+	
+	// 1. 获取数据库中所有状态为'open'的交易记录
+	if at.database == nil {
+		log.Printf("⚠️ [定期审计] 数据库连接不可用，跳过审计")
+		return nil
+	}
+	
+	openTrades, err := at.getOpenTradesFromDatabase()
+	if err != nil {
+		return fmt.Errorf("获取开仓交易记录失败: %w", err)
+	}
+	
+	if len(openTrades) == 0 {
+		log.Printf("📋 [定期审计] 无开仓交易记录，审计完成")
+		return nil
+	}
+	
+	log.Printf("📋 [定期审计] 发现 %d 个开仓交易记录，开始验证", len(openTrades))
+	
+	// 2. 获取当前实际持仓
+	currentPositions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取当前持仓失败: %w", err)
+	}
+	
+	// 3. 建立持仓映射，便于快速查找
+	positionMap := make(map[string]float64) // key: symbol_side, value: quantity
+	for _, pos := range currentPositions {
+		symbol := pos["symbol"].(string)
+		side := pos["side"].(string)
+		quantity := pos["positionAmt"].(float64)
+		if quantity < 0 {
+			quantity = -quantity // 空仓数量为负，转为正数
+		}
+		key := fmt.Sprintf("%s_%s", symbol, side)
+		positionMap[key] = quantity
+	}
+	
+	// 4. 检查每个数据库中的开仓记录
+	var discrepancyCount int
+	for _, trade := range openTrades {
+		posKey := fmt.Sprintf("%s_%s", trade.Symbol, trade.Side)
+		currentQuantity, hasPosition := positionMap[posKey]
+		
+		// 如果数据库显示有开仓但实际没有持仓，或数量不匹配
+		if !hasPosition {
+			log.Printf("🔍 [定期审计] 发现差异: %s %s 数据库显示开仓(%.6f)但实际无持仓", 
+				trade.Symbol, trade.Side, trade.Quantity)
+			discrepancyCount++
+			
+			// 尝试确定平仓原因和价格
+			estimatedClosePrice, closeReason := at.estimateCloseDetails(trade.Symbol, trade.OpenPrice, trade.Side)
+			
+			// 同步更新数据库状态
+			log.Printf("🔄 [定期审计] 同步关闭数据库记录: %s %s 估算平仓价=%.6f", 
+				trade.Symbol, trade.Side, estimatedClosePrice)
+			
+			at.updateTradeInDatabase(trade.Symbol, trade.Side, estimatedClosePrice, 
+				"AUDIT_CLOSE", fmt.Sprintf("periodic_audit_%s", closeReason))
+				
+		} else if math.Abs(currentQuantity-trade.Quantity) > 0.0001 { // 允许小数精度误差
+			log.Printf("🔍 [定期审计] 发现数量差异: %s %s 数据库(%.6f) vs 实际(%.6f)", 
+				trade.Symbol, trade.Side, trade.Quantity, currentQuantity)
+			discrepancyCount++
+			
+			// 如果实际持仓小于数据库记录，可能是部分平仓
+			if currentQuantity < trade.Quantity {
+				partialCloseQuantity := trade.Quantity - currentQuantity
+				log.Printf("📊 [定期审计] 检测到部分平仓: %s %s 平仓数量=%.6f", 
+					trade.Symbol, trade.Side, partialCloseQuantity)
+				
+				// 记录部分平仓（作为止损单成交处理）
+				estimatedClosePrice, _ := at.estimateCloseDetails(trade.Symbol, trade.OpenPrice, trade.Side)
+				pendingOrder := &PendingStopOrder{
+					Symbol:         trade.Symbol,
+					Side:           trade.Side,
+					OrderID:        0, // 审计发现的，没有具体订单ID
+					StopPrice:      estimatedClosePrice,
+					Quantity:       partialCloseQuantity,
+					CreateTime:     time.Now(),
+					OriginalAction: "audit_detected_partial_close",
+				}
+				
+				at.recordStopLossExecution(pendingOrder, record)
+			}
+		}
+	}
+	
+	if discrepancyCount > 0 {
+		log.Printf("⚠️ [定期审计] 发现 %d 个数据差异，已进行同步修复", discrepancyCount)
+	} else {
+		log.Printf("✅ [定期审计] 数据库与实际持仓一致，无需修复")
+	}
+	
+	// 5. 检查订单历史中的止损止盈成交
+	if err := at.checkOrderHistoryForMissedExecutions(record); err != nil {
+		log.Printf("⚠️ [定期审计] 检查订单历史失败: %v", err)
+	}
+	
+	return nil
+}
+
+// getOpenTradesFromDatabase 从数据库获取所有开仓状态的交易记录
+func (at *AutoTrader) getOpenTradesFromDatabase() ([]*config.TradeRecord, error) {
+	if at.database == nil {
+		return nil, fmt.Errorf("数据库连接不可用")
+	}
+	
+	// 使用数据库的GetTraderTrades方法，然后过滤出开仓状态的记录
+	allTrades, err := at.database.GetTraderTrades(at.id, 0) // 0表示获取所有记录
+	if err != nil {
+		return nil, err
+	}
+	
+	var openTrades []*config.TradeRecord
+	for _, trade := range allTrades {
+		if trade.Status == "open" {
+			openTrades = append(openTrades, trade)
+		}
+	}
+	
+	return openTrades, nil
+}
+
+// estimateCloseDetails 估算平仓价格和原因
+func (at *AutoTrader) estimateCloseDetails(symbol string, openPrice float64, side string) (float64, string) {
+	// 获取当前市场价格作为估算平仓价格
+	marketPrice, err := at.trader.GetMarketPrice(symbol)
+	if err != nil {
+		log.Printf("⚠️ [定期审计] 获取 %s 市场价格失败: %v，使用开仓价格", symbol, err)
+		return openPrice, "unknown_market_price_unavailable"
+	}
+	
+	// 简单的平仓原因推断
+	var pnlPct float64
+	if side == "long" {
+		pnlPct = ((marketPrice - openPrice) / openPrice) * 100
+	} else {
+		pnlPct = ((openPrice - marketPrice) / openPrice) * 100
+	}
+	
+	closeReason := "unknown_external"
+	if pnlPct < -5 { // 亏损超过5%，可能是止损
+		closeReason = "likely_stop_loss"
+	} else if pnlPct > 10 { // 盈利超过10%，可能是止盈
+		closeReason = "likely_take_profit"
+	} else {
+		closeReason = "likely_manual_close"
+	}
+	
+	return marketPrice, closeReason
+}
+
+// checkOrderHistoryForMissedExecutions 通过检查订单历史来发现遗漏的止损止盈成交
+func (at *AutoTrader) checkOrderHistoryForMissedExecutions(record *logger.DecisionRecord) error {
+	log.Printf("🔍 [订单历史检查] 开始检查近期订单历史中的遗漏成交...")
+	
+	// 获取当前所有持仓的币种
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓列表失败: %w", err)
+	}
+	
+	// 收集需要检查的币种（当前持仓 + 最近交易的币种）
+	symbolsToCheck := make(map[string]bool)
+	for _, pos := range positions {
+		symbol := pos["symbol"].(string)
+		symbolsToCheck[symbol] = true
+	}
+	
+	// 从数据库获取最近交易的币种
+	if at.database != nil {
+		recentTrades, err := at.database.GetTraderTrades(at.id, 20) // 获取最近20笔交易
+		if err == nil {
+			for _, trade := range recentTrades {
+				symbolsToCheck[trade.Symbol] = true
+			}
+		}
+	}
+	
+	if len(symbolsToCheck) == 0 {
+		log.Printf("📋 [订单历史检查] 无需检查的币种，跳过")
+		return nil
+	}
+	
+	log.Printf("📋 [订单历史检查] 将检查 %d 个币种的订单历史", len(symbolsToCheck))
+	
+	var totalMissedExecutions int
+	
+	// 检查每个币种的订单历史
+	for symbol := range symbolsToCheck {
+		missedCount, err := at.checkSymbolOrderHistory(symbol, record)
+		if err != nil {
+			log.Printf("⚠️ [订单历史检查] 检查 %s 失败: %v", symbol, err)
+			continue
+		}
+		totalMissedExecutions += missedCount
+		
+		// 避免API频率限制，添加短暂延迟
+		time.Sleep(200 * time.Millisecond)
+	}
+	
+	if totalMissedExecutions > 0 {
+		log.Printf("📊 [订单历史检查] 发现并修复了 %d 个遗漏的止损止盈成交", totalMissedExecutions)
+	} else {
+		log.Printf("✅ [订单历史检��] 未发现遗漏的成交记录")
+	}
+	
+	return nil
+}
+
+// checkSymbolOrderHistory 检查单个币种的订单历史
+func (at *AutoTrader) checkSymbolOrderHistory(symbol string, record *logger.DecisionRecord) (int, error) {
+	// 获取最近50个订单历史
+	orderHistory, err := at.trader.GetOrderHistory(symbol, 50)
+	if err != nil {
+		return 0, fmt.Errorf("获取 %s 订单历史失败: %w", symbol, err)
+	}
+	
+	if len(orderHistory) == 0 {
+		return 0, nil
+	}
+	
+	log.Printf("🔍 [订单历史检查] %s 找到 %d 个历史订单", symbol, len(orderHistory))
+	
+	var missedCount int
+	currentTime := time.Now().Unix()
+	
+	// 检查最近24小时内的止损止盈成交
+	for _, order := range orderHistory {
+		orderType, _ := order["type"].(string)
+		updateTime, _ := order["updateTime"].(int64)
+		
+		// 只检查最近24小时的订单
+		if currentTime-updateTime/1000 > 86400 { // updateTime是毫秒，转为秒
+			continue
+		}
+		
+		// 只检查止损止盈订单
+		if orderType != "STOP_MARKET" && orderType != "STOP" && 
+		   orderType != "TAKE_PROFIT_MARKET" && orderType != "TAKE_PROFIT" {
+			continue
+		}
+		
+		orderID, _ := order["orderId"].(int64)
+		positionSide, _ := order["positionSide"].(string)
+		avgPrice, _ := order["avgPrice"].(string)
+		quantity, _ := order["quantity"].(string)
+		
+		// 检查这个成交是否已经在我们的记录中
+		if !at.isOrderExecutionRecorded(orderID, symbol, positionSide) {
+			log.Printf("🔍 [订单历史检查] 发现遗漏的成交: %s %s 订单ID=%d", symbol, orderType, orderID)
+			
+			// 解析成交信息
+			execPrice, _ := strconv.ParseFloat(avgPrice, 64)
+			execQuantity, _ := strconv.ParseFloat(quantity, 64)
+			
+			if execPrice > 0 && execQuantity > 0 {
+				// 确定方向
+				side := "long"
+				if positionSide == "SHORT" {
+					side = "short"
+				}
+				
+				// 记录这个遗漏的成交
+				pendingOrder := &PendingStopOrder{
+					Symbol:         symbol,
+					Side:           side,
+					OrderID:        orderID,
+					StopPrice:      execPrice,
+					Quantity:       execQuantity,
+					CreateTime:     time.Unix(updateTime/1000, 0),
+					OriginalAction: fmt.Sprintf("history_detected_%s", orderType),
+				}
+				
+				log.Printf("📊 [订单历史检查] 记录遗漏成交: %s %s 数量=%.6f 价格=%.6f", 
+					symbol, side, execQuantity, execPrice)
+				
+				at.recordStopLossExecution(pendingOrder, record)
+				missedCount++
+			}
+		}
+	}
+	
+	return missedCount, nil
+}
+
+// isOrderExecutionRecorded 检查指定订单的成交是否已经被记录
+func (at *AutoTrader) isOrderExecutionRecorded(orderID int64, symbol, positionSide string) bool {
+	if at.database == nil {
+		return false // 无法验证，保守地认为未记录
+	}
+	
+	// 从数据库检查是否有相关的交易动作记录
+	actions, err := at.database.GetTradeActions(at.id, 100) // 获取最近100个动作
+	if err != nil {
+		log.Printf("⚠️ [订单历史检查] 获取交易动作记录失败: %v", err)
+		return false
+	}
+	
+	side := "long"
+	if positionSide == "SHORT" {
+		side = "short"  
+	}
+	
+	// 检查是否有匹配的记录
+	for _, action := range actions {
+		if action.OrderID == fmt.Sprintf("%d", orderID) && 
+		   action.Symbol == symbol && 
+		   (strings.Contains(action.Action, side) || strings.Contains(action.Action, "stop_loss")) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// validateDatabaseIntegrity 验证数据库交易记录的完整性
+// 这个函数检查数据库记录与实际持仓的一致性，发现并修复数据不一致问题
+func (at *AutoTrader) validateDatabaseIntegrity(record *logger.DecisionRecord) error {
+	log.Printf("🔍 [数据库完整性校验] 开始验证交易记录完整性...")
+	
+	if at.database == nil {
+		log.Printf("⚠️ [数据库完整性校验] 数据库连接不可用，跳过校验")
+		return nil
+	}
+	
+	var totalIssues int
+	
+	// 1. 检查开仓记录与实际持仓的一致性
+	issues1, err := at.validateOpenTradesConsistency()
+	if err != nil {
+		log.Printf("❌ [数据库完整性校验] 开仓记录一致性检查失败: %v", err)
+	} else {
+		totalIssues += issues1
+	}
+	
+	// 2. 检查交易动作记录的完整性
+	issues2, err := at.validateTradeActionsIntegrity()
+	if err != nil {
+		log.Printf("❌ [数据库完整性校验] 交易动作完整性检查失败: %v", err)
+	} else {
+		totalIssues += issues2
+	}
+	
+	// 3. 检查止损单跟踪记录的准确性
+	issues3, err := at.validateStopOrdersConsistency()
+	if err != nil {
+		log.Printf("❌ [数据库完整性校验] 止损单记录一致性检查失败: %v", err)
+	} else {
+		totalIssues += issues3
+	}
+	
+	// 4. 检查孤立和重复记录
+	issues4, err := at.validateRecordConsistency()
+	if err != nil {
+		log.Printf("❌ [数据库完整性校验] 记录一致性检查失败: %v", err)
+	} else {
+		totalIssues += issues4
+	}
+	
+	if totalIssues > 0 {
+		log.Printf("⚠️ [数据库完整性校验] 发现 %d 个数据完整性问题，已进行修复", totalIssues)
+	} else {
+		log.Printf("✅ [数据库完整性校验] 数据库记录完整，无需修复")
+	}
+	
+	return nil
+}
+
+// validateOpenTradesConsistency 验证开仓记录与实际持仓的一致性
+func (at *AutoTrader) validateOpenTradesConsistency() (int, error) {
+	log.Printf("🔍 [开仓一致性] 检查开仓记录与实际持仓的一致性...")
+	
+	// 获取数据库中所有开仓状态的交易记录
+	openTrades, err := at.getOpenTradesFromDatabase()
+	if err != nil {
+		return 0, err
+	}
+	
+	// 获取当前实际持仓
+	currentPositions, err := at.trader.GetPositions()
+	if err != nil {
+		return 0, err
+	}
+	
+	// 建立持仓映射
+	positionMap := make(map[string]map[string]interface{}) // key: symbol_side
+	for _, pos := range currentPositions {
+		symbol := pos["symbol"].(string)
+		side := pos["side"].(string)
+		key := fmt.Sprintf("%s_%s", symbol, side)
+		positionMap[key] = pos
+	}
+	
+	var issues int
+	
+	// 检查每个数据库开仓记录
+	for _, trade := range openTrades {
+		posKey := fmt.Sprintf("%s_%s", trade.Symbol, trade.Side)
+		actualPos, hasPosition := positionMap[posKey]
+		
+		if !hasPosition {
+			// 数据库显示开仓但实际无持仓
+			log.Printf("❗ [开仓一致性] 发现数据不一致: %s %s 数据库显示开仓但实际无持仓", trade.Symbol, trade.Side)
+			issues++
+			
+			// 估算关闭价格和原因
+			estimatedPrice, closeReason := at.estimateCloseDetails(trade.Symbol, trade.OpenPrice, trade.Side)
+			
+			// 更新数据库状态
+			log.Printf("🔄 [开仓一致性] 修复不一致记录: %s %s", trade.Symbol, trade.Side)
+			at.updateTradeInDatabase(trade.Symbol, trade.Side, estimatedPrice, 
+				"INTEGRITY_CHECK", fmt.Sprintf("auto_fix_%s", closeReason))
+		} else {
+			// 检查数量是否匹配
+			actualQuantity := actualPos["positionAmt"].(float64)
+			if actualQuantity < 0 {
+				actualQuantity = -actualQuantity
+			}
+			
+			if math.Abs(actualQuantity-trade.Quantity) > 0.0001 {
+				log.Printf("⚠️ [开仓一致性] 数量不匹配: %s %s 数据库(%.6f) vs ���际(%.6f)", 
+					trade.Symbol, trade.Side, trade.Quantity, actualQuantity)
+				// 注：这种情况通常是部分平仓导致，需要进一步分析
+			}
+		}
+	}
+	
+	return issues, nil
+}
+
+// validateTradeActionsIntegrity 验证交易动作记录的完整性
+func (at *AutoTrader) validateTradeActionsIntegrity() (int, error) {
+	log.Printf("🔍 [动作完整性] 检查交易动作记录的完整性...")
+	
+	// 获取最近的交易动作记录
+	actions, err := at.database.GetTradeActions(at.id, 200)
+	if err != nil {
+		return 0, err
+	}
+	
+	var issues int
+	
+	// 按币种和方向分组统计动作
+	actionGroups := make(map[string][]string) // key: symbol_side, value: []actions
+	for _, action := range actions {
+		// 从动作中推断方向
+		var side string
+		if strings.Contains(action.Action, "long") {
+			side = "long"
+		} else if strings.Contains(action.Action, "short") {
+			side = "short"
+		} else {
+			continue // 跳过无法识别方向的动作
+		}
+		
+		key := fmt.Sprintf("%s_%s", action.Symbol, side)
+		actionGroups[key] = append(actionGroups[key], action.Action)
+	}
+	
+	// 检查每个组的动作逻辑
+	for key, actions := range actionGroups {
+		openCount := 0
+		closeCount := 0
+		
+		for _, action := range actions {
+			if strings.Contains(action, "open") {
+				openCount++
+			} else if strings.Contains(action, "close") || strings.Contains(action, "stop_loss") {
+				closeCount++
+			}
+		}
+		
+		// 检查开仓平仓逻辑是否合理
+		if openCount > 0 && closeCount > openCount {
+			log.Printf("⚠️ [动作完整性] %s 平仓次数(%d)超过开仓次数(%d)，可能存在记录遗漏", 
+				key, closeCount, openCount)
+			issues++
+		}
+	}
+	
+	return issues, nil
+}
+
+// validateStopOrdersConsistency 验证止损单跟踪记录的准确性
+func (at *AutoTrader) validateStopOrdersConsistency() (int, error) {
+	log.Printf("🔍 [止损单一致性] 检查止损单跟踪记录的准确性...")
+	
+	// 获取数据库中的活跃止损单记录
+	activeStopOrders, err := at.database.GetActiveStopOrders(at.id)
+	if err != nil {
+		return 0, err
+	}
+	
+	var issues int
+	
+	// 检查每个活跃的止损单
+	for _, stopOrder := range activeStopOrders {
+		// 检查对应的持仓是否还存在
+		positions, err := at.trader.GetPositions()
+		if err != nil {
+			log.Printf("⚠️ [止损单一致性] 获取持仓失败: %v", err)
+			continue
+		}
+		
+		hasPosition := false
+		for _, pos := range positions {
+			if pos["symbol"] == stopOrder.Symbol && pos["side"] == stopOrder.Side {
+				hasPosition = true
+				break
+			}
+		}
+		
+		if !hasPosition {
+			// 止损单显示活跃但持仓不存在，应该更新状态
+			log.Printf("❗ [止损单一致性] 发现孤立止损单: %s %s (订单ID: %d)", 
+				stopOrder.Symbol, stopOrder.Side, stopOrder.OrderID)
+			issues++
+			
+			// 更新止损单状态为已成交
+			err := at.database.UpdateStopOrderStatus(at.id, stopOrder.OrderID, "filled")
+			if err != nil {
+				log.Printf("❌ [止损单一致性] 更新止损单状态失败: %v", err)
+			} else {
+				log.Printf("✅ [止损单一致性] 已更新孤立止损单状态为已成交")
+			}
+		}
+		
+		// 验证止损单是否真的存在于交易所
+		if hasPosition {
+			orderStatus, err := at.trader.GetOrderStatus(stopOrder.Symbol, stopOrder.OrderID)
+			if err != nil {
+				// 订单不存在或已取消，但数据库显示活跃
+				log.Printf("❗ [止损单一致性] 止损单在交易所不存在: %s %s (订单ID: %d)", 
+					stopOrder.Symbol, stopOrder.Side, stopOrder.OrderID)
+				issues++
+				
+				// 更新状态为取消
+				at.database.UpdateStopOrderStatus(at.id, stopOrder.OrderID, "cancelled")
+			} else {
+				// 检查状态是否一致
+				exchangeStatus, _ := orderStatus["status"].(string)
+				if exchangeStatus == "FILLED" && stopOrder.Status == "active" {
+					log.Printf("❗ [止损单一致性] 止损单状态不一致: 交易所已成交但数据库显示活跃")
+					issues++
+					
+					// 更新状态
+					at.database.UpdateStopOrderStatus(at.id, stopOrder.OrderID, "filled")
+				}
+			}
+		}
+	}
+	
+	return issues, nil
+}
+
+// validateRecordConsistency 检查孤立和重复记录
+func (at *AutoTrader) validateRecordConsistency() (int, error) {
+	log.Printf("🔍 [记录一致性] 检查孤立和重复记录...")
+	
+	var issues int
+	
+	// 检查是否有孤立的交易动作记录（没有对应的交易记录）
+	actions, err := at.database.GetTradeActions(at.id, 100)
+	if err != nil {
+		return 0, err
+	}
+	
+	// 获取所有交易记录用于比对
+	trades, err := at.database.GetTraderTrades(at.id, 100)
+	if err != nil {
+		return 0, err
+	}
+	
+	// 建立交易ID映射
+	tradeIDs := make(map[string]bool)
+	for _, trade := range trades {
+		tradeIDs[trade.ID] = true
+	}
+	
+	// 检查动作记录中的trade_id引用
+	for _, action := range actions {
+		if action.TradeID != nil && *action.TradeID != "" {
+			if !tradeIDs[*action.TradeID] {
+				log.Printf("❗ [记录一致性] 发现孤立的交易动作记录: %s (引用了不存在的交易ID: %s)", 
+					action.Action, *action.TradeID)
+				issues++
+				// 注：这里可以选择清理孤立记录，但为了安全起见，只记录日志
+			}
+		}
+	}
+	
+	// 检查重复的开仓记录（同一币种同一方向有多个开仓状态的记录）
+	openTradeGroups := make(map[string][]*config.TradeRecord) // key: symbol_side
+	for _, trade := range trades {
+		if trade.Status == "open" {
+			key := fmt.Sprintf("%s_%s", trade.Symbol, trade.Side)
+			openTradeGroups[key] = append(openTradeGroups[key], trade)
+		}
+	}
+	
+	// 检查是否有重复的开仓记录
+	for key, openTrades := range openTradeGroups {
+		if len(openTrades) > 1 {
+			log.Printf("❗ [记录一致性] 发现重复的开仓记录: %s 有 %d 个开仓状态的记录", key, len(openTrades))
+			issues++
+			
+			// 保留最新的记录，关闭较旧的记录
+			for i := 0; i < len(openTrades)-1; i++ {
+				oldTrade := openTrades[i]
+				log.Printf("🔄 [记录一致性] 关闭重复的旧开仓记录: %s (ID: %s)", key, oldTrade.ID)
+				
+				// 估算关闭价格
+				estimatedPrice, _ := at.estimateCloseDetails(oldTrade.Symbol, oldTrade.OpenPrice, oldTrade.Side)
+				
+				// 关闭重复记录
+				at.database.UpdateTrade(oldTrade.ID, estimatedPrice, time.Now(), 
+					"closed", "duplicate_cleanup", "AUTO_CLEANUP", 0, 0, 0)
+			}
+		}
+	}
+	
+	return issues, nil
 }

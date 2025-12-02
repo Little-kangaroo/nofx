@@ -208,6 +208,24 @@ func (d *Database) createTables() error {
 			FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE SET NULL
 		)`,
 
+		// 止损单跟踪表 - 持久化挂单状态避免重启丢失
+		`CREATE TABLE IF NOT EXISTS stop_orders_tracking (
+			id TEXT PRIMARY KEY,
+			trader_id TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL, -- 'long' or 'short'
+			order_id INTEGER NOT NULL,
+			stop_price REAL NOT NULL,
+			quantity REAL NOT NULL,
+			order_type TEXT NOT NULL, -- 'STOP_MARKET', 'STOP'
+			status TEXT NOT NULL DEFAULT 'active', -- 'active', 'filled', 'cancelled', 'expired'
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			filled_at DATETIME,
+			UNIQUE(trader_id, symbol, side, order_id),
+			FOREIGN KEY (trader_id) REFERENCES traders(id) ON DELETE CASCADE
+		)`,
+
 		// 触发器：自动更新 updated_at
 		`CREATE TRIGGER IF NOT EXISTS update_users_updated_at
 			AFTER UPDATE ON users
@@ -1949,4 +1967,129 @@ func (d *Database) calculateSharpeRatioFromTrades(trades []*TradeRecord) float64
 	// 注：直接返回周期级别的夏普比率（非年化），正常范围 -2 到 +2
 	sharpeRatio := meanReturn / stdDev
 	return sharpeRatio
+}
+
+// ===== 止损单跟踪相关方法 =====
+
+// StopOrderTracking 止损单跟踪记录
+type StopOrderTracking struct {
+	ID        string     `json:"id"`
+	TraderID  string     `json:"trader_id"`
+	Symbol    string     `json:"symbol"`
+	Side      string     `json:"side"` // 'long' or 'short'
+	OrderID   int64      `json:"order_id"`
+	StopPrice float64    `json:"stop_price"`
+	Quantity  float64    `json:"quantity"`
+	OrderType string     `json:"order_type"` // 'STOP_MARKET', 'STOP'
+	Status    string     `json:"status"`     // 'active', 'filled', 'cancelled', 'expired'
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	FilledAt  *time.Time `json:"filled_at"`
+}
+
+// CreateStopOrderTracking 创建止损单跟踪记录
+func (d *Database) CreateStopOrderTracking(record *StopOrderTracking) error {
+	if record.ID == "" {
+		record.ID = fmt.Sprintf("stop_track_%d", time.Now().UnixNano())
+	}
+	
+	_, err := d.db.Exec(`
+		INSERT OR REPLACE INTO stop_orders_tracking (
+			id, trader_id, symbol, side, order_id, stop_price, quantity, order_type, status
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.ID, record.TraderID, record.Symbol, record.Side, record.OrderID, 
+	record.StopPrice, record.Quantity, record.OrderType, record.Status)
+	
+	return err
+}
+
+// UpdateStopOrderStatus 更新止损单状态
+func (d *Database) UpdateStopOrderStatus(traderID string, orderID int64, status string) error {
+	filledAt := sql.NullTime{}
+	if status == "filled" {
+		filledAt.Valid = true
+		filledAt.Time = time.Now()
+	}
+	
+	_, err := d.db.Exec(`
+		UPDATE stop_orders_tracking 
+		SET status = ?, updated_at = CURRENT_TIMESTAMP, filled_at = ?
+		WHERE trader_id = ? AND order_id = ?
+	`, status, filledAt, traderID, orderID)
+	
+	return err
+}
+
+// GetActiveStopOrders 获取活跃的止损单
+func (d *Database) GetActiveStopOrders(traderID string) ([]*StopOrderTracking, error) {
+	rows, err := d.db.Query(`
+		SELECT id, trader_id, symbol, side, order_id, stop_price, quantity, order_type, 
+			   status, created_at, updated_at, filled_at
+		FROM stop_orders_tracking 
+		WHERE trader_id = ? AND status = 'active'
+		ORDER BY created_at DESC
+	`, traderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	
+	var stopOrders []*StopOrderTracking
+	for rows.Next() {
+		var record StopOrderTracking
+		var filledAt sql.NullTime
+		
+		err := rows.Scan(
+			&record.ID, &record.TraderID, &record.Symbol, &record.Side, &record.OrderID,
+			&record.StopPrice, &record.Quantity, &record.OrderType, &record.Status,
+			&record.CreatedAt, &record.UpdatedAt, &filledAt)
+		if err != nil {
+			continue
+		}
+		
+		if filledAt.Valid {
+			record.FilledAt = &filledAt.Time
+		}
+		
+		stopOrders = append(stopOrders, &record)
+	}
+	
+	return stopOrders, nil
+}
+
+// GetStopOrderByID 根据订单ID获取止损单跟踪记录
+func (d *Database) GetStopOrderByID(traderID string, orderID int64) (*StopOrderTracking, error) {
+	var record StopOrderTracking
+	var filledAt sql.NullTime
+	
+	err := d.db.QueryRow(`
+		SELECT id, trader_id, symbol, side, order_id, stop_price, quantity, order_type, 
+			   status, created_at, updated_at, filled_at
+		FROM stop_orders_tracking 
+		WHERE trader_id = ? AND order_id = ?
+	`, traderID, orderID).Scan(
+		&record.ID, &record.TraderID, &record.Symbol, &record.Side, &record.OrderID,
+		&record.StopPrice, &record.Quantity, &record.OrderType, &record.Status,
+		&record.CreatedAt, &record.UpdatedAt, &filledAt)
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	if filledAt.Valid {
+		record.FilledAt = &filledAt.Time
+	}
+	
+	return &record, nil
+}
+
+// CleanupStopOrders 清理已完成的止损单记录（定期清理）
+func (d *Database) CleanupStopOrders(traderID string, daysOld int) error {
+	_, err := d.db.Exec(`
+		DELETE FROM stop_orders_tracking 
+		WHERE trader_id = ? AND status IN ('filled', 'cancelled', 'expired') 
+		AND created_at < datetime('now', '-' || ? || ' days')
+	`, traderID, daysOld)
+	
+	return err
 }

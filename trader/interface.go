@@ -45,6 +45,9 @@ type Trader interface {
 	// GetOpenOrders 获取指定币种的所有挂单
 	GetOpenOrders(symbol string) ([]map[string]interface{}, error)
 
+	// GetOrderHistory 获取指定币种的订单历史（最近N个订单）
+	GetOrderHistory(symbol string, limit int) ([]map[string]interface{}, error)
+
 	// FormatQuantity 格式化数量到正确的精度
 	FormatQuantity(symbol string, quantity float64) (string, error)
 }

@@ -733,3 +733,13 @@ func (t *HyperliquidTrader) GetOpenOrders(symbol string) ([]map[string]interface
 	log.Printf("⚠️ [Hyperliquid] GetOpenOrders 暂未实现")
 	return []map[string]interface{}{}, nil
 }
+
+// GetOrderHistory 获取指定币种的订单历史（最近N个订单）
+func (t *HyperliquidTrader) GetOrderHistory(symbol string, limit int) ([]map[string]interface{}, error) {
+	log.Printf("🔍 [Hyperliquid] 查询 %s 的订单历史 (最近%d个订单)...", symbol, limit)
+	
+	// TODO: 实现Hyperliquid的订单历史查询
+	// 目前返回空列表，避免编译错误
+	log.Printf("⚠️ [Hyperliquid] GetOrderHistory 暂未实现")
+	return []map[string]interface{}{}, nil
+}
