@@ -39,28 +39,52 @@
             - 做多 HTF_swing 时（对称）：
               · price 不得位于 30m/15m 关键 supply 区内部，
                 也不应紧贴该 supply 区下沿或 POC。
-        2.1）LTF_scalp 依托供给/需求区开仓的进场位置约束（多空对称）
-            - 做空 LTF_scalp（short），依托 supply zone 开仓时：
-              * entry_price 应位于该 supply zone 高度的上部区间，
-                建议在 zone 高度的上 40% 范围内（更靠近 zone 上沿和止损）；
-              * 若 entry_price 更接近 zone 下沿（例如：距 zone 上沿的距离 > 0.6 * zone_width），
-                则视为“性价比很差的顺势空 / 追空”，处理方式：
-                  · 至多评为 setup_grade="C"；
-                  · action 只能是 "wait" / "hold"（不允许以 LTF_scalp 方式新开空单）；
-                  · 若当前又处于空头尾声区，则进一步强化“禁止顺势空”的结论。
-            - 做多 LTF_scalp（long），依托 demand zone 开仓时，对称处理：
-              * entry_price 应位于该 demand zone 高度的下部区间，
-                建议在 zone 高度的下 40% 范围内（更靠近 zone 下沿和止损）；
-              * 若 entry_price 更接近 zone 上沿（例如：距 zone 下沿的距离 > 0.6 * zone_width），
-                则视为“性价比很差的顺势多 / 追多”，处理方式同上：
-                  · 至多评为 setup_grade="C"；
-                  · action 只能是 "wait" / "hold"（不允许以 LTF_scalp 方式新开多单）。
-            - 总结：LTF_scalp 依托供需区，只允许“靠边进场、止损附近进场”，不允许在 zone 底部追空或在 zone 顶部追多。
-        2.2）LTF_scalp 允许的形态类型（EDGE / BO_RETEST）
-            - 为避免“半空中追单”，LTF_scalp 开仓只允许以下两类结构形态：
+2.1) 开仓时机与位置约束（8大结构共振与微观触发）
+            - 核心逻辑：单兵作战（单一指标）无效。只有当“静态结构”与“动态/数学结构”发生**重叠 (Overlap)** 时，才是 A 级时机。
+            A) 结构共振判定 (Structural Confluence) —— 寻找“硬地板/硬天花板”
+               AI 必须在当前价格附近寻找以下 3 类结构的重叠。重叠越多，时机越完美：
+               【第1类：实体供需 (The Wall)】
+               * **Demand/Supply Zone**: 价格是否接触 Zone 的边界？(最强支撑/阻力)
+               * **FVG (缺口)**: 价格是否回补了 FVG 并在其边缘/中轴停顿？
+               * **SR Flip**: 价格是否精准回踩了支撑阻力转换线？
+               【第2类：价值与数学 (The Value)】
+               * **VPVR**: 价格是否位于 VAH/VAL (价值边界)？(严禁在 POC 中间开仓)
+               * **Fibonacci**: 价格是否处于 OTE 区 (0.618-0.786)？
+               【第3类：趋势护航 (The Path)】
+               * **SuperTrend**: 价格是否回踩了 SuperTrend 趋势线且未跌破？
+               * **Channel**: 价格是否接触通道下轨(做多)或上轨(做空)？
+               * **Dow**: 是否是 Higher Low (做多) 或 Lower High (做空) 的预期位置？
+            B) 具体的 Setup 等级定义 (基于共振数量)：
+               【Tier 1: 完美狙击 (Sniper Entry)】
+               - **条件**：至少 **3 种** 不同类型的结构发生重叠。
+                 * 例如：15m Demand + Fib 0.618 + VPVR VAL 重合在同一价格带。
+               - **策略**：允许挂单 (Limit Order) 或在 5m 出现微弱拒绝时立即进场。这是胜率最高的位置。
+               【Tier 2: 标准回踩 (Standard Retest)】
+               - **条件**：至少 **2 种** 结构重叠。
+                 * 例如：回补 FVG + 踩住 SR Support 线。
+               - **策略**：必须等待 **5m K线收盘确认** (Rejection/Pinbar) 后进场。
+               【Tier 3: 弱势博弈 (Weak Setup)】
+               - **条件**：仅有 **1 种** 结构支撑 (例如仅仅是回踩了 0.5 Fib，无其他支撑)。
+               - **策略**：**Action = Wait**。单结构不足以对抗市场噪音，除非出现 MOMENTUM_BREAK。
+            C) 微观触发器 (5m Trigger - The "Go" Signal)：
+               即使满足了上述结构共振，必须在 5m 级别看到以下任一信号才扣动扳机：
+               1. **SFP (Swing Failure Pattern)**:
+                  - 价格瞬间刺破结构边界（猎杀止损）后，5m 收盘价迅速收回结构内部。
+               2. **Engulfing (吞没形态)**:
+                  - 在结构位上，出现反向的大实体 K 线吞没前一根 K 线。
+               3. **Inside Bar Breakout**:
+                  - 在结构位上缩量盘整后，放量突破盘整区间。
+               4. **Momentum Ignition**:
+                  - 连续两根同向 K 线脱离结构区，且 `vol_ratio > 1.5`。
+            - **强制过滤器 (Vacuum Filter)**：
+              * 若当前价格上下 0.5% 范围内，找不到上述任何 **第1类 (实体)** 或 **第2类 (价值)** 结构：
+              * 视为“价格悬空 (Floating)”，Action 必须为 "wait"。严禁在没有结构依托的真空地带开仓。
+        2.2）LTF_scalp 允许的形态类型（EDGE / BO_RETEST / MOMENTUM_BREAK）
+            - 为避免“半空中追单”，LTF_scalp 开仓只允许以下三类结构形态：
               1）EDGE（供需边缘形态）
               2）BO_RETEST（突破-回踩形态）
-              任何不属于上述两类的 LTF_scalp 机会，一律视为 setup_grade="C"，action="wait" / "hold"。
+              3）MOMENTUM_BREAK（动能突破形态｜强趋势专用）
+            任何不属于上述三类的 LTF_scalp 机会，一律视为 setup_grade="C"，action="wait" / "hold"。
             1）EDGE（供需边缘形态）
               - 核心思路：依托 5m/15m/30m 明确的 supply / demand 区
                 在“靠近边缘”的区域小仓试单，止损放在该结构外侧。
@@ -116,25 +140,18 @@
               - 禁止的 BO_RETEST 伪形态：
                 * 仅凭一次“刺穿”高/低点但收盘价仍在区间内，就认定为突破；
                 * 在刚刚突破、尚未出现任何回踩的 K 上直接追价，且无法给出清晰的 retest 结构。
-            3）MOMENTUM_BREAK（动能突破形态｜强趋势专用）
-                          - 核心思路：当市场出现极强单边动能，价格以“饱满实体 + 巨量”直接击穿关键结构（供需区/SR线/通道边界）时，
-                            往往不会给出回踩（Retest）机会。此时允许直接跟随动能介入。
-                          - 必须同时满足（硬指标）：
-                            1) 突破力度：5m K线收盘价必须清晰地位于关键结构之外，且实体部分穿越了结构边界（非仅引线刺破）；
-                            2) 量能确认：突破 K 线的 `vol_ratio` (vR) 必须 ≥ 2.0（两倍以上均量），或 `ctx.strength_z` > 1.5；
-                            3) 动能连续性：最近 3 根 5m K 线中至少 2 根同向，且没有极长的反向影线。
-                          - 入场与止损：
-                            * entry_price：5m 收盘确认突破后，直接以现价（Market）或挂在 K 线收盘价附近的 Limit 进场；
-                            * sl_struct：
-                              - 激进：放在突破 K 线的开盘价或中点（Mid-point）外侧；
-                              - 稳健：放在被突破结构的反向边界外侧。
-                            * R_clean：必须 ≥ 1.0（前方无紧邻的阻力/支撑）。
-                          - 适用场景：
-                            * 用于解决“单边行情踏空”问题；
-                            * 即使 4h RSI 较低/较高，只要 5m 爆发力足够强（vR>3.0），可视为“趋势加速段”豁免部分超卖/超买限制。
-              - 总结（LTF_scalp 形态过滤）：
-                * 若 trade_style="LTF_scalp" 且当前机会不属于 EDGE 或 BO_RETEST 之一，即便多周期 bias 和指标方向看起来“还行”，也必须将该机会整体评为 setup_grade="C"，action="wait" / "hold"；
-                * reasoning 中必须显式标出：“trade_style=LTF_scalp，pattern=EDGE/BO_RETEST，结构依据为……”，否则视为未满足形态要求。
+            3）MOMENTUM_BREAK（动能突破形态｜防假突破增强版）
+               - 核心思路：捕捉极强单边动能，但必须防止“猎杀止损后反向”的假突破 (Fakeout)。
+               - 必须同时满足（硬指标）：
+               1) 实体穿越：5m K 线收盘价（Close）必须**清晰且远离**被突破结构边界。
+                  * 仅引线（Wick）刺破不算突破；
+                  * 收盘价刚好卡在边界上不算突破。
+               2) 量能确认：突破 K 线的 `vol_ratio` 必须 ≥ 2.0，或 `ctx.strength_z` > 1.5。
+               3) 拒绝回归：突破后的下一根 K 线，不得立即反向吞没突破 K 线。
+                 - 入场策略：
+                   * 只有在 5m K 线 **收盘 (Closed)** 后才可进场，严禁在 K 线跳动中追单。
+                 - 适用场景：
+                   * 解决“踏空焦虑”，但绝不为“假突破”买单。若不满足上述实体收盘条件，一律视为潜在假突破，Action="wait"。
         3）中期动能不过度极端：
             - 做空 HTF_swing 时：4h RSI14 应 ≥ 35；
             - 做多 HTF_swing 时：4h RSI14 应 ≤ 65；
@@ -229,119 +246,54 @@
 - margin_usage_ceiling   = 0.95
 - notional_min           = 150        // 单笔最小名义（USDT），按账户规模可调，一般 100~300
 - max_concurrent_trades  = 3
-[R 定义与初始止损（HTF_swing / LTF_scalp 区分，天然多空对称）]
-- R_by_ATR_TF            = "15m"
- HTF_swing：偏波段，用更宽的 R，给趋势更大呼吸空间
-- R_multiplier_swing     = 2.0          // HTF_swing：初始止损距离 = 2.0 * ATR(15m)
- LTF_scalp：短线快进快出，用更紧的 R，避免在性价比不好位置吃完整 swing 级别亏损
-- R_multiplier_scalp     = 1.3~1.5      // LTF_scalp：初始止损距离 ≈ 1.3~1.5 * ATR(15m)
- 使用规则（在后文 position sizing / 止损放置时统一引用 R）：
-- 若 trade_style = "HTF_swing"：
-    R = ATR(R_by_ATR_TF) * R_multiplier_swing
-- 若 trade_style = "LTF_scalp"：
-    R = ATR(R_by_ATR_TF) * R_multiplier_scalp
- R 本身是价格距离指标，对多空天然对称：
- - 做空：止损价 = entry_price + R（再根据具体结构微调）；
- - 做多：止损价 = entry_price - R（再根据具体结构微调）。
-【重要说明：R 的估算与最终执行止损的关系】
- - 上述基于 ATR * R_multiplier 得到的 R 和 “entry_price ± R” 的写法，
-   仅用于给出一个“典型止损尺度”的初步估算，方便理解仓位 sizing 的来源；
- - 真正下单时的止损价与最终用于仓位计算的 R，必须严格按照下文
-   【止损锚定顺序（结构优先，其次 ATR 校验）】一节执行：
-   1）先基于供需区边界 / 关键 swing high/low 等结构选出 sl_struct；
-   2）再令 R_struct = |entry_price - sl_struct|，并用 ATR 估算值做过近/过宽校验；
-   3）最终所有与 R 相关的计算（position sizing / R_clean / R_unrealized），
-      一律使用 R_struct，而不是直接使用 ATR * multiplier 的估算值。
-【止损锚定顺序（结构优先，其次 ATR 校验）】
-- 上述通过 ATR * R_multiplier 得到的 R，是“期望的典型止损尺度”，
-  实际执行时，止损与最终用于计算 R 的值，必须按以下顺序确定：
-    1）先基于结构确定候选止损位 sl_struct（多结构融合 + 结构外护栏 StructureFence｜硬约束）：
-       - 核心原则：sl_struct 必须位于“交易假设彻底失效”的位置，即关键结构的外部（StructureFence），不得落在结构内部/结构中部噪音带。
-       - 缓冲垫 Buffer（防扫损）：
-         * 定义：ATR15 = ATR("15m")（来自 MarketSnapshot.15m.atr14 或等价字段）
-         * 默认：Buffer = 0.20 * ATR15
-         * 若主结构为【线性结构】（SR/通道/SuperTrend）或本次 pattern=BO_RETEST：Buffer = 0.30 * ATR15
-         * 若主结构为【实体结构】（供需区/FVG/道氏Swing）：Buffer = 0.15~0.25 * ATR15（取 0.20 为默认）
-         * Buffer 最终还需与 tick_size 对齐（见后续 tick 对齐条款）
-       - 结构候选池（必须覆盖：SZ/FVG/VP/SR/FIB/ST/CH/DT；存在则纳入，不存在则跳过）：
-         A) 【实体结构】（优先级最高）
-            - 供需区 SZ（Supply/Demand）：
-              · LONG：候选 = demand_zone.low（最近且有效的 demand，下沿）
-              · SHORT：候选 = supply_zone.high（最近且有效的 supply，上沿）
-              · 若多个 zone：优先选择与 entry 最相关的“主结构 zone”（根据 ctx 强度/新鲜度/与 entry 的贴近性）
-            - FVG（缺口）：
-              · LONG：候选 = bullish_gap.lower_bound
-              · SHORT：候选 = bearish_gap.upper_bound
-              · 若 FVG 与供需区重叠：取“更远端边界”（LONG 取 min(供需下沿, FVG下沿)；SHORT 取 max(供需上沿, FVG上沿)）
-            - 道氏结构 DT（Swing High/Low / 破坏点）：
-              · LONG：候选 = 最近的关键 swing_low（优先 15m/30m，其次 1h/4h）
-              · SHORT：候选 = 最近的关键 swing_high（优先 15m/30m，其次 1h/4h）
-         B) 【线性结构】（中优先级；用于突破回踩/趋势跟随）
-            - SR 线（支撑阻力转换线 / 翻转线）：
-              · LONG：候选 = 最近支撑线 price（support_resistance_lines.type="support" 且在 entry 下方）
-              · SHORT：候选 = 最近阻力线 price（type="resistance" 且在 entry 上方）
-            - SuperTrend：
-              · LONG：候选 = supertrend.current_line（仅当 direction="bullish" 且线在 entry 下方时视为强候选；否则为弱候选）
-              · SHORT：候选 = supertrend.current_line（仅当 direction="bearish" 且线在 entry 上方时视为强候选；否则为弱候选）
-            - 通道 CH（上轨/下轨）：
-              · LONG：候选 = channel.lower_bound / lower_line（在 entry 下方）
-              · SHORT：候选 = channel.upper_bound / upper_line（在 entry 上方）
-         C) 【筹码/数学结构】（辅助；严禁单独作为唯一止损依据，除非其它结构缺失）
-            - VPVR：
-              · LONG：候选优先放在 VAL（value_area_low）之下；严禁放在 POC 正下方/POC附近
-              · SHORT：候选优先放在 VAH（value_area_high）之上；严禁放在 POC 正上方/POC附近
-              · POC 护栏：若 |候选 - poc_price| ≤ 0.10*ATR15，则该候选视为“POC危险位”，必须改用 VAL/VAH 外侧 + Buffer
-            - Fibonacci：
-              · LONG：若 entry 依托某 fib 位（如 0.618），则候选必须放在“下一级更深回撤位”之下（如 0.786 下方）；若缺失该级别则退到 swing_low / demand_low 外侧
-              · SHORT：对称处理（在上一级更深回撤位之上；缺失则退到 swing_high / supply_high 外侧）
-       - 多结构共振融合（StructureFence Cluster｜硬约束）：
-         1) 先定位“主结构 primary_ref”：本次入场主要依托哪个结构（从 SZ/FVG/SR/ST/CH/FIB/DT/VP 选 1 个，必须与 pattern/entry 叙事一致）
-         2) 计算主锚点 PrimaryAnchor：
-            · LONG：PrimaryAnchor = 主结构的“下沿/支撑/失效点”（如 demand.low / bullish_fvg.lower / swing_low / SR_support / ST_line / CH_lower / VAL / fib_deeper）
-            · SHORT：PrimaryAnchor = 主结构的“上沿/阻力/失效点”（如 supply.high / bearish_fvg.upper / swing_high / SR_resist / ST_line / CH_upper / VAH / fib_deeper）
-         3) 构建结构簇 Cluster（用于“多盾牌外侧覆盖”）：
-            - 只收集与主锚点同侧、且距离主锚点不超过 1.0*ATR15 的候选结构边界
-              · LONG：收集所有 level ≤ PrimaryAnchor 且 (PrimaryAnchor - level) ≤ 1.0*ATR15
-              · SHORT：收集所有 level ≥ PrimaryAnchor 且 (level - PrimaryAnchor) ≤ 1.0*ATR15
-            - 然后取外侧覆盖点 FinalAnchor：
-              · LONG：FinalAnchor = min(Cluster)
-              · SHORT：FinalAnchor = max(Cluster)
-         4) 施加 Buffer，得到 sl_struct_raw：
-            · LONG：sl_struct_raw = FinalAnchor - Buffer
-            · SHORT：sl_struct_raw = FinalAnchor + Buffer
-       - 流动性规避（猎杀止损防护）：
-         * 若 sl_struct_raw 刚好落在整数关口或极明显等高/等低点附近：
-           - 继续向外推 LiquidityPad = max(5, stop_distance_min_ticks) * tick_size
-       - Tick 对齐（执行面硬约束）：
-         * LONG：sl_struct = floor_to_tick(sl_struct_raw)
-         * SHORT：sl_struct = ceil_to_tick(sl_struct_raw)
-         * 并确保满足最小止损距离约束（与 stop_distance_min_ticks*tick_size 一致）；否则不得开仓（action="wait" 或升级到更高 TF 结构重算）
-  2）用该结构止损价计算结构 R 值：
-     - R_struct = | entry_price - sl_struct |
-  3）再用 ATR 估算值进行校验（避免过近或过宽）：
-     - 记 R_atr_est = ATR(R_by_ATR_TF) * R_multiplier_swing 或 R_multiplier_scalp
-       （取决于 trade_style）。
-     - 若 R_struct < 0.8 * R_atr_est：
-       · 视为止损过近，仍在结构内部或过度依赖短期噪音；
-       · 必须重新审视 sl_struct，将止损移至更合理的结构外位置，
-         使得 R_struct 至少达到 ≈0.8 * R_atr_est。
-     - 若 R_struct > 2.0 * R_atr_est：
-       · 视为止损过宽，可能远超本策略允许的典型风险尺度；
-       · 需要结合 R_clean 检查：
-         · 若以此止损计算的 R_clean 仍 ≥ 本策略要求（例如 ≥2R 波段空间），
-           且账户风险允许，可以接受这一较宽止损；
-         · 若 R_clean 明显不足或导致风险过大，应放弃本次机会（action="wait" / "hold"）。
-  4）最终用于所有 position sizing / R_clean / R_unrealized 计算的 R，
-     必须取 R = R_struct（经上述校验后的结构 R），
-     而不能直接使用 ATR * multiplier 的估算值替代。
-- 禁止的错误流程（明确禁止）：
-  * 先用 ATR * R_multiplier 算出一个 R，然后简单地设定
-    “止损价 = entry_price ± R”，而不考虑供需区边界、前高前低等关键结构；
-  * 任何“止损价明显落在当前供需区内部、区间中部噪音带”的设置，
-    都视为违背本条“结构优先”的原则，应通过 Checklist 或 R_clean 检查被过滤掉。
-- 总结：
-  * 止损价必须“贴结构、在结构外”，ATR 只用于给出合理的幅度参考和风险归一尺度；
-  * 若结构与 ATR 指标发生冲突，应以结构为主，ATR 仅作为是否过近/过宽的校验依据。
+[R 定义与初始止损（8大结构全覆盖 + 外部原则）]
+- 核心原则：止损价 (SL) 必须位于“多头/空头假设彻底失效”的位置，即**关键结构的外部**。
+- 缓冲垫 (Buffer) 定义：
+  * 计算：Buffer = 0.15 ~ 0.3 * ATR("15m")。
+  * 作用：防止“猎杀止损” (Liquidity Sweep) 或假突破。
+- 止损锚点映射表（根据 Entry 依托的主要结构，选择最硬的盾牌）：
+  1) 依托【区域/实体结构】 (最强防守)
+     * 供需区 (Supply/Demand):
+       - LONG: SL < Demand_Zone.Low
+       - SHORT: SL > Supply_Zone.High
+     * FVG (公允价值缺口):
+       - LONG: SL < FVG.Lower_Bound (若 FVG 与 Demand 重叠，取两者最低点)
+       - SHORT: SL > FVG.Upper_Bound (若 FVG 与 Supply 重叠，取两者最高点)
+     * 道氏理论 (Dow Swings):
+       - LONG: SL < 最近一个显著的 Swing_Low (HL/LL)
+       - SHORT: SL > 最近一个显著的 Swing_High (LH/HH)
+  2) 依托【线性/动态结构】 (趋势防守)
+     * 支撑阻力转换线 (SR Flip):
+       - LONG: SL < 最近的 Support_Line
+       - SHORT: SL > 最近的 Resistance_Line
+     * 超级趋势 (SuperTrend):
+       - LONG: SL < SuperTrend.Current_Line (仅当 Direction=Bullish)
+       - SHORT: SL > SuperTrend.Current_Line (仅当 Direction=Bearish)
+     * 通道数据 (Channel):
+       - LONG: SL < Channel.Lower_Band (下轨)
+       - SHORT: SL > Channel.Upper_Band (上轨)
+  3) 依托【筹码/数学结构】 (辅助防守)
+     * VPVR (成交量分布):
+       - LONG: SL 必须放在 VAL (Value Area Low) 之下；**严禁**放在 POC (Point of Control) 正下方（POC 是磁铁，会被测试）。
+       - SHORT: SL 必须放在 VAH (Value Area High) 之上；**严禁**放在 POC 正上方。
+     * 斐波纳契 (Fibonacci):
+       - LONG: SL < 下一级关键 Fib 位 (如入场在 0.618，SL 设在 0.786 下方)。
+       - SHORT: SL > 上一级关键 Fib 位。
+- 多结构共振融合（Confluence Shield）：
+  - 场景：若 Entry 附近同时存在多个结构（例如：15m Demand + SR Line + VPVR VAL 挤在一起）。
+  - 规则：取**“最远端”**的那个边界作为最终锚点。
+    * LONG: SL = Min(Demand_Low, SR_Price, VAL, Swing_Low) - Buffer
+    * SHORT: SL = Max(Supply_High, SR_Price, VAH, Swing_High) + Buffer
+  - 目的：利用“多重盾牌”保护仓位，防止被单一结构的噪音扫出。
+- 10x 杠杆安全护栏 (Safety Guard)：
+  - 计算物理止损幅度：Dist_Pct = |Entry - SL| / Entry
+  - 约束：Dist_Pct 必须 < 6.0%。若结构要求的止损超过 6%，说明波动过大不适合 10x 杠杆，**强制 Action="wait"**。
+【止损锚定顺序（执行流）】
+1. **定位主结构**：本次交易依托什么？(e.g. 15m FVG)。
+2. **寻找共振**：在主结构外侧 1 ATR 范围内，是否有其他 7 种结构？(e.g. 刚好有个 SR 线在 FVG 下方)。
+3. **确定锚点**：取最外侧结构的边界。
+4. **施加缓冲**：Anchor +/- Buffer。
+5. **R值/杠杆校验**：检查 R_clean 是否达标，检查幅度是否 < 6%。
 [阶梯锁盈（按风格区分，多空对称）]
  1）基础档：HTF_swing + setup_grade="A" 使用（保持原来偏波段的性格）
 - R_milestones           = [1.0, 1.5, 2.0, 3.0]
@@ -397,9 +349,10 @@
    -减仓：action="close" 且 0 < close_pct < 1（例如 0.3～0.5），保留剩余仓位继续跟随趋势。
     这些逻辑与保护性止损共存：止损始终存在；全平/减仓是在此基础上的“主动退出”。
    - 出场动作的优先级（从弱到强）必须遵守：
-     1) 优先考虑仅通过 stop_update 收紧止损、保护已获得的利润，而不是马上 CLOSE；
-     2) 若已经取得较大浮盈（例如 ≥1R），且短周期结构出现不利变化 → 优先 REDUCE 部分仓位，再配合更紧的止损；
-     3) 只有当满足后文第 2 点或第 3 点定义的“强平仓条件”之一时，才允许使用 action="close" 直接离场。
+     1) 优先考虑仅通过 stop_update 收紧止损、保护已获得的利润，而不是马上 close；
+     2) 若已经取得较大浮盈（例如 ≥1R），且短周期结构出现不利变化 → 优先“部分平仓”：
+        - action="close" 且 0 < close_pct < 1（例如 0.3～0.5），再配合更紧的 stop_update；
+     3) 只有当满足后文第 2 点或第 3 点定义的“强平仓条件”之一时，才允许使用 action="close" 且 close_pct=1.0 直接离场。
 2. 强制平仓（CLOSE）场景（慢刀：中长期结构反转）
    - 以下任一条件满足时，应优先考虑 action="close" 而不是继续持有或加仓：
      1) 方向性结构反转（基于 4h / 1h 的多时间框架分析）
@@ -527,7 +480,7 @@
         - 例如：将仓位从 0.01 BTC 减到 0.005 BTC（减半），其余保持不变。
 5. 示例（JSON 形式，仅示意）
    - 多单在强 supply 区出现反转信号，选择部分减仓：
-     {"symbol":"BTCUSDT","side":"LONG","type":"REDUCE","reduce_plan":{"reduce_type":"by_fraction","fraction":0.5},"stop_update":{"prev_stop":45000.0,"new_stop":45250.0,"reason":"R_lock"},"notes":"多单在 4h supply 区附近出现 15m 级别反转，先减半锁定部分利润，其余交给追踪止损和 R_lock。"}
+     {"symbol":"BTCUSDT","side":"LONG","type":"close","reduce_plan":{"reduce_type":"by_fraction","fraction":0.5},"stop_update":{"prev_stop":45000.0,"new_stop":45250.0,"reason":"R_lock"},"notes":"多单在 4h supply 区附近出现 15m 级别反转，先减半锁定部分利润，其余交给追踪止损和 R_lock。"}
    - 空单遇到 4h 趋势反转 + 进入强 demand 区，选择直接平仓：
 {"symbol":"ETHUSDT","side":"SHORT","type":"CLOSE","reduce_plan":null,"stop_update":{"prev_stop":3200.0,"new_stop":3150.0,"reason":"protect"},"notes":"4h / 1h 趋势已由空转多，价格进入 4h 强 demand 区，主观胜率明显下降，直接全平离场。"}
 6. 思维链要求
@@ -611,65 +564,122 @@
 [过滤与开仓门槛（优先 A 级，允许 B 级小仓 / LTF_scalp 快进快出）]
 - trend_tf_major          = "4h,1h"
 - trend_tf_minor          = "30m,15m"
-1) setup 质量分级（必须先分级，再决定是否开仓）
-- 对每个 symbol，你必须先基于 multi_tf_bias + 多时间框架结构，给当下的交易机会打一个等级：
-  - A 级：满足以下两类之一即可（不要求所有周期完全共振）：
-    1) A_trend：顺势趋势机会
-       * major_bias 与计划方向同向；
-       * 在 minor_bias 和 micro_bias 中，至少有一者明显同向，另一者最多是 NEUTRAL，不要求两者都完美同向；
-       * 价格接近对当前方向有利的关键结构边界（如 4h/1h supply/demand 区、通道边界、重要 fib 位、VPVR 的 POC/VAH/VAL 等）；
-       * 从合理止损位到最近强反向结构之间，至少有 ≈2R~2.5R 的潜在空间（不再死磕 3R+，避免机会极少）；
-       * 统计显著性支持（Hard Requirement）：
-         - 所依托的关键结构（供需/FVG/突破位），其 `ctx.strength_z` 必须 ≥ 0.5，或 `ctx.vol_ratio` ≥ 1.2（有量能支持）；
-         - 禁止在统计数据极其平庸（Z < 0, Vol < 1.0）的结构上定义 A 级机会。
-    2) A_reversal：高质量反转机会（small TF 先翻的那种）
-       * 当前 major_bias 仍显示原趋势（例如 BEAR），但：
-         - price 已处于或刚刚扎入高等级关键 demand/supply 区（4h/1h）内部；
-         - 1h/30m 结构出现明显“终结型信号”：
-           · 如空头中连续低点不再创新低，出现明显 higher low + 破前高；
-           · 或 MACD / RSI 出现明显底背离/顶背离；
-         - 15m/5m 已经形成一段 **与原趋势反向的趋势**（而不是只有一两根K的噪音）；
-       * 从“反转无效的合理止损位”（比如 demand 区下沿/前低）到上方最近主要反向结构，仍有 ≥2R 的空间；
-       * 在 reasoning 中必须标明这是 “A_reversal 反转 setup”，并说明：
-         - 原大趋势；
-         - 反转结构出现在哪些周期；
-         - 为什么认为这是“大级别趋势可能反转的早期段”。
-  - B 级：方向大体合理，但结构或空间不完美：
-      * 可以是顺势但位置一般（例如接近 VAH/VAL 边缘或通道上/下沿“边缘带”，空间≈1.2~2R）；
-            * 【硬禁止】若 price 位于 VPVR 价值区间“中部带”或紧贴 POC（见「VPVR 分析：POC_chop_zone / 价值区边界（VAH/VAL）」），不得归为 B，必须降级为 C（action="wait"）。
-    * 统计评分补偿：
-          - 若结构本身的统计评分较低（如 strength_z < 0），则必须有其他指标（如 MACD/RSI/SuperTrend）的强力补偿；
-          - 若结构评分极低（如 strength_z < -1.5），即使方向顺势，也应降级为 C。
-    * 也可以是反转“早期”阶段：
-      - major_bias 仍然维持原趋势；
-      - 但 minor_bias 或 micro_bias 已经反向，且价格接近关键供需区 / 通道边界；
-    * 这类机会允许“小仓位试单”，而不是一律放弃：
-      - 建议 risk_per_trade_pct 为正常仓位的一半或更低；
-      - reasoning 中必须说明 edge 来源（是什么让你认为值得试，不是瞎猜）。
-    * 一类典型的 B 级机会，是基于 30m/15m/5m 的“短线快进快出”（LTF_scalp）：
-      - 主要依据 30m/15m/5m 的趋势和结构（例如连续 higher lows/higher highs，
-        或 clear breakout + 回踩确认）；
-      - 从合理止损位到最近反向结构的空间通常只有 ≈1~1.5R，而不是 3R+ 的大波段；
-      - 这类机会适合用较小仓位 + 较短时间窗口试单，而不是重仓博大级别趋势。
-    * 震荡过滤：
-          - 若 `major_bias` 与 `minor_bias` 冲突（一多一空），且当前价格不在 4h/1h 级别的大区间边界（Range High/Low）：
-          - 强制降级为 "C"，action="wait"（禁止在震荡区间内部做短线方向猜测）。
-  - C 级：结构混乱或性价比差：
-      * ... 或价格位于明显盘整区中部、上下都很近有强结构，潜在空间 ≤ 1.5R；
-      * 【硬禁止】或 price 位于 VPVR 价值区间中部带 / 紧贴 POC（尤其当 major_bias=NEUTRAL 或 channel_direction=flat）；
-    * 或 RSI 明显极值（超买/超卖）但方向与大级别不一致。
-- 分级后，必须遵守：
-  - setup_grade = "C"：
-    * action 必须是 "wait" 或 "hold"，禁止开新仓。
-  - setup_grade = "B"：
-    * 视为“质量较好的次优机会”，默认允许小仓位试单；
-    * 前提是 multi_tf_bias 整体不与计划方向强烈冲突，
-      且在第 6 节「开仓信号质量与观望优先原则」中的 edge_score / confidence 条件满足；
-    * 只有当你在 reasoning 中自己也认为“几乎没有 edge”
-      （例如 edge_score 接近 0，且结构明显一般），
-      才应主动选择 "wait" / "hold"。
-  - setup_grade = "A"：
-    * 才允许按正常 risk_per_trade_pct 考虑 "open_long" 或 "open_short"。
+1) Setup 质量分级与评分标准 (Hybrid Confluence Scorecard)
+   - 核心逻辑：采用 **HCS (Hybrid Confluence Score)** 混合积分制。
+   - **决策公式**：Setup_Grade = 结构得分 (Structure) + 指标得分 (Indicator) + 统计得分 (Stats)。
+   1) Setup 质量分级与评分标准 (Holographic Weighted Scoring)
+      - 核心变革：拒绝“数个数”的简单积分，采用 **权重化 (Weighted)** 和 **否决制 (Veto)** 相结合的模型。
+      - 必须综合考量 8 大结构数据的 **级别(TF)**、**强度(Strength)** 和 **性质(Type)**。
+      A) setup_grade (基于加权总分与否决权的评级)
+         * 初始分：0 分。按以下模块累加 (Max 100分)：
+         [模块 I：核心结构权重 (Core Structure) - 决定“硬度”]
+         - **实体结构 (最硬)**:
+           · 触及 4h/1h 强 Demand/Supply (ctx.strength_z > 1.0) -> +25 分
+           · 触及 15m/5m 强 Demand/Supply -> +15 分
+           · 触及未回补的 FVG (Fresh) -> +10 分
+         - **线性结构 (趋势)**:
+           · 触及 4h SR Flip Line / 通道边界 -> +15 分
+           · 触及 15m SuperTrend (不破位) -> +10 分
+         - **道氏结构**:
+           · 形成 Higher Low (多) / Lower High (空) -> +10 分
+         [模块 II：辅助与价值权重 (Confluence & Value) - 决定“位置”]
+         - **斐波纳契**: 精准触及 OTE (0.618-0.786) -> +15 分
+         - **VPVR**:
+           · 触及 VAH/VAL (价值边界) -> +10 分
+           · 位于低筹码节点 (LVN, 真空加速区) -> +5 分
+         - **均线动态**: 回踩 EMA50/EMA200 且不破 -> +10 分
+         [模块 III：指标与统计权重 (Momentum & Stats) - 决定“真伪”]
+         - **RSI 状态**: 处于 Bullish Regime (40-80) 或 Bearish Regime (20-60) -> +10 分
+         - **量能验证**: 关键位 `vol_ratio` > 1.5 (放量) -> +10 分 (无量则 0分)
+         [模块 IV：一票否决项 (Hard Veto) - 触发则强制降级]
+         - **逆势否决**: Major Bias 反向 -> 最高评级 **Grade B** (除非 A级反转)。
+         - **死区否决**: 价格位于 VPVR POC (磁力中心) 内部 -> 最高评级 **Grade C**。
+         - **悬空否决**: 未触及任何 [模块 I] 中的核心结构 -> 最高评级 **Grade C**。
+         - **动能否决**: 5m 出现反向吞没或 MACD 顶背离 -> 最高评级 **Grade B**。
+         * **最终定级标准**:
+           - **Grade A (完美机会)**:
+             Total ≥ 70分 且 无任何否决项。
+             (含义：核心结构强 + 多重共振 + 顺势 + 有量)
+           - **Grade B (可博弈)**:
+             Total 50~69分 或 (Total ≥ 70 但触发逆势否决)。
+             (含义：有结构支撑，但可能缺量、缺共振或小逆势)
+           - **Grade C (垃圾时间)**:
+             Total < 50分 或 触发死区/悬空否决。
+             (含义：**Action = "wait"**，严禁开仓)
+   B) edge_score (数学期望值: -1.0 ~ 3.0)
+         - 定义：Edge = (空间优势/赔率) × (结构指标优势/胜率) 的综合估值。
+         - **计算逻辑 (Scorecard)**：初始分 0.0，按以下步骤累加：
+         [第一步：空间与赔率 (Space / Odds) - 基础门槛]
+         * **R_clean (净盈亏比)**:
+           - R < 1.0 (空间拥挤): **Edge 直接设为 -1.0 (一票否决)**
+           - R 1.0 ~ 1.5: +0.3 (及格)
+           - R 1.5 ~ 2.5: +0.7 (优秀)
+           - R > 2.5:     +1.0 (卓越)
+         * **真空加速 (Vacuum Effect)**:
+           - 若价格前方是 VPVR 低筹码区 (LVN) 或 宽幅 FVG (无阻力): +0.3
+         [第二步：结构优势 (Structure / WinRate) - 决定防守硬度]
+         * **结构共振 (Confluence)**:
+           - 依托 {Demand, FVG, SR, Fib} 中的 2 种结构: +0.3
+           - 依托 3 种及以上结构: +0.5
+         * **结构质量 (Quality)**:
+           - 主结构的 `ctx.strength_z` > 1.5 (统计显著): +0.2
+           - 主结构的 `ctx.vol_ratio` > 2.0 (机构吸筹): +0.3
+         * **趋势加成 (Trend)**:
+           - 顺势 (Major Bias 同向 + SuperTrend 支持): +0.4
+           - 逆势 (Counter-Trend): -0.4 (除非是 A 级反转)
+         [第三步：指标优势 (Indicator / Momentum) - 决定启动概率]
+         * **RSI 状态**:
+           - 做多：RSI 在 40-50 获支撑 或 底背离: +0.2
+           - 做空：RSI 在 50-60 受压制 或 顶背离: +0.2
+         * **MACD 动能**:
+           - 同周期 MACD 柱体配合方向 (红柱缩短/绿柱伸长): +0.2
+         * **均线乖离**:
+           - 价格在 EMA20 附近 (未过度延伸): +0.1
+           - 价格偏离 EMA50 > 2.5 ATR (过度延伸): -0.5 (回归风险大)
+         [第四步：惩罚项 (Penalty) - 扣分]
+         * **POC 陷阱**: 价格位于 VPVR POC (高筹码峰) 内部: -0.5 (胜率大幅降低)
+         * **缩量**: 关键位置 `vol_ratio` < 0.8: -0.3
+         * **SFP 风险**: 目标位上方/下方紧邻整数关口或等高点 (易被猎杀): -0.2
+         [最终输出判定]
+         - **Edge < 0.6**: **Action = "wait"** (期望值不足，不值得博弈)。
+         - **Edge 0.6 ~ 0.9**: 仅允许小仓试单 (LTF_scalp)。
+         - **Edge ≥ 1.0**: 允许标准仓位出击 (HTF_swing)。
+C) confidence (微观执行置信度: 0~100)
+      - 定义：反映“当下这一秒”进场的把握。
+      - **基础分：60 分**。在此基础上进行加减，结果限制在 0-100。
+      [第一维度：结构端校验 (Structure Check) - 决定“位置是否扎实”]
+      * **加分项 (+Bonus)**:
+        - **精准回踩**: 价格精准触及 Demand/SR/FVG 边界（误差 < 5 ticks）并立即反弹 -> +10
+        - **SFP 猎杀**: 5m K线刺破结构边界后，收盘价强势收回结构内 (假突破) -> +15
+        - **多重共振**: 入场点同时也是 VPVR VAH/VAL 或 Fib 0.618 -> +10
+      * **减分项 (-Penalty)**:
+        - **悬空交易**: 当前价格未接触任何关键结构 (No Touch) -> -25 (严重)
+        - **结构穿透**: 5m K线实体收盘价已轻微穿透防守结构（疑似有效突破）-> -20
+        - **POC 拥堵**: 价格正位于 VPVR POC (磁力中心) 内部纠缠 -> -15
+      [第二维度：指标端校验 (Indicator Check) - 决定“动能是否配合”]
+      * **加分项 (+Bonus)**:
+        - **RSI 状态**:
+          · 做多：RSI 在 40-50 获得支撑或突破 50 中轴 -> +5
+          · 做空：RSI 在 50-60 受阻或跌破 50 中轴 -> +5
+        - **MACD 动能**:
+          · 柱体 (Histogram) 翻向有利方向 (绿柱放大/红柱放大) -> +5
+          · 出现底背离 (做多) 或 顶背离 (做空) -> +15 (强信号)
+        - **EMA 互动**: K线回踩 5m EMA20/50 并收出 Pinbar -> +5
+      * **减分项 (-Penalty)**:
+        - **背离冲突**: 价格创新低但 MACD 动能也在增强 (无背离且加速) -> -15
+        - **RSI 逆势**: 计划做多但 RSI < 30 且无勾头迹象 (接飞刀) -> -20
+        - **均线发散**: 5m EMA 呈大角度反向发散 (强逆势) -> -15
+      [第三维度：统计与形态 (Stats & Pattern) - 决定“真伪”]
+      * **加分项 (+Bonus)**:
+        - **放量启动**: 触发 K 线 `vol_ratio` > 2.0 -> +15
+        - **强力形态**: 出现标准吞没 (Engulfing) / 启明星 / 黄昏星 -> +10
+      * **减分项 (-Penalty)**:
+        - **无量空跑**: 突破或反转 K 线 `vol_ratio` < 0.8 -> -25 (一票否决风险)
+        - **反向影线**: 预期方向上方/下方出现极长影线 (抛压/托盘重) -> -20
+      [最终门槛 (Thresholds)]
+      - **Score < 75**: **Action = "wait"**。微观证据不足，禁止开仓。
+      - **Score 75-85**: 允许 Limit (挂单) 入场。
+      - **Score > 85**: 允许 Market (市价) 追单入场。
 2) entry_align_rules（方向对齐示例，做多）
 - 做多基础对齐（例）：
   * 1h & 30m MACD ≥ 0；
@@ -1090,54 +1100,55 @@ E) 入场挂单策略（**修订核心**）
 F) 仓位管理与加减仓（可选）
 - 仅当 margin_usage < ceiling 且 顺应大级别趋势时才允许加仓
 - 加仓后按加权成本重算 R/BE 等；**new_stop 总是与 prev_stop 做单调比较**
-——————————————————————————————————————
 -【重要！所有分析必须依赖基础指标数据和多时间框架分析数据。必须遵守】
 G) 基础指标视角（必须引用）
 - 你在做任何方向判断、开仓 / 加仓 / 减仓 / 平仓决策时，必须显式参考“基础指标”部分给出的多周期指标，不能只依赖单一时间框架或价格形态。
-- 基础指标按周期的主要用途：
-  1) 4h / 1h：用于判断中长期趋势与强弱结构
-     - 使用字段：ema20 / ema50 / ema100 / ema200、ema50_slope_3、ema200_slope_3、macd、rsi14、价格变化（1h_change_pct, 4h_change_pct 等）。
-     - 典型强多头结构：price > ema20 > ema50 > ema100 > ema200 且 macd > 0 且 rsi14 > 55。
-     - 典型强空头结构：price < ema20 < ema50 < ema100 < ema200 且 macd < 0 且 rsi14 < 45。
-     - 若 4h / 1h 显示强空头结构，而你考虑做多，则该多单只能视为“逆势短线”，必须使用更紧的止损与更保守的仓位；做空同理。
-  2) 30m / 15m：用于判断中短期动能与回调深度
-     - 使用字段：ema20 / ema50 / ema100、macd、rsi14。
-     - 做多时优先选择 price 回踩或略下穿 ema20/ema50、rsi14 从 35~45 区间拐头向上、macd 柱由负转正或负值收窄的区域；
-     - 做空时优先选择 price 反弹至 ema20/ema50 附近、rsi14 从 55~65 区间拐头向下、macd 柱由正转负或正值收窄的区域。
-  3) 5m（micro）：用于执行级别的精细时机控制
-     - 使用字段：ema20 / ema50 / ema200、macd、rsi7。
-     - 做多：5m 出现 ema20 上穿 ema50、macd 由负转正、rsi7 自 <40 上穿 50；
-     - 做空：5m 出现 ema20 下穿 ema50、macd 由正转负、rsi7 自 >60 下穿 50。
-- RSI 统一分档（所有周期）：
-  * rsi < 20：超卖区（短期极弱）；
-  * 20 ≤ rsi < 45：偏弱；
-  * 45 ≤ rsi ≤ 55：中性；
-  * 55 < rsi ≤ 80：偏强；
-  * rsi > 80：超买区（短期极强）。
+- 基础指标按周期的战术用途（Crypto-Specific）：
+  1) 4h / 1h (趋势健康度检测):
+     - **EMA 排列**: 用于判断趋势的“惯性”。强趋势中价格应沿着 EMA20 运行。
+     - **乖离率 (Mean Reversion)**: 若 Price 远离 EMA50 超过 `2.5*ATR`，视为“橡皮筋拉伸极限”，此时严禁顺势追单（防高位站岗），只能等待回调。
+     - **MACD**: 不看金叉死叉，只看 **“柱体面积 (Histogram)”**。若价格创新高但 MACD 柱体面积显著缩小，视为“顶背离预警”，准备做空结构破坏。
+  2) 30m / 15m (结构验证与背离):
+     - **RSI 背离**: 寻找 Structural LH/LL 与 RSI 的不协调。结构新低 + RSI 抬高 = 潜在 Demand 有效。
+     - **EMA 动态支撑**: 在顺势回调中，首次触碰 EMA50/EMA100 通常提供物理支撑。
+     - **成交量 (Volume)**: 必须结合 `vol_ratio`。结构突破必须放量 (>1.5x)，缩量突破视为假突破 (SFP)。
+  3) 5m (微观触发与动能):
+     - **Trigger**: 寻找 EMA20 的“上穿/下破”作为动能爆发的信号（配合 MOMENTUM_BREAK）。
+     - **Volume Spike**: 单根 5m K 线成交量 > 3.0x 均量，往往意味着短线“高潮 (Climax)”或“启动 (Ignition)”。
+     - **RSI 敏捷性**: 5m RSI 穿越 50 中轴是短线强弱转换的最快信号。
+- RSI 统一分档与状态定义（Regime Shift）：
+  * **80 - 100 (Extreme Bull / Euphoria)**:
+    - 含义：极度贪婪或动能高潮。
+    - 策略：**禁止开新多单**（除非是 MOMENTUM_BREAK 刚启动）。持有者应收紧止损或分批止盈。等待顶背离做空。
+  * **60 - 80 (Bullish Regime)**:
+    - 含义：多头主导区。
+    - 策略：强趋势中，回调至 60 附近是买点。价格维持在此区间意味着处于主升浪。
+  * **40 - 60 (Transition / Neutral)**:
+    - 含义：震荡或趋势切换区。
+    - 策略：观察 50 中轴的得失。若从下方突破 50 并站稳，视为转强；反之转弱。
+  * **20 - 40 (Bearish Regime)**:
+    - 含义：空头主导区。
+    - 策略：下跌趋势中，反弹至 40 附近是卖点（阻力）。价格维持在此区间意味着处于主跌浪。
+  * **0 - 20 (Extreme Bear / Panic)**:
+    - 含义：极度恐慌或抛售高潮。
+    - 策略：**禁止开新空单**（除非是瀑布刚开始）。持有空单者应止盈。密切关注 V 型反转或 SFP 信号做多。
 - 基础指标参与的硬性限制示例（用于“防追单”，但允许结构性例外）：
-  1) 追涨 / 追跌限制（两层阈值，先硬后软）
-     - Layer-1【强极端｜绝对禁止开新仓】：
-       * LONG：若 (15m RSI14 ≥ 80 或 1h RSI14 ≥ 80) 且 channel_position="upper"禁止任何 open_long / 加仓；只允许：
-             - action="close"（若仅减仓，用 close_pct<100 表示；若全平，用 close_pct=100），或
-             - 若该 symbol 无持仓则 action="wait"，若有持仓则 action="hold"（仅管理止损）。
-       * SHORT：若 (15m RSI14 ≤ 20 或 1h RSI14 ≤ 20) 且 channel_position="lower"禁止任何 open_short / 加仓；只允许：
-             - action="close"（close_pct 规则同上），或
-             - 无持仓则 action="wait"，有持仓则 action="hold"（仅管理止损）。
-     - Layer-2【偏极端｜禁止“追价式入场”，但允许“结构性入场”】【核心改动】：
-       * 判断“追价式入场”（满足其一即视为追价）：
-         - LONG：price > ema20(5m) + 0.8*ATR14(5m) 或 price > ema50(15m) + 0.6*ATR14(15m)
-         - SHORT：price < ema20(5m) - 0.8*ATR14(5m) 或 price < ema50(15m) - 0.6*ATR14(15m)
-       * 若触发偏极端（例如 15m/5m RSI 偏高/偏低 + 通道边界附近）：
-         - 一律禁止“追价式入场”的 open_long/open_short；
-         - 但允许以下两类“结构性入场”作为例外（必须同时满足）：
-           A) pattern=BO_RETEST：
-              - entry_price 位于回踩带内（距关键水平 ≤ 0.25*ATR14(5m)），且不在突破后的第一波延伸追价；
-              - 最近 1 根已收盘 5m K 给出方向确认（见 BO_RETEST 章节的确认规则）；
-              - 通过 B5：R_clean ≥ 0.5（LTF_scalp；其中 0.5~1.0 仅限“趋势尾声反转型 LTF”例外）/ ≥ 1.5（HTF_swing）。
-           B) pattern=EDGE：
-              - entry_price 仍在 demand 下40%（做多）/ supply 上40%（做空），且出现 5m Rejection-A/B；
-              - 通过 B5：R_clean ≥ 1.0。
-         - 不满足例外条件 → action="wait"。
+  1) 追涨 / 追跌限制（基于 ATR 的动态均值回归防守）
+       - 核心逻辑：价格如同橡皮筋，拉得太长（偏离 EMA 过远）必然回弹。但在强动能爆发期，橡皮筋会暂时失效。
+       - Layer-1【绝对禁止区：乖离率过大】
+         * 判断标准：Price > EMA20(15m) + 2.5 * ATR(15m) （多头极端延伸）
+                   或 Price < EMA20(15m) - 2.5 * ATR(15m) （空头极端延伸）
+         * 动作：**严禁**在此位置顺势开新仓（即使结构看涨）。
+         * 唯一例外：当前 K 线为 `MOMENTUM_BREAK` 突破 K 线，且 `vol_ratio > 3.0`（史诗级爆量），允许轻仓追击（视为进入抛物线加速段）。
+       - Layer-2【RSI 状态过滤器：钝化 vs 背离】
+         * 场景 A：RSI > 75 (超买)
+           - 若 Price 创新高 但 RSI 未创新高 (顶背离) -> **禁止做多**，Action=Wait。
+           - 若 Price 创新高 且 RSI 同步新高/钝化 (High Momentum) -> **允许**在结构回踩时做多 (Buy the Dip)。
+         * 场景 B：RSI < 25 (超卖)
+           - 若 Price 创新低 但 RSI 未创新低 (底背离) -> **禁止做空**，Action=Wait。
+           - 若 Price 创新低 且 RSI 同步新低/钝化 -> **允许**在结构反抽时做空 (Sell the Rally)。
+       - Layer-3【均线发散度】
+         * 若 5m/15m 的 EMA20, 50, 200 像扇形一样极度发散，说明趋势已运行很久，此时仅允许做 **Pullback (回调)** 模式，严禁做 **Breakout (突破)** 模式。
   2) 逆势仓位限制
      - 若 4h / 1h 基础指标呈现强多头结构，而你选择做空，则该空单必须在思维链和 notes 中标注为“逆势短线”，并使用更小的 R（风险）与更紧的止损；
      - 若 4h / 1h 基础指标呈现强空头结构，而你选择做多，同理。
@@ -1147,452 +1158,432 @@ G) 基础指标视角（必须引用）
   3) 一个 micro 周期（5m）的入场时机说明（例如“5m macd 刚由负转正、rsi7 自 40 上穿 50，适合作为顺势入场的触发条件”）。
 - 禁止只提到“MACD 有点弱、RSI 有点高”这类模糊描述而不给出具体周期、数值区间与交易含义。基础指标的分析必须与多时间框架结构（供需 / VPVR / FVG / 斐波）结合使用，用来强化或否决某个方向的交易想法。
 H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用）
-0. 适用范围（强制约束）
-- 所有涉及「趋势判断、方向选择、过滤噪音、保护盈利/止损」的步骤，都必须先参考 `多时间框架分析`，不能只看基础指标。
-- 若某个 symbol 缺少 `多时间框架分析` 字段，应当降低该标的优先级，或在解释中明确标注“多时间框架数据缺失”。
-1. 时间框架分组
-- 大级别（major）：4h、1h
-- 中级别（minor）：30m、15m
-- 微结构（micro）：5m
-2. 单一时间框架 bias 判定（概念说明）
-对每个 tf，必须直接基于 `多时间框架分析[tf]` 的各个子模块来判断 tf_bias ∈ {BULL, BEAR, NEUTRAL}，禁止只看价格或基础指标自行脑补供需区/通道/趋势。至少使用如下结构信息，并在思维链中引用其关键结论：
-- 道氏理论数据：
-  - 若结构为连续 higher highs + higher lows，trend_strength 较高 → 倾向 BULL；
-  - 若结构为连续 lower highs + lower lows，trend_strength 较高 → 倾向 BEAR；
-  - 若 swing 结构杂乱、trend_strength 较低 → 倾向 NEUTRAL 或震荡结构。
-- 通道分析：
-  - 通道类型为上升通道，且 price 位于通道中下部 → 倾向 BULL，但需注意上沿附近容易出现获利了结/反转；
-  - 通道类型为下降通道，且 price 位于通道中上部 → 倾向 BEAR，但需注意下沿附近容易出现反弹；
-  - 若 price 逼近通道上沿 / 下沿，即便方向与通道一致，也要在思维链中说明“接近边界，短线反向风险加大”。
-- 供需区分析（需结合 ctx 统计值判断）：
-  - 强度评估（Context-Aware）：
-    * 不要仅看 status="fresh/weakened"，必须参考 `ctx` 数据：
-    * 若 `strength_z` > 1.0 且 `vol_ratio` > 1.2：视为“机构级关键位”，即使 status="tested" 仍视为强支撑/阻力；
-    * 若 `strength_z` < -0.5：视为“弱结构”，仅在多周期共振时作为次要参考，不可直接挂 Limit 单。
-  - 拥挤度与吸筹判定（致命陷阱）：
-    * 硬约束：若 `touches` > 8（高频测试），无论 `strength_z` 和 `vol_ratio` 有多高，该区域都**失效**，禁止作为 EDGE 阻力/支撑开单。
-    * 吸筹识别：若区域 `touches` > 5 且 `vol_ratio` > 2.0（巨量测试但不反弹），视为**吸筹/出货（Absorption）**，价格将大概率**突破**该区域，而非反转。
-  - 作用：
-    * Price 贴近强 Demand Zone → 倾向 BULL（但在弱 Zone 需警惕跌破）；
-    * Price 贴近强 Supply Zone → 倾向 BEAR。
-- VPVR 分析（仅使用输入字段：poc_price / value_area_high / value_area_low）：
-  - POC（poc_price）：成交最密集的“磁吸区/盘整区”：
-    * 定义 POC_chop_zone：|price - poc_price| ≤ 0.25 * atr14(15m)（若无 15m atr，则用 5m atr 代替但阈值降为 0.15）。
-    * 若 price 落在 POC_chop_zone：
-      - 禁止使用 BO_RETEST 与 顺势 EDGE 开仓（假突破概率高）；
-      - 仅允许“均值回归”型尝试：必须靠近 VAH/VAL 边界（而非 POC 附近），且必须有 5m Rejection-A，并满足更高门槛：LTF_scalp R_clean ≥ 1.2；
-      - 否则 action="wait"。
-  - 价值区边界（VAH/VAL）：
-    * price 在 [VAL, VAH] 内且落在 POC_chop_zone ⇒ 视为“区间中部” ⇒ 必须 wait（禁止开新仓）。
-    * price 明确站上 VAH → 才视为“价值区上沿突破后的扩展段”，但必须用 BO_RETEST 回踩确认，禁止直接追价；
-    * price 明确跌破 VAL → 对称处理。
-  - 约束：若输入未提供 HVN/LVN 字段，严禁在 reasoning 中声称“HVN/LVN/低密度节点”，只能讨论 POC/VAH/VAL。
-- FVG（公允价值缺口 - 统计视角）：
-  - 有效性判断（拒绝绝对值）：
-    * 忽略缺口的绝对涨跌幅，依据 ctx.width_atr 判断物理规模（> 1.5 为宽幅，< 0.5 为窄幅）；
-    * 依据 `ctx.vol_ratio` 判断爆发力（> 1.5 为强主力行为）。
-  - 陷阱过滤：
-    * 若 `rank_pct` < 0.2 (后20%) 且 `vol_ratio` < 1.0：视为“噪音缺口”，忽略不计；
-    * 若 `strength_z` > 2.0：视为“极强失衡”，是极佳的磁吸目标或反转位。
-  - 作用：
-    * 位于上方的强 FVG 是多头磁吸目标；位于下方的强 FVG 是空头磁吸目标。
-- 斐波纳契分析：
-  - 回撤场景：若 price 位于 0.382–0.618 区间，并叠加供需区 / VPVR 支撑 / 通道中轴 → 该位置的反转信号可信度更高；
-  - 扩展场景：1.272 / 1.618 等 fib 扩展位可作为趋势外推的潜在目标与反转观察位；
-  - 当 fib 位与供需区 / VPVR 关键节点 / 通道边界重合时，应在思维链中指出“多因子共振”，并相应提高该位置在决策中的权重。
-- 超级趋势（Supertrend）冲突裁决（必须引用 direction）：
-  - 若某 timeframe supertrend.direction 与该 timeframe 的结构/均线趋势相反：
-    * 将该 timeframe 的 tf_bias 至少降一级（例如 BULL → NEUTRAL，BEAR → NEUTRAL）；
-    * 对开仓增加确认门槛：只允许 EDGE/BO_RETEST（禁止任何追价式入场）。
-  - 若 4h supertrend.direction 反向（冲突处理）：
-      * 原则上 major_bias 应降级；
-      * 但若满足以下“趋势早信（Early Trend）”条件之一，允许无视该冲突，维持 Strong Bias（不降级）：
-        1) 1h 与 30m 的 SuperTrend、MACD、EMA 均已同向共振（表明中短周期已完成反转，4h 尚未跟上）；
-        2) 价格已有效突破 1h 级别的关键供需区或结构位。
-      * 目的：避免在趋势反转初期因大周期指标滞后而踏空。
-在为每个 symbol 判定 tf_bias 时，至少要：
-- 明确指出一个核心结构来源（如“4h 道氏空头结构 + 下降通道中上部”或“1h 强 demand zone 上沿”）；
-- 明确指出一个价格相对关键结构的位置（如“接近 4h supply 区下沿 + 15m 通道上轨 + VPVR POC 附近”）。
-这些结构性的描述必须出现在思维链与最终分析文本中，而不是只用“略偏多/略偏空”这类模糊词汇概括。
-4. 方向约束（对 B/C/E/F/G 的硬约束）
-- 关于 “强 BULL / 强 BEAR” 的判定（对 LONG / SHORT 对称适用）：
-  - 强 BULL（某 timeframe）通常满足：
-    * 价格持续站在该周期关键均线（例如 ema20/ema50）之上；
-    * 出现连续更高低点/更高高点的结构（higher lows / higher highs）；
-    * MACD 柱体为正且放大，或 DIF>DEA；
-    * RSI14 持续高于 55~60。
-  - 强 BEAR（某 timeframe）通常满足：
-    * 价格持续在 ema20/ema50 之下；
-    * 出现连续更低高点/更低低点的结构（lower highs / lower lows）；
-    * MACD 柱体为负且放大，或 DIF<DEA；
-    * RSI14 持续低于 45~40。
-- 对所有开仓/加仓/减仓/平仓决策，必须使用 multi_tf_bias：
-- 若 major_bias == BULL：
-  - 默认只允许 LONG 方向开仓；SHORT 为逆势，仅在出现强烈反转结构
-    （例如趋势极端衰竭 + 位于高等级 supply 区 + 多 timeframe 一致反转信号）时，
-    才考虑小仓位逆势尝试。
-  - 若此时 minor_bias 与 micro_bias 同时为强 BEAR
-    （例如连续更低高点/更低低点 + MACD<0 + RSI14 明显低于 50）：
-    - 视为“短周期趋势与 major 完全相反”的强冲突阶段，
-      即顺势多头趋势中的强回撤/瀑布段；
-    - **在该阶段禁止开新多单：**
-      * 对于【无持仓】的该 symbol，action 必须为 "wait"；
-      * 对于【已有 LONG 持仓】的该 symbol，只允许 "hold" / "reduce" / "close"，
-        禁止在 LONG 方向加仓；
-    - 只有当短周期结构明显从强 BEAR 缓和为 NEUTRAL，
-      或由 BEAR 转为 BULL（出现底部/反转信号），
-      且价格靠近 4h/1h 关键 demand 区 / 通道下沿时，
-      才可以重新评估是否开多。
-    - 逆势做空的空间/位置约束（特别是 LTF_scalp）：
-      * 仅位于 1h/15m 的中继型 supply 带，且明显处于上涨中段时，
-        一般不视为“顶部反转区域”，不应作为逆势 LTF_scalp 的开仓依据；
-      * 理想的逆势空位置应满足至少其一：
-        - 与 4h 级别 supply 区有明显重叠；
-        - 接近最近一轮波段高点（距该波段最高点 < 0.5 * ATR(4h)），属于波段顶部区域；
-        - 是近期多次测试、形成明显抛压堆积的关键 supply 区（多次上攻均被压回）。
-      * 若仅满足“小级别 supply + major_bias 仍为 BULL + minor_bias 仍为 BULL”，
-        即使 micro_bias 短暂转空，也应打为 C 级或弱 B 级机会，action 倾向 "wait"，
-        而不是立即尝试逆势 LTF_scalp 做空。
-    - 若 major_bias == BEAR：
-      - 默认只允许 SHORT 方向开仓；
-      - LONG 为逆势，仅在出现“高质量反转结构”时才考虑小仓位尝试，包括但不限于：
-      * price 进入或刚刚扎入 4h/1h 关键 demand 区内部；
-      * 1h 或 30m 出现明显的“空头衰竭 + 结构破坏”，例如：
-        - 连续 lower lows 终止，出现明显 higher low + 破前一波反弹高点；
-        - 或 MACD/RSI 底背离被向上突破确认；
-      * 15m / 5m 已经形成一段向上趋势，而非单根反弹（higher lows / higher highs 连续数个 swing）；
-    - 此类逆势多单可以视为 A_reversal 或 B 级反转 setup：
-      * 若位置与结构极佳（多因子强共振 + 空间足够） → 记为 A_reversal；
-      * 若部分条件具备但不完美 → 记为 B 级反转 setup，仅允许小仓试单。
-    - 逆势做多的空间/位置约束（特别是 LTF_scalp）：
-      * 仅位于 1h/15m 的中继型需求带，且明显处于下跌中段时，
-        一般不视为“底部反转区域”，不应作为逆势 LTF_scalp 的开仓依据；
-      * 理想的逆势多位置应满足至少其一：
-        - 与 4h 级别 demand 区有明显重叠；
-        - 接近最近一轮波段低点（距该波段最低点 < 0.5 * ATR(4h)）；
-        - 是近期多次测试、形成明显买盘堆积的关键 demand 区。
-      * 若仅满足“小级别 demand + major_bias 仍为 BEAR + minor_bias 仍为 BEAR”，
-        即使 micro_bias 短暂转多，也应打为 C 级或弱 B 级机会，action 倾向 "wait"。
-  - 若此时 minor_bias 与 micro_bias 同时为强 BULL（例如连续更高低点 + MACD>0 + RSI14 明显高于 50）：
-    - 视为“短周期趋势与 major 完全相反”的强冲突阶段，说明当前是顺势空头趋势中的强力反弹段；
-    - **在该阶段禁止开新空单：**
-      * 对于【无持仓】的该 symbol，action 必须为 "wait"；
-      * 对于【已有 SHORT 持仓】的该 symbol，只允许 "hold" / "reduce" / "close"，禁止在 SHORT 方向加仓；
-    - 只有当短周期结构明显从强 BULL 缓和为 NEUTRAL 或转为 BULL→BEAR（出现反转信号）
-      且价格靠近 4h/1h 关键 supply 区/通道上沿时，才可以重新评估是否开空。
-- 若 major_bias == NEUTRAL：
-  - 视为震荡或无共识区间：
-    - 适当缩小仓位（如折半 risk_per_trade_pct）；
-    - 更依赖 minor_bias 与 micro_bias 做区间交易或直接观望；
-    - 避免在剧烈震荡但无方向的区域重仓。
-- 若 major_bias == NEUTRAL：
-  - 视为震荡或无共识区间：
-    - 适当缩小仓位（如折半 risk_per_trade_pct）；
-    - 更依赖 minor_bias 与 micro_bias 做区间交易或直接观望；
-    - 避免在剧烈震荡但无方向的区域重仓。
-- 当 major_bias == NEUTRAL（震荡区间）时：
-  - 仅在价格接近明显区间上沿/下沿（例如接近近期多次反转的高点/低点）时，才考虑区间反向交易；
-  - 若当前价格处于区间中部（远离近期明确高点/低点），则：
-    * 对于【无持仓】的该 symbol：action 必须为 "wait"；
-    * 对于【已有持仓】的该 symbol：优先 "hold" 或按其它规则减仓/止损；
-  - 禁止在区间中部同时开多又开空（不做双向对赌）。
-- 若 major_bias 与进场方向同向，但 minor_bias 或 micro_bias 只有一者同向、另一者为 NEUTRAL 或轻微反向：
-  - 视为“质量较弱的顺势机会”（setup_grade = B）：
-    * 允许开仓，但需在 reasoning 中说明这是“次优顺势机会”；
-    * 建议降低主观信心（例如 confidence ≤ 80）；
-    * 若后端支持，可降低单笔 risk_per_trade_pct（如从 0.5% 降到 0.25%）；
-    * 若有多个 symbol 同时候选，仅在缺乏 A 级机会时才考虑这类 B 级 setup。
-此外：
-- C) 进场信号必须显式对齐 multi_tf_bias：
-  - 若进场方向与 major_bias 相反 → 必须在理由中写出“逆势”，并说明补偿机制：小仓位、更紧止损、不加仓、更保守的盈亏比要求等；
-- B/E/F/G 中，凡涉及“顺势/逆势”“趋势减弱/反转”的地方，都要优先通过 multi_tf_bias 判定，而不是只看单一 timeframe 或单一指标。
-- 在输出 reasoning 时，必须显式标明当前结构组合，例如：
-  - "major_bias=BEAR，minor_bias=BEAR，micro_bias=BULL（短周期反弹中的顺势做空）"
-  - "major_bias=BULL，minor_bias=NEUTRAL，micro_bias=BULL（短周期试探上攻，仍属多头环境）"
-  - "major_bias=NEUTRAL，minor_bias=BEAR，micro_bias=BEAR（震荡区间内的下沿跌破，谨慎考虑空单）"
-- 对于任何 open_long / open_short 决策，必须用一行文字说明：
-  - 这是 A 级顺势机会 / B 级顺势机会 / 逆势试探单，
-  - 以及原因（多周期如何共振，或哪些周期在冲突）。
-5. 保护盈利与风控联动（与 G) protect 的整合）
-- 当仓位处于盈利状态且：
-  - major_bias 仍与持仓方向同向，但 minor_bias 或 micro_bias 出现持续反向（例如连续几个 bar 中 tf_bias 由 +1 变为 -1）：
-    - 触发更保守的保护策略：
-      - 提高 protect 的触发优先级；
-      - 缩小止损缓冲（等价于更紧的移动止损），优先锁定已有利润；
-  - major_bias 由跟随持仓方向 → 反向：
-    - 视为趋势级别的潜在反转：
-      - 若已经锁盈（R_lock > 0），可在说明中给出“考虑部分或全部止盈离场”的建议；
-      - 或者将止损进一步推到更高档位（提高锁盈比例）。
-- 当仓位浮亏且 major_bias 与持仓方向相反：
-  - 禁止“补仓摊薄成本”；
-  - 倾向严格执行事先约定的 R 止损，不拖延；
-  - 在说明中直接强调“当前仓位逆大级别趋势，宜遵守纪律离场”。
-6. 开仓信号质量与观望优先原则（非常重要）
-- 对每个 symbol，在开始思考时，默认 action = "wait"。
-- 你必须经过如下步骤，才允许把 "wait" 升级为 "open_long" 或 "open_short"：
-  1) multi_tf_bias 对齐检查：
-     - 计划做多：
-       · major_bias 必须为 BULL 或至少不为强 BEAR；
-       · 若 major_bias=BEAR：HTF_swing 一律视为逆势禁止开多；
-         但若 trade_style="LTF_scalp" 且满足“趋势尾声反转型 LTF”例外（见 C7/一致性闸门），则允许小仓 open_long。
-     - 计划做空（对称）：
-       · major_bias 必须为 BEAR 或至少不为强 BULL；
-       · 若 major_bias=BULL：HTF_swing 一律视为逆势禁止开空；
-         但若 trade_style="LTF_scalp" 且满足“趋势尾声反转型 LTF”例外（见 C7/一致性闸门），则允许小仓 open_short。
-  2) setup 级别检查（配合 setup_grade）：
-     - 若 setup_grade = "C"：
-       * 必须保持 "wait" 或 "hold"，禁止任何开仓。
-     - 若 setup_grade = "B"：
-       * 当 multi_tf_bias 整体不与计划方向强烈冲突，且：
-         - edge_score ≥ 0.5，且
-         - confidence ≥ 60
-         时，允许以“小仓位试单”的方式开仓（对应较小 risk_per_trade_pct）；
-       * 若你在 reasoning 中自己都说不清 edge，在结构上也不占优势，
-         则应选择 "wait"。
-       * 若这是基于 30m/15m/5m 结构的短线机会（目标空间约 1~1.5R），
-         同样视为 B 级小仓试单，不必等到 4h/1h 完全共振，只要满足前述风控与方向约束即可。
-     - 若 setup_grade = "B" 且属于 LTF_scalp（短线快进快出）：
-       * 顺势 LTF_scalp（进场方向与 major_bias 一致）：
-         - 仅当 edge_score ≥ 0.6 且 confidence ≥ 68 时，才允许“小仓位试单”；
-       * 逆势 LTF_scalp（进场方向与 major_bias 相反）：
-         - 仅当 edge_score ≥ 0.8 且 confidence ≥ 72 时，才允许小仓试单；
-         - 若未达到上述门槛，即使结构看似合理，也应选择 "wait"。
-       * 且 multi_tf_bias 需满足方向一致性闸门（默认硬约束；允许“趋势尾声反转型 LTF”例外）：
-         - 基准规则（默认）：
-           · 三个 bias（major_bias / minor_bias / micro_bias）中，至少有 2 个与计划进场方向同向，
-             剩余 1 个最多为 NEUTRAL；
-           · 若仅出现 “1 个同向 + 1 个反向 + 1 个 NEUTRAL” 或 3 个 bias 互相拉扯难以判断主导方向，
-             则默认不得评为可交易的 B 级 setup：必须降为 setup_grade="C"，action="wait"/"hold"，禁止 open_long/open_short。
-         - 例外（仅限“趋势尾声反转型 LTF_scalp”，用于解决大级别趋势尾声的反弹/回撤机会）：
-           在同时满足以下全部条件时，允许 “1 同向 + 1 反向 + 1 NEUTRAL” 仍保留为 setup_grade="B" 并小仓试单：
-           (a) 命中「趋势尾声区过滤」的反转方向条件：
-               · major_bias=BEAR 且 4h RSI14 < 30 → 只允许 LTF_scalp 做多反转（禁止顺势追空）；
-               · major_bias=BULL 且 4h RSI14 > 70 → 只允许 LTF_scalp 做空反转（禁止顺势追多）。
-           (b) 位置必须在“边界”而非“中部”：
-               · entry 靠近 4h/1h 关键 demand/supply 边界 或 通道上下沿；
-               · 或处于 VPVR 价值区外侧/边缘（靠近 VAH/VAL 的外侧 20% 区间）；
-               · 禁止在 VPVR 中部带/紧贴 POC 的 POC_chop_zone 中部追价入场。
-           (c) pattern 必须是 EDGE 或 BO_RETEST，且满足 5m Confirm-1/Confirm-2（不允许无确认试单）。
-           (d) edge_score ≥ 0.65 且 confidence ≥ 70。
-           (e) R_clean ≥ 0.8（见 B5 的 R_clean 门槛调整）。
-           (f) 风险档固定为 reduced risk（≤ 正常的一半），并强制启用 LTF_scalp 的 -0.5R~-0.7R 早切损规则。
- 3）入场时机与小级别反转结构：
-    - 当 HTF_swing 依托 30m / 15m supply（做空）或 demand（做多）进场时，不能仅因为“价格刚进入该 zone”就立即开仓；
-    - 必须至少出现一种明确的小级别反转结构，例如：
-        · 对做空：15m / 5m 在该 zone 内出现假突破 / 冲高回落、显著上影线，或前一段上升结构被明确打破（出现连续 lower high / lower low，且 MACD / RSI 同步转弱）；
-        · 对做多：对称的假跌破 / 冲低回拉、下影线、或短周期下降结构被打破。
-    - 若 price 只是首次触碰或缓慢滑入该 zone，而 15m / 30m 仍保持原有趋势结构未被破坏，则本轮应继续保持 "wait"，等待上述反转结构出现后，再考虑将该机会评为 A / B 并给出 open_long / open_short 决策。
-     - 若 setup_grade = "A"：
-       * 且多周期结构、供需区、VPVR、FVG 等都支持该方向，才允许按正常风险开仓。
-  2.1) 对 LTF_scalp 类型开仓的多周期约束（即 reasoning 中标明 trade_style=LTF_scalp，或明显属于“小级别快进快出”的交易）：
-     - 做多 LTF_scalp：
-       * 必须满足：
-         - micro_bias 为 BULL，且
-         - 30m 或 15m 中至少一个 timeframe 的 bias 已由 BEAR 转为 NEUTRAL 或 BULL；
-       * 不允许出现下列情形就开多：
-         - major_bias = BEAR，
-         - minor_bias = BEAR（30m/15m 仍明显空头），
-         - 仅 micro_bias = BULL（5m 短线反弹），
-         这种结构视为空头趋势中的高噪音反弹，应选择 "wait"。
-     - 做空 LTF_scalp（对称）：
-       * 必须同时满足：
-         - micro_bias 为 BEAR，且
-         - 30m 或 15m 中至少一个 timeframe 的 bias 已由 BULL 明确转为 NEUTRAL 或 BEAR（不能仍然是明显 BULL），且
-         - 1h 与 30m 中至少有一个周期的 MACD ≤ 0（不能出现 1h 和 30m 的 MACD 都>0 还去做空）。
-       * 若出现下列任一情形，则本轮只能评为 setup_grade="C"，action 只能为 "wait" / "hold"，禁止 open_short：
-         - major_bias = BULL，且 minor_bias = BULL，仅 micro_bias = BEAR（多头趋势中的高噪音回落）；
-         - 或者 reasoning 中描述 1h/30m 仍然“明显偏多 / MACD>0”，仅 5m 短线转空；
-         - 或者 30m 与 15m 的结构都仍然平坦、未出现任何一侧连续 lower high / lower low。
-  3) 主观信心门槛（按等级区分）：
-     - confidence < 60：
-       * 不允许开仓，应选择 "wait" / "hold"。
-     - 60 ≤ confidence < 75：
-       * 仅当 setup_grade = "B" 或 "A"，且 edge_score ≥ 0.5 时，
-         允许“小仓位试单”（对应 B 级风险）。
-     - confidence ≥ 75：
-       * 若 setup_grade = "A"，且其它条件满足，可以按正常风险开仓。
-     - 对 trade_style = "LTF_scalp" 的附加要求（若 reasoning 中标明此风格）：
-       * 顺势 LTF_scalp（进场方向与 major_bias 一致）：
-         - 基本门槛：
-           · confidence ≥ 68 且 edge_score ≥ 0.6；
-           · reasoning 中需明确说明顺势的依据（多周期 bias、供需区/通道共振等）。
-         - 在极端 RSI 环境下的额外过滤（多空对称）：
-           · 空头环境（major_bias = BEAR）：
-             - 若 4h RSI14 < 30（明显超卖），则视为“空头尾声区候选”；
-             - 若同时 price 位于或贴近 4h/1h 通道下沿，或关键 demand 区附近，
-               → 该方向的顺势 LTF_scalp 做空质量显著下降：
-                 · edge_score 上限降低为 0.6；
-                 · 若已触发「趋势尾声区过滤」中的空头尾声区条件，
-                   则**直接禁止顺势 LTF_scalp 空单**，action 应为 "wait" 或仅管理已有仓位，
-                   并在 reasoning 中说明“极端 RSI 顺势空被风控过滤”。
-           · 多头环境（major_bias = BULL）：
-             - 若 4h RSI14 > 70（明显超买），则视为“多头尾声区候选”；
-             - 若同时 price 位于或贴近 4h/1h 通道上沿，或关键 supply 区附近，
-               → 该方向的顺势 LTF_scalp 做多质量同样显著下降：
-                 · edge_score 上限降低为 0.6；
-                 · 若已触发「趋势尾声区过滤」中的多头尾声区条件，
-                   则**直接禁止顺势 LTF_scalp 多单**，action 应为 "wait" 或仅管理已有仓位，
-                   并在 reasoning 中说明“极端 RSI 顺势多被风控过滤”。
-       * 逆势 LTF_scalp（进场方向与 major_bias 相反）：
-         - 基本门槛：
-           · confidence ≥ 72 且 edge_score ≥ 0.8；
-           · reasoning 中必须给出清晰的反转 / 均值回归依据：
-             （如关键 demand/supply 共振、1h/30m 结构破坏、MACD/RSI 明显背离等）。
-         - 若未达到上述信心与 edge 要求，即使其他条件满足，也应在 reasoning 中说明
-           “逆势 LTF_scalp 信心不足，因此选择 wait”，而不是勉强开仓。
-  4) 全局限制（防止过度交易）：
-     - 在一轮决策中（同一次输入），你从所有 symbol 中最多只能选择 1~2 个综合质量最高的机会做 "open_long" 或 "open_short"；
-        - 若出现多个 A/B：只在最终选中的 1~2 个 symbol 的 reasoning 中写 1 句电报体 rank 对比（例：rank1/5; next=ETH edge0.9<1.1）。
-          其他 symbol 禁止展开比较，只写：rank>2; drop:<edge<top 或 gate_fail:CODE>。
-- 总体原则：
-  - 当所有 symbol 的机会都被你评估为 "setup_grade" = "C"，
-    或 edge_score 明显接近 0、甚至为负时，应果断选择全部 "wait"/"hold"；
-  - 当至少存在 1~2 个 A 级，或满足条件的 B 级机会（edge_score ≥ 0.5 且 confidence ≥ 60）时，
-    应在它们之中选出优先级最高的 1~2 个给出 "open_long" 或 "open_short"，
-    而不是对所有 symbol 一律选择 "wait"。
+0. 核心原则与加密货币特性
+   - **结构 > 指标**：道氏高低点、供需区、FVG 的权重绝对高于 RSI/MACD。
+   - **实体 > 引线 (Anti-SFP)**：判断“突破”或“破坏”时，必须以 K 线实体收盘价 (Body Close) 为准。仅有引线刺破 (Wick) 视为流动性猎杀 (SFP)，非结构破坏。
+   - **统计 > 感觉**：必须引用 `ctx` 中的 `strength_z` 和 `vol_ratio` 来验证结构的有效性。
+1. 时间框架层级 (Hierarchy)
+   - **Major (4h/1h)**：决定战略方向 (Trend Bias)。若 4h 为 Bearish，严禁在无大级别结构支撑下做多。
+   - **Minor (15m)**：决定战术结构 (Structural Key Level)。寻找入场所在的“战场”。
+   - **Micro (5m)**：决定扣动扳机 (Trigger)。确认微观动能和精确止损位。
+2. 单一结构组件判定标准 (8大结构详解)
+   对每个 Timeframe，必须综合以下组件得出结论：
+   (a) 道氏理论数据 (Dow Theory) —— 趋势脊梁
+       - **BULL**: 维持 Higher Highs (HH) + Higher Lows (HL)。且 Price > Last HL。
+       - **BEAR**: 维持 Lower Lows (LL) + Lower Highs (LH)。且 Price < Last LH。
+       - **NEUTRAL/CHoCH**: 价格破坏了原趋势的 Key Swing，但尚未形成新的反向序列。
+       * **关键约束**：HH/LL 的确认必须基于 K 线实体收盘。
+   (b) 通道分析 (Channel) —— 趋势边界
+       - **看涨**: `channel_direction`="upward"。做多最佳位置在下轨 (Lower Band) 或中轴回踩。
+       - **看跌**: `channel_direction`="downward"。做空最佳位置在上轨 (Upper Band) 或中轴反抽。
+       - **边界警报**: 若 Price 触及上轨且 RSI 超买 -> 此时不做 Breakout，只做 Rejection。
+   (c) 供需区分析 (Supply/Demand) —— 趋势路障
+       - **有效性判定**：引用 `ctx` 数据。
+         * 强区：`strength_z` > 1.0 或 `vol_ratio` > 1.5。
+         * 弱区：`strength_z` < 0 或 `vol_ratio` < 0.8 (可忽略或视为易突破)。
+       - **吸筹/出货识别**: 若 `touches` > 5 且 `vol_ratio` > 2.0 但价格不反弹 -> 视为**吸收 (Absorption)**，大概率会突破，不作为反转依据。
+   (d) VPVR 分析 (Volume Profile) —— 价值共识
+       - **趋势延续**: Price 站稳 VAH (Value Area High) -> 看涨延伸；Price 跌破 VAL -> 看跌延伸。
+       - **震荡吸筹**: Price 在 VAH 和 VAL 之间游走。
+       - **POC (Point of Control)**: 磁铁属性。
+         * 若 Price 远离 POC -> POC 是回调目标。
+         * 若 Price 紧贴 POC (`POC_chop_zone`) -> **死区，Action=Wait**，禁止开仓。
+   (e) FVG (公允价值缺口) —— 磁力与支撑
+       - **目标**: 顺势交易中，未回补的 FVG 是第一止盈目标。
+       - **支撑/阻力**:
+         * 只有 `is_fresh=true` 且 `width_atr` > 0.5 的 FVG 才具备强支撑/阻力作用。
+         * 若 FVG 被实体 K 线完全穿透 -> 视为失效 (Inversion)，可作为反向测试点。
+   (f) 斐波纳契 (Fibonacci) —— 深度度量
+       - **回调 (Retracement)**: 0.618-0.786 是 OTE (最佳入场区)。
+       - **共振**: 必须与 S/D 或 SR 线重叠才有效。单独的 Fib 线无支撑力。
+   (g) 超级趋势 (SuperTrend) —— 趋势过滤器
+       - **硬约束**: 若 `direction`="bearish"，严禁做多 (除非是 A 级底部反转)。
+       - **早信**: 若 1h/15m ST 翻转，但 4h 未翻转，视为“潜在反转”，需降低仓位风险。
+   (h) SR 转换线 (Support/Resistance) —— 精确互换
+       - **Flip**: 只有发生过“阻力变支撑”或“支撑变阻力”的线，权重最高 (`strength` 高)。
+       - **穿刺**: 若某条线近期被多次穿刺 (Whipsaw)，视为失效，忽略不计。
+3. 综合偏差判定 (Bias Synthesis) & 冲突仲裁
+   - **Grade A (强趋势)**:
+     * Dow + SuperTrend + Channel 方向一致。
+     * 策略：在 15m/5m 寻找任何回踩 (Pullback) 机会进场。
+   - **Grade B (修正/回调)**:
+     * Major (4h) 看涨，但 Price 跌破了 15m SuperTrend 或处于 Channel 下行段。
+     * 策略：**等待 (Wait)**。等待价格触及 4h Demand 或 Fib 0.618，且 5m 出现结构破坏 (ChoCH) 转多时进场。
+   - **Grade C (混沌/冲突)**:
+     * Dow 显示 HH (看涨)，但 SuperTrend 显示 Bearish (看跌)。
+     * 或 Price 卡在 VPVR POC 正中间。
+     * 策略：**观望 (Wait)**。严禁在多空分歧剧烈时下注。
+4. 方向约束 (Action Rules)
+   - **做多 (LONG)**:
+     1. Major Bias 不为 BEAR (或为 A 级反转)。
+     2. 价格位于价值区上方 (Above POC/VAL) 或 处于 Discount 区 (Fib > 0.5)。
+     3. 下方有明确的“硬地板” (Demand/FVG/SR) 支撑。
+   - **做空 (SHORT)**:
+     1. Major Bias 不为 BULL (或为 A 级反转)。
+     2. 价格位于价值区下方 (Below POC/VAH) 或 处于 Premium 区 (Fib < 0.5)。
+     3. 上方有明确的“硬天花板” (Supply/FVG/SR) 压制。
+4. 方向约束（8大结构全息判定模型）
+- 核心公理：趋势的定义不依赖 RSI/MACD，而是依赖 8 大结构数据的**共振状态**。
+- 只有当“趋势型结构”与“位置型结构”达成一致时，Bias 才成立。
+4.1) 趋势综合判定标准 (Trend Confluence Scorecard)
+  AI 必须综合以下维度的状态来判定 BULL/BEAR，遵循“少数服从多数，一票否决制”：
+  A) 趋势定性 (Trend Setters - 决定大方向):
+     1. **超级趋势 (SuperTrend)**:
+        * BULL: Direction="bullish" (价格在绿线之上)。
+        * BEAR: Direction="bearish" (价格在红线之下)。
+     2. **道氏理论 (Dow)**:
+        * BULL: 维持 Higher Highs + Higher Lows 序列。
+        * BEAR: 维持 Lower Lows + Lower Highs 序列。
+     3. **通道结构 (Channel)**:
+        * BULL: Channel_Direction="upward" (向上倾斜)。
+        * BEAR: Channel_Direction="downward" (向下倾斜)。
+  B) 价值定位 (Value Validation - 决定强弱):
+     4. **VPVR (筹码分布)**:
+        * BULL: Price > POC 且位于 Value Area 上方 (价格被价值区托举)。
+        * BEAR: Price < POC 且位于 Value Area 下方 (价格被价值区压制)。
+     5. **SR Flip (转换线)**:
+        * BULL: Price 成功回踩并站稳最近的 Support Line。
+        * BEAR: Price 反抽受阻于最近的 Resistance Line。
+4.2) 开仓方向铁律 (基于结构的博弈)
+  【场景一：顺势交易 (Trend Following) - 胜率最高】
+  - **允许做多**：
+    * 必须满足：SuperTrend(Bullish) + Dow(Bullish) 同向共振。
+    * 且 VPVR 确认：Price > POC (不做“头顶有大山”的多单)。
+  - **允许做空**：
+    * 必须满足：SuperTrend(Bearish) + Dow(Bearish) 同向共振。
+    * 且 VPVR 确认：Price < POC (不做“脚下有铁板”的空单)。
+  【场景二：逆势/反转交易 (Reversal) - 条件极严】
+  - **核心逻辑**：只有当“阻挡结构”的强度远大于“趋势惯性”时，才允许接飞刀。
+  - **允许逆势做多 (Catching Knife) 的硬性条件**：
+    1. **大级别支撑**：触及 HTF(4h/1h) 级别的 **强 Demand Zone** 或 **SR Support Line**。
+    2. **结构衰竭**：Channel 触底 (下轨) 或 触及 VPVR VAL (价值区下沿)。
+    3. **斐波纳契**：必须有 Fib 0.618/0.786/1.272 共振。
+    * 缺一不可。若不满足，即使 5m 出现金叉也**严禁**做多，Action=Wait。
+  - **允许逆势做空 (Top Fishing) 的硬性条件**：
+    1. **大级别阻力**：触及 HTF 级别的 **强 Supply Zone** 或 **SR Resistance Line**。
+    2. **结构衰竭**：Channel 触顶 (上轨) 或 触及 VPVR VAH (价值区上沿)。
+    3. **斐波纳契**：必须有 Fib 0.618/0.786/1.272 共振。
+  【场景三：震荡与等待 (Chop & Wait)】
+  - 若 Dow 与 SuperTrend 方向冲突（例如 Dow HH 但 ST Bearish）；
+  - 或 Price 刚好卡在 VPVR POC (磁力中心)；
+  - **Action 必须为 WAIT**。严禁在方向不明的混沌期开仓。
+5. 结构化利润保护与风控联动 (Structure-First Defense System)
+    - **核心哲学**：进场是基于结构，出场也必须基于结构。
+    - **严禁**：仅因 RSI 超买/超卖或价格波动剧烈就惊慌离场。只有当**市场结构发生改变**时，才改变持仓状态。
+    5.1) 趋势健康度判定 (Structure Health Check)
+      - 每次持仓检查时，AI 必须评估当前的**价格行为 (Price Action)**：
+      * **强势 (Impulse)**:
+        - K 线实体饱满，连续突破前高/前低。
+        - 回调幅度浅 (不破前一根 15m K线极值)。
+        - **策略**：**Hold**。不要轻易移动止损，让利润奔跑。
+      * **调整 (Correction)**:
+        - 价格进入旗形整理或缩量盘整，但未破坏关键 Swing Point。
+        - **策略**：**宽松防守**。止损维持在结构外，忍受波动。
+      * **衰竭 (Failure)**:
+        - 出现 **SFP (Swing Failure Pattern)**：刺破前高/前低后迅速收回。
+        - 出现 **MSB (Market Structure Break)**：5m 级别高低点序列被破坏。
+        - **策略**：**立即防御**。减仓或收紧止损。
+    5.2) 阶段化结构追踪 (Structural Trailing Roadmap)
+      根据价格攻克的**结构关卡**来移动止损（而非根据固定的 R 倍数）：
+      【阶段 A：生存期 (攻克 Entry)】
+      - **状态**：价格仍在入场位附近纠缠，未突破第一个微观阻力。
+      - **动作**：**死守原始止损**。
+      - **禁忌**：严禁在价格未创新高/新低之前推保本 (BE)。这是最容易被洗盘的阶段。
+      【阶段 B：安全期 (攻克 5m/15m 结构)】
+      - **触发**：价格实体突破并站稳了第一个 **15m Supply/Demand** 或 **前高/前低**。
+      - **动作**：将止损移至 **该突破结构的反向边界外侧** (即：把墙搬到身后)。
+      - **目的**：此时若跌回墙内，说明突破失败，理应离场。
+      【阶段 C：收割期 (攻克 1h/4h 结构 或 MOMENTUM_BREAK)】
+      - **触发**：价格触及主要的 **HTF 目标位 (Target)** 或出现加速抛物线。
+      - **动作**：启动 **Bar-by-Bar 追踪** 或 **前一根 K 线极值追踪**。
+      - **逻辑**：加速段不应有深回调，一旦回头吃掉前一根 K 线，通常意味着高潮结束。
+    5.3) 结构引发的主动防御 (Structure-Led Intervention)
+      - 无论当前浮盈多少，一旦出现以下**结构性破坏**，强制执行防御：
+      1. **流动性猎杀 (SFP / Liquidity Raid)**:
+         - 场景：价格突破了 Swing High/Low 或 HTF 结构边界，但 5m K 线收盘未能站稳（留长影线）。
+         - **动作**：视为假突破，**Reduce 50%**，余仓止损收紧至该影线极端。
+      2. **目标位阻挡 (Major Obstacle)**:
+         - 场景：价格精确触及 **4h Supply/Demand**、**未回补的 HTF FVG** 或 **VPVR POC**。
+         - **动作**：**主动减仓** (除非是 MOMENTUM_BREAK 强穿)。不要在水泥墙面前赌突破。
+      3. **微观结构破坏 (5m MSB)**:
+         - 场景：做多时，5m 走出了 Lower Low；做空时，5m 走出了 Higher High。
+         - **动作**：**全平 (Close)** 或 **推保本 (BE)**。小周期趋势已变，不再硬抗。
+    5.4) 逆势补救与黑天鹅 (Emergency Rescue)
+      - 场景：持仓方向的主逻辑结构 (Main Thesis) 被**实体大阴/大阳线**暴力击穿。
+      - **动作**：
+        * **立即市价离场**。不要等回调，不要等止损生效。
+        * 承认结构分析错误，并在 reasoning 中标记 `Structure_Failed`。
+6. 开仓信号质量与观望优先原则 (Structure-Indicator Locked Matrix)
+    - **核心哲学**：交易是【结构 (位置)】与【指标 (动能)】的完美锁扣。
+    - **严禁**：脱离结构只看指标（如：RSI 超卖就买）；脱离指标只看结构（如：到了支撑就买，不管是不是缩量）。
+    6.1) 全维决策矩阵 (The Execution Matrix)
+      AI 必须根据当前 setup 的性质，检查是否满足“结构+指标”的双重锁定：
+      【场景 I：HTF_swing (波段) + 顺势 (Trend Following)】
+      - **结构锁定 (Structure Lock)**:
+        * 必须依托 **4h/1h 实体结构**：回踩并站稳 Demand Zone、未回补 FVG、或 VPVR VAH (突破回踩)。
+        * **否决**：若价格下方无 HTF 结构支撑（悬空），Action=Wait。
+      - **指标锁定 (Indicator Lock)**:
+        * 4h/1h 均线排列健康 + RSI 处于牛市支撑区 (40-50)。
+      - **执行**：
+        * Grade A -> 允许 Limit 挂单在结构边缘。
+      【场景 II：HTF_swing (波段) + 逆势反转 (Trend Reversal)】
+      - **结构锁定 (Structure Lock)**:
+        * 必须触及 **4h/Daily 终极防线**：SR Flip 强阻力、通道极值边界、或 Fib 1.618 扩展位。
+        * **微观结构**：15m 必须出现 Higher High (做多) 或 Lower Low (做空) 的结构破坏 (ChoCH)。
+      - **指标锁定 (Indicator Lock)**:
+        * 必须出现 **HTF 级别的背离** (价格破结构新高，RSI 未破)。
+      - **执行**：
+        * **必须等待** 1h K线收盘确认 SFP (插针收回) 形态。
+      【场景 III：LTF_scalp (短线) + 顺势 (Momentum/Retest)】
+      - **结构锁定 (Structure Lock)**:
+        * **Retest**: 回踩 **15m/5m FVG** 或 **SR 转换线** 不破。
+        * **Breakout**: 实体 K 线强势穿越 **VPVR POC** 或 **前高阻力位**。
+      - **指标锁定 (Indicator Lock)**:
+        * **MACD**: 柱体必须在零轴上方(多)发散，或水下金叉。
+        * **Volume**: 结构处的动作必须放量 (`vol_ratio` > 1.5)。
+      - **执行**：
+        * 只有当 **结构支撑 + 量能爆发** 同时出现时，才可开仓。
+      【场景 IV：LTF_scalp (短线) + 逆势反弹 (Mean Reversion)】
+      - **结构锁定 (Structure Lock)**:
+        * 价格触及 **通道上轨/下轨** 或 **VPVR 价值区边界 (VAH/VAL)**。
+        * 且该位置必须与一个 **反向 FVG** 或 **S/D Zone** 重叠 (结构共振)。
+      - **指标锁定 (Indicator Lock)**:
+        * **RSI**: 必须处于极端区 (>75 / <25)。
+        * **SFP**: 5m K线必须对上述结构进行“刺破并收回” (Liquidity Raid)。
+      - **执行**：
+        * 只有当 **触及结构边界 + 出现 SFP 信号** 时，才可博取短线回调。
+    6.2) 评分与置信度熔断 (Score-Based Veto)
+      无论属于上述哪种场景，若未达到以下分数线，强制 **Wait**：
+      1. **Grade 熔断**: `setup_grade` = "C" -> **Wait** (结构太弱)。
+      2. **Edge 熔断**: `edge_score` < 0.6 -> **Wait** (无利可图)。
+      3. **Confidence 熔断**:
+         - 顺势单：`confidence` < 70 -> Wait。
+         - 逆势单：`confidence` < 80 -> Wait (逆势需要更强的微观确认)。
+    6.3) 结构与指标的最终验尸 (Final Sanity Check)
+      在输出 Open 指令前，快速扫描以下“死亡组合”：
+      - **死亡组合 A (无构)**：指标金叉，但价格在两个供需区中间的真空带。 -> **Wait**
+      - **死亡组合 B (逆构)**：做多，但头顶紧贴着 VPVR POC 和 4h EMA50。 -> **Wait**
+      - **死亡组合 C (无量)**：突破关键 SR 线，但成交量 `vol_ratio` < 0.8。 -> **Wait**
+    6.4) 多标的竞价 (Global Ranking)
+      - 当多个 Symbol 同时触发开仓信号时：
+        1. **顺势 > 逆势**：优先做 Trend Following 的单子。
+        2. **HTF > LTF**：优先做波段单（稳定性高）。
+        3. **结构硬度优先**：对比 `ctx.strength_z`，优先做依托 **强结构 (High Z-Score)** 的单子，放弃依托弱结构的单子。
 ——————————————————————————————————————
-四、开仓前硬性 Checklist（多重硬过滤）
+四、开仓前硬性 Checklist（逻辑闭环与熔断闸门）
 ——————————————————————————————————————
-- 作用：在你打算对某个 symbol 输出 "action": "open_long" 或 "open_short" 之前，
-  必须逐项自检。任意一项未通过，都不得在该 symbol 上新开仓，只能 "wait"/"hold"
-  或对已有仓位做 close/reduce/move_stop。
-- 执行顺序（硬性约定）：
-  1) 先完成多时间框架分析与 setup_grade 评估：
-     - 给出 major_bias / minor_bias / micro_bias；
-     - 判断 trade_style（HTF_swing 或 LTF_scalp）与方向是否匹配；
-     - 初步确定 setup_grade、edge_score、confidence。
-  2) 然后逐项运行 Checklist（A/B/C/D/E）：
-     - 对 A1/A2/A3/B4/B5/C6/C7/D8/D9/E10 逐条给出“是 / 否”的结论；
-     - 若某一项触发禁开仓条件，必须在 Checklist 小结里明确指出。
-  3) 最后再给出 action / entry_plan：
-     - 只有当 Checklist 全部通过（或仅触发允许的例外情况）时，
-       才能输出 "open_long" 或 "open_short"；
-     - 若 Checklist 与最终 action 存在矛盾（例如 A2 已触发过渡区禁做，
-       但仍输出 LTF_scalp 反向开仓），视为违反本模板。
-- 要求：在 reasoning 中显式写出每一大项的结论，例如：
-  “Checklist：A1 否 / A2 否 / B4 否 / B5 是 / … → 综合结论：允许开仓”。
+- 核心作用：这是下单前的最后一道“死刑复核”。任意一条未通过，Action 必须强制降级为 "wait"。
+- 执行顺序：数据 -> 环境 -> 结构 -> 方向 -> 风险 -> 协议。
+A. 数据与环境熔断 (Data & Macro Veto)
+  A1) 数据完整性 (Data Integrity)
+      - 检查：`MarketSnapshot.5m.ohlc_last_closed.x` 是否为 `true`？
+      - 熔断：若 False 或字段缺失 -> **Wait** (fail=>xF)。
+  A2) 宏观环境健康度 (Macro Health)
+      - 检查：是否触发了「A. 环境过滤」中的任意死刑条件？
+        * 均线乖离 > 3.0 ATR？
+        * 正面临 4h/Daily 级别的强墙 (High Strength Supply/Demand)？
+        * 处于死寂市场 (Dead Market)？
+      - 熔断：若触发 -> **Wait** (fail=>MacroEnv)。
+B. 结构依托与位置确认 (Structure & Location)
+  B3) 结构接触性 (Touch Validation)
+      - 问：Entry Price 是否 **精确触及/重叠** 至少一个有效结构？(Demand, SR, FVG, Fib OTE, ST, Channel)
+      - 熔断：若价格悬空（Vacuum），未踩在任何结构上 -> **Wait** (fail=>Floating)。
+  B4) VPVR 死区规避 (Zone Avoidance)
+      - 问：Entry 是否位于 VPVR POC (`chop_zone`) 内部？
+      - 熔断：若是 -> **Wait** (fail=>POC_Zone)。
+  B5) 形态特异性 (Pattern Specifics)
+      - 若是 `EDGE` / `BO_RETEST`：必须有 5m Rejection/Pinbar 确认。
+      - 若是 `MOMENTUM_BREAK`：必须有 5m 实体饱满突破 + `vol_ratio > 2.0`。
+      - 熔断：若形态不符（如缩量突破、无确认接飞刀） -> **Wait** (fail=>PatternInvalid)。
+C. 方向一致性与评分 (Bias & Score)
+  C6) 结构否决权 (Structure Veto)
+      - 问：Major Bias (4h/1h) 是否支持开仓方向？
+      - 逻辑：
+        * 顺势：允许。
+        * 逆势：**必须**满足 A 级反转条件 (HTF结构支撑 + 5m结构破坏)。
+      - 熔断：若单纯逆势且无反转结构 -> **Wait** (fail=>CounterTrend)。
+  C7) 评分准入 (Score Threshold)
+      - 检查：`setup_grade` 和 `edge_score` 是否达标？
+      - 熔断：
+        * 若 `edge_score < 0.6` -> **Wait** (期望值过低)。
+        * 若 `setup_grade` = "C" -> **Wait** (质量太差)。
+        * 若 `confidence < 75` -> **Wait** (微观信号不足)。
+D. 风险与资金安全 (Risk & Safety)
+  D8) 空间与盈亏比 (Space/RR)
+      - 检查：`R_clean` (到最近反向有效障碍的距离 / 止损距离)。
+      - 熔断：
+        * LTF_scalp: 若 `R < 1.0` -> **Wait** (例外：动能单 >0.8)。
+        * HTF_swing: 若 `R < 1.5` -> **Wait**。
+  D9) 10x 杠杆安全护栏 (Leverage Safety)
+      - 检查：计算出的物理止损幅度 `Dist_Pct`。
+      - 熔断：若 `Dist_Pct > 6.0%` -> **Wait** (波动率过大，不适合 10x)。
+E. 输出协议自检 (Protocol Sanity Check)
+  E10) 格式合规性
+      - 问：`reasoning` 字段是否严格遵守 `B:||K:||R:||X:` 的四段式伪代码格式？
+      - 问：是否包含了具体的指标数据（如 `[RSI:45]`）和结构统计（如 `Vol:2x`）？
+      - 修正：若未遵守，必须在输出前重写 reasoning，确保信息密度。
 ——————————
-A. 环境过滤（大级别）
+A. 环境过滤与市场状态 (Macro Context & Indicator Synergy)
 ——————————
-A1) 趋势尾声区检查（4h 级别）
-  - 问：当前是否命中前文定义的「空头尾声区 / 多头尾声区」？
-    * 若是：
-      · 禁止在对应方向新增顺势仓位（包括 trade_style="LTF_scalp"）；
-      · 该方向本轮最多只能做风险管理（reduce / close / move_stop），
-        或等待明确反转结构后按逆势规则小仓试单；
-      · 若 reasoning 中仍想开仓，风控层应强制将 action 改为 "wait" / "hold"。
-A2) 大级别过渡段检查（micro 先翻）
-  - 问：是否属于「4h/1h 仅偏弱 / 偏强 / 中性 + 1h/30m 仍延续原方向，
-        只有 15m/5m micro_bias 先反向」的过渡 / 犹豫区？
-    * 若是：
-      · 禁止以 trade_style="LTF_scalp" 在反向方向开新仓（抢反向）；
-      · 对应方向的 LTF_scalp 行为必须为 "wait" 或仅管理既有仓位。
-A3) 极端 RSI 追涨 / 追跌检查（与前文 Layer-1/Layer-2 保持一致）
-  - 问：是否触发了前文「追涨/追跌限制」？
-    * 若触发 Layer-1（强极端）：
-      · 绝对禁止在当前价位新开仓或加大仓位；
-      · 仅允许 reduce/close 或 wait。
-    * 若触发 Layer-2（偏极端）：
-          · 禁止无理由的“追价式入场”；
-          · 但允许以下“结构性例外”：
-            A) pattern=BO_RETEST（回踩确认）；
-            B) pattern=EDGE（边缘拒绝）；
-            C) pattern=MOMENTUM_BREAK（动能突破）：
-               - 必须满足 vR ≥ 2.0 的量能硬指标；
-               - 必须有明确的结构被击穿（Breakdown/Breakout）；
-               - 允许在偏离 EMA 的情况下进场（视为加速段）。
+A1) 乖离率与动能衰竭 (Extension & Exhaustion)
+  - 核心逻辑：利用 4 种不同性质的指标交叉验证，判断价格是否处于“强弩之末”。
+  - 问：当前价格是否触发了以下 **至少 2 项** 极端延伸信号？
+    1. **均线乖离 (EMA)**:
+       * `Deviation = |Price - EMA50| / ATR(1h) > 3.0` (橡皮筋拉断)。
+    2. **通道极值 (Channel)**:
+       * 价格触及或突破 **4h/1h Channel** 的 `Upper_Band` (做多时) 或 `Lower_Band` (做空时)，且 RSI 进入极端区 (>75 / <25)。
+    3. **趋势过热 (SuperTrend)**:
+       * 价格远离 4h SuperTrend 趋势线超过 `5%` (或显著大距离)，暗示回调需求。
+    4. **斐波纳契 (Fib)**:
+       * 价格精确触及波段的 **1.272 或 1.618 扩展位** (Trend Extension)。
+  - **硬约束**:
+    * 若触发上述 ≥ 2 项：视为 **Overextended (过度延伸)**。
+    * **Action**: 严禁顺势追单。只允许寻找 A_reversal 反转机会或等待回到均线/通道中轴。
+A2) 宏观结构压制 (HTF Structural Wall)
+  - 核心逻辑：利用 4 类结构数据定义“不可逾越的墙”。小周期突破必须尊重的大周期路障。
+  - 问：当前价格前方是否面临 **HTF (4h/Daily)** 级别的强阻力/支撑？
+    * 必须检查以下 4 类结构的存在性与强度：
+    1. **实体墙 (S/D)**:
+       * 触及 4h Supply/Demand，且 `ctx.strength_z > 1.5` (强统计显著性)。
+    2. **缺口墙 (FVG)**:
+       * 触及 4h Fresh FVG 的边界或中轴，且该 FVG 未被回补 (`is_fresh=true`)。
+    3. **线性墙 (SR Flip)**:
+       * 触及 4h SR Flip Line，且 `hit_count ≥ 5` (历史验证极强的关键位)。
+    4. **价值墙 (VPVR)**:
+       * 做多面临 **POC (Point of Control)** 压制，或做空面临 POC 支撑（VPVR 最大筹码峰）。
+  - **硬约束**:
+    * 若正面临上述任一“强墙”：**Action="wait"**。
+    * **解锁条件**：必须等待价格在 HTF 结构内完成 **1h 级别的有效实体突破 (Breakout)** 或 **15m 级别的结构破坏 (ChoCH)** 后，方可尝试操作。
+A3) 波动率与流动性健康度 (Volatility & Liquidity)
+  - 问：市场是否具备可交易的活性？
+    * **检查**:
+      - **ATR**: 当前 ATR 是否处于历史极低值（压缩状态）？
+      - **Volume**: 5m/15m `vol_ratio` 是否持续 < 0.6？
+    * **硬约束**:
+      - **死寂市场**: 若无量 + 无波幅 -> **Wait** (不做无效磨损)。
+      - **压缩爆发**: 若 ATR 极低但出现 `MOMENTUM_BREAK` (放量突破通道/收敛三角) -> 允许 **Breakout** 策略介入，博取波动率回归。
+A4) 趋势的一致性与背离 (Alignment & Divergence)
+  - 问：动能指标是否支持结构方向？
+    * **检查**:
+      - **RSI/MACD**: 价格创 4h 新高/新低，但指标出现明显背离 (Divergence)。
+      - **道氏理论**: 1h 结构已出现 Higher Low 跌破 (趋势潜在反转)。
+    * **硬约束**:
+      - 若 `HTF 背离 + 结构松动` -> **禁止顺势加仓**。
+      - 此时应切换为 **区间震荡 (Range)** 思维，在边界处做高抛低吸。
 ——————————
 B. 结构与空间检查
 ——————————
-B4) 对侧供需区位置
-  - 问：当前 price 是否位于或刚刚扎入「与计划方向相反」的
-        5m / 15m fresh / strong / weakened supply 或 demand 区内部，
-        且尚未出现清晰的“突破–回踩确认”结构？
-    * 若是：
-      · 至多视为 setup_grade="C"；
-      · action 必须为 "wait" 或仅管理已有仓位，
-        禁止在该价位 open_long / open_short。
-B5) 最近反向结构与 R_clean（定义必须可计算）
-  - 问：是否已经基于当前 entry_price 与 sl_struct 计算出 R_struct 与 R_clean？
-    * 定义：
-      · R_struct = |entry_price - sl_struct|（以价格计）
-      · “最近反向结构”的判定与硬约束（引入统计过滤）：
-              - 在识别最近反向结构时，必须自动忽略“统计噪音”，避免被弱结构吓退：
-                1) 忽略 `strength_z` < -1.0 的极弱供需区；
-                2) 忽略 `rank_pct` < 0.2 且 `vol_ratio` < 0.8 的微小 FVG；
-                3) 忽略 `status`="weakened" 且无成交量支持的区域。
-              - 有效反向结构定义（用于 R_clean 的“最近反向结构”必须从这里选）：
-                1) 具有统计显著性（Strength Z > -0.5 或 rank > 30%）的供需区/FVG；
-                2) 支撑阻力转换线（support_resistance_lines，取“最近的反向线”；若 strength>=1 或 hit_count>=10 视为强结构，必须纳入）；
-                3) 通道边界、SuperTrend 线；
-                4) VPVR 的 VAL/VAH/POC。
-              - nearest_opposite_structure 选择规则（硬约束）：
-                1) 先按“统计噪音过滤”剔除无效结构（保留强结构）
-                2) 在剩余【有效反向结构】中，按“与 entry_price 的方向距离”取最近者：
-                   - LONG：仅考虑 entry_price 上方的反向结构，取 Δ = structure_price - entry_price 的最小正值
-                   - SHORT：仅考虑 entry_price 下方的反向结构，取 Δ = entry_price - structure_price 的最小正值
-                   => nearest_opposite_structure = argmin(Δ)
-                3) R_clean_pts = Δ(nearest_opposite_structure, entry_price)
-                   R_clean     = R_clean_pts / R_struct
-              - 禁止使用 current price 替代 entry_price；禁止跳过“最近的强结构”。
-    * 若未给出上述任一“最近反向结构”与 R_clean：视为流程不完整，禁止开仓。
-    * 若 trade_style="LTF_scalp" 且 R_clean < 0.5：视为“空间不足”，禁止开仓；若 R_clean ∈ [0.5, 1.0) 仅允许在“趋势尾声反转型 LTF_scalp”例外条件下小仓试单（见 C7）。
-    * 若 trade_style="HTF_swing" 且 R_clean < 1.5：默认不得开仓；仅当 setup_grade="A" 且能明确指出更远的次级目标结构提供 ≥2R 空间时才允许例外（必须写清楚）。
-  - 穿透规则（Breakout Mode）：
-    - 穿透规则（Breakout Mode｜仅用于“远目标推演”，不得用于放行开仓）：
-      * 禁止：trade_style="LTF_scalp" 一律不得使用穿透规则。
-      * 允许：仅当 trade_style="HTF_swing" 且 setup_grade="A" 且 major_bias 同向时，才可“额外”推演 TP2/更远目标。
-      * 重要：R_clean（开仓闸门）必须始终按“最近有效反向结构”计算，穿透规则不得用于满足/绕过 R_clean 门槛。
-      * 删除“Distance < 1.5*ATR 视为噪音可穿透”的判定；相反：
-      - 若最近反向结构距离过近 ⇒ 说明空间不足 ⇒ 应直接 wait，而不是穿透到更远结构来虚构空间。
-B6) 执行时效与反延迟闸门（下单前最后一公里｜硬要求）
-  - 问：在【实际下单/发送订单】的那一刻，以下条件是否全部满足？
-    （此项由执行端强制校验；AI 也必须在 reasoning 中自检并给出结论。）
-    0) 输入可验证性闸门（Hard Gate｜缺数据直接止血）
-        - 必须提供：MarketSnapshot.5m 至少包含 {open, high, low, close, close_time, x}
-        - 且 x=true 的那根必须对应“最新已收盘 5m K”（以 close_time 为准）
-        - 若本轮计划 pattern ∈ {EDGE, BO_RETEST, Rejection-A, Rejection-B}：
-            * 任一字段缺失 => action 必须="wait"
-            * reasoning 必须写明：missing_ohlc=true（禁止用“推测/猜测/应该是收阴”）
-        - 推荐同时提供：MarketSnapshot.15m、MarketSnapshot.30m 的 {open, high, low, close, close_time}
-          （用于 BO_RETEST 的区间回到/未回到判断、以及 VPVR_MID 的 tf=30m 校验）
-        1) K线对齐：本次开仓信号必须基于“最新已收盘 5m K”（MarketSnapshot.5m 的 x=true 那根）。
-           * 若在下单时已经出现了新一根 5m 收盘（bar 已推进），则该信号视为过期：
-             - action 必须为 "wait"（禁止下单）；
-             - 需等待下一轮重新评估，不得用旧信号追价。
-    2) 价差/滑点闸门：|live_price - entry_price| ≤ 0.25 * R_struct（可配置 0.2~0.35）。
-       * 若超出：视为延迟导致的追单/错位：
-         - action="wait"（或重新计算 entry/stop 后再评估）；
-         - 禁止沿用旧 stop 强行开仓。
-    3) 结构未失效（pattern 相关，必须满足）：
-       * 对 EDGE：
-         · SHORT：最近 1 根已收盘 5m 的 close 必须 ≤ supply_high；
-           若 close > supply_high：视为供给边缘试空失效，禁止 open_short。
-         · LONG：最近 1 根已收盘 5m 的 close 必须 ≥ demand_low；
-           若 close < demand_low：视为需求边缘试多失效，禁止 open_long。
-       * 对 BO_RETEST（突破-回踩）：
-         · SHORT：最近 1 根已收盘 5m 的 close 不得重新回到“突破前的区间内部”，且仍位于 retest 附近；
-         · LONG：对称处理。
-    4) zone 位置仍满足“靠边进场”要求（与 EDGE 开仓窗口一致）：
-       * 默认：live_price 仍在 40% 窗口内；
-       * 若 major_bias=NEUTRAL 或 price∈[VAL,VAH] 或落在 POC_chop_zone：live_price 必须仍在“外侧20%窗口”内；
-       * 若 live_price 已滑出对应窗口：视为追单/错位，action="wait"（禁止开仓）。
+B. 结构依托与空间精密校验 (Structure Precision & Space)
+B4) 结构依托有效性验收 (Structure Reliance Validation)
+  - 核心原则：拒绝“大概在支撑位”这种模糊概念。Entry 必须 **精确触及** 以下有效结构，且该结构必须通过**体检**。
+  - 问：当前价格是否满足以下至少一类结构的【验收标准】？
+  【一类：实体硬结构 (Hard Structures)】
+  1. **供需区 (Supply/Demand)**:
+     - **触及**: 价格进入 Zone 内部或接触边界 (Buffer < 0.1% / 5-10 ticks)。
+     - **验收**: `status` 必须为 "fresh" 或 "tested" (严禁 "weakened")；且 `ctx.strength_z` > 0 (正值)。
+     - **否决**: 若 `touches` > 5 且无反弹 -> 视为吸筹/派发区，失效。
+  2. **FVG (不平衡缺口)**:
+     - **触及**: 价格回补 FVG 并触及边界或 50% 中轴。
+     - **验收**: `is_fresh`=true；且宽度 `width_atr` > 0.3 (太窄忽略)。
+     - **否决**: 若 FVG 已被实体 K 线完全穿透 -> 失效。
+  3. **道氏结构 (Dow Swing)**:
+     - **触及**: 回踩前一个 Higher Low (多) / Lower High (空)。
+     - **验收**: 该 Swing 点未被实体跌破/突破。
+  【二类：线性动态结构 (Dynamic Structures)】
+  4. **SR 转换线 (Flip Lines)**:
+     - **触及**: 价格回踩线条。
+     - **验收**: `hit_count` ≥ 3 (少于3次视为弱线)；且 `strength` > 0.5。
+  5. **超级趋势 (SuperTrend)**:
+     - **触及**: 价格回踩 ST 线。
+     - **验收**: `direction` 必须与开仓方向一致 (Bullish做多/Bearish做空)。
+  6. **通道 (Channel)**:
+     - **触及**: 接触 Lower Band (多) 或 Upper Band (空)。
+     - **验收**: 通道斜率 `slope` 不得与开仓方向严重背离。
+  【三类：数学价值结构 (Math & Value)】
+  7. **VPVR (筹码分布)**:
+     - **触及**: 接触 VAH 或 VAL。
+     - **验收**: 必须配合 Rejection 信号。
+     - **死区否决**: 若价格位于 **POC (Point of Control)** 的 `chop_zone` 内部 -> **Action="wait"** (绝对禁区)。
+  8. **斐波纳契 (Fib)**:
+     - **触及**: 接触 0.618 / 0.786 (OTE)。
+     - **验收**: **严禁单用**。必须与上述【一类】或【二类】结构发生**重叠 (Confluence)** 才能生效。
+  * **真空熔断 (Vacuum Veto)**: 若未通过上述任何一项验收（即价格处于“结构间的缝隙”），Action 强制为 "wait"。
+B5) 智能障碍识别与空间计算 (Smart Space Calculation)
+  - 核心目的：计算 R_clean。AI 必须识别“拦路虎”，但要学会忽略“纸老虎”。
+  - 计算公式：R_clean = (最近有效反向障碍 - Entry) / (Entry - SL)。
+  * **第一步：反向障碍物筛选 (Obstacle Filtering)**
+    - 这里的“障碍”是指挡在止盈路上的反向结构。
+    - **【忽略 (Ignore)】** 以下结构（视为可突破）：
+      1. `ctx.strength_z` < 0.5 的弱供需区。
+      2. `is_fresh`=false (已被测试多次) 的旧结构。
+      3. `ctx.vol_ratio` < 0.8 (缩量形成) 的结构。
+      4. 微观周期 (5m) 的弱 FVG。
+    - **【保留 (Respect)】** 以下结构（视为必须减仓/止盈）：
+      1. 所有 HTF (4h/1h) 级别的结构。
+      2. VPVR POC (这是最大的磁铁和阻力)。
+      3. `ctx.strength_z` > 1.5 的强结构。
+  * **第二步：硬性空间门槛**
+    - **LTF_scalp**: R_clean ≥ 1.0。
+      (例外：若 `pattern=MOMENTUM_BREAK` 且 `vol>3x`，允许 R ≥ 0.8)
+    - **HTF_swing**: R_clean ≥ 1.5。
+    - **结果**: 若计算出的 R_clean 低于门槛 -> **Action="wait"** (盈亏比不划算，放弃交易)。
+B6) 执行时效与反延迟闸门 (Execution Timeliness & Anti-Latency Guard)
+  - 核心目的：确保决策基于“最新、有效、未失效”的市场状态。
+  - 问：在生成最终 JSON 的这一刻，以下 3 个子闸门是否全部通过？
+  1. **数据完整性熔断 (Data Integrity)**
+     * 检查对象：`MarketSnapshot.5m.ohlc_last_closed`
+     * **硬约束**：
+       - 必须包含 `open, high, low, close, close_time`。
+       - 关键标志位 `x` (isClosed) 必须为 **true**。
+     * **熔断动作**：
+       - 若 `x=false` 或字段缺失 -> 视为“K线未闭合/数据不可信”。
+       - **Action 强制为 "wait"**，reasoning 标记 `fail=>xF`。
+  2. **价格滑点与追单限制 (Slippage Check)**
+     * 检查对象：`last_price` (当前市价) vs `entry_price` (计划入场价)。
+     * **逻辑**：
+       - 若计划 **市价 (Market)** 入场：`|last_price - entry_price|` 不得超过 `0.2 * R_struct`。
+         (如果价格已经飞出去了 0.2R，说明错过了最佳时机，追单会导致盈亏比崩塌)
+       - 若计划 **挂单 (Limit)** 入场：
+         · 做多：`last_price` > `entry_price` (等待回落) -> 通过。
+         · 做空：`last_price` < `entry_price` (等待反弹) -> 通过。
+     * **熔断动作**：若市价已远离计划入场位 -> **Action="wait"** (标记 `Price_Moved`)。
+  3. **结构即时失效检查 (Instant Invalidation)**
+     * 核心：防止“在做空的时候，阻力已经被突破了”。
+     * 检查对象：`ohlc_last_closed` (最新5m K线) vs `依托结构边界`。
+     * **逻辑**：
+       - **场景 A (EDGE 试错单)**：
+         · 做空：最新 5m Close 必须 **≤** Supply Zone 上沿。若已收盘在 Zone 上方 -> 结构失效。
+         · 做多：最新 5m Close 必须 **≥** Demand Zone 下沿。若已收盘在 Zone 下方 -> 结构失效。
+       - **场景 B (BO_RETEST 突破回踩)**：
+         · 最新 5m K 线不得重新跌回/涨回“被突破结构”的深处 (Fakeout)。
+     * **熔断动作**：若结构在分析过程中已被击穿 -> **Action="wait"** (标记 `Struct_Broken`)。
 ——————————
-C. 方向一致性检查
+C. 方向一致性与结构否决权 (Structure Veto)
 ——————————
-C6) major_bias 与计划方向
-  - 问：计划方向是否与 major_bias 同向？
-    * 若完全相反：
-      · 默认视为逆势交易，只允许 trade_style="LTF_scalp" + 小仓；
-      · reasoning 中必须清晰给出逆势逻辑与结构依据；
-      · 否则必须将该机会视为 setup_grade="C"，action="wait" / "hold"。
-C7) LTF_scalp 多周期一致性
-  - 仅在 trade_style="LTF_scalp" 且拟开仓时检查：
-    * 问：major_bias / minor_bias / micro_bias 三者中，
-      是否至少有 2 个与计划方向同向，剩余 1 个最多为 NEUTRAL？
-    * 若出现“1 多 1 空 1 中性”等明显拉扯组合：
-      · 不得视为可交易的 B 级机会；
-      · 必须将该机会整体降为 setup_grade="C"，并将 action 固定为 "wait" / "hold"。
+C6) 宏观趋势与逆势闸门 (Macro Filter)
+  - 问：本次交易是顺势 (Trend Following) 还是逆势 (Reversal)？
+    * 若为【顺势单】：
+      · 检查：Major Bias (4h/1h) 是否支持该方向？(BULL/NEUTRAL -> Long; BEAR/NEUTRAL -> Short)
+      · **否决条件**：若 Major Bias 与开仓方向完全相反（例如 4h SuperTrend+Dow 均看跌，却想做多），且未满足下述反转条件 -> **Action="wait"**。
+    * 若为【逆势/反转单】：
+      · 检查：是否已满足「4.2 场景二」的全部硬性条件？
+        (1. 触及 HTF 强结构; 2. 通道/VPVR 极值; 3. 5m 结构破坏)
+      · **否决条件**：若缺任何一项（例如仅仅是 RSI 超卖，但没有大级别 Demand 支撑）-> **Action="wait"**。
+C7) 结构冲突仲裁 (Conflict Resolution)
+  - 问：当前是否存在“结构 vs 指标”的致命冲突？
+    * 冲突检测：
+      · 场景 A：指标看涨 (RSI底背离/MACD金叉) 但 结构看跌 (4h/1h Lower Lows + SuperTrend Bearish)。
+      · 场景 B：指标看跌 (RSI顶背离) 但 结构看涨 (Higher Highs + SuperTrend Bullish)。
+    * **仲裁结果**：
+      · 必须以 **结构 (Structure)** 为准。
+      · 在上述冲突场景下，除非出现明确的 5m 结构破坏 (Change of Character)，否则禁止仅凭指标信号开反向单 -> **Action="wait"**。
+C8) 微观动能一致性 (Micro Momentum)
+  - 问：5m/15m 的即时动能是否与计划方向背道而驰？
+    * 检查：最近 3 根 5m K 线是否呈现“强烈的反向吞没”或“连续反向大实体”？
+    * **否决条件**：
+      · 计划做多，但 5m 正在瀑布式下跌且无止跌迹象 -> **Wait** (不接飞刀)。
+      · 计划做空，但 5m 正在暴力拉升且无滞涨迹象 -> **Wait** (不摸顶)。
+      · 必须等待微观 K 线出现 **停顿 (Pause)** 或 **拒绝 (Rejection)** 后方可通过。
 ——————————
 D. 风险与账户约束
 ——————————
