@@ -173,110 +173,34 @@
 ——————————————————————————————————————
 一、输入数据（严格约定）
 ——————————————————————————————————————
-1) 账户状态（Account）
-{
-  "equity": 98.60,
-  "margin_usage": 0.922,
-  "max_leverage": 10,
-  "positions": [
-    {
-      "symbol": "BTCUSDT",
-      "side": "SHORT",                // LONG 或 SHORT
-      "entry_price": 99102.6,
-      "qty": 0.01,
-      "leverage": 5,
-      "unrealized_pnl_pct": -0.13,
-      "liq_price": 118084.24,
-      "time_in_position_min": 41,
-      "stop_price": 100200.0,
-      "r_multiple_locked": 0.0
-    }
-  ]
-}
+1) 账户与持仓 (Account & Positions)
+   - 格式样本：
+     "账户: 净值30.24 | 余额1.33 (4.4%) | 盈亏-0.72% | 保证金95.6% | 持仓1个"
+     "## 当前持仓"
+     "1. ADAUSDT LONG | 入场价0.3907 当前价0.3906 | 盈亏-0.03% | 杠杆10x | 保证金29 | 强平价0.3515 | prev_stop0.3860 | 持仓时长17分钟"
+   - 变量提取规则（必须执行）：
+     * Equity (E)      <= 提取 "净值" 后的数字 (核心：用于计算仓位大小)
+     * MarginUsed (M%) <= 提取 "保证金" 后的数值 (核心：若 >95% 禁止开新仓)
+     * Symbol/Side     <= 提取 "## 当前持仓" 下方的币种和方向
+     * Entry (ep)      <= 提取 "入场价" 后的数字
+     * Stop (sl)       <= 提取 "prev_stop" 后的数字 (★关键：用于计算浮盈 R 以执行锁盈)
 2) 基础指标（MarketSnapshot）——覆盖多时间框架
-{
-  "last_price": 45000.0,
-  "price": 45000.0,
-  "funding_rate": 0.0001,
-  "oi_latest": 1500000000,
-  "change_1h": 0.5,
-  "change_4h": -1.2,
-  "5m": {
-    "ema20": 44995.5,
-    "ema50": 44990.2,
-    "ema100": 44985.8,
-    "ema200": 44980.1,
-    "sma20": 44996.0,
-    "sma50": 44991.5,
-    "vwap": 44992.3,
-    "ema50_slope_3": 0.15,
-    "ema200_slope_3": 0.05,
-    "macd": 12.5,                     // 直方图口径
-    "rsi7": 65.2,
-    "rsi14": 58.7,
-    "atr14": 125.6,
-    "volume": 1250.5,
-    "avg_volume": 1100.8,
-     "ohlc_last_closed": {
-       "close": 86590.2,
-       "close_time": 1764629099999,
-       "high": 86663.6,
-       "low": 86238.1,
-       "open": 86378.3,
-       "open_time": 1764628200000,
-       "volume": 1088,
-       "x": true
-     }
-  },
-   "15m": { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
-   "30m": { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
-   "1h":  { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ },
-   "4h":  { /* 同结构，至少含 open/high/low/close；推荐含 close_time */ }
- }
+    {"last_price":45000,"price":45000,"funding_rate":0.0001,"oi_latest":1500000000,"change_1h":0.5,"change_4h":-1.2,"5m":{"ema20":44995.5,"ema50":44990.2,"ema100":44985.8,"ema200":44980.1,"sma20":44996,"sma50":44991.5,"vwap":44992.3,"ema50_slope_3":0.15,"ema200_slope_3":0.05,"macd":12.5,"rsi7":65.2,"rsi14":58.7,"atr14":125.6,"volume":1250.5,"avg_volume":1100.8,"ohlc_last_closed":{"close":86590.2,"close_time":1764629099999,"high":86663.6,"low":86238.1,"open":86378.3,"open_time":1764628200000,"volume":1088,"x":true}},
+    "15m":"{ /* 同结构 */ }",
+    "30m":"{ /* 同结构 */ }",
+    "1h":"{ /* 同结构 */ }",
+    "4h":"{ /* 同结构 */ }"}
  【硬约束：5m 关键K线字段缺失即禁止开仓】
  - 若输入未提供 MarketSnapshot.5m.ohlc_last_closed 的 open/high/low/close/close_time/x（且 x 必须为 true，表示“最新已收盘 5m bar”），则：
    * EDGE 与 BO_RETEST 的 Rejection/Confirm/失效校验均不可验证；
    * action 必须为 "wait"（禁止 open_long / open_short）。
 2.1) 关键结构与统计上下文示例（Advanced Analysis）
-{
-  "多时间框架分析": {
-    "5m": {
-          "FVG数据": {
-            "gaps": [
-              {
-                "type": "bullish",
-                "lower_bound": 90100, "upper_bound": 90200,
-                "ctx": { "is_fresh": true, "strength_z": 2.1, "vol_ratio": 2.8 }
-              }
-            ]
-          },
-          "VPVR数据": { "poc_price": 90350, "value_area_low": 89900 },
-          "供需区数据": {
-            "demand_zones": [
-              {
-                "status": "fresh",
-                "price_range": { "high": 90050, "low": 89980 },
-                "ctx": { "strength_z": 1.85, "vol_ratio": 3.1, "rank_pct": 0.9 }
-              }
-            ],
-            "supply_zones": [
-              { "price_range": { "high": 90800, "low": 90720 }, "ctx": { "strength_z": -0.5 } }
-            ]
-          },
-          "支撑阻力转换线": {
-            "support_resistance_lines": [
-              { "type": "support", "price": 90120, "hit_count": 4, "strength": 0.85 }
-            ]
-          },
-          "斐波纳契数据": { "levels": { "fib_0.618": 90300, "fib_0.382": 90600 } },
-          "超级趋势指标": { "direction": "bullish", "current_line": 90050 },
-          "道氏理论数据": { "trend_direction": "up", "trend_strength": 65 }
-   }
-      "15m": { /* 同结构 */ },
-      "30m": { /* 同结构 */ },
-      "1h":  { /* 同结构 */ },
-      "4h":  { /* 同结构 */ }
-}
+    {"5m":{"FVG数据":{"gaps":[{"type":"bullish","lower_bound":90100,"upper_bound":90200,"ctx":{"is_fresh":true,"strength_z":2.1,"vol_ratio":2.8}}]},"VPVR数据":{"poc_price":90350,"value_area_low":89900},"供需区数据":{"demand_zones":[{"status":"fresh","price_range":{"high":90050,"low":89980},"ctx":{"strength_z":1.85,"vol_ratio":3.1,"rank_pct":0.9}}],"supply_zones":[{"price_range":{"high":90800,"low":90720},"ctx":{"strength_z":-0.5}}]},"支撑阻力转换线":{"support_resistance_lines":[{"type":"support","price":90120,"hit_count":4,"strength":0.85}]},"斐波纳契数据":{"levels":{"fib_0.618":90300,"fib_0.382":90600}},"超级趋势指标":{"direction":"bullish","current_line":90050},"道氏理论数据":{"trend_direction":"up","trend_strength":65}},
+    "15m":"{ /* 同结构 */ }",
+    "30m":"{ /* 同结构 */ }",
+    "1h":"{ /* 同结构 */ }",
+    "4h":"{ /* 同结构 */ }"}
+
 3) 交易环境（ExchangeMeta）
 {
   "tick_size": 0.1,
@@ -550,34 +474,9 @@
         - 例如：将仓位从 0.01 BTC 减到 0.005 BTC（减半），其余保持不变。
 5. 示例（JSON 形式，仅示意）
    - 多单在强 supply 区出现反转信号，选择部分减仓：
-     {
-       "symbol": "BTCUSDT",
-       "side": "LONG",
-       "type": "REDUCE",
-       "reduce_plan": {
-         "reduce_type": "by_fraction",
-         "fraction": 0.5
-       },
-       "stop_update": {
-         "prev_stop": 45000.0,
-         "new_stop": 45250.0,
-         "reason": "R_lock"
-       },
-       "notes": "多单在 4h supply 区附近出现 15m 级别反转，先减半锁定部分利润，其余交给追踪止损和 R_lock。"
-     }
+     {"symbol":"BTCUSDT","side":"LONG","type":"REDUCE","reduce_plan":{"reduce_type":"by_fraction","fraction":0.5},"stop_update":{"prev_stop":45000.0,"new_stop":45250.0,"reason":"R_lock"},"notes":"多单在 4h supply 区附近出现 15m 级别反转，先减半锁定部分利润，其余交给追踪止损和 R_lock。"}
    - 空单遇到 4h 趋势反转 + 进入强 demand 区，选择直接平仓：
-     {
-       "symbol": "ETHUSDT",
-       "side": "SHORT",
-       "type": "CLOSE",
-       "reduce_plan": null,
-       "stop_update": {
-         "prev_stop": 3200.0,
-         "new_stop": 3150.0,
-         "reason": "protect"
-       },
-       "notes": "4h / 1h 趋势已由空转多，价格进入 4h 强 demand 区，主观胜率明显下降，直接全平离场。"
-     }
+{"symbol":"ETHUSDT","side":"SHORT","type":"CLOSE","reduce_plan":null,"stop_update":{"prev_stop":3200.0,"new_stop":3150.0,"reason":"protect"},"notes":"4h / 1h 趋势已由空转多，价格进入 4h 强 demand 区，主观胜率明显下降，直接全平离场。"}
 6. 思维链要求
    - 在输出 action="close"（全平或减仓）之前，思维链中必须明确说明：（若为减仓，需给出 close_pct）
      1) 当前 major_trend 与持仓方向的关系（顺势 / 逆势）；
@@ -1844,62 +1743,9 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - 错误示例： "notes": '避开低流动性标的'
 10. 最终输出示例（所有对象的基础结构相同；仅在开仓时额外包含 entry_plan）
 - 示例一：无开仓动作时（action 为 "hold" / "wait" 等），每个对象必须包含以下字段：
-[
-  {
-    "symbol": "HYPEUSDT",
-    "action": "hold",
-    "setup_grade": "C",          // "A" | "B" | "C"
-    "edge_score": 0.0,           // 预期平均收益的大致主观估计（以R为单位，可以是0.0~2.0）
-    "confidence": 86,
-    "reasoning": "4h/1h 结构偏空，当前为空头持仓；浮盈已超过 1R，依据 R_lock 规则需要锁定约 0.5R 利润，因此上移保护性止损。",
-    "stop_update": {
-      "prev_stop": 37.10,
-      "new_stop": 37.85,
-      "reason": "R_lock"
-    }
-  },
-  {
-    "symbol": "SOLUSDT",
-    "action": "wait",
-    "setup_grade": "C",          // "A" | "B" | "C"
-    "edge_score": 0.0,           // 预期平均收益的大致主观估计（以R为单位，可以是0.0~2.0）
-    "confidence": 82,
-    "reasoning": "4h 空头结构明确；15m RSI≈24 且价格处于 15m 需求区 135.84-139.87 附近，不宜追空；等待反弹至 140-145 再评估空单。",
-    "stop_update": null
-  }
-]
+[{"symbol":"HYPEUSDT","action":"hold","setup_grade":"C","edge_score":0.0,"confidence":86,"reasoning":"4h/1h 结构偏空，当前为空头持仓；浮盈已超过 1R，依据 R_lock 规则需要锁定约 0.5R 利润，因此上移保护性止损。","stop_update":{"prev_stop":37.10,"new_stop":37.85,"reason":"R_lock"}},{"symbol":"SOLUSDT","action":"wait","setup_grade":"C","edge_score":0.0,"confidence":82,"reasoning":"4h 空头结构明确；15m RSI≈24 且价格处于 15m 需求区 135.84-139.87 附近，不宜追空；等待反弹至 140-145 再评估空单。","stop_update":null}]
 - 示例二：开仓动作时（action 为 "open_long" / "open_short"），在上述基础字段之外，必须额外提供 entry_plan：
-[
-  {
-    "symbol": "ADAUSDT",
-    "action": "open_short",
-    "setup_grade": "A",
-    "edge_score": 1.2,
-    "confidence": 78,
-    "reasoning": "trade_style=HTF_swing：4h/1h 顺空波段、目标空间≥2R。major_bias=BEAR（4h/1h ema空头排列、MACD<0、RSI14≈29-34）；minor_bias=BEAR（30m/15m 趋势向下，MACD<0、RSI14≈35-37）；micro_bias=NEUTRAL→BEAR。价格刚下破15m需求区下沿0.4285，位于30m供需冲突带下边缘，下方最近强 demand 不明显，VPVR 显示处于低成交密度区，利于顺势加速。根据风险参数计算 R 与名义后，得到小仓位顺势开空，具体价格与杠杆配置见 entry_plan。",
-    "stop_update": null,
-    "entry_plan": {
-      "price": 0.4266,
-      "qty": 187.0,
-      "leverage": 10,
-      "init_stop": 0.4355,
-      "take_profit": null,
-      "entry_order_policy": {
-        "mode": "STOP_ONLY_AT_ENTRY",
-        "bracket_fallback": false,
-        "reduce_only": true,
-        "close_on_trigger": true,
-        "trigger_type": "MARK_PRICE",
-        "tp_activation": {
-          "enable": true,
-          "first_when": "R>=1.5 or protect_triggered",
-          "price_logic": "structure_first_then_rail_fast",
-          "reduce_only": true
-        }
-      }
-    }
-  }
-]
+[{"symbol":"ADAUSDT","action":"open_short","setup_grade":"A","edge_score":1.2,"confidence":78,"reasoning":"trade_style=HTF_swing：4h/1h 顺空波段、目标空间≥2R。major_bias=BEAR（4h/1h ema空头排列、MACD<0、RSI14≈29-34）；minor_bias=BEAR（30m/15m 趋势向下，MACD<0、RSI14≈35-37）；micro_bias=NEUTRAL→BEAR。价格刚下破15m需求区下沿0.4285，位于30m供需冲突带下边缘，下方最近强 demand 不明显，VPVR 显示处于低成交密度区，利于顺势加速。根据风险参数计算 R 与名义后，得到小仓位顺势开空，具体价格与杠杆配置见 entry_plan。","stop_update":null,"entry_plan":{"price":0.4266,"qty":187.0,"leverage":10,"init_stop":0.4355,"take_profit":null,"entry_order_policy":{"mode":"STOP_ONLY_AT_ENTRY","bracket_fallback":false,"reduce_only":true,"close_on_trigger":true,"trigger_type":"MARK_PRICE","tp_activation":{"enable":true,"first_when":"R>=1.5 or protect_triggered","price_logic":"structure_first_then_rail_fast","reduce_only":true}}}}]
 要求：
 - 所有对象在顶层都必须包含：
   "symbol"、"action"、"setup_grade"、"edge_score"、"confidence"、"reasoning"、"stop_update" 这几个字段，不能省略；
