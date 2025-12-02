@@ -200,7 +200,6 @@
     "30m":"{ /* 同结构 */ }",
     "1h":"{ /* 同结构 */ }",
     "4h":"{ /* 同结构 */ }"}
-
 3) 交易环境（ExchangeMeta）
 {
   "tick_size": 0.1,
@@ -256,13 +255,67 @@
 【止损锚定顺序（结构优先，其次 ATR 校验）】
 - 上述通过 ATR * R_multiplier 得到的 R，是“期望的典型止损尺度”，
   实际执行时，止损与最终用于计算 R 的值，必须按以下顺序确定：
-  1）先基于结构确定候选止损位 sl_struct：
-     - 对多单（LONG）：
-       · 优先选择最近有效的 demand 区下沿、关键 swing low、
-         或其它明显“多头假设失效”的结构价位，下方再留出若干 tick/小倍数 ATR。
-     - 对空单（SHORT）：
-       · 优先选择最近有效的 supply 区上沿、关键 swing high、
-         或其它明显“空头假设失效”的结构价位，上方再留出若干 tick/小倍数 ATR。
+    1）先基于结构确定候选止损位 sl_struct（多结构融合 + 结构外护栏 StructureFence｜硬约束）：
+       - 核心原则：sl_struct 必须位于“交易假设彻底失效”的位置，即关键结构的外部（StructureFence），不得落在结构内部/结构中部噪音带。
+       - 缓冲垫 Buffer（防扫损）：
+         * 定义：ATR15 = ATR("15m")（来自 MarketSnapshot.15m.atr14 或等价字段）
+         * 默认：Buffer = 0.20 * ATR15
+         * 若主结构为【线性结构】（SR/通道/SuperTrend）或本次 pattern=BO_RETEST：Buffer = 0.30 * ATR15
+         * 若主结构为【实体结构】（供需区/FVG/道氏Swing）：Buffer = 0.15~0.25 * ATR15（取 0.20 为默认）
+         * Buffer 最终还需与 tick_size 对齐（见后续 tick 对齐条款）
+       - 结构候选池（必须覆盖：SZ/FVG/VP/SR/FIB/ST/CH/DT；存在则纳入，不存在则跳过）：
+         A) 【实体结构】（优先级最高）
+            - 供需区 SZ（Supply/Demand）：
+              · LONG：候选 = demand_zone.low（最近且有效的 demand，下沿）
+              · SHORT：候选 = supply_zone.high（最近且有效的 supply，上沿）
+              · 若多个 zone：优先选择与 entry 最相关的“主结构 zone”（根据 ctx 强度/新鲜度/与 entry 的贴近性）
+            - FVG（缺口）：
+              · LONG：候选 = bullish_gap.lower_bound
+              · SHORT：候选 = bearish_gap.upper_bound
+              · 若 FVG 与供需区重叠：取“更远端边界”（LONG 取 min(供需下沿, FVG下沿)；SHORT 取 max(供需上沿, FVG上沿)）
+            - 道氏结构 DT（Swing High/Low / 破坏点）：
+              · LONG：候选 = 最近的关键 swing_low（优先 15m/30m，其次 1h/4h）
+              · SHORT：候选 = 最近的关键 swing_high（优先 15m/30m，其次 1h/4h）
+         B) 【线性结构】（中优先级；用于突破回踩/趋势跟随）
+            - SR 线（支撑阻力转换线 / 翻转线）：
+              · LONG：候选 = 最近支撑线 price（support_resistance_lines.type="support" 且在 entry 下方）
+              · SHORT：候选 = 最近阻力线 price（type="resistance" 且在 entry 上方）
+            - SuperTrend：
+              · LONG：候选 = supertrend.current_line（仅当 direction="bullish" 且线在 entry 下方时视为强候选；否则为弱候选）
+              · SHORT：候选 = supertrend.current_line（仅当 direction="bearish" 且线在 entry 上方时视为强候选；否则为弱候选）
+            - 通道 CH（上轨/下轨）：
+              · LONG：候选 = channel.lower_bound / lower_line（在 entry 下方）
+              · SHORT：候选 = channel.upper_bound / upper_line（在 entry 上方）
+         C) 【筹码/数学结构】（辅助；严禁单独作为唯一止损依据，除非其它结构缺失）
+            - VPVR：
+              · LONG：候选优先放在 VAL（value_area_low）之下；严禁放在 POC 正下方/POC附近
+              · SHORT：候选优先放在 VAH（value_area_high）之上；严禁放在 POC 正上方/POC附近
+              · POC 护栏：若 |候选 - poc_price| ≤ 0.10*ATR15，则该候选视为“POC危险位”，必须改用 VAL/VAH 外侧 + Buffer
+            - Fibonacci：
+              · LONG：若 entry 依托某 fib 位（如 0.618），则候选必须放在“下一级更深回撤位”之下（如 0.786 下方）；若缺失该级别则退到 swing_low / demand_low 外侧
+              · SHORT：对称处理（在上一级更深回撤位之上；缺失则退到 swing_high / supply_high 外侧）
+       - 多结构共振融合（StructureFence Cluster｜硬约束）：
+         1) 先定位“主结构 primary_ref”：本次入场主要依托哪个结构（从 SZ/FVG/SR/ST/CH/FIB/DT/VP 选 1 个，必须与 pattern/entry 叙事一致）
+         2) 计算主锚点 PrimaryAnchor：
+            · LONG：PrimaryAnchor = 主结构的“下沿/支撑/失效点”（如 demand.low / bullish_fvg.lower / swing_low / SR_support / ST_line / CH_lower / VAL / fib_deeper）
+            · SHORT：PrimaryAnchor = 主结构的“上沿/阻力/失效点”（如 supply.high / bearish_fvg.upper / swing_high / SR_resist / ST_line / CH_upper / VAH / fib_deeper）
+         3) 构建结构簇 Cluster（用于“多盾牌外侧覆盖”）：
+            - 只收集与主锚点同侧、且距离主锚点不超过 1.0*ATR15 的候选结构边界
+              · LONG：收集所有 level ≤ PrimaryAnchor 且 (PrimaryAnchor - level) ≤ 1.0*ATR15
+              · SHORT：收集所有 level ≥ PrimaryAnchor 且 (level - PrimaryAnchor) ≤ 1.0*ATR15
+            - 然后取外侧覆盖点 FinalAnchor：
+              · LONG：FinalAnchor = min(Cluster)
+              · SHORT：FinalAnchor = max(Cluster)
+         4) 施加 Buffer，得到 sl_struct_raw：
+            · LONG：sl_struct_raw = FinalAnchor - Buffer
+            · SHORT：sl_struct_raw = FinalAnchor + Buffer
+       - 流动性规避（猎杀止损防护）：
+         * 若 sl_struct_raw 刚好落在整数关口或极明显等高/等低点附近：
+           - 继续向外推 LiquidityPad = max(5, stop_distance_min_ticks) * tick_size
+       - Tick 对齐（执行面硬约束）：
+         * LONG：sl_struct = floor_to_tick(sl_struct_raw)
+         * SHORT：sl_struct = ceil_to_tick(sl_struct_raw)
+         * 并确保满足最小止损距离约束（与 stop_distance_min_ticks*tick_size 一致）；否则不得开仓（action="wait" 或升级到更高 TF 结构重算）
   2）用该结构止损价计算结构 R 值：
      - R_struct = | entry_price - sl_struct |
   3）再用 ATR 估算值进行校验（避免过近或过宽）：
@@ -907,27 +960,100 @@ C) 聚合与单调性
   s_cand = min( BE_with_costs, R_lock, micro_fast?, fast, slow, spike_filter?, time_decay? )
   s_cand = floor_to_tick(s_cand)
   new_stop = min(prev_stop, s_cand)
- 【硬检查】盈利地板与可执行性校验（Fail Closed）
-- 先计算 ProfitFloor（按上文 ProfitFloor 规则）：
-  - ProfitFloor 的触发条件以“ROI 锁盈优先级最高”为准：
-    - 若 (roi_unrealized ≥ roi_lock_trigger 且 持仓时间 ≥ protect_trigger.time_min) ⇒ ProfitFloor 必须生效
-    - 否则若触发 break-even 或任一 R_lock 里程碑 ⇒ ProfitFloor 生效
-    - 否则 ProfitFloor = null（表示此阶段禁止把止损推入‘会锁盈/打平’区间）
-  - 若已触发 ⇒ ProfitFloor = 对应的地板价
-- 对 LONG：
-  - 若 ProfitFloor != null：
-      s_cand = max(s_cand, ProfitFloor)
-  - 然后执行可执行性约束：
-      s_exec = min(s_cand, last_price - stop_distance_min_ticks*tick_size)
-      若 s_exec < ProfitFloor（或 ProfitFloor 存在但无法满足）⇒ stop_update:null
-      否则 new_stop = max(prev_stop, ceil_to_tick(s_exec))
-- 对 SHORT（对称）：
-  - 若 ProfitFloor != null：
-      s_cand = min(s_cand, ProfitFloor)
-  - 然后：
-      s_exec = max(s_cand, last_price + stop_distance_min_ticks*tick_size)
-      若 s_exec > ProfitFloor（或 ProfitFloor 存在但无法满足）⇒ stop_update:null
-      否则 new_stop = min(prev_stop, floor_to_tick(s_exec))
+  【硬检查】盈利地板 / 结构外护栏 StructureFence / 可执行性（Fail Closed）
+ - 执行顺序：先 ProfitFloor → 再 StructureFence（结构外护栏）→ 再 可执行性约束 → 最后 去抖/单调性。
+ 1) ProfitFloor（沿用原有逻辑）
+ - 先计算 ProfitFloor（按上文 ProfitFloor 规则）：
+   - ProfitFloor 的触发条件以“ROI 锁盈优先级最高”为准：
+     - 若 (roi_unrealized ≥ roi_lock_trigger 且 持仓时间 ≥ protect_trigger.time_min) ⇒ ProfitFloor 必须生效
+     - 否则若触发 break-even 或任一 R_lock 里程碑 ⇒ ProfitFloor 生效
+     - 否则 ProfitFloor = null（表示此阶段禁止把止损推入“会锁盈/打平”区间）
+   - 若已触发 ⇒ ProfitFloor = 对应的地板价
+ 2) 结构外护栏 StructureFence（仅作用于 stop_update.new_stop 的候选值）
+ - 输入：
+   - 方向（LONG/SHORT）、prev_stop、s_cand、ProfitFloor、last_price、ATR14(15m/5m)、
+   - 以及结构数据：供需区（supply/demand）、FVG、VPVR（poc_price / value_area_low / value_area_high）、
+     支撑阻力转换线、通道上下轨、SuperTrend 线、Fib 水平、道氏 swing 高/低点。
+ - Buffer 定义：
+   - 窄带半宽 b ≈ max(0.15*ATR14(15m), 2*tick_size)，若无 15m ATR 则用 5m ATR 代替。
+   - 结构外缓冲 buf_struct ≈
+     - 实体结构（供需/FVG/swing）为主：0.20 * ATR14(15m)
+     - 线性结构（SR/通道/ST/Fib）主导：0.30 * ATR14(15m)
+     - 缺少 ATR 时，至少保证 buf_struct ≥ 3*tick_size。
+ - 构建 StructureBands（结构带）：
+   - 供需区：band = [zone_low, zone_high]
+   - FVG：band = [fvg_low, fvg_high]（仅当 is_fresh=true 或 strength_z 达标时纳入）
+   - 道氏 swing 高/低：band = [swing_level - b, swing_level + b]
+   - SR Flip 线：band = [sr - b, sr + b]
+   - 通道上下轨：band = [rail - b, rail + b]
+   - SuperTrend current_line：band = [st - b, st + b]
+   - Fib：band = [fib_level - b, fib_level + b]
+   - VPVR：
+     - VA_band = [value_area_low, value_area_high]（若字段存在）
+     - POC_band = [poc_price - b_poc, poc_price + b_poc]，其中 b_poc ≈ 0.20*ATR14(15m) 或 ≥ 3*tick_size
+ - StructureFence 核心规则（LONG/SHORT 通用）：
+   - 若 s_cand 不落入任何 band：直接记为 s_sf（structure-fenced 候选），进入下一步。
+   - 若 s_cand 落入一个或多个 band 内：
+     1) 收集所有包含 s_cand 的 band，形成结构簇 cluster：
+        - cluster_low  = min(band.low)
+        - cluster_high = max(band.high)
+     2) 计算“结构簇外侧候选”：
+        - LONG：
+          · c1 = cluster_low  - buf_struct
+          · c2 = cluster_high + buf_struct
+        - SHORT：
+          · c1 = cluster_high + buf_struct
+          · c2 = cluster_low  - buf_struct
+     3) 在 {c1, c2} 中，筛选仍满足“方向单调性 + ProfitFloor 基本约束”的价位：
+        - LONG：必须 ≥ prev_stop，且若 ProfitFloor != null，则 ≥ ProfitFloor
+        - SHORT：必须 ≤ prev_stop，且若 ProfitFloor != null，则 ≤ ProfitFloor
+        - 在满足条件的集合中，选择“更靠近当前价格的一侧”作为 s_sf。
+   - VPVR 特殊约束：
+     - new_stop 不得落在 POC_band 内（严禁把止损放在 POC 正下/正上的磁吸区）；
+     - 若 s_sf ∈ POC_band：需再向远离 POC 的方向外推 ≥ buf_struct：
+       · LONG：进一步下移到 min(s_sf, poc_price - buf_struct)
+       · SHORT：进一步上移到 max(s_sf, poc_price + buf_struct)
+   - 流动性规避（Liquidity）：
+     - 若 s_sf 恰好落在明显整数关口（如 90000）或显著 equal highs/lows 附近，且不破坏单调性/ProfitFloor：
+       · LONG：允许再向下多推 5~10 ticks
+       · SHORT：允许再向上多推 5~10 ticks
+   - 结构外找不到解时的处理：
+     - 若在“结构外 + 单调性 + ProfitFloor”三者同时成立的集合中完全找不到 s_sf：
+       · 且本轮不是“由 TP 触发的锁盈事件”（定义见 stop_update 小节）⇒ 本轮 stop_update=null；
+       · 若本轮为“TP 触发锁盈事件”：
+         - 则必须在“结构外 + 单调性”的集合中，选取一个“尽量靠近 ProfitFloor/prev_stop”的价位作为 s_sf，
+           可以适度放宽“与现价的最小距离”约束（stop_distance_min_ticks），
+           但仍不得回到任何结构带内部，也不得降低 LONG 的止损价格或抬高 SHORT 的止损价格。
+         - 任何 TP 触发锁盈事件中，stop_update 不得为 null。
+ 3) 可执行性约束与 new_stop
+ - 对 LONG：
+   - 若 ProfitFloor != null：
+       s_sf = max(s_sf, ProfitFloor)
+   - 可执行性约束：
+       s_exec = min(s_sf, last_price - stop_distance_min_ticks*tick_size)
+   - 一般情况（非 TP 触发）：
+       - 若 s_exec < ProfitFloor（或 ProfitFloor 存在但无法满足）⇒ stop_update:null
+       - 否则 new_stop = max(prev_stop, ceil_to_tick(s_exec))
+   - TP 触发锁盈事件（强制更新）：
+       - 若 s_exec < ProfitFloor，则：
+         · 仍须在“结构外 + new_stop ≥ max(prev_stop, ProfitFloor)”的集合中选取一个最近的 tick 作为 new_stop；
+         · new_stop 必须 > prev_stop，且 |new_stop - prev_stop| ≥ min_tick_move_to_update*tick_size；
+         · 若 s_exec 已满足上述条件，则直接用 s_exec 取整；
+       - 无论如何，TP 触发锁盈事件中不得返回 stop_update:null。
+ - 对 SHORT（对称）：
+   - 若 ProfitFloor != null：
+       s_sf = min(s_sf, ProfitFloor)
+   - 可执行性约束：
+       s_exec = max(s_sf, last_price + stop_distance_min_ticks*tick_size)
+   - 一般情况（非 TP 触发）：
+       - 若 s_exec > ProfitFloor（或 ProfitFloor 存在但无法满足）⇒ stop_update:null
+       - 否则 new_stop = min(prev_stop, floor_to_tick(s_exec))
+   - TP 触发锁盈事件（强制更新）：
+       - 若 s_exec > ProfitFloor，则：
+         · 仍须在“结构外 + new_stop ≤ min(prev_stop, ProfitFloor)”的集合中选取一个最近的 tick 作为 new_stop；
+         · new_stop 必须 < prev_stop，且 |new_stop - prev_stop| ≥ min_tick_move_to_update*tick_size；
+         · 若 s_exec 已满足上述条件，则直接用 s_exec 取整；
+       - 无论如何，TP 触发锁盈事件中不得返回 stop_update:null。
 - 去抖与执行：仅当变动≥min_tick_move_to_update*tick_size 且 与现价距离≥stop_distance_min_ticks*tick_size 才更新；
 - 仅 microflip 事件例外/或仅当 allow_intrabar_update=true 才允许
 D) MicroFlip 快速响应
@@ -935,10 +1061,12 @@ D) MicroFlip 快速响应
 - SHORT：对称处理（保证 new_stop 单调下降）
 E) 入场挂单策略（**修订核心**）
 - 若 action ∈ {"open_long","open_short"}：
-  1) **STOP_ONLY_AT_ENTRY（默认）**
-     - 开多：仅挂一个 reduce-only STOP（卖出止损）；init_stop = entry - R
-     - 开空：仅挂一个 reduce-only STOP（买入止损）；init_stop = entry + R
-     - **不挂任何 TP**。后续由 R_lock / 轨道 / protect 推动“单一追踪止盈”与“TP激活”。
+    1) **STOP_ONLY_AT_ENTRY（默认）**
+       - 开多：仅挂一个 reduce-only STOP（卖出止损）；init_stop = sl_struct（必须按下文【止损锚定顺序（结构优先，其次 ATR 校验）】计算，且位于结构外）
+       - 开空：仅挂一个 reduce-only STOP（买入止损）；init_stop = sl_struct（必须按下文【止损锚定顺序（结构优先，其次 ATR 校验）】计算，且位于结构外）
+       - 【硬禁止】不得使用“init_stop = entry ± R”作为最终下单止损；entry ± R 仅允许作为 R_atr_est 的解释性估算值
+       - 若无法计算出满足结构外 + 可执行性约束的 sl_struct（缺关键结构/校验失败/会落在结构内）⇒ action 必须为 "wait"
+       - **不挂任何 TP**。后续由 R_lock / 轨道 / protect 推动“单一追踪止盈”与“TP激活”。
   2) **BRACKET_FALLBACK（仅当执行端强制）**
      - 创建 OCO 组（take_profit + stop）；两者均 reduce-only；同组互斥；统一 trigger_type；
      - take_profit 的初始 price 可设置为 None（挂占位不激活）或远离现价的“哑TP”，并在满足 tp_activation 条件后被“就地改价/激活”。
@@ -1688,30 +1816,50 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
         7. 必须显式引用 `ctx` 数据来支持你的论点：
                    - 不要只说“强支撑”，要说“强支撑（Z=2.1, Vol=1.8x）”；
                    - 不要只说“忽略该阻力”，要说“忽略弱阻力（Z=-1.2, Rank=15%）”。
-     - "stop_update":
-         * 若本轮不需要调整止损，必须为 null
-         * 若需要调整止损，必须是一个对象：
-         {
-           "prev_stop": 数字,     // 当前止损价，来自输入的 positions.stop_price
-           "new_stop": 数字,      // 本轮根据 BE_with_costs / R_lock / 轨道 等计算出来的新止损价
-           "reason": "R_lock" | "BE" | "protect" | "microflip" | "manual"
-         }
-         * 若有 stop_update，说明主要依据（R_lock/BE/protect/microflip）。
-         * 当你决定“不更新止损”时必须输出："stop_update": null，不能为了“方便”把 prev_stop 原样写回去。
-         * 只有在满足以下任一条件时，才可以返回非 null 的 stop_update：
-        - R_unrealized ≥ 0.5 且触发对应级别的 R_lock；
-        - roi_unrealized ≥ roi_lock_trigger 且 持仓时间 ≥ protect_trigger.time_min（ROI 锁盈触发）；
-        - 交易结构明显恶化，需要收紧止损以减少最大亏损（risk_cut）；
-        - protect / microflip 等策略被显式触发。
-3. 对于「已有持仓」的 symbol：
-- 默认只做仓位管理，不允许再输出 open_*：
-  - "action" 必须为 "hold"（除非你要主动平仓：action="close" 且 close_pct>0）
-- "stop_update" 允许为 null：
-  - 仅当同时满足下列条件时，才输出 stop_update 对象：
-    A) 通过 ProfitFloor / 可执行性校验（如有 ProfitFloor，new_stop 不得穿过 ProfitFloor）
-    B) 通过更新门槛约束：|new_stop - prev_stop| ≥ min_tick_move_to_update*tick_size
-    C) 与现价距离约束：LONG 需 new_stop ≤ last_price - stop_distance_min_ticks*tick_size（SHORT 对称）
-  - 若任意条件不满足 ⇒ 必须输出 "stop_update": null（禁止为了“字段非空”而回填 prev_stop/new_stop）
+         - "stop_update":
+             * 若本轮确实没有任何止损调整需求，且本轮也不是“由 TP 触发的锁盈事件”，则必须为 null。
+             * 若存在调整需求，则必须是一个对象：
+             {
+               "prev_stop": 数字,     // 当前止损价，来自输入的 positions.stop_price
+               "new_stop": 数字,      // 本轮根据 BE_with_costs / R_lock / 轨道 / StructureFence 等计算出来的新止损价
+               "reason": "R_lock" | "BE" | "protect" | "microflip" | "manual"
+             }
+             * 若有 stop_update，说明主要依据（R_lock / BE / protect / microflip / risk_cut 等）。
+             * 当你决定“本轮完全不调整止损”时，必须输出："stop_update": null，
+               不能为了“字段非空”把 prev_stop 原样写回去（prev_stop≠new_stop 不能视为“更新”）。
+             * 特例：当本轮属于“由 TP 触发的锁盈事件”时，视为“强制需要调整止损”：
+               - 典型判定方式（满足其一即可）：
+                 · reduce_plan 非空且其触发条件源自结构性 TP1/TP2/target 成交或 tp_activation 条件；
+                 · reasoning 中明确写出“TP1/TP2 已被触发/成交，但保留部分仓位继续持有”。
+               - 在该类场景下：
+                 · "stop_update" 不得为 null；
+                 · 必须输出一个新的 new_stop，用于锁定剩余仓位的利润；
+                 · new_stop 必须满足：结构外（通过 StructureFence）、方向单调性（LONG≥prev_stop；SHORT≤prev_stop），
+                   且在不违反 ProfitFloor 的前提下尽量接近 ProfitFloor / break-even。
+                 · 若严格的“最小距离”或其他软约束导致找不到完全完美的价位，
+                   应优先牺牲软约束（例如适度放宽与现价距离的下限），也不得返回 stop_update:null。
+    3. 对于「已有持仓」的 symbol：
+    - 默认只做仓位管理，不允许再输出 open_*：
+      - "action" 必须为 "hold"（除非你要主动平仓：action="close" 且 close_pct>0）
+    - "stop_update" 允许为 null，但须遵守：
+      - 若本轮不是 TP 触发锁盈事件：
+        - 仅当同时满足下列条件时，才输出 stop_update 对象：
+          A) 通过 ProfitFloor / 可执行性 / StructureFence 校验：
+             · new_stop 不得穿过 ProfitFloor（如有）；
+             · new_stop 必须处于关键结构外部（不得落入供需区/FVG/VPVR POC 带/重要 SR/通道/ST/Fib/swing band 内）；
+          B) 通过更新门槛约束：|new_stop - prev_stop| ≥ min_tick_move_to_update*tick_size；
+          C) 与现价距离约束：
+             · LONG：需 new_stop ≤ last_price - stop_distance_min_ticks*tick_size
+             · SHORT：需 new_stop ≥ last_price + stop_distance_min_ticks*tick_size
+        - 若任意条件不满足 ⇒ 必须输出 "stop_update": null（禁止为了“字段非空”而回填 prev_stop/new_stop）。
+      - 若本轮为 TP 触发锁盈事件：
+        - 必须输出非 null 的 stop_update，并给出新的 new_stop：
+          · new_stop 必须满足 StructureFence 的“结构外”约束与方向单调性：
+             - LONG：new_stop ≥ max(prev_stop, ProfitFloor, break_even_with_costs)
+             - SHORT：new_stop ≤ min(prev_stop, ProfitFloor, break_even_with_costs)
+          · new_stop 与 prev_stop 的差值原则上应 ≥ min_tick_move_to_update*tick_size；
+            若略小于该门槛但仍能显著改善锁盈质量，可以适度放宽（属于 TP 强制锁盈的例外），
+            但绝不能返回 stop_update:null。
 4. 对于「没有持仓」的 symbol（以 open_positions 列表为准）：
    - 若该 symbol 不在 open_positions 中：
      * "action" 只能是 "open_long"、"open_short" 或 "wait"；
