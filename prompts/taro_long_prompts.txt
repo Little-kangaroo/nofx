@@ -248,7 +248,7 @@
 - risk_per_trade_pct     = 0.75       // 从 0.5 提升到 0.75，更积极一点
 - leverage_default       = 10         // 默认偏好使用 10x 杠杆
 - margin_usage_ceiling   = 0.95
-- notional_min           = 150        // 单笔最小名义（USDT），按账户规模可调，一般 100~300
+- notional_min           = 20        // 单笔最小名义（USDT），按账户规模可调，一般 100~300
 - max_concurrent_trades  = 3
 [R 定义与初始止损（8大结构全覆盖 + 外部原则）]
 - 核心原则：止损价 (SL) 必须位于“多头/空头假设彻底失效”的位置，即**关键结构的外部**。
