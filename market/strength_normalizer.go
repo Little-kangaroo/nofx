@@ -19,14 +19,36 @@ const (
 	MaxZScore = 3.0
 	// HistoryRetentionDays 历史数据保留天数
 	HistoryRetentionDays = 30
+	
+	// 批量写入配置
+	// DefaultBatchSize 默认批量写入大小
+	DefaultBatchSize = 10
+	// DefaultBatchTimeout 默认批量写入超时时间
+	DefaultBatchTimeout = 5 * time.Second
+	// MaxBatchSize 最大批量写入大小，防止内存过度消耗
+	MaxBatchSize = 100
 )
 
 // StrengthNormalizer 强度标准化管理器
 // 负责管理所有币种+时间框架的历史强度数据，提供标准化的Z-Score计算
 type StrengthNormalizer struct {
-	db    *sql.DB                        // 数据库连接
-	stats map[string]*StrengthStats      // symbol+timeframe -> 统计状态
-	mu    sync.RWMutex                   // 读写锁保护并发访问
+	db          *sql.DB                        // 数据库连接
+	stats       map[string]*StrengthStats      // symbol+timeframe -> 统计状态
+	mu          sync.RWMutex                   // 读写锁保护并发访问
+	batchWriter *BatchWriter                   // 批量写入管理器
+}
+
+// BatchWriter 批量写入管理器
+// 解决数据库并发锁定问题，收集多个写入请求后批量提交
+type BatchWriter struct {
+	records     []*ZoneStrengthRecord         // 待写入的记录缓存
+	mutex       sync.Mutex                    // 保护records的并发访问
+	batchSize   int                          // 批量大小阈值
+	timeout     time.Duration                // 超时阈值
+	lastFlush   time.Time                    // 上次刷新时间
+	db          *sql.DB                      // 数据库连接
+	stopCh      chan struct{}                // 停止信号
+	running     bool                         // 运行状态
 }
 
 // StrengthStats 单个币种+时间框架的强度统计状态
@@ -73,12 +95,27 @@ var (
 
 // NewStrengthNormalizer 创建强度标准化管理器
 func NewStrengthNormalizer(db *sql.DB) *StrengthNormalizer {
-	normalizer := &StrengthNormalizer{
-		db:    db,
-		stats: make(map[string]*StrengthStats),
+	// 创建批量写入器
+	batchWriter := &BatchWriter{
+		records:   make([]*ZoneStrengthRecord, 0, DefaultBatchSize),
+		batchSize: DefaultBatchSize,
+		timeout:   DefaultBatchTimeout,
+		lastFlush: time.Now(),
+		db:        db,
+		stopCh:    make(chan struct{}),
+		running:   false,
 	}
 	
-	log.Printf("🎯 强度标准化器已创建，准备预热历史数据...")
+	normalizer := &StrengthNormalizer{
+		db:          db,
+		stats:       make(map[string]*StrengthStats),
+		batchWriter: batchWriter,
+	}
+	
+	// 启动批量写入器的后台goroutine
+	normalizer.startBatchWriter()
+	
+	log.Printf("🎯 强度标准化器已创建（批量写入模式），准备预热历史数据...")
 	
 	return normalizer
 }
@@ -147,20 +184,235 @@ func formatSymbol(symbol string) string {
 	return symbol
 }
 
-// ===== 数据库操作方法 =====
+// ===== 批量写入器方法 =====
 
-// SaveZoneStrength 保存供需区强度到数据库（异步执行，不阻塞主流程）
-func (sn *StrengthNormalizer) SaveZoneStrength(record *ZoneStrengthRecord) {
-	// 异步执行数据库写入，避免阻塞主流程
-	go func() {
-		if err := sn.persistZoneStrength(record); err != nil {
-			log.Printf("❌ 保存供需区强度失败 [%s_%s]: %v", record.Symbol, record.Timeframe, err)
-		}
-	}()
+// startBatchWriter 启动批量写入器的后台goroutine
+func (sn *StrengthNormalizer) startBatchWriter() {
+	sn.batchWriter.mutex.Lock()
+	if sn.batchWriter.running {
+		sn.batchWriter.mutex.Unlock()
+		return // 已经启动
+	}
+	sn.batchWriter.running = true
+	sn.batchWriter.mutex.Unlock()
+	
+	go sn.batchWriter.backgroundFlush()
+	log.Printf("📦 [批量写入器] 后台刷新服务已启动，批量大小: %d, 超时: %v", 
+		sn.batchWriter.batchSize, sn.batchWriter.timeout)
 }
 
-// persistZoneStrength 同步保存供需区强度到数据库
-func (sn *StrengthNormalizer) persistZoneStrength(record *ZoneStrengthRecord) error {
+// AddToBatch 添加记录到批量写入缓存
+func (bw *BatchWriter) AddToBatch(record *ZoneStrengthRecord) {
+	bw.mutex.Lock()
+	defer bw.mutex.Unlock()
+	
+	// 防止缓存过大
+	if len(bw.records) >= MaxBatchSize {
+		log.Printf("⚠️ [批量写入器] 缓存已满，强制刷新")
+		go bw.flushBatch() // 异步刷新，避免阻塞
+		bw.records = bw.records[:0] // 清空缓存
+		bw.lastFlush = time.Now()
+	}
+	
+	bw.records = append(bw.records, record)
+	
+	// 检查是否需要立即刷新
+	if len(bw.records) >= bw.batchSize {
+		log.Printf("📦 [批量写入器] 达到批量大小 (%d)，触发刷新", len(bw.records))
+		go bw.flushBatch() // 异步刷新
+		bw.records = bw.records[:0] // 清空缓存
+		bw.lastFlush = time.Now()
+	}
+}
+
+// backgroundFlush 后台定时刷新goroutine
+func (bw *BatchWriter) backgroundFlush() {
+	ticker := time.NewTicker(1 * time.Second) // 每秒检查一次
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-bw.stopCh:
+			// 收到停止信号，最后刷新一次
+			bw.flushBatch()
+			log.Printf("📦 [批量写入器] 后台刷新服务已停止")
+			return
+		case <-ticker.C:
+			bw.mutex.Lock()
+			shouldFlush := len(bw.records) > 0 && time.Since(bw.lastFlush) > bw.timeout
+			recordCount := len(bw.records)
+			bw.mutex.Unlock()
+			
+			if shouldFlush {
+				log.Printf("📦 [批量写入器] 超时��发刷新，缓存记录: %d", recordCount)
+				bw.flushBatch()
+			}
+		}
+	}
+}
+
+// flushBatch 执行批量刷新到数据库
+func (bw *BatchWriter) flushBatch() {
+	bw.mutex.Lock()
+	if len(bw.records) == 0 {
+		bw.mutex.Unlock()
+		return // 没有记录需要刷新
+	}
+	
+	// 复制记录到局部变量，快速释放锁
+	recordsToFlush := make([]*ZoneStrengthRecord, len(bw.records))
+	copy(recordsToFlush, bw.records)
+	bw.records = bw.records[:0] // 清空缓存
+	bw.lastFlush = time.Now()
+	bw.mutex.Unlock()
+	
+	// 执行批量写入
+	startTime := time.Now()
+	err := bw.persistBatch(recordsToFlush)
+	duration := time.Since(startTime)
+	
+	if err != nil {
+		log.Printf("❌ [批量写入器] 批量写入失败: %v, 记录数: %d, 耗时: %v", 
+			err, len(recordsToFlush), duration)
+		
+		// 失败时的降级策略：逐个尝试写入
+		log.Printf("🔄 [批量写入器] 启动降级策略，逐个重试写入...")
+		successCount := 0
+		for _, record := range recordsToFlush {
+			if err := bw.persistSingle(record); err != nil {
+				log.Printf("❌ [降级策略] 单个记录写入失败 [%s_%s]: %v", 
+					record.Symbol, record.Timeframe, err)
+			} else {
+				successCount++
+			}
+		}
+		log.Printf("🔄 [降级策略完成] 成功: %d/%d", successCount, len(recordsToFlush))
+	} else {
+		log.Printf("✅ [批量写入器] 批量写入成功: %d条记录, 耗时: %v", 
+			len(recordsToFlush), duration)
+	}
+}
+
+// persistBatch 批量写入多条记录（使用事务）
+func (bw *BatchWriter) persistBatch(records []*ZoneStrengthRecord) error {
+	if bw.db == nil {
+		return fmt.Errorf("数据库连接为空")
+	}
+	
+	// 开始事务
+	tx, err := bw.db.Begin()
+	if err != nil {
+		return fmt.Errorf("开始事务失败: %w", err)
+	}
+	defer tx.Rollback() // 确保在错误时回滚
+	
+	// 准备批量插入语句
+	query := `
+	INSERT INTO zone_history (
+		symbol, timeframe, raw_score, zone_type, 
+		pattern_type, touch_count, volume_ratio, width_percent, 
+		created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+	`
+	
+	stmt, err := tx.Prepare(query)
+	if err != nil {
+		return fmt.Errorf("准备语句失败: %w", err)
+	}
+	defer stmt.Close()
+	
+	// 批量执行插入
+	for _, record := range records {
+		_, err := stmt.Exec(
+			record.Symbol,
+			record.Timeframe,
+			record.RawScore,
+			record.ZoneType,
+			record.PatternType,
+			record.TouchCount,
+			record.VolumeRatio,
+			record.WidthPercent,
+		)
+		if err != nil {
+			return fmt.Errorf("执行插入失败 [%s_%s]: %w", 
+				record.Symbol, record.Timeframe, err)
+		}
+	}
+	
+	// 提交事务
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交事务失败: %w", err)
+	}
+	
+	return nil
+}
+
+// persistSingle 单条记录写入（降级策略）
+func (bw *BatchWriter) persistSingle(record *ZoneStrengthRecord) error {
+	if bw.db == nil {
+		return fmt.Errorf("数据库连接为空")
+	}
+	
+	query := `
+	INSERT INTO zone_history (
+		symbol, timeframe, raw_score, zone_type, 
+		pattern_type, touch_count, volume_ratio, width_percent, 
+		created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+	`
+	
+	_, err := bw.db.Exec(query,
+		record.Symbol,
+		record.Timeframe,
+		record.RawScore,
+		record.ZoneType,
+		record.PatternType,
+		record.TouchCount,
+		record.VolumeRatio,
+		record.WidthPercent,
+	)
+	
+	if err != nil {
+		return fmt.Errorf("执行数据库插入失败: %w", err)
+	}
+	
+	return nil
+}
+
+// StopBatchWriter 停止批量写入器
+func (sn *StrengthNormalizer) StopBatchWriter() {
+	if sn.batchWriter != nil {
+		sn.batchWriter.mutex.Lock()
+		if sn.batchWriter.running {
+			close(sn.batchWriter.stopCh)
+			sn.batchWriter.running = false
+		}
+		sn.batchWriter.mutex.Unlock()
+	}
+}
+
+// ===== 数据库操作方法 =====
+
+// SaveZoneStrength 保存供需区强度到数据库（使用批量写入策略）
+func (sn *StrengthNormalizer) SaveZoneStrength(record *ZoneStrengthRecord) {
+	// 使用批量写入器，解决数据库锁定问题
+	if sn.batchWriter != nil {
+		sn.batchWriter.AddToBatch(record)
+		log.Printf("📦 [批量写入] 添加记录到缓存: %s_%s (强度: %.2f)", 
+			record.Symbol, record.Timeframe, record.RawScore)
+	} else {
+		// 降级为直接写入（兼容性）
+		log.Printf("⚠️ [批量写入器] 未初始化，使用直接写入模式")
+		go func() {
+			if err := sn.persistZoneStrengthDirect(record); err != nil {
+				log.Printf("❌ 保存供需区强度失败 [%s_%s]: %v", record.Symbol, record.Timeframe, err)
+			}
+		}()
+	}
+}
+
+// persistZoneStrengthDirect 直接保存供需区强度到数据库（降级策略）
+func (sn *StrengthNormalizer) persistZoneStrengthDirect(record *ZoneStrengthRecord) error {
 	if sn.db == nil {
 		return fmt.Errorf("数据库连接为空")
 	}
