@@ -1027,12 +1027,13 @@ func extractCompactChannelAnalysis(data *ChannelData, symbol string) map[string]
 
 	result := map[string]interface{}{
 		"channel_direction": data.Direction,
-		"channel_width":     FormatByDataTypeAndSymbol(data.Quality * 100, "percentage", symbol),
+		"channel_width_pct": FormatByDataTypeAndSymbol(data.Quality*100, "percentage", symbol), // 默认用Quality评分作为百分比
 		"current_position":  data.CurrentPosition,
 	}
 
 	if data.ActiveChannel != nil {
-		result["channel_width"] = FormatByDataTypeAndSymbol(data.ActiveChannel.Width * 100, "percentage", symbol)
+		// 通道宽度是相对于价格的百分比，已经是0.02形式，乘以100转为百分比显示
+		result["channel_width_pct"] = FormatByDataTypeAndSymbol(data.ActiveChannel.Width*100, "percentage", symbol)
 	}
 
 	return result
@@ -1175,7 +1176,7 @@ func extractCompactFVG(data *FVGData, symbol string) map[string]interface{} {
 	result := map[string]interface{}{
 		"active_gaps": len(data.ActiveFVGs),
 		"nearest_gap": 0.0,
-		"gap_type":    "unknown",
+		"gap_type":    "none", // 默认为none，表示无Gap
 		"gaps":        []map[string]interface{}{},
 	}
 

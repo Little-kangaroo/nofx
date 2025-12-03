@@ -507,16 +507,26 @@ func (mca *MarketContextAnalyzer) estimateBTCDominance(btcData *Data, marketData
 	change4h := btcData.PriceChange4h * 0.1
 	change24h := change4h * 2.0               // 估算24小时变化
 	
-	// 分析趋势
+	// 分析趋势 - 更量化的趋势判断
 	trend := "stable"
 	trendStrength := 50.0
 	
-	if change4h > 0.5 {
-		trend = "rising"
-		trendStrength = 60.0 + math.Min(change4h*10, 30)
-	} else if change4h < -0.5 {
-		trend = "falling" 
-		trendStrength = 60.0 + math.Min(math.Abs(change4h)*10, 30)
+	// 基于4小时价格变化判断趋势（更明确的阈值）
+	if change4h > 1.0 {
+		trend = "uptrend"  // BTC主导地位上升，山寨币相对走弱
+		trendStrength = 55.0 + math.Min(change4h*8, 35)
+	} else if change4h < -1.0 {
+		trend = "downtrend" // BTC主导地位下降，山寨币相对走强
+		trendStrength = 55.0 + math.Min(math.Abs(change4h)*8, 35)
+	} else if math.Abs(change4h) >= 0.3 {
+		// 轻微变化也要标注方向
+		if change4h > 0 {
+			trend = "weak_uptrend"
+			trendStrength = 52.0 + change4h*10
+		} else {
+			trend = "weak_downtrend"
+			trendStrength = 52.0 + math.Abs(change4h)*10
+		}
 	}
 	
 	// 估算支撑阻力位（基于技术分析的简化版本）
@@ -591,14 +601,14 @@ func (mca *MarketContextAnalyzer) GetMarketRegime(btcData *Data, marketContext *
 					 math.Abs(marketContext.Correlation.BTCCorr4h) + 
 					 math.Abs(marketContext.Correlation.BTCCorr24h)) / 3
 	
-	// 判断市场状态
+	// 判断市场状态 - 更新趋势匹配逻辑
 	if btcChange4h < -5 && avgCorrelation > 0.7 {
 		return RegimePanicMode // 恐慌模式：BTC大跌且高相关性
-	} else if btcChange4h > 3 && dominanceTrend == "rising" {
+	} else if btcChange4h > 3 && (dominanceTrend == "uptrend" || dominanceTrend == "weak_uptrend") {
 		return RegimeBTCRally // BTC主导上涨
-	} else if btcChange4h < -2 && dominanceTrend == "falling" {
+	} else if btcChange4h < -2 && (dominanceTrend == "downtrend" || dominanceTrend == "weak_downtrend") {
 		return RegimeBTCDump // BTC主导下跌
-	} else if dominanceTrend == "falling" && avgCorrelation < 0.4 {
+	} else if (dominanceTrend == "downtrend" || dominanceTrend == "weak_downtrend") && avgCorrelation < 0.4 {
 		return RegimeAltSeason // 山寨币季节：BTC占比下降且低相关性
 	} else if avgCorrelation < 0.3 {
 		return RegimeDecoupling // 脱钩行情

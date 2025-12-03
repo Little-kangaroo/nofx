@@ -1948,7 +1948,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   结构失效：inv@p；rt=break+retest；Rej5m=5m拒绝；lastHL/lastLH=最近高低点结构。
   src/k tags 允许拼接：SZd/SZs, SR, VP(POC/VAH/VAL), ST4h/ST15m, FVG#, FIB#, CH, DT, sn, ctx, RSI, MACD。
 - 结构引用底线：禁止只写“RSI/MACD”；结构类标签（SZ/SR/VP/ST/FVG/FIB/CH/DT）至少出现 1 个。
-- Reasoning 必须严格包含 B/K/R/X 四段，但在 B 段之前，
-  允许增加一段 "S" (Synthesis) Summary，用不超过 15 个单词概括核心逻辑。
-  例如： "S: BTC大跌带动全场，尽管触及支撑但动能极弱，建议观望。"
+- Reasoning 必须严格包含 S/B/K/R/X 四段。
+- S (Synthesis): 自然语言摘要。若为山寨币，必须先简述 BTC 状态对其的影响。
+  例: "S: BTC回调至支撑，ETH虽强但受压于3080阻力，需等待。"
 （完）
