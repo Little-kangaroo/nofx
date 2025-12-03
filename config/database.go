@@ -1238,6 +1238,11 @@ func (d *Database) Close() error {
 	return d.db.Close()
 }
 
+// GetDB 获取底层数据库连接（用于其他模块需要直接数据库访问的场景）
+func (d *Database) GetDB() *sql.DB {
+	return d.db
+}
+
 // LoadBetaCodesFromFile 从文件加载内测码到数据库
 func (d *Database) LoadBetaCodesFromFile(filePath string) error {
 	// 读取文件内容

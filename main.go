@@ -281,6 +281,13 @@ func main() {
 	}
 
 	log.Printf("✓ 配置数据库初始化成功")
+	
+	// 🎯 初始化市场分析模块的强度标准化器
+	// 注意：这里复用配置数据库，生产环境中可以考虑使用独立的分析数据库
+	log.Printf("🎯 初始化AI市场分析强度标准化器...")
+	market.InitGlobalStrengthNormalizer(database.GetDB())
+	log.Printf("✅ 强度标准化器初始化完成")
+	
 	fmt.Println()
 
 	// 从数据库读取默认主流币种列表
