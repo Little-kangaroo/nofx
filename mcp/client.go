@@ -229,6 +229,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
 			requestBody["reasoning_effort"] = "low"
 			requestBody["prompt_cache_retention"] = "24h"
+			requestBody["temperature"] = 0.2
 		}
 	default:
 		// 默认使用新格式，支持GPT-5.1参数

@@ -30,6 +30,11 @@ func NewSupplyDemandAnalyzerWithConfig(config SDConfig) *SupplyDemandAnalyzer {
 
 // Analyze 分析K线数据识别供需区
 func (sda *SupplyDemandAnalyzer) Analyze(klines []Kline) *SupplyDemandData {
+	return sda.AnalyzeWithSymbol(klines, "", "")
+}
+
+// AnalyzeWithSymbol 分析K线数据识别供需区（支持Z-Score标准化）
+func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timeframe string) *SupplyDemandData {
 	if len(klines) < 10 {
 		// 返回空数据结构而不是nil，避免后续处理报错
 		return &SupplyDemandData{
@@ -46,10 +51,10 @@ func (sda *SupplyDemandAnalyzer) Analyze(klines []Kline) *SupplyDemandData {
 	var demandZones []*SupplyDemandZone
 
 	// 识别供给区
-	supplyZones = sda.identifySupplyZones(klines)
+	supplyZones = sda.identifySupplyZones(klines, symbol, timeframe)
 
 	// 识别需求区
-	demandZones = sda.identifyDemandZones(klines)
+	demandZones = sda.identifyDemandZones(klines, symbol, timeframe)
 
 	// 合并并排序所有区域
 	allZones := append(supplyZones, demandZones...)
@@ -59,10 +64,10 @@ func (sda *SupplyDemandAnalyzer) Analyze(klines []Kline) *SupplyDemandData {
 	activeZones := sda.filterActiveZones(allZones)
 
 	// 如果复杂模式识别没有找到足够的区域，使用简单的高低点方法作为补充
-	// 修复备用机制悖论：不管主算法找到多少个，都启用备用机制增强识别
+	// 修复备用机��悖论：不管主算法找到多少个，都启用备用机制增强识别
 	// 这样可以确保在主算法识别能力有限时，依然有基础的供需区支撑
 	if len(activeZones) < 5 { // 提高启动条件：少于5个区域就启动备用机制
-		backupZones := sda.identifyBasicZones(klines)
+		backupZones := sda.identifyBasicZonesWithSymbol(klines, symbol, timeframe)
 		for _, zone := range backupZones {
 			if !sda.isZoneOverlapping(zone, allZones) {
 				allZones = append(allZones, zone)
@@ -96,7 +101,7 @@ func (sda *SupplyDemandAnalyzer) Analyze(klines []Kline) *SupplyDemandData {
 }
 
 // identifySupplyZones 识别供给区
-func (sda *SupplyDemandAnalyzer) identifySupplyZones(klines []Kline) []*SupplyDemandZone {
+func (sda *SupplyDemandAnalyzer) identifySupplyZones(klines []Kline, symbol, timeframe string) []*SupplyDemandZone {
 	var zones []*SupplyDemandZone
 
 	// 遍历K线寻找供给区模式
@@ -122,7 +127,11 @@ func (sda *SupplyDemandAnalyzer) identifySupplyZones(klines []Kline) []*SupplyDe
 
 	// 计算区域强度和质量
 	for _, zone := range zones {
-		sda.calculateZoneStrength(zone, klines)
+		if symbol != "" && timeframe != "" {
+			sda.calculateZoneStrengthWithSymbol(zone, klines, symbol, timeframe)
+		} else {
+			sda.calculateZoneStrength(zone, klines)
+		}
 		sda.assessZoneQuality(zone)
 	}
 
@@ -130,7 +139,7 @@ func (sda *SupplyDemandAnalyzer) identifySupplyZones(klines []Kline) []*SupplyDe
 }
 
 // identifyDemandZones 识别需求区
-func (sda *SupplyDemandAnalyzer) identifyDemandZones(klines []Kline) []*SupplyDemandZone {
+func (sda *SupplyDemandAnalyzer) identifyDemandZones(klines []Kline, symbol, timeframe string) []*SupplyDemandZone {
 	var zones []*SupplyDemandZone
 
 	// 遍历K线寻找需求区模式
@@ -156,7 +165,11 @@ func (sda *SupplyDemandAnalyzer) identifyDemandZones(klines []Kline) []*SupplyDe
 
 	// 计算区域强度和质量
 	for _, zone := range zones {
-		sda.calculateZoneStrength(zone, klines)
+		if symbol != "" && timeframe != "" {
+			sda.calculateZoneStrengthWithSymbol(zone, klines, symbol, timeframe)
+		} else {
+			sda.calculateZoneStrength(zone, klines)
+		}
 		sda.assessZoneQuality(zone)
 	}
 
@@ -847,7 +860,7 @@ func (sda *SupplyDemandAnalyzer) calculateZoneStrength(zone *SupplyDemandZone, k
 					symbol, timeframe, zone.SampleCount, MinSampleSize)
 			}
 		} else {
-			log.Printf("��️ 无法推断symbol/timeframe，跳过Z-Score标准化")
+			// 静默跳过Z-Score标准化 - 这是向后兼容的正常fallback
 		}
 	} else {
 		log.Printf("⚠️ 强度标准化器未初始化，使用原始强度评分")
@@ -1582,6 +1595,11 @@ func (sda *SupplyDemandAnalyzer) GetStrongestZones(sdData *SupplyDemandData, cou
 
 // identifyBasicZones 识别基础供需区（基于近期高低点的简单方法）
 func (sda *SupplyDemandAnalyzer) identifyBasicZones(klines []Kline) []*SupplyDemandZone {
+	return sda.identifyBasicZonesWithSymbol(klines, "", "")
+}
+
+// identifyBasicZonesWithSymbol 识别基础供需区（支持Z-Score标准化）
+func (sda *SupplyDemandAnalyzer) identifyBasicZonesWithSymbol(klines []Kline, symbol, timeframe string) []*SupplyDemandZone {
 	var zones []*SupplyDemandZone
 
 	// 大幅增加最小K线数要求，确保有足够的数据进行分析
@@ -1650,8 +1668,14 @@ func (sda *SupplyDemandAnalyzer) identifyBasicZones(klines []Kline) []*SupplyDem
 			CreationTime: klines[highestIndex].OpenTime,
 			IsActive:     true,
 			IsBroken:     false,
-			Strength:     75.0, // 大幅提升强度：从60到75，确保通过筛选
 			Quality:      QualityGood, // 提升质量等级
+		}
+
+		// 计算区域强度（支持Z-Score标准化）
+		if symbol != "" && timeframe != "" {
+			sda.calculateZoneStrengthWithSymbol(zone, klines, symbol, timeframe)
+		} else {
+			sda.calculateZoneStrength(zone, klines)
 		}
 
 		zones = append(zones, zone)
@@ -1694,8 +1718,14 @@ func (sda *SupplyDemandAnalyzer) identifyBasicZones(klines []Kline) []*SupplyDem
 			CreationTime: klines[lowestIndex].OpenTime,
 			IsActive:     true,
 			IsBroken:     false,
-			Strength:     75.0, // 大幅提升强度：从60到75，确保通过筛选
 			Quality:      QualityGood, // 提升质量等级
+		}
+
+		// 计算区域强度（支持Z-Score标准化）
+		if symbol != "" && timeframe != "" {
+			sda.calculateZoneStrengthWithSymbol(zone, klines, symbol, timeframe)
+		} else {
+			sda.calculateZoneStrength(zone, klines)
 		}
 
 		zones = append(zones, zone)

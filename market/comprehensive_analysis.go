@@ -339,7 +339,7 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 
 	// 执行供需区分析
 	if ca.config.EnableSupplyDemand && len(klines4h) > 15 {
-		result.SupplyDemand = ca.sdAnalyzer.Analyze(klines4h)
+		result.SupplyDemand = ca.sdAnalyzer.AnalyzeWithSymbol(klines4h, symbol, "4h")
 	}
 
 	// 执行FVG分析
@@ -1358,7 +1358,7 @@ func (ca *ComprehensiveAnalyzer) AnalyzeAllTimeframes(symbol string, currentPric
 			continue
 		}
 
-		tfAnalysis := ca.analyzeSingleTimeframe(tf, klines, currentPrice, weights[tf])
+		tfAnalysis := ca.analyzeSingleTimeframe(tf, symbol, klines, currentPrice, weights[tf])
 		analysis.Timeframes[tf] = tfAnalysis
 	}
 
@@ -1372,7 +1372,7 @@ func (ca *ComprehensiveAnalyzer) AnalyzeAllTimeframes(symbol string, currentPric
 }
 
 // analyzeSingleTimeframe 分析单一时间框架
-func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe string, klines []Kline, currentPrice, weight float64) *TimeframeAnalysis {
+func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe, symbol string, klines []Kline, currentPrice, weight float64) *TimeframeAnalysis {
 	tfAnalysis := &TimeframeAnalysis{
 		Timeframe: timeframe,
 		Weight:    weight,
@@ -1412,7 +1412,7 @@ func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe string, klines
 
 	// 供需区分析
 	if ca.config.EnableSupplyDemand {
-		tfAnalysis.SupplyDemand = ca.sdAnalyzer.Analyze(klines)
+		tfAnalysis.SupplyDemand = ca.sdAnalyzer.AnalyzeWithSymbol(klines, symbol, timeframe)
 	}
 
 	// FVG分析
