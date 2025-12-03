@@ -226,6 +226,27 @@ func (d *Database) createTables() error {
 			FOREIGN KEY (trader_id) REFERENCES traders(id) ON DELETE CASCADE
 		)`,
 
+		// 供需区历史强度表 - 用于Z-Score标准化
+		`CREATE TABLE IF NOT EXISTS zone_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			symbol TEXT NOT NULL,
+			timeframe TEXT NOT NULL,
+			raw_score REAL NOT NULL,
+			zone_type TEXT NOT NULL, -- 'supply' or 'demand'
+			pattern_type TEXT DEFAULT '',
+			touch_count INTEGER DEFAULT 0,
+			volume_ratio REAL DEFAULT 0,
+			width_percent REAL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
+		// 为供需区历史强度表创建索引
+		`CREATE INDEX IF NOT EXISTS idx_zone_history_lookup 
+		ON zone_history(symbol, timeframe, created_at DESC)`,
+
+		`CREATE INDEX IF NOT EXISTS idx_zone_history_cleanup 
+		ON zone_history(created_at)`,
+
 		// 触发器：自动更新 updated_at
 		`CREATE TRIGGER IF NOT EXISTS update_users_updated_at
 			AFTER UPDATE ON users

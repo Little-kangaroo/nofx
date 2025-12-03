@@ -144,15 +144,11 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCal
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapLow * 100
 
-	// 移除硬阈值过滤 - 让AI自己判断缺口重要性
-	// 原有的硬阈值过滤导致不同币种适配问题：
-	// - MEME币需要大阈值，主流币需要小阈值  
-	// - 一个固定参数无法适配所有币种
-	// 现在让AI根据币种特性和市场环境进行判断
-	//
-	// if gapWidthPercent < fvg.config.MinGapPercent || gapWidthPercent > fvg.config.MaxGapPercent {
-	//     return nil
-	// }
+	// 智能预过滤：基于时间框架的自适应阈值
+	atr := fvg.calculateATR(klines, 14) // 需要ATR数据进行LTF过滤
+	if shouldFilterByTimeframe(klines, gapWidthPercent, atr, gapWidth) {
+		return nil
+	}
 
 	// 保留基本的数据质量检查：确保缺口确实存在
 	if gapWidth <= 0 {
@@ -231,15 +227,11 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, contextCal
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapHigh * 100
 
-	// 移除硬阈值过滤 - 让AI自己判断缺口重要性
-	// 原有的硬阈值过滤导致不同币种适配问题：
-	// - MEME币需要大阈值，主流币需要小阈值  
-	// - 一个固定参数无法适配所有币种
-	// 现在让AI根据币种特性和市场环境进行判断
-	//
-	// if gapWidthPercent < fvg.config.MinGapPercent || gapWidthPercent > fvg.config.MaxGapPercent {
-	//     return nil
-	// }
+	// 智能预过滤：基于时间框架的自适应阈值
+	atr := fvg.calculateATR(klines, 14) // 需要ATR数据进行LTF过滤
+	if shouldFilterByTimeframe(klines, gapWidthPercent, atr, gapWidth) {
+		return nil
+	}
 
 	// 保留基本的数据质量检查：确保缺口确实存在
 	if gapWidth <= 0 {
@@ -566,23 +558,30 @@ func (fvg *FVGAnalyzer) filterActiveFVGs(gaps []*FairValueGap) []*FairValueGap {
 	return activeFVGs
 }
 
-// filterActiveFVGsWithContext 使用上下文信息筛选活跃FVG - "先截断后打分"策略
+// filterActiveFVGsWithContext 使用上下文信息筛选活跃FVG - "时间框架独立Top 3"策略
 func (fvg *FVGAnalyzer) filterActiveFVGsWithContext(gaps []*FairValueGap, currentPrice float64, atr float64, klines []Kline) []*FairValueGap {
+	if len(gaps) == 0 {
+		return gaps
+	}
+
+	// 推断时间框架
+	timeframe := inferTimeframe(klines)
+	
 	var candidates []*FairValueGap
 
-	// 第一刀：硬截断 - 基础过滤
+	// 第一阶段：硬截断 - 基础过滤
 	for _, gap := range gaps {
 		// 基础有效性检查
 		if !gap.IsActive || gap.IsFilled {
 			continue
 		}
 
-		// 第二刀：完全回补检查
+		// 完全回补检查
 		if gap.FillProgress >= 95.0 {
 			continue // 几乎完全回补，直接过滤
 		}
 
-		// 第一刀：距离硬截断（5 ATR）
+		// 距离硬截断（5 ATR）
 		if atr > 0 {
 			distanceATR := fvg.calculateDistanceInATR(gap, currentPrice, atr)
 			if distanceATR > fvg.config.MaxDistanceATR {
@@ -593,12 +592,7 @@ func (fvg *FVGAnalyzer) filterActiveFVGsWithContext(gaps []*FairValueGap, curren
 		candidates = append(candidates, gap)
 	}
 
-	// 如果候选数量已经在限制内，直接返回
-	if len(candidates) <= fvg.config.MaxActiveFVGs {
-		return candidates
-	}
-
-	// 第三步：综合评分排序
+	// 第二阶段：综合评分排序
 	for i := range candidates {
 		candidates[i].Score = fvg.calculateFVGScore(candidates[i], currentPrice, atr, klines)
 	}
@@ -608,9 +602,10 @@ func (fvg *FVGAnalyzer) filterActiveFVGsWithContext(gaps []*FairValueGap, curren
 		return candidates[i].Score > candidates[j].Score
 	})
 
-	// 第四步：数量限制 - 取前N个最高分的FVG
-	if len(candidates) > fvg.config.MaxActiveFVGs {
-		candidates = candidates[:fvg.config.MaxActiveFVGs]
+	// 第三阶段：时间框架独立Top 3限制
+	maxFVGs := getMaxFVGsForTimeframe(timeframe)
+	if len(candidates) > maxFVGs {
+		candidates = candidates[:maxFVGs]
 	}
 
 	return candidates
@@ -1290,4 +1285,74 @@ func (fvg *FVGAnalyzer) calculateBearishImpulsiveMove(firstCandle, middleCandle,
 	
 	// 加权组合：中间K线爆发力70% + 总缺口距离30%
 	return middleBodyMove*0.7 + totalGapMove*0.3
+}
+
+// shouldFilterByTimeframe 基于时间框架的智能FVG预过滤
+// 解决微型FVG干扰问题，让AI专注于重要结构
+func shouldFilterByTimeframe(klines []Kline, widthPercent, atr, gapWidth float64) bool {
+	if len(klines) == 0 {
+		return false // 无法判断时间框架，不过滤
+	}
+	
+	// 推断时间框架（基于K线间隔）
+	timeframe := inferTimeframe(klines)
+	
+	// HTF (4h/1h): 使用width_percent过滤
+	if timeframe == "4h" || timeframe == "1h" {
+		// 丢弃 width_percent < 0.3% 的微型FVG
+		if widthPercent < 0.3 {
+			return true // 过滤掉
+		}
+	}
+	
+	// LTF (15m/5m): 使用width_atr过滤  
+	if timeframe == "15m" || timeframe == "5m" {
+		if atr > 0 {
+			widthATR := gapWidth / atr
+			// 丢弃 width_atr < 0.5 的微型FVG
+			if widthATR < 0.5 {
+				return true // 过滤掉
+			}
+		}
+	}
+	
+	return false // 通过过滤
+}
+
+// inferTimeframe 推断K线时间框架（基于K线间隔）
+func inferTimeframe(klines []Kline) string {
+	if len(klines) < 2 {
+		return "unknown"
+	}
+	
+	// 计算K线间隔（毫秒）
+	interval := klines[1].OpenTime - klines[0].OpenTime
+	
+	// 转换为分钟
+	intervalMinutes := interval / (1000 * 60)
+	
+	switch {
+	case intervalMinutes <= 5:
+		return "5m"
+	case intervalMinutes <= 15:
+		return "15m"
+	case intervalMinutes <= 60:
+		return "1h"
+	case intervalMinutes <= 240:
+		return "4h"
+	default:
+		return "unknown"
+	}
+}
+
+// getMaxFVGsForTimeframe 获取各时间框架的最大FVG数量限制
+func getMaxFVGsForTimeframe(timeframe string) int {
+	switch timeframe {
+	case "5m", "15m":
+		return 3 // LTF: 最多保留3个FVG
+	case "1h", "4h":
+		return 3 // HTF: 最多保留3个FVG  
+	default:
+		return 3 // 默认3个，统一标准
+	}
 }

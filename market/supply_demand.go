@@ -2,8 +2,10 @@ package market
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -769,8 +771,9 @@ func (sda *SupplyDemandAnalyzer) zonesOverlap(zone1, zone2 *SupplyDemandZone) bo
 	return !(zone1.UpperBound < zone2.LowerBound || zone2.UpperBound < zone1.LowerBound)
 }
 
-// calculateZoneStrength 计算区域强度 (优化版：更合理的评分体系)
+// calculateZoneStrength 计算区域强度 (集成Z-Score标准化)
 func (sda *SupplyDemandAnalyzer) calculateZoneStrength(zone *SupplyDemandZone, klines []Kline) {
+	// 原有强度计算逻辑保持不变
 	strength := 0.0
 
 	// 修复1: 基于冲击移动的强度 (权重降低，避免过严)
@@ -787,7 +790,7 @@ func (sda *SupplyDemandAnalyzer) calculateZoneStrength(zone *SupplyDemandZone, k
 	// 修复3: 基于区域宽度的强度 (更加友好的评分)
 	if zone.WidthPercent > 0 && zone.WidthPercent <= 12 { // 12%内的宽度都给分
 		// 优化宽度评分：不再惩罚较宽的区域，而是给出基础分数
-		widthScore := math.Max(0, 10 - zone.WidthPercent) // 越窄分数越高，但最宽也有最少2分
+		widthScore := math.Max(0, 10 - zone.WidthPercent) // 越窄分数越���，但最宽也有最少2分
 		strength += math.Max(widthScore, 2) // 保底2分
 	}
 
@@ -807,6 +810,100 @@ func (sda *SupplyDemandAnalyzer) calculateZoneStrength(zone *SupplyDemandZone, k
 
 	// 限制在合理范围，但提高上限
 	zone.Strength = math.Max(15.0, math.Min(strength, 100.0)) // 最低15分，最高100分
+	
+	// ===== 集成Z-Score标准化 =====
+	// 尝试获取全局强度标准化器
+	normalizer := GetGlobalStrengthNormalizer()
+	if normalizer != nil {
+		// 从K线数据推断symbol和timeframe
+		symbol, timeframe := sda.inferSymbolTimeframe(klines)
+		if symbol != "" && timeframe != "" {
+			// 创建供需区强度记录
+			zoneRecord := &ZoneStrengthRecord{
+				Symbol:       symbol,
+				Timeframe:    timeframe,
+				RawScore:     zone.Strength,
+				ZoneType:     string(zone.Type),
+				PatternType:  string(zone.Origin.PatternType),
+				TouchCount:   zone.TouchCount,
+				VolumeRatio:  zone.Volume / avgVolume,
+				WidthPercent: zone.WidthPercent,
+			}
+			
+			// 获取标准化Z-Score (先计算Z分数，再添加到历史记录)
+			zScoreResult := normalizer.GetZScoreWithUpdate(symbol, timeframe, zone.Strength, zoneRecord)
+			
+			// 更新供需区的标准化强度
+			zone.StrengthZ = zScoreResult.ZScore
+			zone.StrengthZReady = zScoreResult.IsReady
+			zone.SampleCount = zScoreResult.SampleCount
+			
+			// 调试日志：记录标准化过程
+			if zScoreResult.IsReady {
+				log.Printf("🎯 [%s_%s] 供需区强度标准化: 原始=%.2f → Z分数=%.2f (样本=%d)", 
+					symbol, timeframe, zone.Strength, zone.StrengthZ, zone.SampleCount)
+			} else {
+				log.Printf("⚠️ [%s_%s] 供需区强度标准化: 样本不足 (%d<%d)，使用原始强度", 
+					symbol, timeframe, zone.SampleCount, MinSampleSize)
+			}
+		} else {
+			log.Printf("��️ 无法推断symbol/timeframe，跳过Z-Score标准化")
+		}
+	} else {
+		log.Printf("⚠️ 强度标准化器未初始化，使用原始强度评分")
+	}
+}
+
+// calculateZoneStrengthWithSymbol 计算区域强度（支持Z-Score标准化的完整版本）
+// 需要明确传入symbol和timeframe以启用标准化功能
+func (sda *SupplyDemandAnalyzer) calculateZoneStrengthWithSymbol(zone *SupplyDemandZone, klines []Kline, symbol, timeframe string) {
+	// 首先调用原有的强度计算逻辑
+	sda.calculateZoneStrength(zone, klines)
+	
+	// ===== 集成Z-Score标准化 =====
+	// 只有在明确提供symbol和timeframe时才进行标准化
+	if symbol != "" && timeframe != "" {
+		normalizer := GetGlobalStrengthNormalizer()
+		if normalizer != nil {
+			// 重新计算成交量比例（用于记录）
+			avgVolume := sda.calculateAverageVolume(klines, 0, len(klines)-1)
+			volumeRatio := 1.0
+			if avgVolume > 0 {
+				volumeRatio = zone.Volume / avgVolume
+			}
+			
+			// 创建供需区强度记录
+			zoneRecord := &ZoneStrengthRecord{
+				Symbol:       symbol,
+				Timeframe:    timeframe,
+				RawScore:     zone.Strength,
+				ZoneType:     string(zone.Type),
+				PatternType:  string(zone.Origin.PatternType),
+				TouchCount:   zone.TouchCount,
+				VolumeRatio:  volumeRatio,
+				WidthPercent: zone.WidthPercent,
+			}
+			
+			// 获取标准化Z-Score (先计算Z分数，再添加到历史记录)
+			zScoreResult := normalizer.GetZScoreWithUpdate(symbol, timeframe, zone.Strength, zoneRecord)
+			
+			// 更新供需区的标准化强度
+			zone.StrengthZ = zScoreResult.ZScore
+			zone.StrengthZReady = zScoreResult.IsReady
+			zone.SampleCount = zScoreResult.SampleCount
+			
+			// 调试日志：记录标准化过程
+			if zScoreResult.IsReady {
+				log.Printf("🎯 [%s_%s] 供需区强度标准化: 原始=%.2f → Z分数=%.2f (样本=%d)", 
+					symbol, timeframe, zone.Strength, zone.StrengthZ, zone.SampleCount)
+			} else {
+				log.Printf("⚠️ [%s_%s] 供需区强度标准化: 样本不足 (%d<%d)，使用原始强度", 
+					symbol, timeframe, zone.SampleCount, MinSampleSize)
+			}
+		} else {
+			log.Printf("⚠️ 强度标准化器未初始化，使用原始强度评分")
+		}
+	}
 }
 
 // assessZoneQuality 评估区域质量
@@ -858,11 +955,21 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 
 		// 检查是否被突破
 		if sda.isZoneBroken(zone, klines, currentPrice) {
-			zone.Status = StatusBroken
-			zone.IsBroken = true
-			zone.IsActive = false
-			zone.BreakTime = currentTime
-			continue
+			// 【修复幽灵支撑】处理区域类型转换逻辑
+			sda.handleZoneBreakout(zone, currentPrice)
+			
+			// 如果区域发生了类型转换（Breaker），则不标记为broken
+			if strings.Contains(zone.ID, "breaker_") {
+				// Breaker区域：继续活跃，只是改变了类型
+				log.Printf("✅ [Breaker激活] 区域%s类型转换完成，继续监控", zone.ID)
+			} else {
+				// 普通突破：标记为broken
+				zone.Status = StatusBroken
+				zone.IsBroken = true
+				zone.IsActive = false
+				zone.BreakTime = currentTime
+				continue
+			}
 		}
 
 		// 检查触及次数
@@ -883,7 +990,7 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 	}
 }
 
-// isZoneBroken 检查区域是否被突破
+// isZoneBroken 检查区域是否被突���
 func (sda *SupplyDemandAnalyzer) isZoneBroken(zone *SupplyDemandZone, klines []Kline, currentPrice float64) bool {
 	threshold := sda.config.BreakoutThreshold
 
@@ -896,6 +1003,53 @@ func (sda *SupplyDemandAnalyzer) isZoneBroken(zone *SupplyDemandZone, klines []K
 	}
 }
 
+// handleZoneBreakout 处理区域突破后的类型转换（修复"幽灵支撑"问题）
+func (sda *SupplyDemandAnalyzer) handleZoneBreakout(zone *SupplyDemandZone, currentPrice float64) {
+	// 核心逻辑：跌破的需求区 = 新的阻力位（供给区）
+	//           突破的供给区 = 新的支撑位（需求区）
+	
+	originalType := zone.Type
+	
+	if zone.Type == DemandZone && currentPrice < zone.LowerBound {
+		// 【修复幽灵支撑】需求区被跌破 → 转换为供给区（阻力位）
+		zone.Type = SupplyZone
+		zone.ID = "breaker_" + zone.ID  // 更新ID标识转换
+		
+		// 更新模式类型为Breaker
+		if zone.Origin != nil {
+			zone.Origin.PatternType = "demand_breaker" // 新的模式类型
+		}
+		
+		log.Printf("🔄 [幽灵支撑修复] 需求区%.2f-%.2f被跌破，转换为供给区（阻力位）", 
+			zone.LowerBound, zone.UpperBound)
+		
+	} else if zone.Type == SupplyZone && currentPrice > zone.UpperBound {
+		// 供给区被突破 → 转换为需求区（支撑位）
+		zone.Type = DemandZone
+		zone.ID = "breaker_" + zone.ID
+		
+		if zone.Origin != nil {
+			zone.Origin.PatternType = "supply_breaker"
+		}
+		
+		log.Printf("🔄 [区域转换] 供给区%.2f-%.2f被突破，转换为需求区（支撑位）", 
+			zone.LowerBound, zone.UpperBound)
+	}
+	
+	// 如果发生了类型转换，重置区域状态
+	if zone.Type != originalType {
+		zone.Status = StatusTested      // 重置为已测试状态
+		zone.TouchCount = 1           // 重置触及计数
+		zone.IsActive = true          // 重新激活
+		zone.IsBroken = false         // 不再是broken状态
+		zone.BreakTime = 0           // 清除突破时间
+		
+		// 重新计算强度（Breaker区域通常强度较高）
+		zone.Strength = math.Min(zone.Strength * 1.2, 100.0) // 提升20%强度，上限100
+		zone.Quality = QualityGood   // 设置为良好质量
+	}
+}
+
 // countZoneTouches 计算区域触及次数（修复版：避免数值爆炸）
 func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines []Kline) int {
 	count := 0
@@ -904,7 +1058,10 @@ func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines
 	
 	// 【修复幽灵支撑Bug】从区域诞生开始检查完整历史，不截断数据
 	// 必须检查完整生命周期以发现历史的Zone Broken事件
-	startIndex := zone.Origin.KlineIndex + 1
+	startIndex := 0
+	if zone.Origin != nil {
+		startIndex = zone.Origin.KlineIndex + 1
+	}
 	endIndex := len(klines)
 	
 	// 【安全检查】确保索引有效
@@ -1555,4 +1712,11 @@ func (sda *SupplyDemandAnalyzer) isZoneOverlapping(newZone *SupplyDemandZone, ex
 		}
 	}
 	return false
+}
+
+// inferSymbolTimeframe 从K线数据推断symbol和timeframe（工具方法）
+func (sda *SupplyDemandAnalyzer) inferSymbolTimeframe(klines []Kline) (string, string) {
+	// TODO: 实际实现需要根据K线数据特征或外部传入参数来确定
+	// 这里提供一个简单的示例实现
+	return "", "" // 返回空值，让调用者明确传入symbol和timeframe
 }

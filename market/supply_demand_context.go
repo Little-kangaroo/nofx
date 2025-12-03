@@ -76,6 +76,9 @@ func (scs *SupplyDemandContextScoring) calculateSingleZoneContext(zone *SupplyDe
 	// 在所有供需区中的强度排名，0.8+ 表示前20%
 	rankPct := contextCalc.CalculateRankPercentile(zone.Strength, allStrengths)
 
+	// 7. 计算基于ATR的波动率评级 (跨币种统一标准)
+	zone.VolatilityGrade = contextCalc.CalculateVolatilityGrade(widthATR)
+
 	return &ContextMetrics{
 		StrengthZ: strengthZ,
 		WidthATR:  widthATR,  

@@ -589,7 +589,7 @@ type SupplyDemandZone struct {
 	Width         float64     `json:"width"`          // 区域宽度
 	WidthPercent  float64     `json:"width_percent"`  // 区域宽度百分比
 	Origin        *ZoneOrigin `json:"origin"`         // 区域起源
-	Strength      float64     `json:"strength"`       // 区域强度
+	Strength      float64     `json:"strength"`       // 区域强度（原始分数）
 	Quality       ZoneQuality `json:"quality"`        // 区域质量
 	Status        ZoneStatus  `json:"status"`         // 区域状态
 	TouchCount    int         `json:"touch_count"`    // 触及次数
@@ -602,6 +602,20 @@ type SupplyDemandZone struct {
 	IsBroken      bool        `json:"is_broken"`      // 是否被突破
 	BreakTime     int64       `json:"break_time"`     // 突破时间
 	Context       *ContextMetrics `json:"ctx"`        // 上下文评分
+	
+	// ===== Z-Score标准化相关字段 =====
+	StrengthZ      float64 `json:"strength_z"`       // 标准化Z分数 (基于历史对比)
+	StrengthZReady bool    `json:"strength_z_ready"` // Z分数是否可靠 (样本量充足)
+	SampleCount    int     `json:"sample_count"`     // 参与Z分数计算的样本数量
+	
+	// ===== ATR归一化评级字段 =====
+	VolatilityGrade VolatilityGrade `json:"volatility_grade"` // 基于ATR归一化的波动率评级
+	
+	// ===== 模糊逻辑状态字段 =====
+	FuzzyTolerance    float64 `json:"fuzzy_tolerance"`     // 模糊逻辑缓冲区大小
+	MaxPenetrationPct float64 `json:"max_penetration_pct"` // 最大穿透深度百分比
+	DeepTouchCount    int     `json:"deep_touch_count"`    // 深度触及次数 (穿透>50%)
+	LastPenetrationPct float64 `json:"last_penetration_pct"` // 最近一次穿透深度
 }
 
 // ZoneType 区域类型
@@ -644,15 +658,25 @@ const (
 	QualityWeak     ZoneQuality = "weak"     // 弱
 )
 
+// VolatilityGrade 基于ATR归一化的波动率评级 (跨币种统一标准)
+type VolatilityGrade string
+
+const (
+	VolGradeA VolatilityGrade = "A" // A级：0.2 < width_atr < 1.5，最优ATR标准
+	VolGradeB VolatilityGrade = "B" // B级：基本符合ATR标准，可交易
+	VolGradeC VolatilityGrade = "C" // C级：ATR标准一般，谨慎交易
+	VolGradeD VolatilityGrade = "D" // D级：不符合ATR标准，不建议
+)
+
 // ZoneStatus 区域状态
 type ZoneStatus string
 
 const (
-	StatusFresh    ZoneStatus = "fresh"    // 新鲜
-	StatusTested   ZoneStatus = "tested"   // 已测试
-	StatusWeakened ZoneStatus = "weakened" // 已弱化
-	StatusBroken   ZoneStatus = "broken"   // 已突破
-	StatusExpired  ZoneStatus = "expired"  // 已过期
+	StatusFresh     ZoneStatus = "fresh"     // 新鲜：未触碰
+	StatusTested    ZoneStatus = "tested"    // 已测试：已触碰但未破坏
+	StatusWeakened  ZoneStatus = "weakened"  // 已弱化：触碰>3次或深度穿透>50%
+	StatusBroken    ZoneStatus = "broken"    // 已突破：失效
+	StatusExpired   ZoneStatus = "expired"   // 已过期：时间过长失效
 )
 
 // ZoneVP 区域成交量分布
