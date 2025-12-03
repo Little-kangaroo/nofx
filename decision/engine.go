@@ -221,6 +221,54 @@ func fetchMarketDataForContext(ctx *Context) error {
 	log.Printf("📊 [拉取K线数据统计] 总耗时: %v，币种数量: %d���平均每币种: %v",
 		allDataDuration, len(ctx.MarketDataMap), allDataDuration/time.Duration(1+len(ctx.MarketDataMap)))
 
+	// 【新增】BTC市场上下文分析
+	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC && len(ctx.MarketDataMap) > 1 {
+		log.Printf("🔍 [市场上下文分析] 开始分析BTC联动性...")
+		contextStart := time.Now()
+		
+		// 创建市场上下文分析器
+		marketAnalyzer := market.NewMarketContextAnalyzer()
+		
+		// 为每个目标币种分析市场上下文
+		for targetSymbol, targetData := range ctx.MarketDataMap {
+			if targetSymbol == "BTCUSDT" {
+				continue // 跳过BTC自身
+			}
+			
+			// 分析目标币种与BTC的联动性
+			marketContext := marketAnalyzer.AnalyzeMarketContext(
+				targetSymbol, 
+				targetData, 
+				btcData, 
+				ctx.MarketDataMap,
+			)
+			
+			if marketContext != nil {
+				targetData.MarketContext = marketContext
+				log.Printf("✅ [%s] 市场上下文分析完成: BTC相关性=%.2f", 
+					targetSymbol, marketContext.Correlation.BTCCorr4h)
+			}
+		}
+		
+		// 为BTC本身分析市场主导地位
+		btcMarketContext := marketAnalyzer.AnalyzeMarketContext(
+			"BTCUSDT",
+			btcData,
+			btcData, // BTC分析自身
+			ctx.MarketDataMap,
+		)
+		
+		if btcMarketContext != nil {
+			btcData.MarketContext = btcMarketContext
+		}
+		
+		contextDuration := time.Since(contextStart)
+		log.Printf("📊 [市场上下文分析] 完成，耗时: %v，分析币种: %d个", 
+			contextDuration, len(ctx.MarketDataMap)-1)
+	} else {
+		log.Printf("⚠️ [市场上下文分析] 跳过：BTC数据不可用或候选币种不足")
+	}
+
 	// 加载OI Top数据（不影响主流程）
 	oiPositions, err := pool.GetOITopPositions()
 	if err == nil {
@@ -315,11 +363,64 @@ func buildUserPrompt(ctx *Context) string {
 	sb.WriteString(fmt.Sprintf("时间: %s | 周期: #%d | 运行: %d分钟\n\n",
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
 
-	// BTC 市场
+	// BTC 市场上下文（增强版：联动性分析）
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n\n",
+		// 基础BTC信息
+		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
 			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
 			btcData.CurrentMACD, btcData.CurrentRSI7))
+		
+		// BTC联动性上下文分析
+		if btcData.MarketContext != nil {
+			mc := btcData.MarketContext
+			sb.WriteString("🔗 BTC联动性分析:\n")
+			
+			// BTC主导地位
+			if mc.BTCDominance != nil {
+				dom := mc.BTCDominance
+				sb.WriteString(fmt.Sprintf("  📊 BTC占比: %.1f%% (1h: %+.2f%%, 4h: %+.2f%%, 24h: %+.2f%%) | 趋势: %s (强度%.0f)\n",
+					dom.Current, dom.Change1h, dom.Change4h, dom.Change24h, dom.Trend, dom.TrendStrength))
+				sb.WriteString(fmt.Sprintf("  🎯 关键位: 阻力%.1f%% | 支撑%.1f%%\n", dom.NextResistance, dom.NextSupport))
+			}
+			
+			// 市场相关性
+			if mc.Correlation != nil {
+				corr := mc.Correlation
+				sb.WriteString(fmt.Sprintf("  🔗 山寨币联动: 1h=%.2f | 4h=%.2f | 24h=%.2f | 趋势=%s | 脱钩风险=%.0f%%\n",
+					corr.BTCCorr1h, corr.BTCCorr4h, corr.BTCCorr24h, corr.CorrTrend, corr.DecouplingRisk))
+				sb.WriteString(fmt.Sprintf("  📈 Beta系数: %.2f | Alpha超额收益: %+.2f%%\n", corr.BetaCoefficient, corr.Alpha))
+			}
+			
+			// OI持仓分析
+			if mc.OIAnalysis != nil {
+				oi := mc.OIAnalysis
+				sb.WriteString(fmt.Sprintf("  💰 持仓变化: 1h=%+.1f%% | 4h=%+.1f%% | 24h=%+.1f%% | 趋势=%s\n",
+					oi.OIChange1h, oi.OIChange4h, oi.OIChange24h, oi.OITrend))
+				sb.WriteString(fmt.Sprintf("  ⚖️ 多空比: %.2f | 清算风险: %.0f%% | 与BTC OI相关: %.2f\n",
+					oi.LongShortRatio, oi.LiquidationRisk, oi.BTCOICorr))
+			}
+			
+			// 资金费率环境
+			if mc.FundingContext != nil {
+				fund := mc.FundingContext
+				sb.WriteString(fmt.Sprintf("  💸 资金费率: 当前=%.4f%% | 24h均值=%.4f%% | 波动性=%.4f | 情绪=%s\n",
+					fund.CurrentRate*100, fund.AverageRate24h*100, fund.RateVolatility, fund.MarketSentiment))
+				sb.WriteString(fmt.Sprintf("  🔥 过热风险: %.0f%% | 与BTC费率相关: %.2f\n", fund.OverheatingRisk, fund.BTCRateCorr))
+			}
+			
+			// 市场风险评估
+			if mc.RiskAssessment != nil {
+				risk := mc.RiskAssessment
+				sb.WriteString(fmt.Sprintf("  ⚠️ 风险评估: %s (评分%.0f/100) | BTC依赖度: %.0f%%\n",
+					risk.OverallRisk, risk.RiskScore, risk.BTCDependency))
+				sb.WriteString(fmt.Sprintf("  🔍 系统性风险: %.0f%% | 个股风险: %.0f%% | BTC方向性: %.0f%% | BTC波动性: %.0f%%\n",
+					risk.SystemicRisk, risk.IdiosyncraticRisk,
+					risk.RiskFactors.BTCDirectional, risk.RiskFactors.BTCVolatility))
+			}
+		} else {
+			sb.WriteString("⚠️ BTC联动性分析数据缺失，建议检查MarketContext模块\n")
+		}
+		sb.WriteString("\n")
 	}
 
 	// 账户

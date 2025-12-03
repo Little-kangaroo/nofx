@@ -56,6 +56,39 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 	// 识别需求区
 	demandZones = sda.identifyDemandZones(klines, symbol, timeframe)
 
+	// 【P0修复】ATR验证：对所有识别的区域进行位置验证
+	if len(klines) >= 14 { // 确保有足够数据计算ATR
+		currentPrice := klines[len(klines)-1].Close
+		atr := sda.calculateATR(klines, 14)
+		
+		// 验证供给区位置的合理性
+		validSupplyZones := []*SupplyDemandZone{}
+		for _, zone := range supplyZones {
+			if sda.validateZonePosition(zone, currentPrice, atr) {
+				validSupplyZones = append(validSupplyZones, zone)
+			} else {
+				log.Printf("⚠️ [P0验证] 供给区%.2f-%.2f位置不合理，已过滤 (当前价格%.2f)", 
+					zone.LowerBound, zone.UpperBound, currentPrice)
+			}
+		}
+		supplyZones = validSupplyZones
+		
+		// 验证需求区位置的合理性
+		validDemandZones := []*SupplyDemandZone{}
+		for _, zone := range demandZones {
+			if sda.validateZonePosition(zone, currentPrice, atr) {
+				validDemandZones = append(validDemandZones, zone)
+			} else {
+				log.Printf("⚠️ [P0验证] 需求区%.2f-%.2f位置不合理，已过滤 (当前价格%.2f)", 
+					zone.LowerBound, zone.UpperBound, currentPrice)
+			}
+		}
+		demandZones = validDemandZones
+		
+		log.Printf("✅ [P0验证完成] ATR=%.2f, 有效供给区=%d, 有效需求区=%d", 
+			atr, len(supplyZones), len(demandZones))
+	}
+
 	// 合并并排序所有区域
 	allZones := append(supplyZones, demandZones...)
 	sda.updateZoneStatuses(allZones, klines)
@@ -69,6 +102,17 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 	if len(activeZones) < 5 { // 提高启动条件：少于5个区域就启动备用机制
 		backupZones := sda.identifyBasicZonesWithSymbol(klines, symbol, timeframe)
 		for _, zone := range backupZones {
+			// 【P0修复】对备用区域也进行位置验证
+			if len(klines) >= 14 {
+				currentPrice := klines[len(klines)-1].Close
+				atr := sda.calculateATR(klines, 14)
+				if !sda.validateZonePosition(zone, currentPrice, atr) {
+					log.Printf("⚠️ [P0验证] 备用区域%.2f-%.2f位置不合理，已跳过", 
+						zone.LowerBound, zone.UpperBound)
+					continue
+				}
+			}
+			
 			if !sda.isZoneOverlapping(zone, allZones) {
 				allZones = append(allZones, zone)
 				if zone.IsActive {
@@ -86,6 +130,28 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 	// 计算上下文评分 (在所有供需区创建后进行)
 	contextCalc := NewContextCalculator(klines)
 	sda.CalculateContextScores(allZones, contextCalc)
+
+	// 【P2修复】异常数据清洗：过滤极端width_atr和vol_ratio值
+	dataData := &SupplyDemandData{
+		SupplyZones:  supplyZones,
+		DemandZones:  demandZones,
+		ActiveZones:  activeZones,
+		Config:       &sda.config,
+		Statistics:   &SDStatistics{}, // 临时统计，将被重新计算
+		LastAnalysis: time.Now().UnixMilli(),
+	}
+	
+	// 应用数据清洗
+	cleaner := NewDataCleaner()
+	cleanedData, cleaningStats := cleaner.CleanSupplyDemandData(dataData)
+	
+	log.Printf("🧹 [P2数据清洗] 清洗完成: 原始=%d, 清洗后=%d, 过滤率=%.1f%%, 质量评分=%.1f", 
+		cleaningStats.TotalZones, len(cleanedData.ActiveZones), cleaningStats.FilterRate, cleaningStats.QualityScore)
+
+	// 使用清洗后的数据
+	supplyZones = cleanedData.SupplyZones
+	demandZones = cleanedData.DemandZones
+	activeZones = cleanedData.ActiveZones
 
 	// 计算统计信息
 	stats := sda.calculateStatistics(supplyZones, demandZones, activeZones)
@@ -968,13 +1034,16 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 
 		// 检查是否被突破
 		if sda.isZoneBroken(zone, klines, currentPrice) {
-			// 【修复幽灵支撑】处理区域类型转换逻辑
-			sda.handleZoneBreakout(zone, currentPrice)
+			// 【P0修复】处理区域类型转换逻辑，使用ATR智能判断
+			sda.handleZoneBreakout(zone, currentPrice, klines)
 			
 			// 如果区域发生了类型转换（Breaker），则不标记为broken
 			if strings.Contains(zone.ID, "breaker_") {
 				// Breaker区域：继续活跃，只是改变了类型
 				log.Printf("✅ [Breaker激活] 区域%s类型转换完成，继续监控", zone.ID)
+			} else if zone.Status == StatusTesting {
+				// 假突破/SFP：保持活跃状态，继续监控
+				log.Printf("🎯 [SFP监控] 区域%s进入Testing状态，继续监控价格行为", zone.ID)
 			} else {
 				// 普通突破：标记为broken
 				zone.Status = StatusBroken
@@ -1016,40 +1085,60 @@ func (sda *SupplyDemandAnalyzer) isZoneBroken(zone *SupplyDemandZone, klines []K
 	}
 }
 
-// handleZoneBreakout 处理区域突破后的类型转换（修复"幽灵支撑"问题）
-func (sda *SupplyDemandAnalyzer) handleZoneBreakout(zone *SupplyDemandZone, currentPrice float64) {
-	// 核心逻辑：跌破的需求区 = 新的阻力位（供给区）
-	//           突破的供给区 = 新的支撑位（需求区）
+// handleZoneBreakout 处理区域突破后的类型转换（P0修复：基于ATR的智能判断）
+// 作用：使用ATR缓冲区判断真假突破，只有真正的突破才进行区域类型转换
+func (sda *SupplyDemandAnalyzer) handleZoneBreakout(zone *SupplyDemandZone, currentPrice float64, klines []Kline) {
+	// 计算ATR用于真假突破判定
+	atr := sda.calculateATR(klines, 14) // 使用14期ATR
+	
+	// 检查是否为真正的突破（而非SFP假突破）
+	isTrueBreak := sda.isTrueBreakout(zone, currentPrice, atr)
 	
 	originalType := zone.Type
 	
 	if zone.Type == DemandZone && currentPrice < zone.LowerBound {
-		// 【修复幽灵支撑】需求区被跌破 → 转换为供给区（阻力位）
-		zone.Type = SupplyZone
-		zone.ID = "breaker_" + zone.ID  // 更新ID标识转换
-		
-		// 更新模式类型为Breaker
-		if zone.Origin != nil {
-			zone.Origin.PatternType = "demand_breaker" // 新的模式类型
+		if isTrueBreak {
+			// 【真突破】需求区被真正跌破 → 转换为供给区（阻力位）
+			zone.Type = SupplyZone
+			zone.ID = "breaker_" + zone.ID  // 更新ID标识转换
+			
+			// 更新模式类型为Breaker
+			if zone.Origin != nil {
+				zone.Origin.PatternType = "demand_breaker" // 新的模式类型
+			}
+			
+			log.Printf("🔄 [真突破确认] 需求区%.2f-%.2f被真正跌破(ATR缓冲%.2f)，转换为供给区", 
+				zone.LowerBound, zone.UpperBound, 0.2*atr)
+		} else {
+			// 【假突破/SFP】仅标记为测试状态，不转换类型
+			zone.Status = StatusTesting
+			log.Printf("🎯 [SFP检测] 需求区%.2f-%.2f价格刺破但未达真突破阈值，标记为Testing状态", 
+				zone.LowerBound, zone.UpperBound)
+			return // 不进行类型转换
 		}
-		
-		log.Printf("🔄 [幽灵支撑修复] 需求区%.2f-%.2f被跌破，转换为供给区（阻力位）", 
-			zone.LowerBound, zone.UpperBound)
 		
 	} else if zone.Type == SupplyZone && currentPrice > zone.UpperBound {
-		// 供给区被突破 → 转换为需求区（支撑位）
-		zone.Type = DemandZone
-		zone.ID = "breaker_" + zone.ID
-		
-		if zone.Origin != nil {
-			zone.Origin.PatternType = "supply_breaker"
+		if isTrueBreak {
+			// 【真突破】供给区被真正突破 → 转换为需求区（支撑位）
+			zone.Type = DemandZone
+			zone.ID = "breaker_" + zone.ID
+			
+			if zone.Origin != nil {
+				zone.Origin.PatternType = "supply_breaker"
+			}
+			
+			log.Printf("🔄 [真突破确认] 供给区%.2f-%.2f被真正突破(ATR缓冲%.2f)，转换为需求区", 
+				zone.LowerBound, zone.UpperBound, 0.2*atr)
+		} else {
+			// 【假突破/SFP】仅标记为测试状态，不转换类型
+			zone.Status = StatusTesting
+			log.Printf("🎯 [SFP检测] 供给区%.2f-%.2f价格刺破但未达真突破阈值，标记为Testing状态", 
+				zone.LowerBound, zone.UpperBound)
+			return // 不进行类型转换
 		}
-		
-		log.Printf("🔄 [区域转换] 供给区%.2f-%.2f被突破，转换为需求区（支撑位）", 
-			zone.LowerBound, zone.UpperBound)
 	}
 	
-	// 如果发生了类型转换，重置区域状态
+	// 如果发生了真正的类型转换，重置区域状态
 	if zone.Type != originalType {
 		zone.Status = StatusTested      // 重置为已测试状态
 		zone.TouchCount = 1           // 重置触及计数
@@ -1060,6 +1149,9 @@ func (sda *SupplyDemandAnalyzer) handleZoneBreakout(zone *SupplyDemandZone, curr
 		// 重新计算强度（Breaker区域通常强度较高）
 		zone.Strength = math.Min(zone.Strength * 1.2, 100.0) // 提升20%强度，上限100
 		zone.Quality = QualityGood   // 设置为良好质量
+		
+		log.Printf("✅ [区域转换完成] ATR=%.2f, 缓冲距离=%.2f, 新类型=%s", 
+			atr, 0.2*atr, zone.Type)
 	}
 }
 
@@ -1749,4 +1841,169 @@ func (sda *SupplyDemandAnalyzer) inferSymbolTimeframe(klines []Kline) (string, s
 	// TODO: 实际实现需要根据K线数据特征或外部传入参数来确定
 	// 这里提供一个简单的示例实现
 	return "", "" // 返回空值，让调用者明确传入symbol和timeframe
+}
+
+// validateZonePosition 验证区域位置的合理性（P0修复辅助方法）
+// 作用：确保供给区在当前价格上方，需求区在当前价格下方
+func (sda *SupplyDemandAnalyzer) validateZonePosition(zone *SupplyDemandZone, currentPrice float64, atr float64) bool {
+	bufferDistance := 0.1 * atr // 使用较小的缓冲区用于位置验证
+	
+	if zone.Type == SupplyZone {
+		// 供给区应该在当前价格上方（或接近）
+		minValidPrice := currentPrice - bufferDistance
+		isValid := zone.LowerBound >= minValidPrice
+		
+		if !isValid {
+			log.Printf("🚫 [位置验证失败] 供给区%.2f-%.2f在当前价格%.2f下方，不符合市场物理定律", 
+				zone.LowerBound, zone.UpperBound, currentPrice)
+		}
+		return isValid
+		
+	} else if zone.Type == DemandZone {
+		// 需求区应该在当前价格下方（或接近）
+		maxValidPrice := currentPrice + bufferDistance
+		isValid := zone.UpperBound <= maxValidPrice
+		
+		if !isValid {
+			log.Printf("🚫 [位置验证失败] 需求区%.2f-%.2f在当前价格%.2f上方，不符合市场物理定律", 
+				zone.LowerBound, zone.UpperBound, currentPrice)
+		}
+		return isValid
+	}
+	
+	return true
+}
+
+// ===== ATR辅助方法（P0级修复支持） =====
+
+// calculateATR 计算平均真实波动率（ATR）- 用于判断真假突破的关键指标
+// 作用：测量市场的正常波动幅度，设定合理的突破判定标准
+func (sda *SupplyDemandAnalyzer) calculateATR(klines []Kline, period int) float64 {
+	if len(klines) < period+1 {
+		// 数据不足时的降级处理，确保系统不会因为数据不够而崩溃
+		if len(klines) >= 2 {
+			lastKline := klines[len(klines)-1]
+			return (lastKline.High - lastKline.Low) * 1.5 // 使用当前K线波动的1.5倍作为估算
+		}
+		return 50.0 // 保底默认值
+	}
+	
+	var trSum float64 = 0
+	validPeriods := 0
+	
+	// 计算指定周期内的平均真实波动率
+	for i := 1; i < len(klines) && validPeriods < period; i++ {
+		current := klines[i]
+		previous := klines[i-1]
+		
+		// 真实波动率公式：TR = max(当日高低差, |当日高-前日收|, |当日低-前日收|)
+		tr1 := current.High - current.Low                    
+		tr2 := math.Abs(current.High - previous.Close)       
+		tr3 := math.Abs(current.Low - previous.Close)        
+		
+		trCurrent := math.Max(tr1, math.Max(tr2, tr3))
+		trSum += trCurrent
+		validPeriods++
+	}
+	
+	if validPeriods == 0 {
+		return 50.0
+	}
+	
+	atr := trSum / float64(validPeriods)
+	log.Printf("🔢 [ATR计算] 周期=%d, ATR=%.2f (市场波动性基准)", validPeriods, atr)
+	return atr
+}
+
+// isTrueBreakout 判断是否为真正的突破（带ATR缓冲区） - P0修复核心逻辑
+// 作用：区分真突破和假突破(SFP)，防止误判导致错误的区域类型转换
+func (sda *SupplyDemandAnalyzer) isTrueBreakout(zone *SupplyDemandZone, currentPrice float64, atr float64) bool {
+	bufferDistance := 0.2 * atr // 0.2倍ATR作为缓冲距离，这是经验值，可以过滤掉大部分假突破
+	
+	if zone.Type == DemandZone {
+		// 需求区突破判定：价格必须跌破 (区域下沿 - 0.2*ATR) 才算真正突破
+		breakoutThreshold := zone.LowerBound - bufferDistance
+		isTrue := currentPrice < breakoutThreshold
+		
+		log.Printf("🎯 [真假突破判定] 需求区%.2f, 当前%.2f, 阈值%.2f (缓冲%.2f), 结果=%s", 
+			zone.LowerBound, currentPrice, breakoutThreshold, bufferDistance, 
+			map[bool]string{true: "真突破", false: "假突破/测试"}[isTrue])
+		
+		return isTrue
+	} else if zone.Type == SupplyZone {
+		// 供给区突破判定：价格必须突破 (区域上沿 + 0.2*ATR) 才算真正突破
+		breakoutThreshold := zone.UpperBound + bufferDistance
+		isTrue := currentPrice > breakoutThreshold
+		
+		log.Printf("🎯 [真假突破判定] 供给区%.2f, 当前%.2f, 阈值%.2f (缓冲%.2f), 结果=%s", 
+			zone.UpperBound, currentPrice, breakoutThreshold, bufferDistance,
+			map[bool]string{true: "真突破", false: "假突破/测试"}[isTrue])
+		
+		return isTrue
+	}
+	
+	return false
+}
+
+// validateZonePositions 验证和清理所有区域的位置合理性（P0修复全面清理方法）
+// 作用：系统启动或定期维护时调用，清理不符合市场物理定律的区域
+func (sda *SupplyDemandAnalyzer) ValidateZonePositions(sdData *SupplyDemandData, klines []Kline) *SupplyDemandData {
+	if sdData == nil || len(klines) < 14 {
+		return sdData
+	}
+	
+	currentPrice := klines[len(klines)-1].Close
+	atr := sda.calculateATR(klines, 14)
+	
+	log.Printf("🔍 [P0全面验证] 开始验证所有区域位置，当前价格=%.2f, ATR=%.2f", currentPrice, atr)
+	
+	// 验证和清理供给区
+	validSupplyZones := []*SupplyDemandZone{}
+	removedSupplyCount := 0
+	for _, zone := range sdData.SupplyZones {
+		if sda.validateZonePosition(zone, currentPrice, atr) {
+			validSupplyZones = append(validSupplyZones, zone)
+		} else {
+			removedSupplyCount++
+			log.Printf("🗑️ [清理供给区] 移除位置不合理的供给区: %.2f-%.2f (ID: %s)", 
+				zone.LowerBound, zone.UpperBound, zone.ID)
+		}
+	}
+	
+	// 验证和清理需求区
+	validDemandZones := []*SupplyDemandZone{}
+	removedDemandCount := 0
+	for _, zone := range sdData.DemandZones {
+		if sda.validateZonePosition(zone, currentPrice, atr) {
+			validDemandZones = append(validDemandZones, zone)
+		} else {
+			removedDemandCount++
+			log.Printf("🗑️ [清理需求区] 移除位置不合理的需求区: %.2f-%.2f (ID: %s)", 
+				zone.LowerBound, zone.UpperBound, zone.ID)
+		}
+	}
+	
+	// 重新构建活跃区域列表
+	allValidZones := append(validSupplyZones, validDemandZones...)
+	validActiveZones := []*SupplyDemandZone{}
+	for _, zone := range allValidZones {
+		if zone.IsActive {
+			validActiveZones = append(validActiveZones, zone)
+		}
+	}
+	
+	// 重新计算统计信息
+	stats := sda.calculateStatistics(validSupplyZones, validDemandZones, validActiveZones)
+	
+	log.Printf("✅ [P0全面验证完成] 移除供给区%d个, 需求区%d个, 剩余活跃区域%d个", 
+		removedSupplyCount, removedDemandCount, len(validActiveZones))
+	
+	return &SupplyDemandData{
+		SupplyZones:  validSupplyZones,
+		DemandZones:  validDemandZones,
+		ActiveZones:  validActiveZones,
+		Config:       sdData.Config,
+		Statistics:   stats,
+		LastAnalysis: time.Now().UnixMilli(),
+	}
 }

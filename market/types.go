@@ -39,6 +39,9 @@ type Data struct {
 	SupplyDemand      *SupplyDemandData // 供给需求区数据
 	FairValueGaps     *FVGData // 公平价值缺口数据
 	Fibonacci         *FibonacciData // 斐波纳契分析数据
+	
+	// === 市场联动性分析（BTC相关性） ===
+	MarketContext     *MarketContextData // 市场上下文分析数据
 }
 
 // MultiTimeframeAnalysis 多时间框架分析结果
@@ -674,6 +677,7 @@ type ZoneStatus string
 const (
 	StatusFresh     ZoneStatus = "fresh"     // 新鲜：未触碰
 	StatusTested    ZoneStatus = "tested"    // 已测试：已触碰但未破坏
+	StatusTesting   ZoneStatus = "testing"   // 正在测试：价格刺破但未达到突破阈值（SFP/假突破）
 	StatusWeakened  ZoneStatus = "weakened"  // 已弱化：触碰>3次或深度穿透>50%
 	StatusBroken    ZoneStatus = "broken"    // 已突破：失效
 	StatusExpired   ZoneStatus = "expired"   // 已过期：时间过长失效
@@ -1193,5 +1197,114 @@ var defaultFibonacciConfig = FibonacciConfig{
 	DefaultRatios:     []float64{0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618, 2.618}, // 标准斐波比率
 	SwingLookback:     15,    // 15周期回望（优化后的值）
 	MinSwingSize:      0.025, // 2.5%最小摆动幅度 (已移除硬过滤，AI自主判断)
+}
+
+// ====================== 市场联动性和上下文分析 ======================
+
+// MarketContextData 市场上下文分析数据（主要针对BTC联动性）
+type MarketContextData struct {
+	// === BTC主导地位分析 ===
+	BTCDominance      *BTCDominanceData   `json:"btc_dominance"`      // BTC市值占比趋势
+	
+	// === 联动性分析 ===
+	Correlation       *CorrelationData    `json:"correlation"`        // 与BTC的相关性分析
+	
+	// === Open Interest 分析 ===
+	OIAnalysis        *OIAnalysisData     `json:"oi_analysis"`        // 持仓量变化分析
+	
+	// === 资金费率环境 ===
+	FundingContext    *FundingContextData `json:"funding_context"`    // 资金费率市场环境
+	
+	// === 风险评估 ===
+	RiskAssessment    *MarketRiskData     `json:"risk_assessment"`    // 基于联动性的风险评估
+	
+	LastUpdated       int64              `json:"last_updated"`       // 最后更新时间
+}
+
+// BTCDominanceData BTC市值占比分析
+type BTCDominanceData struct {
+	Current           float64 `json:"current"`            // 当前BTC市值占比
+	Change1h          float64 `json:"change_1h"`          // 1小时变化
+	Change4h          float64 `json:"change_4h"`          // 4小时变化
+	Change24h         float64 `json:"change_24h"`         // 24小时变化
+	Trend             string  `json:"trend"`              // 趋势方向: "rising", "falling", "stable"
+	TrendStrength     float64 `json:"trend_strength"`     // 趋势强度 0-100
+	NextResistance    float64 `json:"next_resistance"`    // 下一个阻力位
+	NextSupport       float64 `json:"next_support"`       // 下一个支撑位
+}
+
+// CorrelationData 相关性分析数据
+type CorrelationData struct {
+	BTCCorr1h         float64 `json:"btc_corr_1h"`        // 与BTC的1小时相关性 (-1 to 1)
+	BTCCorr4h         float64 `json:"btc_corr_4h"`        // 与BTC的4小时相关性
+	BTCCorr24h        float64 `json:"btc_corr_24h"`       // 与BTC的24小时相关性
+	CorrTrend         string  `json:"corr_trend"`         // 相关性趋势: "strengthening", "weakening", "stable"
+	DecouplingRisk    float64 `json:"decoupling_risk"`    // 脱钩风险 0-100
+	BetaCoefficient   float64 `json:"beta_coefficient"`   // Beta系数（相对BTC的波动倍数）
+	Alpha             float64 `json:"alpha"`              // Alpha（超越BTC的超额收益）
+}
+
+// OIAnalysisData Open Interest 分析数据
+type OIAnalysisData struct {
+	CurrentOI         float64 `json:"current_oi"`         // 当前持仓量
+	OIChange1h        float64 `json:"oi_change_1h"`       // 1小时持仓量变化百分比
+	OIChange4h        float64 `json:"oi_change_4h"`       // 4小时持仓量变化百分比
+	OIChange24h       float64 `json:"oi_change_24h"`      // 24小时持仓量变化百分比
+	OITrend           string  `json:"oi_trend"`           // 持仓量趋势
+	LongShortRatio    float64 `json:"long_short_ratio"`   // 多空比例
+	LiquidationRisk   float64 `json:"liquidation_risk"`   // 清算风险评估 0-100
+	BTCOICorr         float64 `json:"btc_oi_corr"`        // 与BTC持仓量的相关性
+}
+
+// FundingContextData 资金费率上下文
+type FundingContextData struct {
+	CurrentRate       float64 `json:"current_rate"`       // 当前资金费率
+	AverageRate24h    float64 `json:"average_rate_24h"`   // 24小时平均资金费率
+	RateVolatility    float64 `json:"rate_volatility"`    // 资金费率波动性
+	MarketSentiment   string  `json:"market_sentiment"`   // 市场情绪: "bullish", "bearish", "neutral"
+	OverheatingRisk   float64 `json:"overheating_risk"`   // 过热风险 0-100
+	BTCRateCorr       float64 `json:"btc_rate_corr"`      // 与BTC资金费率的相关性
+}
+
+// MarketRiskData 市场风险评估
+type MarketRiskData struct {
+	OverallRisk       string  `json:"overall_risk"`       // 总体风险: "low", "medium", "high", "extreme"
+	RiskScore         float64 `json:"risk_score"`         // 风险评分 0-100
+	BTCDependency     float64 `json:"btc_dependency"`     // BTC依赖度 0-100
+	SystemicRisk      float64 `json:"systemic_risk"`      // 系统性风险
+	IdiosyncraticRisk float64 `json:"idiosyncratic_risk"` // 个股特有风险
+	
+	// 风险因子分解
+	RiskFactors       *RiskFactors `json:"risk_factors"`   // 详细风险因子
+}
+
+// RiskFactors 风险因子分解
+type RiskFactors struct {
+	BTCDirectional    float64 `json:"btc_directional"`    // BTC方向性风险
+	BTCVolatility     float64 `json:"btc_volatility"`     // BTC波动性风险
+	LiquidityRisk     float64 `json:"liquidity_risk"`     // 流动性风险
+	ConcentrationRisk float64 `json:"concentration_risk"` // 集中度风险
+	MacroRisk         float64 `json:"macro_risk"`         // 宏观经济风险
+	TechnicalRisk     float64 `json:"technical_risk"`     // 技术面风险
+}
+
+// MarketRegime 市场状态枚举
+type MarketRegime string
+
+const (
+	RegimeBTCRally     MarketRegime = "btc_rally"      // BTC主导上涨
+	RegimeBTCDump      MarketRegime = "btc_dump"       // BTC主导下跌
+	RegimeAltSeason    MarketRegime = "alt_season"     // 山寨币季节
+	RegimeDecoupling   MarketRegime = "decoupling"     // 脱钩行情
+	RegimeCrabMarket   MarketRegime = "crab_market"    // 横盘整理
+	RegimePanicMode    MarketRegime = "panic_mode"     // 恐慌模式
+)
+
+// MarketContextAnalyzer 市场上下文分析器
+type MarketContextAnalyzer struct {
+	// 用于计算相关性的历史数据缓存
+	priceHistory    map[string][]float64  // symbol -> price history
+	oiHistory       map[string][]float64  // symbol -> OI history  
+	fundingHistory  map[string][]float64  // symbol -> funding rate history
 }
 

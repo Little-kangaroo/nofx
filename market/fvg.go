@@ -71,6 +71,27 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 	// 计算上下文评分 (在所有FVG创建后进行)
 	fvg.CalculateContextScores(allFVGs, contextCalc)
 
+	// 【P2级数据清洗】对FVG数据进行清洗以过滤异常值
+	tempFVGData := &FVGData{
+		BullishFVGs:  bullishFVGs,
+		BearishFVGs:  bearishFVGs,
+		ActiveFVGs:   append(bullishFVGs, bearishFVGs...), // 先暂时包含所有FVG
+		Config:       &fvg.config,
+		Statistics:   &FVGStatistics{}, // 临时统计
+		LastAnalysis: time.Now().UnixMilli(),
+	}
+
+	// 创建数据清洗器并进行FVG清洗
+	dataCleaner := NewDataCleaner()
+	cleanedFVGData, cleaningStats := dataCleaner.CleanFVGData(tempFVGData)
+	
+	if cleaningStats.FilteredZones > 0 {
+		// 更新清洗后的数据
+		bullishFVGs = cleanedFVGData.BullishFVGs
+		bearishFVGs = cleanedFVGData.BearishFVGs
+		allFVGs = append(bullishFVGs, bearishFVGs...)
+	}
+
 	// 使用新的过滤逻辑筛选活跃FVG
 	var activeFVGs []*FairValueGap
 	if len(klines) > 0 {
