@@ -700,9 +700,9 @@ func (dc *DataCleaner) detectFVGOutliers(fvg *FairValueGap, widthATRStats, volRa
 func (dc *DataCleaner) detectFVGWidthATROutlier(fvg *FairValueGap, stats StatisticalSummary) *OutlierInfo {
 	value := fvg.Context.WidthATR
 	
-	// FVG的width_atr标准：通常更小，因为FVG是价格缺口
+	// FVG的width_atr标准：调整为更合理的范围
 	fvgWidthATRMin := dc.config.WidthATRMin * 0.5  // FVG可以更窄
-	fvgWidthATRMax := dc.config.WidthATRMax * 0.8  // FVG不应太宽
+	fvgWidthATRMax := dc.config.WidthATRMax * 1.8  // FVG允许更宽，从2.4调整到5.4
 	
 	// 阈值检测
 	if value < fvgWidthATRMin {
@@ -721,7 +721,7 @@ func (dc *DataCleaner) detectFVGWidthATROutlier(fvg *FairValueGap, stats Statist
 			Value:    value,
 			ZoneID:   fvg.ID,
 			Method:   "threshold",
-			Severity: "severe", // FVG过大说明不是真正的缺口
+			Severity: "severe", // 只有极端宽度才认为是异常
 		}
 	}
 	

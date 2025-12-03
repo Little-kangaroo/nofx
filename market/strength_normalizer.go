@@ -13,8 +13,8 @@ import (
 const (
 	// WindowSize 滑动窗口大小 - 保存最近200个供需区强度分数
 	WindowSize = 200
-	// MinSampleSize 计算Z-Score所需的最小样本量
-	MinSampleSize = 50
+	// MinSampleSize 计算Z-Score所需的最小样本量 - 修正：降低阈值加速进入正常模式
+	MinSampleSize = 15
 	// MaxZScore Z-Score的最大绝对值，防止极端值
 	MaxZScore = 3.0
 	// HistoryRetentionDays 历史数据保留天数
@@ -924,26 +924,35 @@ func (css *ColdStartStrategy) GetFallbackZScore(symbol, timeframe string, curren
 	return result
 }
 
-// mapScoreToZScore 将0-100的强度分数映射为合理的Z分数
+// mapScoreToZScore 将0-100的强度分数映射为合理的Z分数（修复版 - 非线性映射）
+// 目标：让60-75分（良）能拿到+0.5~+1.5的Z-Score，触发AI关注
 func (css *ColdStartStrategy) mapScoreToZScore(score float64) float64 {
-	// 基于经验的映射关系：
-	// 0-20分 -> -2.0 到 -1.0 (弱)
-	// 20-40分 -> -1.0 到 -0.5 (偏弱)
-	// 40-60分 -> -0.5 到 +0.5 (中等)
-	// 60-80分 -> +0.5 到 +1.5 (偏强)
-	// 80-100分 -> +1.5 到 +2.5 (强)
-	
 	switch {
-	case score <= 20:
-		return -2.0 + (score/20.0)*1.0 // -2.0 到 -1.0
-	case score <= 40:
-		return -1.0 + ((score-20)/20.0)*0.5 // -1.0 到 -0.5
-	case score <= 60:
-		return -0.5 + ((score-40)/20.0)*1.0 // -0.5 到 +0.5
+	// 垃圾区：0-30分 -> Z: -3.0 ~ -1.0
+	// 这类结构本来就该被过滤，给极低分没问题
+	case score <= 30:
+		return -3.0 + (score/30.0)*2.0
+		
+	// 平庸区：30-55分 -> Z: -1.0 ~ 0.0  
+	// 稍微给一点点"负面评价"，但不至于判死刑
+	case score <= 55:
+		return -1.0 + ((score-30)/25.0)*1.0
+		
+	// 关键区：55-80分 -> Z: 0.0 ~ +1.5
+	// 这里是大多数"可交易结构"的分布区，必须让它们变成正数！
+	// 67.5分时 Z = +0.75 (边缘机会)
+	// 80分时   Z = +1.5  (A级机会)
 	case score <= 80:
-		return 0.5 + ((score-60)/20.0)*1.0 // +0.5 到 +1.5
-	default: // score > 80
-		return 1.5 + ((score-80)/20.0)*1.0 // +1.5 到 +2.5
+		return 0.0 + ((score-55)/25.0)*1.5
+		
+	// 极品区：80-100分 -> Z: +1.5 ~ +3.0
+	// 这种结构必须让AI眼前一亮
+	default: // > 80
+		val := 1.5 + ((score-80)/20.0)*1.5
+		if val > 3.0 {
+			return 3.0
+		}
+		return val
 	}
 }
 
