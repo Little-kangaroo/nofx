@@ -2431,6 +2431,31 @@ func (at *AutoTrader) checkAllPositionStopOrders(record *logger.DecisionRecord) 
 				if lastOrderID > 0 && !currentOrderIDs[lastOrderID] {
 					log.Printf("    🔍 检测到止损单消失: %s %s (订单ID: %d)", symbol, side, lastOrderID)
 					
+					// 🔧 智能判断：区分止损单更新和真正的止损成交
+					// 1. 检查是否有同样币种和方向的新止损单（可能是价格调整）
+					hasNewStopOrder := len(stopLossOrders) > 0
+					var lastStopPrice, newStopPrice float64
+					
+					// 获取旧止损价格
+					if stopPriceStr, ok := lastOrder["stopPrice"].(string); ok {
+						lastStopPrice, _ = strconv.ParseFloat(stopPriceStr, 64)
+					}
+					
+					// 获取新止损价格（如果存在）
+					if hasNewStopOrder {
+						if newStopPriceStr, ok := stopLossOrders[0]["stopPrice"].(string); ok {
+							newStopPrice, _ = strconv.ParseFloat(newStopPriceStr, 64)
+						}
+					}
+					
+					// 如果存在新止损单且价格不同，说明是止损单更新而非成交
+					if hasNewStopOrder && lastStopPrice > 0 && newStopPrice > 0 && 
+					   math.Abs(lastStopPrice-newStopPrice)/lastStopPrice > 0.001 { // 价格变化超过0.1%
+						log.Printf("    💡 检测到止损单价格更新: %s %s %.6f -> %.6f，跳过误报", 
+							symbol, side, lastStopPrice, newStopPrice)
+						continue // 跳过这个"消失"的订单，不当作成交处理
+					}
+					
 					// 🔧 严格验证：只有持仓完全消失才认为是真正的止损成交
 					// 获取当前持仓数量，如果持仓还存在，说明不是真正的止损成交
 					currentPositions, posErr := at.trader.GetPositions()
