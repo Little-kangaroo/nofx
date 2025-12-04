@@ -563,8 +563,8 @@ func (sync *ExchangeRecordSync) recordPartialClose(diff *PositionDifference) err
 	partialCloseQty := diff.DatabaseQuantity - diff.ExchangeQuantity
 	estimatedPrice, _ := sync.estimateCloseDetails(diff.Symbol, diff.Side)
 	
-	log.Printf("📝 [Partial Close] 记录部分平仓: %s %s 数量=%.6f", 
-		diff.Symbol, diff.Side, partialCloseQty)
+	log.Printf("📝 [Partial Close] 记录部分平仓: %s %s 数量=%.6f 价格=%.6f", 
+		diff.Symbol, diff.Side, partialCloseQty, estimatedPrice)
 	
 	// TODO: 实现部分平仓记录逻辑
 	// 这可能需要修改数据库结构以支持部分平仓记录
