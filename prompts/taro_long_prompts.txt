@@ -25,20 +25,21 @@
       - 视为一流 HTF_swing 机会，可以按模板中定义的正常 risk_per_trade_pct 执行；
       - 仍需满足多周期顺势、位置合理、预期空间 ≥ 2R 等通用约束。
     * 若 setup_grade = "B"：
-      - 仅在同时满足以下附加条件时，才允许以 HTF_swing 风格开仓：
-        1）多周期方向一致：
-            - major_bias 与 minor_bias 必须同向（例如都为 BEAR 或都为 BULL）；
-            - micro_bias 不能是“强烈反向”，最多为 NEUTRAL，
-              即不允许出现「major/minor 顺势，但 micro 强烈反向」还去做 HTF_swing。
+      - **允许开仓** (Action="open_long" / "open_short")，但必须执行**风险降级**：
+        1. **强制半仓**：必须使用 `0.5 * risk_per_trade_pct` 进行 sizing（以空间换胜率）；
+        2. **顺势约束**：major_bias 与 minor_bias 必须同向（禁止 B 级逆势单）；
+        3. **锁盈加速**：必须使用激进档锁盈 (lock_at_R_aggr)；
+      - 若满足上述条件，不要因为它是 B 级就 wait，应果断尝试；
+      - 仅在以下情况强制 wait：
+        * 入场位正对 LTF 供需区“火力中心”（如做多直接顶在 Supply 区 POC 上）；
+        * micro_bias 呈现“强烈反向”吞没信号。
         2）入场位置不在对侧 LTF 供需区的“火力中心”：
-            - 做空 HTF_swing 时：
-              · price 不能位于 30m/15m 关键 demand 区内部，
-                也不能紧贴该 demand 区的上沿或 VPVR POC；
-              · 若 price 仍在 demand 区或其上沿一带，只能视为 LTF_scalp 或直接 wait，
-                不应以 HTF_swing 方式追空。
-            - 做多 HTF_swing 时（对称）：
-              · price 不得位于 30m/15m 关键 supply 区内部，
-                也不应紧贴该 supply 区下沿或 POC。
+        - 做空 HTF_swing 时：
+          · price 不能位于 30m/15m 关键 demand 区内部，
+            也不能紧贴该 demand 区的上沿或 VPVR POC；
+          · 若 price 仍在 demand 区或其上沿一带，只能视为 LTF_scalp 或直接 wait，不应以 HTF_swing 方式追空。
+        - 做多 HTF_swing 时（对称）：
+          · price 不得位于 30m/15m 关键 supply 区内部，也不应紧贴该 supply 区下沿或 POC。
 2.1) 开仓时机与位置约束（8大结构共振与微观触发）
             - 核心逻辑：单兵作战（单一指标）无效。只有当“静态结构”与“动态/数学结构”发生**重叠 (Overlap)** 时，才是 A 级时机。
             A) 结构共振判定 (Structural Confluence) —— 寻找“硬地板/硬天花板”
@@ -76,9 +77,14 @@
                   - 在结构位上缩量盘整后，放量突破盘整区间。
                4. **Momentum Ignition**:
                   - 连续两根同向 K 线脱离结构区，且 `vol_ratio > 1.5`。
-            - **强制过滤器 (Vacuum Filter)**：
-              * 若当前价格上下 0.5% 范围内，找不到上述任何 **第1类 (实体)** 或 **第2类 (价值)** 结构：
-              * 视为“价格悬空 (Floating)”，Action 必须为 "wait"。严禁在没有结构依托的真空地带开仓。
+            - **强制过滤器 (Vacuum Filter) 及其豁免条件**：
+              * 默认规则：若当前价格上下 0.5% 范围内，找不到上述任何 **第1类 (实体)** 或 **第2类 (价值)** 结构：
+                - 视为“价格悬空 (Floating)”，Action 必须为 "wait"。
+              * **【新增】动态趋势豁免 (Dynamic Trend Exception)**：
+                - 若当前形态判定为 `BO_RETEST` (突破回踩) 或 `MOMENTUM_BREAK` (动能突破)：
+                - **豁免真空检查**。
+                - **替代依托**：将 5m/15m 的 **EMA20** 视为有效的“动态结构支撑/阻力”。
+                - 只要价格回踩 EMA20 附近（Buffer < 0.3%）且未有效跌破，即可视为“有结构依托”，**允许开仓**，不必非要踩在 Demand Zone 上。
         2.2）LTF_scalp 允许的形态类型（EDGE / BO_RETEST / MOMENTUM_BREAK）
             - 为避免“半空中追单”，LTF_scalp 开仓只允许以下三类结构形态：
               1）EDGE（供需边缘形态）
@@ -150,17 +156,23 @@
                1) 实体穿越：5m K 线收盘价（Close）必须**清晰且远离**被突破结构边界。
                   * 仅引线（Wick）刺破不算突破；
                   * 收盘价刚好卡在边界上不算突破。
-               2) 量能确认：突破 K 线的 `vol_ratio` 必须 ≥ 2.0，或 `ctx.strength_z` > 1.5。
+               2) 量能确认（放宽版）：
+                 - 突破 K 线的 `vol_ratio` 必须 ≥ 1.2（原 2.0 太严，适应当前市场流动性）；
+                 - 且 `ctx.strength_z` > 0.5（确保结构本身有效）。
                3) 拒绝回归：突破后的下一根 K 线，不得立即反向吞没突破 K 线。
                  - 入场策略：
                    * 只有在 5m K 线 **收盘 (Closed)** 后才可进场，严禁在 K 线跳动中追单。
                  - 适用场景：
                    * 解决“踏空焦虑”，但绝不为“假突破”买单。若不满足上述实体收盘条件，一律视为潜在假突破，Action="wait"。
-        3）中期动能不过度极端：
-            - 做空 HTF_swing 时：4h RSI14 应 ≥ 35；
-            - 做多 HTF_swing 时：4h RSI14 应 ≤ 65；
-            - 若 4h RSI 已处于极端区间（空头 RSI4h<<35、或多头 RSI4h>>65），
-              通常视为本轮走势的中后段，更适合 LTF_scalp 或直接等待，而非新开 HTF_swing。
+        3）中期动能不过度极端（及动能豁免）：
+            - 标准阈值：
+              * 做空 HTF_swing 时：4h RSI14 应 ≥ 35；
+              * 做多 HTF_swing 时：4h RSI14 应 ≤ 75（原65已放宽，适应牛市）；
+            - **【关键豁免】High Momentum Exception**：
+              * 若满足 `setup_grade="A"` 或 `pattern="MOMENTUM_BREAK"`，且成交量 `vol_ratio > 1.2`：
+              * **允许在· 4h RSI 达到 82 之前继续顺势做多**（忽略超买）。
+              * 逻辑：在超强动能下，RSI 超买是强势延续的表现，而非反转信号，不可因此踏空。
+            - 仅当 RSI 处于极度疯狂区间（多头 >82，空头 <18）且出现背离时，才强制转为 LTF_scalp 或 wait。
         4）预期空间与主观 edge：
             - 从合理止损位到首个主要目标至少 ≥ 2R；
             - edge_score ≥ 0.7，confidence ≥ 70；
@@ -700,9 +712,13 @@ C) confidence (微观执行置信度: 0~100)
   - 做空禁止：
     * 若 15m 或 1h 的 RSI14 < 30，且 price 明显低于该周期 ema20/ema50，视为“极端超卖”；
     * 且 price 不在、也不贴近任何重要 demand zone/支撑位 → 禁止 open_short，只能 "wait" 或 "hold"。
-  - 做多禁止：
-    * 若 15m 或 1h 的 RSI14 > 70，且 price 明显高于 ema20/ema50，视为“极端超买”；
-    * 且 price 不在、也不贴近任何重要 supply zone/压力位 → 禁止 open_long，只能 "wait" 或 "hold"。
+  - 做多禁止（分级约束）：
+      * 标准情形：若 15m 或 1h 的 RSI14 > 75（原 70 已放宽），视为“超买警戒”，原则上不追多；
+      * **【关键豁免】High Momentum Exception**：
+        - 若满足 `setup_grade="A"` 或 `pattern="MOMENTUM_BREAK"`，且成交量 `vol_ratio > 1.2`：
+        - **允许在 4h/1h RSI 达到 82 之前继续顺势做多**（忽略超买）。
+        - 逻辑：在超强动能下，RSI 超买是强势延续的表现，而非反转信号。
+      * 仅当 RSI > 82 且出现顶背离，或 price 远离 ema20/50 时，才强制 Action="wait"。
 - 若 price 已经在短时间内（如近 N 根 15m K）沿同一方向运行 ≥ 2 * ATR(15m)，但尚未接触任何关键结构：
   - 视为“趋势中段追价区”，即使方向正确，优先 "wait"，等待：
     * 回调接近 demand/supply 区；
@@ -734,6 +750,24 @@ C) confidence (微观执行置信度: 0~100)
           · 等待明确反转结构出现后，再按逆势空单规则小仓尝试 SHORT；
         * 若模型仍给出 open_long 建议，风控层应强制将 action 改为 "wait" 或仅管理既有仓位，
           并在 reasoning 中说明“处于多头尾声区，禁止顺势追多”。
+-[新增] 逆势交易特别约束 (Counter-Trend Hard Rules)
+         - 针对在强趋势背景下尝试 LTF_scalp 逆势单（如牛市做空、熊市做多）的致命过滤器：
+           1. 级别不对等禁止 (Asymmetric Tier Check)：
+              - 当 major_bias = BULL 时：
+                * 严禁依据 15m / 5m / 30m 级别的 Supply Zone 或 Resistance Line 开空；
+                * 仅允许在价格触及 4h / Daily 级别的强阻力（且 ctx.strength_z > 1.5）时考虑逆势空；
+                * 逻辑：牛市里的小级别阻力通常是用来突破的，不是用来反转的。
+              - 当 major_bias = BEAR 时（对称）：
+                * 严禁依据 15m / 5m / 30m 级别的 Demand Zone 或 Support Line 开多；
+                * 仅允许在触及 4h / Daily 强支撑时考虑逆势多。
+           2. 拒绝“横盘摸顶/抄底” (Hovering is Continuation)：
+              - 若价格在阻力位（做空时）或支撑位（做多时）附近，连续 ≥3 根 15m K 线收盘价变化幅度很小（横盘震荡），且未出现明确的反向吞没/大K线脱离：
+              - 视为“空中加油/中继形态” (Absorption)；
+              - Action 强制为 "wait"，严禁在此类“滞涨/滞跌”状态下逆势开仓，必须等待明确的结构破坏信号。
+           3. 逆势 RSI 门槛 (RSI Hard Cap)：
+              - 在顺势背景下做逆势回调单（LTF_scalp），必须满足更极端的动能条件：
+                * 逆势开空（牛市中）：要求 1h RSI > 75 或 5m RSI > 80，或出现明显顶背离。若 RSI 仅在 60-70 之间，视为“多头健康区”，禁止开空。
+                * 逆势开多（熊市中）：要求 1h RSI < 25 或 5m RSI < 20，或出现明显底背离。若 RSI 仅在 30-40 之间，视为空头健康区，禁止开多。
 - 仅当当前不处于上述“趋势尾声区”时，才继续应用其它顺势/逆势开仓规则。
 4) 区间震荡场景（major_bias = NEUTRAL）下的门槛
 - 当 major_bias = NEUTRAL，视为震荡或无共识区间：
@@ -817,6 +851,13 @@ C) confidence (微观执行置信度: 0~100)
       · 只有在 trade_style="HTF_swing" 且 setup_grade="A"，且 R_clean 介于 [0.8, 1.0) 这类少数例外时，
         你才可以在 reasoning 中极其清晰地说明为什么仍然有足够的波段空间（例如更远的关键结构提供了明确 ≥2R 的目标），
         否则一律视为“空间不足”不新开仓。
+    - “最近反向结构”的判定与硬约束：
+          · 默认：尊重最近的 5m/15m/30m 供需区。
+          · **【新增】顺势路障豁免 (Trend Obstacle Ignoring)**：
+            - 仅针对 trade_style="LTF_scalp" 且 顺势操作（如 Major=BULL 做多）：
+            - 在计算 R_clean 时，**忽略** 所有的 **15m/5m 级别弱 Supply Zone (strength_z < 1.0) 和 弱 SR Resistance**。
+            - 此时的目标位应直接看向 **1h/4h 级别的强阻力** 或 **Fib 扩展位 (1.272/1.618)**。
+            - 逻辑：强趋势大概率直接冲破微观阻力，不要被“纸老虎”吓退。
 - 风险与持仓时间（建议）：
   * 这类机会通常记为 "setup_grade": "B"；
   * 对应 risk_per_trade_pct 建议为正常 HTF_swing 仓位的一半或更低；
@@ -1414,13 +1455,16 @@ C. 方向一致性与评分 (Bias & Score)
         * 若 `confidence < 75` -> **Wait** (微观信号不足)。
 D. 风险与资金安全 (Risk & Safety)
   D8) 空间与盈亏比 (Space/RR)
-      - 检查：`R_clean` (到最近反向有效障碍的距离 / 止损距离)。
-      - 熔断：
-        * LTF_scalp: 若 `R < 1.0` -> **Wait** (例外：动能单 >0.8)。
-        * HTF_swing: 若 `R < 1.5` -> **Wait**。
-  D9) 10x 杠杆安全护栏 (Leverage Safety)
-      - 检查：计算出的物理止损幅度 `Dist_Pct`。
-      - 熔断：若 `Dist_Pct > 6.0%` -> **Wait** (波动率过大，不适合 10x)。
+    - 检查：`R_clean` (到最近反向有效障碍的距离 / 止损距离)。
+    - **【新增】强趋势下的障碍豁免 (Trend Obstacle Ignoring)**：
+      * **条件**：当 `major_bias` 与交易方向一致（如 BULL），且 **Trend_Strength > 50** (或均线呈明显发散排列) 时；
+      * **动作**：在计算 `R_clean` 时，**自动忽略** 所有 **15m/30m 级别的反向结构**（Supply Zone / Resistance Line），将其视为“可被动能冲破的纸老虎”；
+      * **约束**：此时仅将 **4h/Daily 级别的强结构**（Strength_Z > 1.5 或 Stacked Zone）视为有效障碍来计算 R 值。
+    - 熔断标准（应用上述豁免后）：
+      * LTF_scalp: 若 `R < 1.0` -> **Wait** (例外：MOMENTUM_BREAK 强动能单允许 R > 0.8)。
+      * HTF_swing: 若 `R < 1.5` -> **Wait**。  D9) 10x 杠杆安全护栏 (Leverage Safety)
+  - 检查：计算出的物理止损幅度 `Dist_Pct`。
+  - 熔断：若 `Dist_Pct > 6.0%` -> **Wait** (波动率过大，不适合 10x)。
 E. 输出协议自检 (Protocol Sanity Check)
   E10) 格式合规性
       - 问：`reasoning` 字段是否严格遵守 `B:||K:||R:||X:` 的四段式伪代码格式？
