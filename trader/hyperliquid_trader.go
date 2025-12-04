@@ -743,3 +743,9 @@ func (t *HyperliquidTrader) GetOrderHistory(symbol string, limit int) ([]map[str
 	log.Printf("⚠️ [Hyperliquid] GetOrderHistory 暂未实现")
 	return []map[string]interface{}{}, nil
 }
+
+// GetTradeHistory 获取指定币种的成交历史（暂未实现）
+func (t *HyperliquidTrader) GetTradeHistory(symbol string, limit int) ([]map[string]interface{}, error) {
+	log.Printf("⚠️ [Hyperliquid] GetTradeHistory 暂未实现")
+	return []map[string]interface{}{}, nil
+}

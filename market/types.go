@@ -204,6 +204,18 @@ type Kline struct {
 	Trades              int     `json:"trades"`
 	TakerBuyBaseVolume  float64 `json:"takerBuyBaseVolume"`
 	TakerBuyQuoteVolume float64 `json:"takerBuyQuoteVolume"`
+	
+	// 扩展字段：真实买卖量数据（用于VPVR精确计算）
+	// 这些字段可能来自：
+	// 1. 交易所高级API（如币安的详细K线数据）
+	// 2. 第三方数据提供商
+	// 3. 实时订单簿分析
+	BuyVolume        float64 `json:"buyVolume,omitempty"`        // 买方成交量
+	SellVolume       float64 `json:"sellVolume,omitempty"`       // 卖方成交量  
+	TakerBuyVolume   float64 `json:"takerBuyVolume,omitempty"`   // 主动买入成交量（市价买单）
+	TakerSellVolume  float64 `json:"takerSellVolume,omitempty"`  // 主动卖出成交量（市价卖单）
+	BuyerMakerVolume float64 `json:"buyerMakerVolume,omitempty"` // 买方挂单成交量（限价买单）
+	SellerMakerVolume float64 `json:"sellerMakerVolume,omitempty"` // 卖方挂单成交量（限价卖单）
 }
 
 type KlineResponse []interface{}
@@ -504,6 +516,14 @@ type PriceLevel struct {
 	Transactions  int     `json:"transactions"`   // 交易次数
 	IsPOC         bool    `json:"is_poc"`         // 是否为POC
 	InValueArea   bool    `json:"in_value_area"`  // 是否在价值区域内
+	
+	// Task 6: HVN/LVN标记字段
+	IsHVN         bool    `json:"is_hvn"`         // 是否为高成交量节点(High Volume Node)
+	IsLVN         bool    `json:"is_lvn"`         // 是否为低成交量节点(Low Volume Node)
+	VolumeRank    int     `json:"volume_rank"`    // 成交量排名(1=最高)
+	HVNStrength   float64 `json:"hvn_strength"`   // HVN强度评分(0-100)
+	LVNStrength   float64 `json:"lvn_strength"`   // LVN强度评分(0-100)
+	NodeType      VolumeNodeType `json:"node_type"` // 节点类型
 }
 
 // ValueArea 价值区域
@@ -528,7 +548,67 @@ type VolumeStats struct {
 	PriceStdDev    float64 `json:"price_std_dev"`   // 价格标准差
 	MaxLevel       *PriceLevel `json:"max_level"`   // 最大成交量级别
 	MinLevel       *PriceLevel `json:"min_level"`   // 最小成交量级别
+	
+	// POC密度计算相关字段
+	POCDensity     float64 `json:"poc_density"`     // POC密度：POC成交量占总量的百分比
+	POCStrength    float64 `json:"poc_strength"`    // POC强度：相对于周围价格水平的强度评分
+	POCCluster     *POCClusterInfo `json:"poc_cluster"` // POC聚集信息
+	
+	// 价值区宽度占比分析字段
+	ValueAreaWidthRatio   float64 `json:"value_area_width_ratio"`   // 价值区宽度占比：VA范围/总价格范围
+	MarketProfile        MarketProfileType `json:"market_profile"`        // 市场廓型类型
+	MarketRegimeStrength float64 `json:"market_regime_strength"`   // 市场状态强度评分 (0-100)
+	TrendStrength        float64 `json:"trend_strength"`            // 趋势强度评分 (0-100)
+	ConsolidationLevel   float64 `json:"consolidation_level"`       // 整理程度评分 (0-100)
+	
+	// Task 6: HVN/LVN统计字段
+	HVNCount             int     `json:"hvn_count"`                 // 高成交量节点数量
+	LVNCount             int     `json:"lvn_count"`                 // 低成交量节点数量
+	HVNTotalVolume       float64 `json:"hvn_total_volume"`          // HVN总成交量
+	LVNTotalVolume       float64 `json:"lvn_total_volume"`          // LVN总成交量
+	HVNVolumePercent     float64 `json:"hvn_volume_percent"`        // HVN成交量占比
+	LVNVolumePercent     float64 `json:"lvn_volume_percent"`        // LVN成交量占比
+	VolumeConcentration  float64 `json:"volume_concentration"`      // 成交量集中度评分(0-100)
+	PriceGapCount        int     `json:"price_gap_count"`           // 价格空隙数量(LVN形成的空隙)
 }
+
+// POCClusterInfo POC聚集信息
+type POCClusterInfo struct {
+	ClusterRange      float64   `json:"cluster_range"`       // POC聚集区间范围
+	ClusterVolume     float64   `json:"cluster_volume"`      // 聚集区间总成交量
+	ClusterLevels     int       `json:"cluster_levels"`      // 聚集区间包含的价格级别数量
+	ClusterDensity    float64   `json:"cluster_density"`     // 聚集密度：每单位价格的平均成交量
+	RelativeStrength  float64   `json:"relative_strength"`   // 相对强度：与其他价格区间的对比强度
+	SupportLevel      float64   `json:"support_level"`       // 支撑强度评级 (0-100)
+	ResistanceLevel   float64   `json:"resistance_level"`    // 阻力强度评级 (0-100)
+	BreakoutProb      float64   `json:"breakout_prob"`       // 突破概率估算 (0-1)
+	VolumeProfile     []float64 `json:"volume_profile"`      // 聚集区间内的成交量分布
+}
+
+// MarketProfileType 市场廓型类型
+type MarketProfileType string
+
+const (
+	MarketProfileTrending      MarketProfileType = "trending"       // 趋势型：价值区窄，POC清晰，呈单向移动
+	MarketProfileConsolidation MarketProfileType = "consolidation"  // 整理型：价值区适中，POC稳定，呈区间震荡
+	MarketProfileVolatile      MarketProfileType = "volatile"       // 波动型：价值区宽，POC分散，呈高波动
+	MarketProfileBalance       MarketProfileType = "balance"        // 平衡型：价值区中等，POC集中，呈均衡状态
+	MarketProfileBreakout      MarketProfileType = "breakout"       // 突破型：价值区突变，POC转移，呈突破状态
+	MarketProfileRotation      MarketProfileType = "rotation"       // 轮动型：价值区迁移，POC变化，呈轮动状态
+	MarketProfileUnknown       MarketProfileType = "unknown"        // 未知型：无法明确分类的市场状态
+)
+
+// VolumeNodeType 成交量节点类型
+type VolumeNodeType string
+
+const (
+	VolumeNodeNormal   VolumeNodeType = "normal"   // 普通节点：成交量在正常范围内
+	VolumeNodeHVN      VolumeNodeType = "hvn"      // 高成交量节点：显著高于平均水平
+	VolumeNodeLVN      VolumeNodeType = "lvn"      // 低成交量节点：显著低于平均水平
+	VolumeNodePOC      VolumeNodeType = "poc"      // POC节点：最高成交量点
+	VolumeNodeCluster  VolumeNodeType = "cluster"  // 聚集节点：多个HVN聚集形成的区域
+	VolumeNodeGap      VolumeNodeType = "gap"      // 空隙节点：成交量极低，形成价格空隙
+)
 
 // VPVRConfig VPVR配置
 type VPVRConfig struct {

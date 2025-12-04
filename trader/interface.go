@@ -48,6 +48,9 @@ type Trader interface {
 	// GetOrderHistory 获取指定币种的订单历史（最近N个订单）
 	GetOrderHistory(symbol string, limit int) ([]map[string]interface{}, error)
 
+	// GetTradeHistory 获取指定币种的成交历史（包含positionSide、realizedPnl等信息）
+	GetTradeHistory(symbol string, limit int) ([]map[string]interface{}, error)
+
 	// FormatQuantity 格式化数量到正确的精度
 	FormatQuantity(symbol string, quantity float64) (string, error)
 }

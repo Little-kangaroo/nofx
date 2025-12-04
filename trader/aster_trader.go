@@ -1050,3 +1050,9 @@ func (t *AsterTrader) GetOrderHistory(symbol string, limit int) ([]map[string]in
 	log.Printf("⚠️ [Aster] GetOrderHistory 暂未实现")
 	return []map[string]interface{}{}, nil
 }
+
+// GetTradeHistory 获取指定币种的成交历史（暂未实现）
+func (t *AsterTrader) GetTradeHistory(symbol string, limit int) ([]map[string]interface{}, error) {
+	log.Printf("⚠️ [Aster] GetTradeHistory 暂未实现")
+	return []map[string]interface{}{}, nil
+}

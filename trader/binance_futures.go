@@ -894,3 +894,52 @@ func (t *FuturesTrader) GetOrderHistory(symbol string, limit int) ([]map[string]
 	
 	return result, nil
 }
+
+// GetTradeHistory 获取指定币种的成交历史（Account Trade List）
+func (t *FuturesTrader) GetTradeHistory(symbol string, limit int) ([]map[string]interface{}, error) {
+	log.Printf("🔍 [Binance] 查询 %s 的成交历史 (最近%d条)...", symbol, limit)
+	
+	// 调用币安API获取成交历史 (Account Trade List)
+	service := t.client.NewGetAccountTradeListService().Symbol(symbol)
+	if limit > 0 && limit <= 1000 { // 币安API限制最多1000条记录
+		service = service.Limit(limit)
+	}
+	
+	trades, err := service.Do(context.Background())
+	if err != nil {
+		log.Printf("❌ [Binance] 获取成交历史失败: %v", err)
+		return nil, fmt.Errorf("获取成交历史失败: %w", err)
+	}
+	
+	log.Printf("📋 [Binance] %s 找到 %d 条成交历史", symbol, len(trades))
+	
+	// 转换为统一格式
+	var result []map[string]interface{}
+	for _, trade := range trades {
+		tradeMap := map[string]interface{}{
+			"symbol":       trade.Symbol,
+			"id":           trade.ID,
+			"orderId":      trade.OrderID,
+			"side":         string(trade.Side),        // BUY/SELL
+			"qty":          trade.Qty,                 // 成交数量
+			"price":        trade.Price,               // 成交价格
+			"quoteQty":     trade.QuoteQty,           // 成交金额
+			"commission":   trade.Commission,          // 手续费
+			"commissionAsset": trade.CommissionAsset, // 手续费币种
+			"time":         trade.Time,               // 成交时间
+			"positionSide": string(trade.PositionSide), // LONG/SHORT/BOTH
+			"realizedPnl":  trade.RealizedPnl,        // 实现盈亏
+			"buyer":        trade.Buyer,              // 是否为买方
+		}
+		result = append(result, tradeMap)
+		
+		// 记录关键信息用于调试
+		if trade.RealizedPnl != "0" {
+			log.Printf("  💰 平仓交易: %s %s %s, 价格=%s, 盈亏=%s, 时间=%d", 
+				trade.Symbol, trade.PositionSide, trade.Side, trade.Price, trade.RealizedPnl, trade.Time)
+		}
+	}
+	
+	log.Printf("✅ [Binance] 成交历史查询完成: %d条记录", len(result))
+	return result, nil
+}
