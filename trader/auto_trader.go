@@ -2716,6 +2716,10 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 	log.Printf("    盈亏: %.2f USDT (%s)", pnl, pnlCalculationMethod)
 	log.Printf("    原始动作: %s", pendingOrder.OriginalAction)
 	log.Printf("    创建时间: %s", pendingOrder.CreateTime.Format("2006-01-02 15:04:05"))
+	
+	// 🔧 关键修复：创建止损成交的决策记录，确保decision_records表数据完整性
+	at.createStopLossDecisionRecord(pendingOrder, executionPrice, pnl, pnlCalculationMethod)
+	
 	log.Printf("🎯 [止损记录] =================================")
 }
 
@@ -3555,3 +3559,198 @@ func (at *AutoTrader) validateRecordConsistency() (int, error) {
 	
 	return issues, nil
 }
+
+// createStopLossDecisionRecord 为止损成交创建决策记录，确保decision_records表数据完整性
+func (at *AutoTrader) createStopLossDecisionRecord(pendingOrder *PendingStopOrder, executionPrice, pnl float64, pnlCalculationMethod string) {
+	if at.database == nil {
+		log.Printf("⚠️ [止损决策记录] 数据库连接不可用，跳过决策记录创建")
+		return
+	}
+	
+	log.Printf("📝 [止损决策记录] 开始创建止损成交的决策记录...")
+	log.Printf("    币种: %s %s", pendingOrder.Symbol, pendingOrder.Side)
+	log.Printf("    订单ID: %d", pendingOrder.OrderID)
+	log.Printf("    成交价格: %.6f", executionPrice)
+	log.Printf("    盈亏: %.2f USDT (%s)", pnl, pnlCalculationMethod)
+	
+	// 创建止损决策记录
+	decisionRecord := &config.DecisionRecordDB{
+		TraderID:    at.id,
+		CycleNumber: at.callCount, // 使用当前周期号
+		Timestamp:   time.Now(),
+		
+		// 系统提示词 - 标明这是止损成交记录
+		SystemPrompt: fmt.Sprintf("系统自动止损成交记录 - %s %s 订单ID: %d", 
+			pendingOrder.Symbol, strings.ToUpper(pendingOrder.Side), pendingOrder.OrderID),
+		
+		// 输入提示词 - 描述止损成交的详细信息
+		InputPrompt: fmt.Sprintf(
+			"止损单自动成交:\n"+
+				"币种: %s\n"+
+				"方向: %s\n"+
+				"数量: %.6f\n"+
+				"成交价格: %.6f\n"+
+				"盈亏: %.2f USDT\n"+
+				"计算方法: %s\n"+
+				"原始动作: %s\n"+
+				"创建时间: %s",
+			pendingOrder.Symbol, 
+			strings.ToUpper(pendingOrder.Side),
+			pendingOrder.Quantity,
+			executionPrice,
+			pnl,
+			pnlCalculationMethod,
+			pendingOrder.OriginalAction,
+			pendingOrder.CreateTime.Format("2006-01-02 15:04:05")),
+		
+		// CoT思维链 - 说明止损逻辑
+		CoTTrace: fmt.Sprintf(
+			"止损成交分析:\n"+
+				"1. 检测到止损单 %d 已成交\n"+
+				"2. 成交价格: %.6f\n"+
+				"3. 盈亏分析: %.2f USDT (使用%s计算方法)\n"+
+				"4. 风控措施: 自动平仓保护资金\n"+
+				"5. 数据同步: 更新trades和decision_records表",
+			pendingOrder.OrderID,
+			executionPrice,
+			pnl,
+			pnlCalculationMethod),
+		
+		// 决策JSON - 止损成交的决策动作
+		DecisionJSON: fmt.Sprintf(`[{
+			"symbol": "%s",
+			"action": "stop_loss_%s",
+			"reasoning": "止损单自动成交 - 订单ID: %d, 成交价格: %.6f",
+			"quantity": %.6f,
+			"price": %.6f,
+			"pnl": %.2f,
+			"calculation_method": "%s",
+			"order_id": %d,
+			"original_action": "%s"
+		}]`,
+			pendingOrder.Symbol,
+			pendingOrder.Side,
+			pendingOrder.OrderID,
+			executionPrice,
+			pendingOrder.Quantity,
+			executionPrice,
+			pnl,
+			pnlCalculationMethod,
+			pendingOrder.OrderID,
+			pendingOrder.OriginalAction),
+		
+		// 账户状态JSON - 获取当前账户状态
+		AccountStateJSON: at.getCurrentAccountStateJSON(),
+		
+		// 持仓JSON - 获取当前持仓状态
+		PositionsJSON: at.getCurrentPositionsJSON(),
+		
+		// 候选币种JSON - 空数组，止损成交不涉及币种选择
+		CandidateCoinsJSON: "[]",
+		
+		// 执行日志JSON
+		ExecutionLogJSON: fmt.Sprintf(`["止损单 %d 自动成交: %s %s %.6f@%.6f, 盈亏: %.2f USDT"]`,
+			pendingOrder.OrderID,
+			pendingOrder.Symbol,
+			strings.ToUpper(pendingOrder.Side),
+			pendingOrder.Quantity,
+			executionPrice,
+			pnl),
+		
+		Success:      true,
+		ErrorMessage: "",
+	}
+	
+	// 保存到数据库
+	err := at.database.CreateDecisionRecord(decisionRecord)
+	if err != nil {
+		log.Printf("❌ [止损决策记录] 创建决策记录失败: %v", err)
+		log.Printf("    记录ID: %s", decisionRecord.ID)
+		log.Printf("    TraderID: %s", decisionRecord.TraderID)
+	} else {
+		log.Printf("✅ [止损决策记录] 成功创建决策记录: %s", decisionRecord.ID)
+		log.Printf("    确保了decision_records表与trades表的数据一致性")
+	}
+}
+
+// getCurrentAccountStateJSON 获取当前账户状态的JSON字符串
+func (at *AutoTrader) getCurrentAccountStateJSON() string {
+	balance, err := at.trader.GetBalance()
+	if err != nil {
+		log.Printf("⚠️ [止损决策记录] 获取账户余额失败: %v", err)
+		return "{}"
+	}
+	
+	// 提取账户字段
+	totalWalletBalance := 0.0
+	totalUnrealizedProfit := 0.0
+	availableBalance := 0.0
+	
+	if wallet, ok := balance["totalWalletBalance"].(float64); ok {
+		totalWalletBalance = wallet
+	}
+	if unrealized, ok := balance["totalUnrealizedProfit"].(float64); ok {
+		totalUnrealizedProfit = unrealized
+	}
+	if avail, ok := balance["availableBalance"].(float64); ok {
+		availableBalance = avail
+	}
+	
+	totalEquity := totalWalletBalance + totalUnrealizedProfit
+	
+	accountState := map[string]interface{}{
+		"TotalBalance":          totalEquity,
+		"AvailableBalance":      availableBalance,
+		"TotalUnrealizedProfit": totalUnrealizedProfit,
+		"PositionCount":         0, // 将在持仓信息中更新
+		"MarginUsedPct":         0.0,
+	}
+	
+	jsonBytes, _ := json.Marshal(accountState)
+	return string(jsonBytes)
+}
+
+// getCurrentPositionsJSON 获取当前持仓状态的JSON字符串
+func (at *AutoTrader) getCurrentPositionsJSON() string {
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		log.Printf("⚠️ [止损决策记录] 获取持仓信息失败: %v", err)
+		return "[]"
+	}
+	
+	var positionSnapshots []map[string]interface{}
+	for _, pos := range positions {
+		symbol := pos["symbol"].(string)
+		side := pos["side"].(string)
+		entryPrice := pos["entryPrice"].(float64)
+		markPrice := pos["markPrice"].(float64)
+		quantity := pos["positionAmt"].(float64)
+		if quantity < 0 {
+			quantity = -quantity
+		}
+		unrealizedPnL := pos["unRealizedProfit"].(float64)
+		liquidationPrice := pos["liquidationPrice"].(float64)
+		
+		leverage := 10
+		if lev, ok := pos["leverage"].(float64); ok {
+			leverage = int(lev)
+		}
+		
+		positionSnapshot := map[string]interface{}{
+			"Symbol":           symbol,
+			"Side":             side,
+			"PositionAmt":      quantity,
+			"EntryPrice":       entryPrice,
+			"MarkPrice":        markPrice,
+			"UnrealizedProfit": unrealizedPnL,
+			"Leverage":         float64(leverage),
+			"LiquidationPrice": liquidationPrice,
+		}
+		
+		positionSnapshots = append(positionSnapshots, positionSnapshot)
+	}
+	
+	jsonBytes, _ := json.Marshal(positionSnapshots)
+	return string(jsonBytes)
+}
+
