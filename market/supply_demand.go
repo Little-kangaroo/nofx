@@ -1014,7 +1014,7 @@ func (sda *SupplyDemandAnalyzer) assessZoneQuality(zone *SupplyDemandZone) {
 	}
 }
 
-// updateZoneStatuses 更新区域状态
+// updateZoneStatuses 更新区域状态（修复数据层稳定性）
 func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, klines []Kline) {
 	if len(klines) == 0 {
 		return
@@ -1022,6 +1022,9 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 
 	currentTime := klines[len(klines)-1].OpenTime
 	currentPrice := klines[len(klines)-1].Close
+	
+	// 计算ATR用于准确的突破判定
+	atr := sda.calculateATR(klines, 14)
 
 	for _, zone := range zones {
 		// 检查年龄
@@ -1032,24 +1035,43 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 			continue
 		}
 
-		// 检查是否被突破
-		if sda.isZoneBroken(zone, klines, currentPrice) {
-			// 【P0修复】处理区域类型转换逻辑，使用ATR智能判断
+		// 【关键修复】使用增强的突破判定逻辑��区分Testing和Broken状态
+		breakoutResult := sda.analyzeZoneInteraction(zone, currentPrice, atr)
+		
+		switch breakoutResult {
+		case "no_interaction":
+			// 价格未接触区域，保持现状
+			
+		case "testing":
+			// 【核心修复】价格正在测试区域，但未有效突破 - 保持活跃状态
+			zone.Status = StatusTesting
+			zone.IsActive = true  // 确保Testing状态的区域保持活跃
+			log.Printf("🎯 [Testing状态] 区域%s被价格测试(%.2f)，保持活跃监控", zone.ID, currentPrice)
+			
+		case "true_breakout":
+			// 真正的突破 - 进行类型转换处理
 			sda.handleZoneBreakout(zone, currentPrice, klines)
 			
-			// 如果区域发生了类型转换（Breaker），则不标记为broken
 			if strings.Contains(zone.ID, "breaker_") {
 				// Breaker区域：继续活跃，只是改变了类型
 				log.Printf("✅ [Breaker激活] 区域%s类型转换完成，继续监控", zone.ID)
 			} else if zone.Status == StatusTesting {
-				// 假突破/SFP：保持活跃状态，继续监控
-				log.Printf("🎯 [SFP监控] 区域%s进入Testing状态，继续监控价格行为", zone.ID)
+				// 即使在handleZoneBreakout后仍为Testing状态，保持活跃
+				zone.IsActive = true
+				log.Printf("🎯 [Testing保持] 区域%s经处理后仍为Testing状态，保持活跃", zone.ID)
 			} else {
-				// 普通突破：标记为broken
+				// 真正的突破：标记为broken，但给予观察期
 				zone.Status = StatusBroken
 				zone.IsBroken = true
-				zone.IsActive = false
 				zone.BreakTime = currentTime
+				// 【修复】给予破损区域短暂观察期，防止误判
+				if age < 2 { // 2小时内的新区域即使破损也暂时保持活跃
+					zone.IsActive = true
+					log.Printf("⚡ [新区域保护] 新区域%s虽破损但给予观察期，保持活跃", zone.ID)
+				} else {
+					zone.IsActive = false
+					log.Printf("❌ [区域失效] 区域%s真正突破失效", zone.ID)
+				}
 				continue
 			}
 		}
@@ -1060,8 +1082,12 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 
 		if touchCount > sda.config.MaxTouchCount {
 			zone.Status = StatusWeakened
+			// 【修复】即使weakened状态也不立即失效，给AI判断机会
+			zone.IsActive = true
 		} else if touchCount > 0 {
-			zone.Status = StatusTested
+			if zone.Status != StatusTesting { // 不覆盖Testing状态
+				zone.Status = StatusTested
+			}
 			zone.LastTouch = currentTime
 		}
 
@@ -1273,20 +1299,48 @@ func (sda *SupplyDemandAnalyzer) analyzePriceAction(klines []Kline, start, end i
 	}
 }
 
-// filterActiveZones 筛选活跃区域
+// filterActiveZones 筛选活跃区域（修复数据层稳定性）
 func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone) []*SupplyDemandZone {
 	var active []*SupplyDemandZone
 
 	for _, zone := range zones {
-		// 移除质量阈值硬过滤 - 让AI判断区域重要性
-		// 原有过滤: if zone.IsActive && zone.Strength >= sda.config.QualityThreshold*100
-		// 现在只要是活跃状态就保留，让AI根据强度、质量等综合判断
-		if zone.IsActive {
+		// 【关键修复】扩展活跃区域的保留条件，确保Testing状态区域不会消失
+		shouldKeepActive := zone.IsActive || 
+						   zone.Status == StatusTesting ||  // Testing状态必须保留
+						   zone.Status == StatusWeakened || // Weakened状态也给AI判断机会
+						   (zone.Status == StatusBroken && sda.isRecentZone(zone)) // 新区域即使Broken也给观察期
+		
+		if shouldKeepActive {
 			active = append(active, zone)
+			
+			// 调试日志：记录保留原因
+			reason := ""
+			if zone.IsActive {
+				reason = "活跃状态"
+			} else if zone.Status == StatusTesting {
+				reason = "Testing状态保护"
+			} else if zone.Status == StatusWeakened {
+				reason = "Weakened状态保护"
+			} else if zone.Status == StatusBroken && sda.isRecentZone(zone) {
+				reason = "新区域观察期保护"
+			}
+			
+			if reason != "活跃状态" { // 只记录特殊保护情况
+				log.Printf("🛡️ [区域保护] 区域%s被保留(%s) - %.2f-%.2f", 
+					zone.ID, reason, zone.LowerBound, zone.UpperBound)
+			}
 		}
 	}
 
+	log.Printf("📊 [ActiveZones过滤] 总区域%d个，保留活跃区域%d个", len(zones), len(active))
 	return active
+}
+
+// isRecentZone 判断是否为近期创建的区域（2小时内）
+func (sda *SupplyDemandAnalyzer) isRecentZone(zone *SupplyDemandZone) bool {
+	currentTime := time.Now().UnixMilli()
+	age := int((currentTime - zone.CreationTime) / (3600 * 1000)) // 小时
+	return age < 2
 }
 
 // calculateStatistics 计算统计信息
@@ -2005,5 +2059,50 @@ func (sda *SupplyDemandAnalyzer) ValidateZonePositions(sdData *SupplyDemandData,
 		Config:       sdData.Config,
 		Statistics:   stats,
 		LastAnalysis: time.Now().UnixMilli(),
+	}
+}
+
+// ===== 数据层稳定性修复：Zone交互分析增强 =====
+
+// analyzeZoneInteraction 分析价格与区域的交互状态（修复数据层稳定性核心函数）
+// 返回：no_interaction, testing, true_breakout
+func (sda *SupplyDemandAnalyzer) analyzeZoneInteraction(zone *SupplyDemandZone, currentPrice float64, atr float64) string {
+	// 计算价格到区域的距离
+	distanceToZone := sda.calculateDistanceToZone(zone, currentPrice)
+	
+	// 级别1：未接触区域 - 价格距离区域超过1%
+	if distanceToZone > 0.01 { // 1%以外不算交互
+		return "no_interaction"
+	}
+	
+	// 判断价格是否在区域内部
+	priceInZone := currentPrice >= zone.LowerBound && currentPrice <= zone.UpperBound
+	
+	if priceInZone {
+		// 价格在区域内 = Testing状态，不应该失效
+		return "testing"
+	}
+	
+	// 计算刺破距离（使用ATR作为基准）
+	penetrationDistance := 0.0
+	if zone.Type == DemandZone && currentPrice < zone.LowerBound {
+		penetrationDistance = zone.LowerBound - currentPrice
+	} else if zone.Type == SupplyZone && currentPrice > zone.UpperBound {
+		penetrationDistance = currentPrice - zone.UpperBound
+	}
+	
+	// 设置ATR缓冲标准
+	minPenetrationForTesting := 0.1 * atr    // 0.1*ATR以内算轻微测试
+	minPenetrationForBreakout := 0.5 * atr   // 0.5*ATR以上才考虑真突破
+	
+	if penetrationDistance <= minPenetrationForTesting {
+		// 轻微刺破 = Testing状态
+		return "testing"
+	} else if penetrationDistance >= minPenetrationForBreakout {
+		// 显著刺破 = 可能的真突破，需要进一步验证
+		return "true_breakout"
+	} else {
+		// 中等刺破 = 保守��理为Testing状态
+		return "testing"
 	}
 }
