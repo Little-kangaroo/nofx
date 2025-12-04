@@ -115,6 +115,7 @@ type AutoTrader struct {
 	positionFirstSeenTime map[string]int64 // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
 	pendingStopOrders     map[string]*PendingStopOrder // 待确认的止损单
 	lastKnownStopOrders   map[string][]map[string]interface{} // 上次检查的止损单状态 (posKey -> orders)
+	exchangeSync          *ExchangeRecordSync // 交易所记录同步器
 }
 
 // NewAutoTrader 创建自动交易器
@@ -219,7 +220,8 @@ func NewAutoTrader(config AutoTraderConfig, database *config.Database) (*AutoTra
 	log.Printf("🔧 [%s] 创建AutoTrader - DefaultCoins: %v (长度:%d)", config.Name, config.DefaultCoins, len(config.DefaultCoins))
 	log.Printf("🔧 [%s] 创建AutoTrader - TradingCoins: %v (长度:%d)", config.Name, config.TradingCoins, len(config.TradingCoins))
 
-	return &AutoTrader{
+	// 创建AutoTrader实例
+	autoTrader := &AutoTrader{
 		id:                    config.ID,
 		name:                  config.Name,
 		aiModel:               config.AIModel,
@@ -240,7 +242,13 @@ func NewAutoTrader(config AutoTraderConfig, database *config.Database) (*AutoTra
 		positionFirstSeenTime: make(map[string]int64),
 		pendingStopOrders:     make(map[string]*PendingStopOrder),
 		lastKnownStopOrders:   make(map[string][]map[string]interface{}),
-	}, nil
+	}
+
+	// 初始化ExchangeRecordSync
+	autoTrader.exchangeSync = NewExchangeRecordSync(trader, database, config.ID)
+	log.Printf("✅ [%s] ExchangeRecordSync已初始化", config.Name)
+
+	return autoTrader, nil
 }
 
 // Run 运行自动交易主循环
@@ -483,6 +491,23 @@ func (at *AutoTrader) runCycle() error {
 	if at.database != nil {
 		if err := at.saveToDatabaseRecord(record); err != nil {
 			log.Printf("⚠ 保存决策记录到数据库失败: %v", err)
+		}
+	}
+
+	// 11. 执行交易所记录同步检查（每5个周期执行一次以减少频率）
+	if at.exchangeSync != nil && at.callCount%5 == 0 {
+		log.Printf("🔄 [ExchangeSync] 执行定期持仓一致性检查 (周期 #%d)", at.callCount)
+		if differences, err := at.exchangeSync.DetectPositionDifferences(); err != nil {
+			log.Printf("❌ [ExchangeSync] 持仓差异检测失败: %v", err)
+		} else if len(differences) > 0 {
+			log.Printf("⚠️ [ExchangeSync] 发现 %d 个持仓差异，开始自动修复", len(differences))
+			if err := at.exchangeSync.AutoFixPositionDifferences(differences); err != nil {
+				log.Printf("❌ [ExchangeSync] 自动修复失败: %v", err)
+			} else {
+				log.Printf("✅ [ExchangeSync] 持仓差异修复完成")
+			}
+		} else {
+			log.Printf("✅ [ExchangeSync] 持仓数据一致，无需修复")
 		}
 	}
 
@@ -2543,9 +2568,33 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 		pendingOrder.Symbol, pendingOrder.Side, pendingOrder.OrderID, 
 		pendingOrder.Quantity, pendingOrder.StopPrice)
 	
-	// 🔧 修复：使用止损价格作为成交价，而不是市场价格
-	// 止损单成交时，成交价格应该接近止损价格
-	executionPrice := pendingOrder.StopPrice
+	// 🔧 增强修复：使用ExchangeRecordSync获取更精确的成交价格
+	var executionPrice float64
+	var pnlCalculationMethod string
+	
+	if at.exchangeSync != nil {
+		log.Printf("🔍 [止损记录] 使用ExchangeRecordSync获取增强成交信息...")
+		fillDetails, err := at.exchangeSync.GetEnhancedFillPrice(pendingOrder.OrderID, pendingOrder.Symbol, pendingOrder.Side)
+		if err != nil {
+			log.Printf("⚠️ [止损记录] 增强成交价格获取失败，降级使用止损价格: %v", err)
+			executionPrice = pendingOrder.StopPrice
+			pnlCalculationMethod = "fallback_stop_price"
+		} else if fillDetails != nil && fillDetails.AveragePrice > 0 {
+			executionPrice = fillDetails.AveragePrice
+			pnlCalculationMethod = "enhanced_exchange_fill"
+			log.Printf("✅ [止损记录] 获取到增强成交信息: 价格=%.6f, 数量=%.6f, 状态=%s", 
+				fillDetails.AveragePrice, fillDetails.ExecutedQty, fillDetails.Status)
+		} else {
+			log.Printf("⚠️ [止损记录] 增强成交信息无效，降级使用止损价格")
+			executionPrice = pendingOrder.StopPrice
+			pnlCalculationMethod = "fallback_invalid_fill"
+		}
+	} else {
+		// 🔧 降级：使用止损价格作为成交价（原有逻辑）
+		log.Printf("⚠️ [止损记录] ExchangeRecordSync未初始化，使用止损价格")
+		executionPrice = pendingOrder.StopPrice
+		pnlCalculationMethod = "fallback_no_sync"
+	}
 	
 	// 获取当前市场价格用于验证和日志记录
 	marketData, err := market.Get(pendingOrder.Symbol)
@@ -2601,7 +2650,7 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 	
 	// 🔧 增强盈亏计算：提供更准确的盈亏估算和详细日志
 	var pnl float64
-	var pnlCalculationMethod string
+	var finalPnlMethod string
 	
 	// 尝试从数据库获取开仓价格进行精确计算
 	if at.database != nil {
@@ -2613,7 +2662,7 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 			} else {
 				pnl = (openTrade.OpenPrice - executionPrice) * pendingOrder.Quantity
 			}
-			pnlCalculationMethod = "precise_with_open_price"
+			finalPnlMethod = fmt.Sprintf("precise_with_open_price+%s", pnlCalculationMethod)
 			log.Printf("💰 [止损记录] 精确盈亏计算: 开仓价=%.6f, 止损价=%.6f, 盈亏=%.2f USDT", 
 				openTrade.OpenPrice, executionPrice, pnl)
 		} else {
@@ -2625,9 +2674,9 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 				// 空仓止损：通常是亏损
 				pnl = (pendingOrder.StopPrice - executionPrice) * pendingOrder.Quantity
 			}
-			pnlCalculationMethod = "simplified_estimation"
+			finalPnlMethod = fmt.Sprintf("simplified_estimation+%s", pnlCalculationMethod)
 			log.Printf("💰 [止损记录] 简化盈亏估算: 止损价=%.6f, 估算盈亏=%.2f USDT (方法: %s)", 
-				pendingOrder.StopPrice, pnl, pnlCalculationMethod)
+				pendingOrder.StopPrice, pnl, finalPnlMethod)
 		}
 	} else {
 		// 无数据库连接，使用简化计算
@@ -2636,12 +2685,12 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 		} else {
 			pnl = (pendingOrder.StopPrice - executionPrice) * pendingOrder.Quantity
 		}
-		pnlCalculationMethod = "no_database_estimation"
+		finalPnlMethod = fmt.Sprintf("no_database_estimation+%s", pnlCalculationMethod)
 		log.Printf("💰 [止损记录] 无数据库盈亏估算: 盈亏=%.2f USDT", pnl)
 	}
 	
 	log.Printf("📊 [止损记录] 止损成交汇总: %s %s 数量=%.6f 价格=%.6f 盈亏=%.2f USDT (计算方法: %s)", 
-		pendingOrder.Symbol, pendingOrder.Side, pendingOrder.Quantity, executionPrice, pnl, pnlCalculationMethod)
+		pendingOrder.Symbol, pendingOrder.Side, pendingOrder.Quantity, executionPrice, pnl, finalPnlMethod)
 	
 	// 🔧 增强交易记录创建：添加更多元数据和验证
 	log.Printf("📝 [止损记录] 创建交易动作记录...")
@@ -2718,7 +2767,7 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 	log.Printf("    创建时间: %s", pendingOrder.CreateTime.Format("2006-01-02 15:04:05"))
 	
 	// 🔧 关键修复：创建止损成交的决策记录，确保decision_records表数据完整性
-	at.createStopLossDecisionRecord(pendingOrder, executionPrice, pnl, pnlCalculationMethod)
+	at.createStopLossDecisionRecord(pendingOrder, executionPrice, pnl, finalPnlMethod)
 	
 	log.Printf("🎯 [止损记录] =================================")
 }

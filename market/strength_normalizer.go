@@ -62,6 +62,11 @@ type StrengthStats struct {
 	StdDev        float64                // 当前标准差
 	LastUpdated   time.Time              // 最后更新时间
 	SampleCount   int                    // 样本数量（便于调试）
+	
+	// Width宽度统计（新增）
+	HistoryWidths []float64              // 滑动窗口：最近200个宽度数据（基础点或ATR倍数）
+	WidthMean     float64                // 宽度均值
+	WidthStdDev   float64                // 宽度标准差
 }
 
 // ZScoreResult Z-Score计算结果
@@ -71,6 +76,15 @@ type ZScoreResult struct {
 	SampleCount int   `json:"sample_count"` // 当前样本数量
 	Mean      float64 `json:"mean"`        // 当前均值（调试用）
 	StdDev    float64 `json:"std_dev"`     // 当前标准差（调试用）
+}
+
+// WidthZScoreResult Width宽度Z-Score计算结果（新增）
+type WidthZScoreResult struct {
+	WidthZScore    float64 `json:"width_z_score"`     // 宽度标准化的Z分数
+	IsReady        bool    `json:"is_ready"`          // 数据是否充足
+	SampleCount    int     `json:"sample_count"`      // 当前样本数量
+	WidthMean      float64 `json:"width_mean"`        // 宽度均值（调试用）
+	WidthStdDev    float64 `json:"width_std_dev"`     // 宽度标准差（调试用）
 }
 
 // ZoneStrengthRecord 供需区强度记录（用于数据库存储）
@@ -610,6 +624,7 @@ func (sn *StrengthNormalizer) AddScore(symbol, timeframe string, rawScore float6
 			Symbol:        symbol,
 			Timeframe:     timeframe,
 			HistoryScores: make([]float64, 0, WindowSize),
+			HistoryWidths: make([]float64, 0, WindowSize), // 新增
 			LastUpdated:   time.Now(),
 		}
 		sn.stats[key] = stats
@@ -636,6 +651,53 @@ func (sn *StrengthNormalizer) AddScore(symbol, timeframe string, rawScore float6
 	}
 }
 
+// AddScoreWithWidth 添加强度分数和宽度数据到滑动窗口（新增）
+// 扩展版本的AddScore，同时支持Width宽度的Z-Score统计
+func (sn *StrengthNormalizer) AddScoreWithWidth(symbol, timeframe string, rawScore, widthATR float64, zoneInfo *ZoneStrengthRecord) {
+	// 参数验证
+	symbol = formatSymbol(symbol)
+	if !validateTimeframe(timeframe) {
+		log.Printf("⚠️ 无效的时间框架: %s", timeframe)
+		return
+	}
+	
+	key := getStatsKey(symbol, timeframe)
+	
+	// 获取或创建统计状态
+	sn.mu.Lock()
+	stats := sn.stats[key]
+	if stats == nil {
+		stats = &StrengthStats{
+			Symbol:        symbol,
+			Timeframe:     timeframe,
+			HistoryScores: make([]float64, 0, WindowSize),
+			HistoryWidths: make([]float64, 0, WindowSize),
+			LastUpdated:   time.Now(),
+		}
+		sn.stats[key] = stats
+	}
+	sn.mu.Unlock()
+	
+	// 更新滑动窗口（包含强度和宽度）
+	stats.Lock()
+	stats.addScoreWithWidth(rawScore, widthATR)
+	stats.Unlock()
+	
+	// 异步持久化
+	if zoneInfo != nil {
+		zoneInfo.Symbol = symbol
+		zoneInfo.Timeframe = timeframe
+		zoneInfo.RawScore = rawScore
+		sn.SaveZoneStrength(zoneInfo)
+	}
+	
+	// 调试日志
+	if len(stats.HistoryScores) % 10 == 0 {
+		log.Printf("📊 [%s_%s] 滑动窗口更新: %d个样本, 强度均值=%.2f±%.2f, 宽度均值=%.3f±%.3f",
+			symbol, timeframe, len(stats.HistoryScores), stats.Mean, stats.StdDev, stats.WidthMean, stats.WidthStdDev)
+	}
+}
+
 // addScore 向单个统计状态添加分数（内部方法，已加锁）
 func (ss *StrengthStats) addScore(score float64) {
 	// 添加新分数
@@ -653,7 +715,28 @@ func (ss *StrengthStats) addScore(score float64) {
 	ss.SampleCount = len(ss.HistoryScores)
 }
 
+// addScoreWithWidth 向单个统计状态添加分数和宽度（内部方法，已加锁）
+func (ss *StrengthStats) addScoreWithWidth(score, widthATR float64) {
+	// 添加新分数
+	ss.HistoryScores = append(ss.HistoryScores, score)
+	ss.HistoryWidths = append(ss.HistoryWidths, widthATR)
+	
+	// 维持窗口大小（FIFO队列）
+	if len(ss.HistoryScores) > WindowSize {
+		// 移除最老的分数和宽度
+		ss.HistoryScores = ss.HistoryScores[1:]
+		ss.HistoryWidths = ss.HistoryWidths[1:]
+	}
+	
+	// 更新统计特征
+	ss.updateStatistics()
+	ss.updateWidthStatistics()  // 新增宽度统计更新
+	ss.LastUpdated = time.Now()
+	ss.SampleCount = len(ss.HistoryScores)
+}
+
 // updateStatistics 重新计算均值和标准差（内部方法，已加锁）
+// 修复：使用时间窗口分离，避免新旧数据扭曲统计特征
 func (ss *StrengthStats) updateStatistics() {
 	count := len(ss.HistoryScores)
 	if count == 0 {
@@ -662,29 +745,114 @@ func (ss *StrengthStats) updateStatistics() {
 		return
 	}
 	
-	// 计算均值
+	// 修复：分离计算策略，避免时间窗口扭曲
+	// 如果样本充足，使用最近的样本计算更稳定的统计特征
+	var effectiveScores []float64
+	if count >= 50 {
+		// 充足样本：只使用最近75%的数据计算统计特征
+		// 这样避免早期冷启动数据影响当前统计特征
+		recentCount := int(float64(count) * 0.75)
+		if recentCount < 30 {
+			recentCount = 30 // 最少保留30个样本
+		}
+		startIdx := count - recentCount
+		effectiveScores = ss.HistoryScores[startIdx:]
+	} else {
+		// 样本不足：使用全部数据
+		effectiveScores = ss.HistoryScores
+	}
+	
+	effectiveCount := len(effectiveScores)
+	
+	// 计算均值（基于有效样本）
 	sum := 0.0
-	for _, score := range ss.HistoryScores {
+	for _, score := range effectiveScores {
 		sum += score
 	}
-	ss.Mean = sum / float64(count)
+	ss.Mean = sum / float64(effectiveCount)
 	
-	// 计算标准差
-	if count == 1 {
+	// 计算标准差（基于有效样本）
+	if effectiveCount == 1 {
 		ss.StdDev = 0
 		return
 	}
 	
 	varianceSum := 0.0
-	for _, score := range ss.HistoryScores {
+	for _, score := range effectiveScores {
 		diff := score - ss.Mean
 		varianceSum += diff * diff
 	}
-	variance := varianceSum / float64(count)
+	
+	// 使用贝塞尔校正的标准差计算（样本标准差）
+	// 除以 (n-1) 而不是 n，提供更准确的总体标准差估计
+	variance := varianceSum / float64(effectiveCount-1)
 	ss.StdDev = math.Sqrt(variance)
+	
+	// 添加最小标准差保护，避��过度敏感的Z-Score
+	minStdDev := 5.0 // 假设强度分数范围0-100，最小标准差为5
+	if ss.StdDev < minStdDev {
+		ss.StdDev = minStdDev
+	}
 }
 
-// loadHistoryScoresIntoMemory 将数据库中的历史分数加载到内存滑动窗口
+// updateWidthStatistics 重新计算宽度的均值和标准差（内部方法，已加锁）
+// 与updateStatistics方法类似，但专门处理宽度数据
+func (ss *StrengthStats) updateWidthStatistics() {
+	count := len(ss.HistoryWidths)
+	if count == 0 {
+		ss.WidthMean = 0
+		ss.WidthStdDev = 0
+		return
+	}
+	
+	// 宽度统计也使用相同的时间窗口分离策略
+	var effectiveWidths []float64
+	if count >= 50 {
+		// 充足样本：只使用最近75%的数据计算统计特征
+		recentCount := int(float64(count) * 0.75)
+		if recentCount < 30 {
+			recentCount = 30 // 最少保留30个样本
+		}
+		startIdx := count - recentCount
+		effectiveWidths = ss.HistoryWidths[startIdx:]
+	} else {
+		// 样本不足：使用全部数据
+		effectiveWidths = ss.HistoryWidths
+	}
+	
+	effectiveCount := len(effectiveWidths)
+	
+	// 计算宽度均值
+	sum := 0.0
+	for _, width := range effectiveWidths {
+		sum += width
+	}
+	ss.WidthMean = sum / float64(effectiveCount)
+	
+	// 计算宽度标准差
+	if effectiveCount == 1 {
+		ss.WidthStdDev = 0
+		return
+	}
+	
+	varianceSum := 0.0
+	for _, width := range effectiveWidths {
+		diff := width - ss.WidthMean
+		varianceSum += diff * diff
+	}
+	
+	// 使用贝塞尔校正的标准差计算
+	variance := varianceSum / float64(effectiveCount-1)
+	ss.WidthStdDev = math.Sqrt(variance)
+	
+	// 宽度的最小标准差保护（基于ATR倍数，通常范围0.1-3.0）
+	minWidthStdDev := 0.05 // 最小标准差为0.05个ATR倍数
+	if ss.WidthStdDev < minWidthStdDev {
+		ss.WidthStdDev = minWidthStdDev
+	}
+}
+
+// loadHistoryScoresIntoMemory ��数据库中的历史分数加载到内存滑动窗口
 func (sn *StrengthNormalizer) loadHistoryScoresIntoMemory(symbol, timeframe string) error {
 	scores, err := sn.LoadHistoryScores(symbol, timeframe, WindowSize)
 	if err != nil {
@@ -1652,6 +1820,87 @@ func (sn *StrengthNormalizer) BatchGetZScores(requests []struct {
 	}
 	
 	return results
+}
+
+// GetWidthZScore 获取宽度的标准化Z分数
+// 用于判断供需区宽度相对于历史宽度分布的标准化程度
+func (sn *StrengthNormalizer) GetWidthZScore(symbol, timeframe string, currentWidthATR float64) *WidthZScoreResult {
+	// 参数验证和标准化
+	symbol = formatSymbol(symbol)
+	if !validateTimeframe(timeframe) {
+		return &WidthZScoreResult{
+			WidthZScore: 0.0,
+			IsReady:     false,
+		}
+	}
+	
+	key := getStatsKey(symbol, timeframe)
+	
+	sn.mu.RLock()
+	stats := sn.stats[key]
+	sn.mu.RUnlock()
+	
+	if stats == nil {
+		// 没有历史数据，返回中性分数
+		return &WidthZScoreResult{
+			WidthZScore: 0.0,
+			IsReady:     false,
+			SampleCount: 0,
+		}
+	}
+	
+	// 委托给单个统计状态计算宽度Z分数
+	return stats.calculateWidthZScore(currentWidthATR)
+}
+
+// calculateWidthZScore 计算宽度Z分数（内部方法）
+func (ss *StrengthStats) calculateWidthZScore(currentWidthATR float64) *WidthZScoreResult {
+	ss.RLock()
+	defer ss.RUnlock()
+	
+	result := &WidthZScoreResult{
+		SampleCount: len(ss.HistoryWidths),
+		WidthMean:   ss.WidthMean,
+		WidthStdDev: ss.WidthStdDev,
+	}
+	
+	// 冷启动保护：样本量不足
+	if len(ss.HistoryWidths) < MinSampleSize {
+		result.WidthZScore = 0.0
+		result.IsReady = false
+		return result
+	}
+	
+	// 防止除零错误
+	if ss.WidthStdDev == 0 {
+		// 特殊情况：所有历史宽度都相同
+		if currentWidthATR > ss.WidthMean {
+			result.WidthZScore = MaxZScore
+		} else if currentWidthATR < ss.WidthMean {
+			result.WidthZScore = -MaxZScore
+		} else {
+			result.WidthZScore = 0.0
+		}
+		result.IsReady = true
+		return result
+	}
+	
+	// 标准Z-Score计算
+	rawZ := (currentWidthATR - ss.WidthMean) / ss.WidthStdDev
+	
+	// 极值截断保护：强制限制在 [-3.0, +3.0] 范围内
+	clippedZ := clipZScore(rawZ)
+	
+	result.WidthZScore = clippedZ
+	result.IsReady = true
+	
+	// 调试信息：记录极值截断情况
+	if math.Abs(rawZ) > MaxZScore {
+		log.Printf("🔒 [%s_%s] 宽度Z-Score截断: %.3f → %.3f (当前宽度=%.3f ATR, 均值=%.3f, 标准差=%.3f)",
+			ss.Symbol, ss.Timeframe, rawZ, clippedZ, currentWidthATR, ss.WidthMean, ss.WidthStdDev)
+	}
+	
+	return result
 }
 
 // GetZScoreDistribution 获取Z分数分布统计（分析和调试用）

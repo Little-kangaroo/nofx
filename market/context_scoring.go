@@ -224,7 +224,7 @@ func (cc *ContextCalculator) calculateVolatilityZScore(period int) float64 {
 	return cc.calculateZScore(currentVol, recentVolatilities)
 }
 
-// calculateTrendStrength 计算趋势强度 (简化版本)
+// calculateTrendStrength 计算趋势强度 (ATR归一化版本)
 func (cc *ContextCalculator) calculateTrendStrength() float64 {
 	if len(cc.klines) < 20 {
 		return 50.0 // 默认中性
@@ -250,11 +250,33 @@ func (cc *ContextCalculator) calculateTrendStrength() float64 {
 	ema := emaSum / float64(count)
 	currentPrice := cc.klines[len(cc.klines)-1].Close
 	
-	// 计算价格相对EMA的位置，转换为0-100的强度值
-	priceRatio := currentPrice / ema
-	strength := (priceRatio - 0.9) / 0.2 * 100 // 0.9-1.1 映射到 0-100
-	
-	return math.Max(0, math.Min(100, strength))
+	// ATR归一化的价格差异
+	priceDeviation := currentPrice - ema
+	atr14 := cc.calculateATR(14) // 获取ATR14值
+	if atr14 > 0 {
+		// ATR归一化：Deviation_ATR = (Current_Price - EMA) / ATR
+		// 结果：价格相对EMA偏离多少个ATR倍数
+		normalizedDeviation := priceDeviation / atr14
+		
+		// 将ATR归一化的偏差转换为0-100强度值
+		// normalizedDeviation的含义：
+		// +2.0 = 价格高出EMA 2个ATR -> 强势
+		// +1.0 = 价格高出EMA 1个ATR -> 中等强势  
+		// 0.0  = 价格等于EMA -> 中性
+		// -1.0 = 价格低于EMA 1个ATR -> 中等弱势
+		// -2.0 = 价格低于EMA 2个ATR -> 弱势
+		
+		// 映射公式：Strength = 50 + normalizedDeviation * 20
+		// 这样 [-2.5, +2.5] ATR范围映射到 [0, 100] 强度范围
+		strength := 50.0 + normalizedDeviation * 20.0
+		
+		return math.Max(0, math.Min(100, strength))
+	} else {
+		// 降级：ATR为0时使用原始方法
+		priceRatio := currentPrice / ema
+		strength := (priceRatio - 0.9) / 0.2 * 100 // 0.9-1.1 映射到 0-100
+		return math.Max(0, math.Min(100, strength))
+	}
 }
 
 // CalculateWidthATR 计算宽度相对ATR的倍数
@@ -284,7 +306,7 @@ func (cc *ContextCalculator) CalculateVolumeRatio(volume float64) float64 {
 		logBaselineVolume := cc.market.MedianVolume20 // 已经是对数值
 		
 		if logBaselineVolume != 0 {
-			return logCurrentVolume / logBaselineVolume
+			return math.Exp(logCurrentVolume - logBaselineVolume)
 		}
 		return 1.0
 	}
@@ -308,7 +330,7 @@ func (cc *ContextCalculator) CalculateVolumeRatioWithPeriod(volume float64, peri
 	// 如果启用对数处理
 	if cc.useLogVolume && volume > 0 {
 		logCurrentVolume := math.Log(volume)
-		return logCurrentVolume / baseline // baseline已经是对数值
+		return math.Exp(logCurrentVolume - baseline) // baseline已经是对数值
 	}
 	
 	return volume / baseline
