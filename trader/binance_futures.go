@@ -900,7 +900,7 @@ func (t *FuturesTrader) GetTradeHistory(symbol string, limit int) ([]map[string]
 	log.Printf("🔍 [Binance] 查询 %s 的成交历史 (最近%d条)...", symbol, limit)
 	
 	// 调用币安API获取成交历史 (Account Trade List)
-	service := t.client.NewGetAccountTradeListService().Symbol(symbol)
+	service := t.client.NewListAccountTradeService().Symbol(symbol)
 	if limit > 0 && limit <= 1000 { // 币安API限制最多1000条记录
 		service = service.Limit(limit)
 	}
@@ -921,9 +921,9 @@ func (t *FuturesTrader) GetTradeHistory(symbol string, limit int) ([]map[string]
 			"id":           trade.ID,
 			"orderId":      trade.OrderID,
 			"side":         string(trade.Side),        // BUY/SELL
-			"qty":          trade.Qty,                 // 成交数量
+			"qty":          trade.Quantity,            // 成交数量
 			"price":        trade.Price,               // 成交价格
-			"quoteQty":     trade.QuoteQty,           // 成交金额
+			"quoteQty":     trade.QuoteQuantity,       // 成交金额
 			"commission":   trade.Commission,          // 手续费
 			"commissionAsset": trade.CommissionAsset, // 手续费币种
 			"time":         trade.Time,               // 成交时间

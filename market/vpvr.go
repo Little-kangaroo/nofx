@@ -2856,7 +2856,7 @@ func (va *VPVRAnalyzer) generateHVNLVNSignal(profile *VolumeProfile, currentPric
 	}
 
 	// HVN信号：当价格接近强HVN节点时
-	if nearestHVN \!= nil && minDistance < thresholds.POCDistanceThreshold*1.5 { // HVN阈值稍微放宽
+	if nearestHVN != nil && minDistance < thresholds.POCDistanceThreshold*1.5 { // HVN阈值稍微放宽
 		var action SignalAction
 		description := "价格接近高成交量节点(HVN)"
 
@@ -2905,4 +2905,3 @@ func (va *VPVRAnalyzer) generateHVNLVNSignal(profile *VolumeProfile, currentPric
 
 	return nil
 }
-EOF < /dev/null
