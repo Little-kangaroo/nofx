@@ -10,6 +10,7 @@ import (
 	"nofx/logger"
 	"nofx/manager"
 	"nofx/market"
+	"nofx/microstructure"
 	"nofx/pool"
 	"os"
 	"os/signal"
@@ -288,6 +289,14 @@ func main() {
 	market.InitGlobalStrengthNormalizer(database.GetDB())
 	log.Printf("✅ 强度标准化器初始化完成")
 	
+	// 🚀 初始化订单流分析系统
+	log.Printf("🚀 初始化订单流分析系统...")
+	if err := microstructure.StartOrderFlowSystem(true, true); err != nil {
+		log.Printf("⚠️ 订单流系统启动失败: %v", err)
+	} else {
+		log.Printf("✅ 订单流系统启动成功")
+	}
+	
 	fmt.Println()
 
 	// 从数据库读取默认主流币种列表
@@ -326,6 +335,14 @@ func main() {
 	if oiTopAPIURL != "" {
 		pool.SetOITopAPI(oiTopAPIURL)
 		log.Printf("✓ 已配置OI Top API")
+	}
+
+	// 🔗 为订单流系统订阅默认币种
+	log.Printf("🔗 为订单流系统订阅默认币种...")
+	if err := microstructure.InitOrderFlowForSymbols(defaultCoins); err != nil {
+		log.Printf("⚠️ 订单流系统币种订阅失败: %v", err)
+	} else {
+		log.Printf("✅ 已为订单流系统订阅 %d 个币种", len(defaultCoins))
 	}
 
 	// 创建TraderManager
@@ -440,6 +457,11 @@ func main() {
 	fmt.Println()
 	log.Println("📛 收到退出信号，正在停止所有trader...")
 	traderManager.StopAll()
+	
+	// 停止订单流系统
+	log.Println("🛑 正在停止订单流系统...")
+	microstructure.StopOrderFlowSystem()
+	log.Println("✅ 订单流系统已停止")
 
 	fmt.Println()
 	fmt.Println("👋 感谢使用AI交易系统！")

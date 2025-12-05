@@ -4084,6 +4084,35 @@ func (at *AutoTrader) handleRealtimeStopLossExecution(symbol, side string, order
 		}
 	}
 	
+	// 🔧 创建决策记录用于前端显示 - 仿照update_stop方式
+	stopLossActionRecord := logger.DecisionAction{
+		Action:    fmt.Sprintf("stop_loss_%s", side),
+		Symbol:    symbol,
+		Quantity:  executionQty,
+		Price:     executionPrice,
+		OrderID:   orderID,
+		Timestamp: time.Now(),
+		Success:   true,
+		Error:     "",
+	}
+	
+	// 创建简单的决策记录
+	stopLossRecord := &logger.DecisionRecord{
+		Decisions:    []logger.DecisionAction{stopLossActionRecord},
+		ExecutionLog: []string{fmt.Sprintf("✓ %s stop_loss_%s 成交", symbol, side)},
+		Success:      true,
+	}
+	
+	// 保存决策记录（仿照runCycle中的方式）
+	if err := at.decisionLogger.LogDecision(stopLossRecord); err != nil {
+		log.Printf("⚠️ [实时止损] 保存决策记录失败: %v", err)
+	}
+	if at.database != nil {
+		if err := at.saveToDatabaseRecord(stopLossRecord); err != nil {
+			log.Printf("⚠️ [实时止损] 保存到数据库失败: %v", err)
+		}
+	}
+	
 	// 🆕 清理持仓时间跟踪记录
 	posKey := symbol + "_" + side
 	if _, exists := at.positionFirstSeenTime[posKey]; exists {

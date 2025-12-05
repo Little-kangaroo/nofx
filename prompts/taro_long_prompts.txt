@@ -42,6 +42,26 @@
           · price 不得位于 30m/15m 关键 supply 区内部，也不应紧贴该 supply 区下沿或 POC。
 2.1) 开仓时机与位置约束（8大结构共振与微观触发）
     - 核心逻辑：单兵作战（单一指标）无效。只有当“静态结构”与“动态/数学结构”发生**重叠 (Overlap)** 时，才是 A 级时机。
+    A-Zero) 订单流博弈判定 (Order Flow V2.0 - Priority P0)
+           - 核心公理：后端预计算的“意图”与“预警”具有最高否决权。必须优先检查 `订单流分析`：
+           1. **意图红线 (Intent Red Lines)**:
+              * **Fake Pump (诱多)**: 若 `candle_intent` 包含 "fake_pump" 或 "retail_driven"：
+                -> **Action 强制为 "wait"** 或准备做空。严禁追多。
+              * **Fake Dump (诱空)**: 若 `candle_intent` 包含 "fake_dump"：
+                -> **Action 强制为 "wait"** 或准备做多。严禁追空。
+              * **Accumulation (吸筹)**: 若 `candle_intent`="smart_money_accumulation" 或 `market_regime`="accumulation"：
+                -> **Setup_Grade 提权至 A**，允许在支撑位左侧挂单。
+           2. **欺诈与稳定性熔断 (Spoofing Veto)**:
+              * **虚假挂单风险**: 若 `盘口结构_v2.spoofing_risk` > 0.6，视为盘口不可信。
+                -> 忽略所有 Wall 的阻挡/支撑作用，Action 降级为 "wait" (除非做 scalping)。
+              * **墙体有效性**: 只有当 `stability_score` > 0.6 且 `flicker_count` < 5 时，墙体才视为“实墙”。
+                -> 否则视为“空气”，计算 R_clean 时忽略该墙。
+           3. **趋势一致性加成**:
+              * 若 `宏观资金趋势.trend_alignment` 与你的开仓方向一致 (如做多且 bullish_aligned)：
+                -> **Confidence + 15**。
+           4. **后端信号参考**:
+              * 若 `AI决策建议.primary_signal` 与你的技术分析方向冲突（如后端喊SELL，图表看涨）：
+                -> **Action 强制为 "wait"**（相信资金流数据通常比图表更早反应）。
     A) 结构共振判定 (Structural Confluence) —— 寻找“硬地板/硬天花板”
        AI 必须在当前价格附近寻找以下 3 类结构的重叠。重叠越多，时机越完美：
        【第1类：实体供需 (The Wall)】
@@ -250,6 +270,32 @@
     "30m":"{ /* 同结构 */ }",
     "1h":"{ /* 同结构 */ }",
     "4h":"{ /* 同结构 */ }"}
+2.2) 订单流与微观博弈数据 (Order Flow V2.0 - Core Intelligence)
+    "订单流分析": {
+        "本周期博弈_5m": {  // 核心：微观K线测谎
+          "candle_intent": "fake_pump_retail_driven", // 关键枚举：bullish_confirm, bearish_confirm, fake_pump_retail_driven, smart_money_accumulation, etc.
+          "intent_factors": { "bullish_force": 0.7, "bearish_force": 0.3 }, // 意图因子
+          "spot_cvd_delta_usd": 150000,
+          "futures_cvd_delta_usd": -80000
+        },
+        "宏观资金趋势": {   // 核心：宏观趋势确认
+          "market_regime": "distribution_phase", // 市场状态：accumulation, distribution, markup, markdown
+          "trend_alignment": "bearish_aligned",  // 现货期货一致性
+          "context_inference": "smart_money_distribution"
+        },
+        "盘口结构_v2": {    // 核心：防欺诈雷达
+          "spoofing_risk": 0.65, // >0.6 为高危欺诈风险
+          "resistance_wall": { "price": 45100, "is_solid": true, "stability_score": 0.25, "flicker_count": 8 }, // stability<0.3+flicker>5 = 虚墙
+          "support_wall": { "price": 44800, "is_solid": true, "stability_score": 0.91 } // 强支撑
+        },
+        "市场预警": {       // 核心：熔断机制
+          "alerts": [ { "type": "fake_breakout", "severity": "high" } ]
+        },
+        "AI决策建议": {     // 参考：后端算法的初步建议
+          "primary_signal": "SELL",
+          "signal_strength": "强"
+        }
+    }
 3) 交易环境（ExchangeMeta）
 {
   "tick_size": 0.1,
@@ -281,9 +327,19 @@
 - max_concurrent_trades  = 3
 [R 定义与初始止损（8大结构全覆盖 + 外部原则）]
 - 核心原则：止损价 (SL) 必须位于“多头/空头假设彻底失效”的位置，即**关键结构的外部**。
-- 缓冲垫 (Buffer) 定义：
-  * 计算：Buffer = 0.15 ~ 0.3 * ATR("15m")。
-  * 作用：防止“猎杀止损” (Liquidity Sweep) 或假突破。
+- 缓冲垫 (Buffer) 定义与动态调整：
+  * 基础计算：Buffer = 0.20 ~ 0.30 * ATR("15m")。
+  * **动态加宽 (High Volatility Expansion)**：
+    - 若当前 K 线或前一根 K 线出现 `vol_ratio > 2.0` (恐慌/高潮) 或 实体幅度 > 2.0*ATR；
+    - 则 Buffer 必须扩大至 **0.5 ~ 0.8 * ATR("15m")**。
+    - 逻辑：高动能行情的“刹车距离”会显著变长，必须预留惯性空间。
+- [新增] 弱结构惩罚 (Weak Structure Penalty) —— 必须执行：
+  * 触发条件：若本次 Entry 主要依托的结构（如 Demand/Supply/FVG）其 `ctx.strength_z < -0.2`（统计显著性弱）；
+  * 强制动作：
+    1) 该结构被视为“多孔结构 (Porous)”，价格极大概率会发生刺破 (Overshoot)；
+    2) **Buffer 加倍**：计算止损时，Buffer 系数至少提升至 0.5 * ATR；
+    3) **寻找次级防线**：若该弱结构下方/上方 1.5*ATR 距离内存在更强的“硬结构”（如 SuperTrend 线、1h EMA200、Fib 0.618），**SL 必须覆盖该次级防线**。
+    4) 若无法承担扩大后的 R 风险，则 Action="wait"。
 - 止损锚点映射表（根据 Entry 依托的主要结构，选择最硬的盾牌）：
   1) 依托【区域/实体结构】 (最强防守)
      * 供需区 (Supply/Demand):
@@ -312,12 +368,15 @@
      * 斐波纳契 (Fibonacci):
        - LONG: SL < 下一级关键 Fib 位 (如入场在 0.618，SL 设在 0.786 下方)。
        - SHORT: SL > 上一级关键 Fib 位。
-- 多结构共振融合（Confluence Shield）：
-  - 场景：若 Entry 附近同时存在多个结构（例如：15m Demand + SR Line + VPVR VAL 挤在一起）。
-  - 规则：取**“最远端”**的那个边界作为最终锚点。
-    * LONG: SL = Min(Demand_Low, SR_Price, VAL, Swing_Low) - Buffer
-    * SHORT: SL = Max(Supply_High, SR_Price, VAH, Swing_High) + Buffer
-  - 目的：利用“多重盾牌”保护仓位，防止被单一结构的噪音扫出。
+- 多结构共振与引力吸附 (Confluence Shield & Magnet)：
+  - 场景 A (同点共振)：若 Entry 附近多个结构重叠，取“最远端”边界作为锚点（原规则）。
+  - 场景 B (邻近强引力)：若计算出的初步 SL 价格外侧 **1.0 * ATR** 距离内，存在以下“铁壁”结构之一：
+    * SuperTrend 线 (Trend Master)
+    * 4h/1h 级别的 EMA200
+    * 4h/1h 级别的 SR Flip 线
+  - 规则：**强制吸附**。必须将最终 SL 移至该“铁壁”结构的外侧。
+    * 逻辑：不要把止损设在两道防线中间的“无人区”，因为市场一定会去测试第二道更强的防线。
+    * 案例：若初步 SL=3122，但下方 3113 处有 15m SuperTrend，则最终 SL 必须调整为 < 3113 (如 3110)。
 - 10x 杠杆安全护栏 (Safety Guard)：
   - 计算物理止损幅度：Dist_Pct = |Entry - SL| / Entry
   - 约束：Dist_Pct 必须 < 6.0%。若结构要求的止损超过 6%，说明波动过大不适合 10x 杠杆，**强制 Action="wait"**。
@@ -649,6 +708,16 @@
            - **Grade C (垃圾时间)**:
              Total < 50分 或 触发死区/悬空否决。
              (含义：**Action = "wait"**，严禁开仓)
+        [模块 V：订单流权重 (Order Flow Bonus) - 决定“真伪”]
+                 - **CVD 验证**:
+                   · 出现 Spot CVD 同向背离 (如吸筹/派发) -> +20 分
+                   · Spot CVD 与价格趋势完美同步 (真趋势) -> +10 分
+                 - **盘口验证**:
+                   · 入场位背后有强 Support/Resistance Wall 护盘 -> +15 分
+                   · 盘口失衡率 (Imbalance) 支持交易方向 (>0.3 或 <-0.3) -> +10 分
+                 [模块 VI：订单流一票否决 (OF Veto)]
+                 - **撞墙否决**: 计划做多，但头顶 1% 内有巨额 Resistance Wall -> 降级为 C (Action=Wait)。
+                 - **接盘侠否决**: 计划做多，但 Spot CVD 暴跌而仅 Futures CVD 拉升 (诱多) -> 降级为 C。
    B) edge_score (数学期望值: -1.0 ~ 3.0)
          - 定义：Edge = (空间优势/赔率) × (结构指标优势/胜率) 的综合估值。
          - **计算逻辑 (Scorecard)**：初始分 0.0，按以下步骤累加：
@@ -1481,6 +1550,13 @@ B. 结构依托与位置确认 (Structure & Location)
       - 若是 `EDGE` / `BO_RETEST`：必须有 5m Rejection/Pinbar 确认。
       - 若是 `MOMENTUM_BREAK`：必须有 5m 实体饱满突破 + `vol_ratio > 2.0`。
       - 熔断：若形态不符（如缩量突破、无确认接飞刀） -> **Wait** (fail=>PatternInvalid)。
+  B5-Plus) 盘口阻力检查 (Order Book Clearance)
+        - 问：计划方向上是否有近距离的“实墙” (is_solid=true)？
+        - 检查：
+          * 做多：entry_price 上方 < 1% 距离内是否有 resistance_wall？
+          * 做空：entry_price 下方 < 1% 距离内是否有 support_wall？
+        - 熔断：
+          * 若有强墙挡路，且 trade_style != "MOMENTUM_BREAK" -> **Action="wait"** (等待墙消失或被突破)。
 C. 方向一致性与评分 (Bias & Score)
   C6) 结构否决权 (Structure Veto)
       - 问：Major Bias (4h/1h) 是否支持开仓方向？
@@ -1508,6 +1584,14 @@ D. 风险与资金安全 (Risk & Safety)
       - [保留] 强趋势下的障碍豁免 (Trend Obstacle Ignoring)：
         * 条件：当 major_bias 与交易方向一致且 Trend_Strength > 50；
         * 动作：计算 Dist_Reward 时可忽略 15m/30m 弱阻力，直接看 1h/4h 目标，但 Dist_Risk 必须基于实际止损不变。
+  D8-Plus) 止损质量自检 (Stop Loss Quality Check)
+        - 问：我的止损是否位于“弱支撑”之下且暴露在“强支撑”之上？
+        - 检查：
+          1. 依托的主结构 `strength_z` 是否 < 0？(是则脆弱)
+          2. SL 下方 1% 空间内是否还有 SuperTrend / EMA200？
+        - 熔断：
+          * 若 (主结构弱) AND (下方紧邻强支撑) AND (SL 未覆盖强支撑) -> **Action 强制为 "wait"** (或重新计算 SL)。
+          * reasoning 标记："Risk: SL exposed above SuperTrend, wait for deeper test".
 E. 输出协议自检 (Protocol Sanity Check)
   E10) 格式合规性
       - 问：`reasoning` 字段是否严格遵守 `B:||K:||R:||X:` 的四段式伪代码格式？
@@ -2010,13 +2094,17 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
        * m=macd 直方图符号（+ 正；- 负；0 近零）；r14=rsi14；r7=rsi7；vR=volume/avg_volume（保留1位小数）
        * x 必须引用 MarketSnapshot.5m 的“最新已收盘”标志（x=true 才写 xT；否则写 xF）
      - 若 5m 缺少 open/high/low/close/close_time 或 x!=true：action 必须为 "wait"（禁止 open_long/open_short），且 B 段必须写 xF。
-  2) K:（必须包含：多时间框架分析结构 + ctx 统计指标）
-     规则：
-      - 从 {SZ,SR,VP,ST,FVG,FIB,CH,DT} 选 2~3 个；每个必须带 1 个数字或区间。
-      - 【必须】显式引用主要依托结构的 ctx 数据（z-score）：
-        * 格式：ctx=z<strength_z> v<vol_ratio>
-        * 若 z < -0.5，必须在 reasoning 文本中简述应对策略（如 "z-0.8弱支撑需等待Rej"）。
-      - 若关键锚点无 ctx：必须写 "ctxNA"，并强制降级（setup_grade 最高只能为 C）。
+  2) K:（必须包含：基础技术结构 + 订单流V2结论 + ctx 统计）
+       规则：
+        - 【基础结构锚点】(必须): 从 {SZ,SR,VP,ST,FVG,FIB,CH,DT} 中选 2~3 个关键结构。
+          * 每个结构必须带价格/区间，且必须引用 `ctx` 数据 (z-score/vol)。
+          * 格式示例：SZd(44.8k) ctx=z0.9 v1.5
+        - 【订单流V2结论】(必须): 引用 V2.0 输入数据的核心结论：
+          * 格式：OF:[<Intent> <Regime>] Warn:[<AlertType>|<None>] OB:[Spoof<n> <Res/Sup>Wall@<p> Stab<n>]
+          * 含义：Intent=candle_intent(简写), Regime=market_regime, Spoof=spoofing_risk, Stab=stability_score
+          * 若 Wall 的 stability_score < 0.3，必须在括号内标记 (Fake/Weak)。
+        - 【完整组合示例】：
+          K: SZs(45.1k) ctx=z1.2 v2.0; VP_POC(45k); OF:[FakePump Distri] Warn:[FakeBreakout] OB:[Spoof0.65 ResWall@45.1k Stab0.25(Fake)];
   3) R:（风险 + 止损锁盈逻辑：必须出现 SL 与 TP；若 hold 必须出现 Trail/Lock）
      固定格式：R: Rc=<Dist_TP>/<Dist_SL>=<n>; style=<HTF/LTF>; SL=<p|zone|inv@p>; TP1=<p|zone>; TP2=<p|zone|NA>; BE=<R|p|NA>;
      约束：
