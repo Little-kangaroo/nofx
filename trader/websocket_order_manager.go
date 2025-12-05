@@ -810,21 +810,21 @@ func (wom *WebSocketOrderManager) checkAllTrackedOrders() {
 }
 
 // pollOrderStatus 轮询单个订单状态（降级模式）
-func (wom *WebSocketOrderManager) pollOrderStatus(order *TrackedOrder) {
+func (wom *WebSocketOrderManager) pollOrderStatus(order *TrackedOrder) bool {
 	if wom.trader == nil {
-		return
+		return false
 	}
 	
 	orderStatus, err := wom.trader.GetOrderStatus(order.Symbol, order.OrderID)
 	if err != nil {
 		log.Printf("❌ [WebSocketOrderManager] 轮询订单状态失败: OrderID=%d, %v", order.OrderID, err)
-		return
+		return false
 	}
 	
 	status, ok := orderStatus["status"].(string)
 	if !ok {
 		log.Printf("❌ [WebSocketOrderManager] 无法解析订单状态: OrderID=%d", order.OrderID)
-		return
+		return false
 	}
 	
 	// 如果订单已成交，模拟执行报告
@@ -854,7 +854,9 @@ func (wom *WebSocketOrderManager) pollOrderStatus(order *TrackedOrder) {
 		
 		// 移除已处理的订单
 		wom.UntrackOrder(order.OrderID)
+		return true
 	}
+	return true
 }
 
 // keepAliveLoop listenKey保活循环
