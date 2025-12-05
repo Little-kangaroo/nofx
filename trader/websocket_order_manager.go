@@ -103,6 +103,8 @@ type WebSocketOrderManager struct {
 	maxReconnects    int
 	reconnectDelay   time.Duration
 	heartbeatTicker  *time.Ticker
+	isReconnecting   bool          // 🆕 防止重复重连
+	reconnectMutex   sync.Mutex    // 🆕 重连保护锁
 	
 	// 降级模式
 	fallbackMode     bool
@@ -598,8 +600,20 @@ func (wom *WebSocketOrderManager) publishStopLossEvent(event *StopLossExecutionE
 	log.Printf("    成交时间: %s", event.Timestamp.Format("15:04:05"))
 }
 
-// handleConnectionError 处理连接错误（增强版）
+// handleConnectionError 处理连接错误（增强版 - 防重复触发）
 func (wom *WebSocketOrderManager) handleConnectionError() {
+	// 🆕 防止重复错误处理
+	wom.reconnectMutex.Lock()
+	defer wom.reconnectMutex.Unlock()
+	
+	// 如果已经在重连中，直接返回
+	if wom.isReconnecting {
+		return
+	}
+	
+	// 标记开始重连
+	wom.isReconnecting = true
+	
 	wom.connMutex.Lock()
 	wom.isConnected = false
 	if wom.conn != nil {
@@ -623,7 +637,13 @@ func (wom *WebSocketOrderManager) handleConnectionError() {
 	wom.logConnectionError()
 	
 	// 尝试重连（带指数退避）
-	go wom.reconnectWithBackoff()
+	go func() {
+		wom.reconnectWithBackoff()
+		// 重连完成后重置标记
+		wom.reconnectMutex.Lock()
+		wom.isReconnecting = false
+		wom.reconnectMutex.Unlock()
+	}()
 }
 
 // logConnectionError 记录连接错误统计
@@ -636,7 +656,7 @@ func (wom *WebSocketOrderManager) logConnectionError() {
 	log.Printf("    降级模式: %v", wom.fallbackMode)
 }
 
-// reconnectWithBackoff 带退避机制的重连（增强版）
+// reconnectWithBackoff 带退避机制的重连（增强版 - 防重复调用）
 func (wom *WebSocketOrderManager) reconnectWithBackoff() {
 	for wom.isRunning && wom.reconnectCount < wom.maxReconnects {
 		wom.reconnectCount++
@@ -694,7 +714,7 @@ func (wom *WebSocketOrderManager) reconnectWithBackoff() {
 		return
 	}
 	
-	// 重连失败，保持降级模式
+	// 重连失败，仅记录一次最终状态
 	if wom.reconnectCount >= wom.maxReconnects {
 		log.Printf("❌ [WebSocketOrderManager] 达到最大重连次数(%d)，保持降级模式运行", wom.maxReconnects)
 		log.Printf("⚠️ [WebSocketOrderManager] 系统将继续使用轮询模式监控订单状态")
