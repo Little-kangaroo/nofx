@@ -103,6 +103,7 @@ type WebSocketOrderManager struct {
 	maxReconnects    int
 	reconnectDelay   time.Duration
 	heartbeatTicker  *time.Ticker
+	pingTicker       *time.Ticker      // 🆕 WebSocket心跳定时器
 	isReconnecting   bool          // 🆕 防止重复重连
 	reconnectMutex   sync.Mutex    // 🆕 重连保护锁
 	
@@ -166,6 +167,9 @@ func (wom *WebSocketOrderManager) Start() error {
 	// 4. 启动心跳保活协程
 	go wom.keepAliveLoop()
 	
+	// 5. 🆕 启动WebSocket心跳协程
+	go wom.startWebSocketPing()
+	
 	log.Printf("✅ [WebSocketOrderManager] 启动成功")
 	return nil
 }
@@ -187,6 +191,11 @@ func (wom *WebSocketOrderManager) Stop() {
 	// 停止心跳
 	if wom.heartbeatTicker != nil {
 		wom.heartbeatTicker.Stop()
+	}
+	
+	// 🆕 停止WebSocket心跳
+	if wom.pingTicker != nil {
+		wom.pingTicker.Stop()
 	}
 	
 	// 停止降级模式
@@ -357,26 +366,46 @@ func (wom *WebSocketOrderManager) messageLoop() {
 		default:
 			wom.connMutex.RLock()
 			conn := wom.conn
+			isConnected := wom.isConnected
 			wom.connMutex.RUnlock()
 			
-			if conn == nil {
+			if conn == nil || !isConnected {
 				time.Sleep(1 * time.Second)
 				continue
 			}
 			
-			// 设置读取超时
-			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+			// 设置读取超时 - 币安建议5分钟以上，因为用户数据流可能长时间静默
+			conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 			
 			// 读取消息
 			messageType, message, err := conn.ReadMessage()
 			if err != nil {
-				log.Printf("❌ [WebSocketOrderManager] 读取消息失败: %v", err)
+				// 🆕 优化：检查是否已经在处理连接错误，避免重复日志
+				wom.reconnectMutex.Lock()
+				if !wom.isReconnecting {
+					log.Printf("❌ [WebSocketOrderManager] 读取消息失败: %v", err)
+				}
+				wom.reconnectMutex.Unlock()
+				
 				wom.handleConnectionError()
-				continue
+				// 🆕 优化：连接错误后立即退出messageLoop，避免重复错误
+				return
 			}
 			
-			if messageType == websocket.TextMessage {
+			// 处理不同类型的WebSocket消息
+			switch messageType {
+			case websocket.TextMessage:
 				wom.handleMessage(message)
+			case websocket.PongMessage:
+				// 收到pong响应，连接正常
+				log.Printf("💗 [WebSocketOrderManager] 收到pong响应，连接正常")
+			case websocket.PingMessage:
+				// 收到ping，自动回复pong（gorilla/websocket会自动处理）
+				log.Printf("💓 [WebSocketOrderManager] 收到ping，自动回复pong")
+			case websocket.CloseMessage:
+				log.Printf("📪 [WebSocketOrderManager] 收到关闭消息")
+				wom.handleConnectionError()
+				return
 			}
 		}
 	}
@@ -705,11 +734,15 @@ func (wom *WebSocketOrderManager) reconnectWithBackoff() {
 		// 重新启动消息处理
 		go wom.messageLoop()
 		
+		// 🆕 重新启动WebSocket心跳
+		go wom.startWebSocketPing()
+		
 		// 🆕 增强：记录重连成功统计
 		log.Printf("📊 [WebSocketOrderManager] 重连成功统计:")
 		log.Printf("    恢复时间: %s", time.Now().Format("15:04:05"))
 		log.Printf("    当前跟踪订单: %d个", wom.GetTrackedOrderCount())
 		log.Printf("    降级模式已关闭")
+		log.Printf("    WebSocket心跳已重启")
 		
 		return
 	}
@@ -928,4 +961,47 @@ func (wom *WebSocketOrderManager) extendListenKey() {
 	} else {
 		log.Printf("❌ [WebSocketOrderManager] 延长listenKey失败，状态码: %d", resp.StatusCode)
 	}
+}
+
+// startWebSocketPing 启动WebSocket心跳机制，保持连接活跃
+func (wom *WebSocketOrderManager) startWebSocketPing() {
+	// 每20秒发送一次ping，保持连接活跃
+	wom.pingTicker = time.NewTicker(20 * time.Second)
+	defer func() {
+		log.Printf("📤 [WebSocketOrderManager] WebSocket心跳退出")
+	}()
+	
+	for {
+		select {
+		case <-wom.stopChan:
+			return
+		case <-wom.pingTicker.C:
+			wom.sendPing()
+		}
+	}
+}
+
+// sendPing 发送WebSocket ping帧
+func (wom *WebSocketOrderManager) sendPing() {
+	wom.connMutex.RLock()
+	conn := wom.conn
+	isConnected := wom.isConnected
+	wom.connMutex.RUnlock()
+	
+	if conn == nil || !isConnected {
+		return
+	}
+	
+	// 设置写入超时
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	
+	// 发送ping帧
+	err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second))
+	if err != nil {
+		log.Printf("⚠️ [WebSocketOrderManager] 发送ping失败: %v", err)
+		// ping失败可能表示连接有问题，但不立即断开，让读取超时处理
+		return
+	}
+	
+	log.Printf("💓 [WebSocketOrderManager] 心跳ping发送成功")
 }
