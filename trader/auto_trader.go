@@ -116,6 +116,7 @@ type AutoTrader struct {
 	pendingStopOrders     map[string]*PendingStopOrder // 待确认的止损单
 	lastKnownStopOrders   map[string][]map[string]interface{} // 上次检查的止损单状态 (posKey -> orders)
 	exchangeSync          *ExchangeRecordSync // 交易所记录同步器
+	wsOrderManager        *WebSocketOrderManager // WebSocket订单管理器
 }
 
 // NewAutoTrader 创建自动交易器
@@ -248,6 +249,16 @@ func NewAutoTrader(config AutoTraderConfig, database *config.Database) (*AutoTra
 	autoTrader.exchangeSync = NewExchangeRecordSync(trader, database, config.ID)
 	log.Printf("✅ [%s] ExchangeRecordSync已初始化", config.Name)
 
+	// 🆕 初始化WebSocket订单管理器
+	if config.Exchange == "binance" && config.BinanceAPIKey != "" && config.BinanceSecretKey != "" {
+		wsOrderManager := NewWebSocketOrderManager(config.BinanceAPIKey, config.BinanceSecretKey, false, trader, database)
+		wsOrderManager.SetAutoTrader(autoTrader)
+		autoTrader.wsOrderManager = wsOrderManager
+		log.Printf("✅ [%s] WebSocket订单管理器已初始化", config.Name)
+	} else {
+		log.Printf("⚠️ [%s] 跳过WebSocket订单管理器初始化 (仅支持币安)", config.Name)
+	}
+
 	return autoTrader, nil
 }
 
@@ -258,6 +269,16 @@ func (at *AutoTrader) Run() error {
 	log.Printf("💰 初始余额: %.2f USDT", at.initialBalance)
 	log.Println("🕐 使用BTCUSDT 5分钟收盘事件触发AI分析")
 	log.Println("🤖 AI将全权决定杠杆、仓位大小、止损止盈等参数")
+
+	// 🆕 启动WebSocket订单管理器
+	if at.wsOrderManager != nil {
+		if err := at.wsOrderManager.Start(); err != nil {
+			log.Printf("❌ [%s] WebSocket订单管理器启动失败: %v", at.name, err)
+			log.Printf("⚠️ [%s] 将使用传统轮询模式继续运行", at.name)
+		} else {
+			log.Printf("✅ [%s] WebSocket订单管理器启动成功", at.name)
+		}
+	}
 
 	// 创建结束信号通道
 	done := make(chan struct{})
@@ -278,6 +299,13 @@ func (at *AutoTrader) Run() error {
 // Stop 停止自动交易
 func (at *AutoTrader) Stop() {
 	at.isRunning = false
+	
+	// 🆕 停止WebSocket订单管理器
+	if at.wsOrderManager != nil {
+		at.wsOrderManager.Stop()
+		log.Printf("✅ [%s] WebSocket订单管理器已停止", at.name)
+	}
+	
 	log.Println("⏹ 自动交易系统停止")
 }
 
@@ -871,7 +899,8 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
 	// 设置止损（风控必需）
-	if _, err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
+	var stopOrderID int64
+	if stopOrderResult, err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
 		// 如果错误提到"已存在"或"duplicate"，不视为错误
 		errStr := strings.ToLower(err.Error())
 		if strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "already exists") || strings.Contains(errStr, "已存在") {
@@ -880,7 +909,25 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 			log.Printf("  ⚠ 设置止损失败: %v", err)
 		}
 	} else {
-		log.Printf("  ✓ 设置止损成功: %.2f", decision.StopLoss)
+		stopOrderID = stopOrderResult
+		log.Printf("  ✓ 设置止损成功: %.2f (订单ID: %d)", decision.StopLoss, stopOrderID)
+		
+		// 🆕 注册止损单到WebSocket管理器
+		if at.wsOrderManager != nil && stopOrderID > 0 {
+			stopOrder := &TrackedOrder{
+				OrderID:     stopOrderID,
+				Symbol:      decision.Symbol,
+				Side:        "long",
+				Type:        "STOP_MARKET",
+				Quantity:    quantity,
+				StopPrice:   decision.StopLoss,
+				TradeID:     "", // 可以从数据库获取
+				CreatedAt:   time.Now(),
+				Description: fmt.Sprintf("多头止损单 - 开仓时设置"),
+			}
+			at.wsOrderManager.TrackOrder(stopOrder)
+			log.Printf("  📍 已将止损单注册到WebSocket管理器")
+		}
 	}
 	
 	// 移动止盈策略：开仓时不设置止盈，等待AI通过update_take_profit动作来设置
@@ -1007,7 +1054,8 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
 	// 设置止损（风控必需）
-	if _, err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
+	var stopOrderID int64
+	if stopOrderResult, err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
 		// 如果错误提到"已存在"或"duplicate"，不视为错误
 		errStr := strings.ToLower(err.Error())
 		if strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "already exists") || strings.Contains(errStr, "已存在") {
@@ -1016,7 +1064,25 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 			log.Printf("  ⚠ 设置止损失败: %v", err)
 		}
 	} else {
-		log.Printf("  ✓ 设置止损成功: %.2f", decision.StopLoss)
+		stopOrderID = stopOrderResult
+		log.Printf("  ✓ 设置止损成功: %.2f (订单ID: %d)", decision.StopLoss, stopOrderID)
+		
+		// 🆕 注册止损单到WebSocket管理器
+		if at.wsOrderManager != nil && stopOrderID > 0 {
+			stopOrder := &TrackedOrder{
+				OrderID:     stopOrderID,
+				Symbol:      decision.Symbol,
+				Side:        "short",
+				Type:        "STOP_MARKET",
+				Quantity:    quantity,
+				StopPrice:   decision.StopLoss,
+				TradeID:     "", // 可以从数据库获取
+				CreatedAt:   time.Now(),
+				Description: fmt.Sprintf("空头止损单 - 开仓时设置"),
+			}
+			at.wsOrderManager.TrackOrder(stopOrder)
+			log.Printf("  📍 已将止损单注册到WebSocket管理器")
+		}
 	}
 	
 	// 移动止盈策略：开仓时不设置止盈，等待AI通过update_take_profit动作来设置
@@ -1949,6 +2015,23 @@ func (at *AutoTrader) executeUpdateStopWithRecord(decision *decision.Decision, a
 		pendingKey := fmt.Sprintf("%s_long_stop", decision.Symbol)
 		at.pendingStopOrders[pendingKey] = pendingOrder
 		
+		// 🆕 注册到WebSocket管理器（替换旧的跟踪）
+		if at.wsOrderManager != nil {
+			wsOrder := &TrackedOrder{
+				OrderID:     orderID,
+				Symbol:      decision.Symbol,
+				Side:        "long",
+				Type:        "STOP_MARKET",
+				Quantity:    longQuantity,
+				StopPrice:   decision.StopLoss,
+				TradeID:     "", // 可以从数据库获取
+				CreatedAt:   time.Now(),
+				Description: fmt.Sprintf("多头止损更新 - %s", decision.Action),
+			}
+			at.wsOrderManager.TrackOrder(wsOrder)
+			log.Printf("  📍 已将更新的止损单注册到WebSocket管理器")
+		}
+		
 		actionRecord.OrderID = orderID
 		log.Printf("  ✓ 更新多仓止损成功: %.6f (订单ID: %d)", decision.StopLoss, orderID)
 		log.Printf("  📋 已记录待确认止损单: %s", pendingKey)
@@ -2010,6 +2093,23 @@ func (at *AutoTrader) executeUpdateStopWithRecord(decision *decision.Decision, a
 		
 		pendingKey := fmt.Sprintf("%s_short_stop", decision.Symbol)
 		at.pendingStopOrders[pendingKey] = pendingOrder
+		
+		// 🆕 注册到WebSocket管理器（替换旧的跟踪）
+		if at.wsOrderManager != nil {
+			wsOrder := &TrackedOrder{
+				OrderID:     orderID,
+				Symbol:      decision.Symbol,
+				Side:        "short",
+				Type:        "STOP_MARKET",
+				Quantity:    shortQuantity,
+				StopPrice:   decision.StopLoss,
+				TradeID:     "", // 可以从数据库获取
+				CreatedAt:   time.Now(),
+				Description: fmt.Sprintf("空头止损更新 - %s", decision.Action),
+			}
+			at.wsOrderManager.TrackOrder(wsOrder)
+			log.Printf("  📍 已将更新的止损单注册到WebSocket管理器")
+		}
 		
 		actionRecord.OrderID = orderID
 		log.Printf("  ✓ 更新空仓止损成功: %.6f (订单ID: %d)", decision.StopLoss, orderID)
@@ -2244,23 +2344,139 @@ func (at *AutoTrader) executeCloseAllPositionsWithRecord(decision *decision.Deci
 	return nil
 }
 
-// checkPendingStopOrders 检查待确认的止损单状态，记录成交的订单
+// checkPendingStopOrders 检查待确认的止损单状态（已简化 - 主要依赖WebSocket）
 func (at *AutoTrader) checkPendingStopOrders(record *logger.DecisionRecord) error {
-	// 1. 检查内存中跟踪的止损单（AI更新的）
-	if err := at.checkTrackedStopOrders(record); err != nil {
-		log.Printf("⚠️ 检查跟踪的止损单失败: %v", err)
-	}
-	
-	// 2. 检查所有持仓的止损单（包括开仓时设置的）
-	if err := at.checkAllPositionStopOrders(record); err != nil {
-		log.Printf("⚠️ 检查所有持仓止损单失败: %v", err)
-	}
-	
-	// 3. 定期全量检查：每10个周期执行一次深度检查
-	if at.callCount%10 == 0 {
-		if err := at.performPeriodicStopLossAudit(record); err != nil {
-			log.Printf("⚠️ 定期止损单审计失败: %v", err)
+	// 🆕 优化：主要依赖WebSocket实时监控，大幅减少轮询检查频率
+	if at.wsOrderManager != nil && at.wsOrderManager.IsConnected() {
+		log.Printf("🔗 [Stop Check] WebSocket连接正常，使用实时监控模式")
+		
+		// WebSocket正常时，只做超轻量级检查（每30个周��一次）
+		if at.callCount%30 == 0 {
+			log.Printf("🔍 [Stop Check] 执行超轻量级检查 (周期 #%d)", at.callCount)
+			if err := at.checkTrackedStopOrdersUltraLightweight(record); err != nil {
+				log.Printf("⚠️ 超轻量级止损单检查失败: %v", err)
+			}
 		}
+		return nil
+	}
+	
+	// WebSocket不可用时，使用轻量级轮询模式（频率降低）
+	log.Printf("⚠️ [Stop Check] WebSocket不可用，使用轻量级轮询模式")
+	
+	// 每5个周期检查一次（之前是每个周期都检查）
+	if at.callCount%5 == 0 {
+		log.Printf("🔍 [Stop Check] 执行轮询检查 (周期 #%d)", at.callCount)
+		
+		// 1. 检查内存中跟踪的止损单（AI更新的）
+		if err := at.checkTrackedStopOrders(record); err != nil {
+			log.Printf("⚠️ 检查跟踪的止损单失败: %v", err)
+		}
+		
+		// 2. 检查所有持仓的止损单（降频，每15个周期执行一次）
+		if at.callCount%15 == 0 {
+			if err := at.checkAllPositionStopOrders(record); err != nil {
+				log.Printf("⚠️ 检查所有持仓止损单失败: %v", err)
+			}
+		}
+	}
+	
+	return nil
+}
+
+// checkTrackedStopOrdersUltraLightweight 超轻量级止损单检查（WebSocket模式下使用）
+func (at *AutoTrader) checkTrackedStopOrdersUltraLightweight(record *logger.DecisionRecord) error {
+	// 仅清理明显���效的跟踪记录，不执行API调用
+	if len(at.pendingStopOrders) == 0 {
+		return nil
+	}
+	
+	log.Printf("🔍 [Ultra Lightweight] 检查 %d 个内存中的止损单（无API调用）", len(at.pendingStopOrders))
+	
+	// 获取当前持仓，仅用于清理无关记录
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		log.Printf("⚠️ [Ultra Lightweight] 获取持仓失败，跳过清理: %v", err)
+		return nil
+	}
+	
+	// 建立持仓映射
+	positionMap := make(map[string]bool)
+	for _, pos := range positions {
+		symbol := pos["symbol"].(string)
+		side := pos["side"].(string)
+		quantity := pos["positionAmt"].(float64)
+		if (side == "long" && quantity > 0) || (side == "short" && quantity < 0) {
+			key := symbol + "_" + side
+			positionMap[key] = true
+		}
+	}
+	
+	// 清理已平仓的跟踪记录（超轻量级，不查询订单状态）
+	var toRemove []string
+	for key, pendingOrder := range at.pendingStopOrders {
+		posKey := pendingOrder.Symbol + "_" + pendingOrder.Side
+		if !positionMap[posKey] {
+			log.Printf("🧹 [Ultra Lightweight] 持仓已消失，清理跟踪记录: %s", key)
+			toRemove = append(toRemove, key)
+		}
+	}
+	
+	// 移除已平仓的记录
+	for _, key := range toRemove {
+		delete(at.pendingStopOrders, key)
+	}
+	
+	if len(toRemove) > 0 {
+		log.Printf("✅ [Ultra Lightweight] 清理了 %d 个无效的跟踪记录", len(toRemove))
+	}
+	
+	return nil
+}
+
+// checkTrackedStopOrdersLightweight 轻量级止损单检查（WebSocket模式下使用）
+func (at *AutoTrader) checkTrackedStopOrdersLightweight(record *logger.DecisionRecord) error {
+	// 只检查内存中还在跟踪但可能已成交的订单
+	if len(at.pendingStopOrders) == 0 {
+		return nil
+	}
+	
+	log.Printf("🔍 [Lightweight Check] 检查 %d 个内存中的止损单", len(at.pendingStopOrders))
+	
+	// 简化版检查：只验证持仓是否仍存在
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓失败: %w", err)
+	}
+	
+	// 建立持仓映射
+	positionMap := make(map[string]bool)
+	for _, pos := range positions {
+		symbol := pos["symbol"].(string)
+		side := pos["side"].(string)
+		quantity := pos["positionAmt"].(float64)
+		if (side == "long" && quantity > 0) || (side == "short" && quantity < 0) {
+			key := symbol + "_" + side
+			positionMap[key] = true
+		}
+	}
+	
+	// 清理已平仓的跟踪记录
+	var toRemove []string
+	for key, pendingOrder := range at.pendingStopOrders {
+		posKey := pendingOrder.Symbol + "_" + pendingOrder.Side
+		if !positionMap[posKey] {
+			log.Printf("🧹 [Lightweight Check] 持仓已平仓，清理跟踪记录: %s", key)
+			toRemove = append(toRemove, key)
+		}
+	}
+	
+	// 移除已平仓的记录
+	for _, key := range toRemove {
+		delete(at.pendingStopOrders, key)
+	}
+	
+	if len(toRemove) > 0 {
+		log.Printf("✅ [Lightweight Check] 清理了 %d 个已平仓的跟踪记录", len(toRemove))
 	}
 	
 	return nil
@@ -3826,5 +4042,55 @@ func (at *AutoTrader) getCurrentPositionsJSON() string {
 	
 	jsonBytes, _ := json.Marshal(positionSnapshots)
 	return string(jsonBytes)
+}
+
+// handleRealtimeStopLossExecution 处理实时止损成交（WebSocket回调）
+func (at *AutoTrader) handleRealtimeStopLossExecution(symbol, side string, orderID int64, executionPrice, executionQty float64) {
+	log.Printf("🚨 [实时止损] 收到止损成交通知: %s %s 订单ID=%d 价格=%.6f 数量=%.6f", 
+		symbol, side, orderID, executionPrice, executionQty)
+	
+	// 🆕 立即更新数据库中的交易记录状态
+	if at.database != nil {
+		log.Printf("🔄 [实时止损] 立即更新数据库交易记录...")
+		at.updateTradeInDatabase(symbol, side, executionPrice, 
+			fmt.Sprintf("%d", orderID), "stop_loss_websocket")
+	}
+	
+	// 🆕 清理内存中的待确认止损单跟踪
+	pendingKey := fmt.Sprintf("%s_%s_stop", symbol, side)
+	if _, exists := at.pendingStopOrders[pendingKey]; exists {
+		delete(at.pendingStopOrders, pendingKey)
+		log.Printf("🧹 [实时止损] 清理待确认止损单: %s", pendingKey)
+	}
+	
+	// 🆕 记录详细的交易动作到数据库
+	if at.database != nil {
+		actionRecord := &config.TradeActionRecord{
+			TraderID:     at.id,
+			Action:       fmt.Sprintf("stop_loss_%s_realtime", side),
+			Symbol:       symbol,
+			Quantity:     executionQty,
+			Price:        executionPrice,
+			OrderID:      fmt.Sprintf("%d", orderID),
+			Timestamp:    time.Now(),
+			Success:      true,
+			ErrorMessage: "WebSocket实时止损成交 - 数据同步完成",
+		}
+		
+		if err := at.database.CreateTradeAction(actionRecord); err != nil {
+			log.Printf("❌ [实时止损] 记录交易动作失败: %v", err)
+		} else {
+			log.Printf("✅ [实时止损] 交易动作已记录: %s", actionRecord.ID)
+		}
+	}
+	
+	// 🆕 清理持仓时间跟踪记录
+	posKey := symbol + "_" + side
+	if _, exists := at.positionFirstSeenTime[posKey]; exists {
+		delete(at.positionFirstSeenTime, posKey)
+		log.Printf("🧹 [实时止损] 清理持仓时间��录: %s", posKey)
+	}
+	
+	log.Printf("🎯 [实时止损] 止损成交处理完成: %s %s", symbol, side)
 }
 

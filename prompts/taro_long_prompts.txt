@@ -41,50 +41,67 @@
         - 做多 HTF_swing 时（对称）：
           · price 不得位于 30m/15m 关键 supply 区内部，也不应紧贴该 supply 区下沿或 POC。
 2.1) 开仓时机与位置约束（8大结构共振与微观触发）
-            - 核心逻辑：单兵作战（单一指标）无效。只有当“静态结构”与“动态/数学结构”发生**重叠 (Overlap)** 时，才是 A 级时机。
-            A) 结构共振判定 (Structural Confluence) —— 寻找“硬地板/硬天花板”
-               AI 必须在当前价格附近寻找以下 3 类结构的重叠。重叠越多，时机越完美：
-               【第1类：实体供需 (The Wall)】
-               * **Demand/Supply Zone**: 价格是否接触 Zone 的边界？(最强支撑/阻力)
-               * **FVG (缺口)**: 价格是否回补了 FVG 并在其边缘/中轴停顿？
-               * **SR Flip**: 价格是否精准回踩了支撑阻力转换线？
-               【第2类：价值与数学 (The Value)】
-               * **VPVR**: 价格是否位于 VAH/VAL (价值边界)？(严禁在 POC 中间开仓)
-               * **Fibonacci**: 价格是否处于 OTE 区 (0.618-0.786)？
-               【第3类：趋势护航 (The Path)】
-               * **SuperTrend**: 价格是否回踩了 SuperTrend 趋势线且未跌破？
-               * **Channel**: 价格是否接触通道下轨(做多)或上轨(做空)？
-               * **Dow**: 是否是 Higher Low (做多) 或 Lower High (做空) 的预期位置？
-            B) 具体的 Setup 等级定义 (基于共振数量)：
-               【Tier 1: 完美狙击 (Sniper Entry)】
-               - **条件**：至少 **3 种** 不同类型的结构发生重叠。
-                 * 例如：15m Demand + Fib 0.618 + VPVR VAL 重合在同一价格带。
-               - **策略**：允许挂单 (Limit Order) 或在 5m 出现微弱拒绝时立即进场。这是胜率最高的位置。
-               【Tier 2: 标准回踩 (Standard Retest)】
-               - **条件**：至少 **2 种** 结构重叠。
-                 * 例如：回补 FVG + 踩住 SR Support 线。
-               - **策略**：必须等待 **5m K线收盘确认** (Rejection/Pinbar) 后进场。
-               【Tier 3: 弱势博弈 (Weak Setup)】
-               - **条件**：仅有 **1 种** 结构支撑 (例如仅仅是回踩了 0.5 Fib，无其他支撑)。
-               - **策略**：**Action = Wait**。单结构不足以对抗市场噪音，除非出现 MOMENTUM_BREAK。
-            C) 微观触发器 (5m Trigger - The "Go" Signal)：
-               即使满足了上述结构共振，必须在 5m 级别看到以下任一信号才扣动扳机：
-               1. **SFP (Swing Failure Pattern)**:
-                  - 价格瞬间刺破结构边界（猎杀止损）后，5m 收盘价迅速收回结构内部。
-               2. **Engulfing (吞没形态)**:
-                  - 在结构位上，出现反向的大实体 K 线吞没前一根 K 线。
-               3. **Inside Bar Breakout**:
-                  - 在结构位上缩量盘整后，放量突破盘整区间。
-               4. **Momentum Ignition**:
-                  - 连续两根同向 K 线脱离结构区，且 `vol_ratio > 1.5`。
-            - **强制过滤器 (Vacuum Filter) 及其豁免条件**：
-              * 默认规则：若当前价格上下 0.5% 范围内，找不到上述任何 **第1类 (实体)** 或 **第2类 (价值)** 结构：
-                - 视为“价格悬空 (Floating)”，Action 必须为 "wait"。
-              * **【新增】动态趋势豁免 (Dynamic Trend Exception)**：
-                - 若当前形态判定为 `BO_RETEST` (突破回踩) 或 `MOMENTUM_BREAK` (动能突破)：
-                - **豁免真空检查**。
-                - **替代依托**：将 5m/15m 的 **EMA20** 视为有效的“动态结构支撑/阻力”。
-                - 只要价格回踩 EMA20 附近（Buffer < 0.3%）且未有效跌破，即可视为“有结构依托”，**允许开仓**，不必非要踩在 Demand Zone 上。
+    - 核心逻辑：单兵作战（单一指标）无效。只有当“静态结构”与“动态/数学结构”发生**重叠 (Overlap)** 时，才是 A 级时机。
+    A) 结构共振判定 (Structural Confluence) —— 寻找“硬地板/硬天花板”
+       AI 必须在当前价格附近寻找以下 3 类结构的重叠。重叠越多，时机越完美：
+       【第1类：实体供需 (The Wall)】
+       * **Demand/Supply Zone**: 价格是否接触 Zone 的边界？(最强支撑/阻力)
+       * **FVG (缺口)**: 价格是否回补了 FVG 并在其边缘/中轴停顿？
+       * **SR Flip**: 价格是否精准回踩了支撑阻力转换线？
+       【第2类：价值与数学 (The Value)】
+       * **VPVR**: 价格是否位于 VAH/VAL (价值边界)？(严禁在 POC 中间开仓)
+       * **Fibonacci**: 价格是否处于 OTE 区 (0.618-0.786)？
+       【第3类：趋势护航 (The Path)】
+       * **SuperTrend**: 价格是否回踩了 SuperTrend 趋势线且未跌破？
+       * **Channel**: 价格是否接触通道下轨(做多)或上轨(做空)？
+       * **Dow**: 是否是 Higher Low (做多) 或 Lower High (做空) 的预期位置？
+    A-Extra) 周期级别对齐 (Timeframe Alignment Rules) —— 拒绝“小马拉大车”
+       - 核心原则：环境越极端（超买/超卖），对支撑/阻力的级别要求越高。
+       - 规则：
+         * 当 4h RSI14 > 65 (多头过热) 或 < 35 (空头过热) 时：
+           - 若 trade_style="HTF_swing"：
+             · **严禁** 仅依托 5m / 15m 级别的 Demand/Supply 开仓；
+             · **必须** 等待价格回踩至 1h 或 4h 级别的关键结构（如 1h EMA50, 4h Demand, 1h SuperTrend）并发生接触；
+             · 若价格仅停留在 5m/15m 结构上而未触及 1h/4h 结构 -> Action="wait" (视为悬空中继)。
+    A-Plus) 结构强度熔断 (Structure Quality Veto) —— 拒绝“纸老虎”
+      - 核心原则：统计显著性差的结构（Z-Score 低）不得单独作为 HTF_swing 的防守依托。
+      - 规则：
+        * 若本次交易依托的主要结构（如 Primary Demand/Supply 或 FVG）的 `ctx.strength_z < -0.5`：
+          1) 该结构视为“弱支撑/阻力”，setup_grade 自动降级，最高为 "B"；
+          2) 禁止“左侧挂单”或“市价直接入场”；
+          3) 必须等待“Tier 2 (标准回踩)”级别的确认（即：价格触碰该弱结构后，5m 必须走出明确的 Rejection 或 Engulfing），否则 Action="wait"。
+        * 若 `ctx.strength_z < -1.5`：
+          - 直接忽略该结构，视为不存在（除非有极强的 SR Flip 或 Fib 0.618 共振补偿）。若无强力共振，Action="wait"。
+    B) 具体的 Setup 等级定义 (基于共振数量)：
+       【Tier 1: 完美狙击 (Sniper Entry)】
+       - **条件**：至少 **3 种** 不同类型的结构发生重叠。
+         * 例如：15m Demand + Fib 0.618 + VPVR VAL 重合在同一价格带。
+       - **策略**：允许挂单 (Limit Order) 或在 5m 出现微弱拒绝时立即进场。这是胜率最高的位置。
+       【Tier 2: 标准回踩 (Standard Retest)】
+       - **条件**：至少 **2 种** 结构重叠。
+         * 例如：回补 FVG + 踩住 SR Support 线。
+       - **策略**：必须等待 **5m K线收盘确认** (Rejection/Pinbar) 后进场。
+       【Tier 3: 弱势博弈 (Weak Setup)】
+       - **条件**：仅有 **1 种** 结构支撑 (例如仅仅是回踩了 0.5 Fib，无其他支撑)。
+       - **策略**：**Action = Wait**。单结构不足以对抗市场噪音，除非出现 MOMENTUM_BREAK。
+    C) 微观触发器 (5m Trigger - The "Go" Signal)：
+       即使满足了上述结构共振，必须在 5m 级别看到以下任一信号才扣动扳机：
+       1. **SFP (Swing Failure Pattern)**:
+          - 价格瞬间刺破结构边界（猎杀止损）后，5m 收盘价迅速收回结构内部。
+       2. **Engulfing (吞没形态)**:
+          - 在结构位上，出现反向的大实体 K 线吞没前一根 K 线。
+       3. **Inside Bar Breakout**:
+          - 在结构位上缩量盘整后，放量突破盘整区间。
+       4. **Momentum Ignition**:
+          - 连续两根同向 K 线脱离结构区，且 `vol_ratio > 1.5`。
+    - **强制过滤器 (Vacuum Filter) 及其豁免条件**：
+      * 默认规则：若当前价格上下 0.5% 范围内，找不到上述任何 **第1类 (实体)** 或 **第2类 (价值)** 结构：
+        - 视为“价格悬空 (Floating)”，Action 必须为 "wait"。
+      * **【新增】动态趋势豁免 (Dynamic Trend Exception)**：
+        - 若当前形态判定为 `BO_RETEST` (突破回踩) 或 `MOMENTUM_BREAK` (动能突破)：
+        - **豁免真空检查**。
+        - **替代依托**：将 5m/15m 的 **EMA20** 视为有效的“动态结构支撑/阻力”。
+        - 只要价格回踩 EMA20 附近（Buffer < 0.3%）且未有效跌破，即可视为“有结构依托”，**允许开仓**，不必非要踩在 Demand Zone 上。
         2.2）LTF_scalp 允许的形态类型（EDGE / BO_RETEST / MOMENTUM_BREAK）
             - 为避免“半空中追单”，LTF_scalp 开仓只允许以下三类结构形态：
               1）EDGE（供需边缘形态）
@@ -304,6 +321,16 @@
 - 10x 杠杆安全护栏 (Safety Guard)：
   - 计算物理止损幅度：Dist_Pct = |Entry - SL| / Entry
   - 约束：Dist_Pct 必须 < 6.0%。若结构要求的止损超过 6%，说明波动过大不适合 10x 杠杆，**强制 Action="wait"**。
+- [新增] 最小噪音容忍度 (Minimum Noise Tolerance):
+  - 核心逻辑：止损必须包含该时间框架的正常呼吸空间，防止被正常波动（Noise）扫出。
+  - HTF_swing 模式硬约束：
+    * 物理止损距离 (|Entry - SL|) 必须 ≥ 0.5 * ATR("1h")；
+    * 建议值：≥ 1.0 * ATR("1h") 或 ≥ 0.25 * ATR("4h")。
+    * 若计算出的结构止损（SL_struct）距离小于此阈值：
+      - 方案 A：主动放宽止损至满足最小 ATR 要求（并相应降低仓位大小以维持单笔风险金额不变）；
+      - 方案 B：若放宽后 R_clean < 1.5，则放弃本次交易 (Action="wait")。
+  - LTF_scalp 模式硬约束：
+    * 物理止损距离 必须 ≥ 0.8 * ATR("5m")。
 【止损锚定顺序（执行流）】
 1. **定位主结构**：本次交易依托什么？(e.g. 15m FVG)。
 2. **寻找共振**：在主结构外侧 1 ATR 范围内，是否有其他 7 种结构？(e.g. 刚好有个 SR 线在 FVG 下方)。
@@ -708,6 +735,14 @@ C) confidence (微观执行置信度: 0~100)
   * RSI14(15m) ≤ 50；
   * major_bias = BEAR，且 minor_bias != 强 BULL。
 3) entry_avoid_rules（硬禁止：不追高/不杀跌）
+- [增强] 逆动能开仓禁令 (Anti-Momentum Injection)：
+  * 即使价格触及 Setup_Grade="A" 的强结构，若微观动能极度不利，禁止市价（Market）入场接飞刀：
+    - 做多禁令：若 5m RSI7 < 30 且 5m MACD 柱体在零轴下方持续放大（动能加速向下）：
+      · Action 强制改为 "wait"；
+      · 除非：价格出现“V型恐慌抛售”（Volume > 3.0x Avg）后的瞬间收回（SFP），才允许尝试左侧。
+    - 做空禁令：若 5m RSI7 > 70 且 5m MACD 柱体在零轴上方持续放大：
+      · Action 强制改为 "wait"。
+  * 逻辑：不要试图接住正在加速坠落的刀子，要在刀子落地弹起（Rejection）后再进场。
 - 禁止在“极端超买/超卖 + 远离关键结构”的位置追单：
   - 做空禁止：
     * 若 15m 或 1h 的 RSI14 < 30，且 price 明显低于该周期 ema20/ema50，视为“极端超卖”；
@@ -1430,9 +1465,15 @@ A. 数据与环境熔断 (Data & Macro Veto)
         * 处于死寂市场 (Dead Market)？
       - 熔断：若触发 -> **Wait** (fail=>MacroEnv)。
 B. 结构依托与位置确认 (Structure & Location)
-  B3) 结构接触性 (Touch Validation)
-      - 问：Entry Price 是否 **精确触及/重叠** 至少一个有效结构？(Demand, SR, FVG, Fib OTE, ST, Channel)
-      - 熔断：若价格悬空（Vacuum），未踩在任何结构上 -> **Wait** (fail=>Floating)。
+  B3) 结构接触性与抢跑禁止 (Touch Validation & Anti-Front-Running)
+    - 问：Entry Price 是否真正位于依托结构的“射程”内？
+    - 计算：Gap = |Entry - Structure_Boundary| / Entry。
+    - 规则：
+      * 若做多：Entry 必须 ≤ Demand_Upper + max(0.002, 0.5*ATR(5m))；(即最多允许上方 0.2% 或半个ATR的滑点)
+      * 若做空：Entry 必须 ≥ Supply_Lower - max(0.002, 0.5*ATR(5m))。
+    - 熔断：
+      * 若 Gap 超过上述阈值（即抢跑入场）：**Action="wait"**。
+      * reasoning 必须标记："Price too far from zone (Gap=x%), wait for deeper retest"。
   B4) VPVR 死区规避 (Zone Avoidance)
       - 问：Entry 是否位于 VPVR POC (`chop_zone`) 内部？
       - 熔断：若是 -> **Wait** (fail=>POC_Zone)。
@@ -1454,17 +1495,19 @@ C. 方向一致性与评分 (Bias & Score)
         * 若 `setup_grade` = "C" -> **Wait** (质量太差)。
         * 若 `confidence < 75` -> **Wait** (微观信号不足)。
 D. 风险与资金安全 (Risk & Safety)
-  D8) 空间与盈亏比 (Space/RR)
-    - 检查：`R_clean` (到最近反向有效障碍的距离 / 止损距离)。
-    - **【新增】强趋势下的障碍豁免 (Trend Obstacle Ignoring)**：
-      * **条件**：当 `major_bias` 与交易方向一致（如 BULL），且 **Trend_Strength > 50** (或均线呈明显发散排列) 时；
-      * **动作**：在计算 `R_clean` 时，**自动忽略** 所有 **15m/30m 级别的反向结构**（Supply Zone / Resistance Line），将其视为“可被动能冲破的纸老虎”；
-      * **约束**：此时仅将 **4h/Daily 级别的强结构**（Strength_Z > 1.5 或 Stacked Zone）视为有效障碍来计算 R 值。
-    - 熔断标准（应用上述豁免后）：
-      * LTF_scalp: 若 `R < 1.0` -> **Wait** (例外：MOMENTUM_BREAK 强动能单允许 R > 0.8)。
-      * HTF_swing: 若 `R < 1.5` -> **Wait**。  D9) 10x 杠杆安全护栏 (Leverage Safety)
-  - 检查：计算出的物理止损幅度 `Dist_Pct`。
-  - 熔断：若 `Dist_Pct > 6.0%` -> **Wait** (波动率过大，不适合 10x)。
+  D8) 空间与盈亏比算术自检 (Space/RR Math Check)
+      - 核心：你必须在心中执行一步小学除法，严禁凭感觉估算 R 值。
+      - 强制计算步骤：
+        1. Dist_Reward = |TP1 - Entry|  (目标空间)
+        2. Dist_Risk   = |Entry - SL|   (风险空间)
+        3. Real_R      = Dist_Reward / Dist_Risk
+      - 熔断标准：
+        * HTF_swing 模式：若 Real_R < 1.5 -> **Action 强制为 "wait"**。
+        * LTF_scalp 模式：若 Real_R < 1.0 -> **Action 强制为 "wait"**。
+        * 任何情况下，若 Real_R < 1.0，严禁开仓，reasoning 必须标记："Math_Check_Fail: R<1.0"。
+      - [保留] 强趋势下的障碍豁免 (Trend Obstacle Ignoring)：
+        * 条件：当 major_bias 与交易方向一致且 Trend_Strength > 50；
+        * 动作：计算 Dist_Reward 时可忽略 15m/30m 弱阻力，直接看 1h/4h 目标，但 Dist_Risk 必须基于实际止损不变。
 E. 输出协议自检 (Protocol Sanity Check)
   E10) 格式合规性
       - 问：`reasoning` 字段是否严格遵守 `B:||K:||R:||X:` 的四段式伪代码格式？
@@ -1791,6 +1834,22 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 2. 每个决策对象必须包含以下字段，否则就视为本次输出不符合规范（字段名必须完全一致）：
    - "symbol": 交易对字符串，例如 "BTCUSDT"
    - "action": 决策字符串，只能为 "open_long"、"open_short"、"close"、"wait"、"hold" 等预定义动作之一
+   - "entry_plan":
+        * 【结构硬约束】只要 action 是 "open_long" 或 "open_short"，本字段必须是一个**嵌套对象 (Nested Object)**，严禁将内部字段（如 price, qty, init_stop）直接写在 JSON 根目录下。
+        * 必须包含且仅包含以下子字段：
+          {
+            "price": 数字,              // 入场价
+            "qty": 数字,                // 数量
+            "leverage": 整数,           // 杠杆
+            "init_stop": 数字,          // 初始止损
+            "take_profit": 数字或null,  // 初始止盈
+            "R_struct": 数字,           // 止损距离的R值
+            "R_clean": 数字,            // 净盈亏比
+            "nearest_opposite_structure_type": 字符串, // 最近反向结构类型
+            "nearest_opposite_structure_value": 数字,  // 最近反向结构价格
+            "entry_order_policy": 对象   // 挂单策略详情
+          }
+        * 若 action 不是 open_*，本字段应为 null 或省略。
    - "confidence": 0~100 的整数
    - "setup_grade":              // ★ 这里加双引号，明确是字段名
      - "A"：结构清晰、RR 明显有优势的高质量机会；
@@ -1831,22 +1890,22 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
           - 例如："trade_style=HTF_swing，理由：4h/1h 顺势波段，目标空间≥2R ..."；
           - 或："trade_style=LTF_scalp，理由：30m/15m/5m 短线趋势清晰，目标约1~1.5R，小仓快进快出"。
         5. 若是开仓（open_long/open_short），还需明确说明最近反向结构与可用空间：
-                 - 指出当前 entry_price 到最近反向结构的距离：
-                   · 对多单：最近的 30m/15m/5m supply 区或 swing high；
-                   · 对空单：最近的 30m/15m/5m demand 区或 swing low；
-                 - 给出该距离的点数和折算后的 R 值（记为 R_clean）：
-                   · 例如："最近反向结构为 15m supply 87200-87500，entry→supply_low≈0.8R"；
-                 - 若 R_clean < 1.0：
-                     · 视为“空间不足”，默认不得作为常规模型的新开仓信号；
-                     · 但对 trade_style="LTF_scalp" 允许更细分的门槛（用于提升短线开仓频率，同时保留质量约束）：
-                       (a) 若 trade_style="LTF_scalp" 且 R_clean < 0.5：
-                           - 仍视为“空间严重不足”，action 必须为 "wait"/"hold"，禁止新建 open_long/open_short。
-                       (b) 若 trade_style="LTF_scalp" 且 R_clean ∈ [0.5, 1.0)：
-                           - 仅允许在“趋势尾声反转型 LTF_scalp”例外场景下小仓试单（见 C7 一致性闸门的例外条件），
-                             且必须满足：pattern∈{EDGE, BO_RETEST} + 5m Confirm-1/2 + edge_score ≥ 0.65 + confidence ≥ 70；否则一律 wait。
-                       (c) 若 trade_style="HTF_swing"：
-                           - 仍按原逻辑：R_clean < 1.0 默认不得开仓；
-                           - 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚）。
+         - 指出当前 entry_price 到最近反向结构的距离：
+           · 对多单：最近的 30m/15m/5m supply 区或 swing high；
+           · 对空单：最近的 30m/15m/5m demand 区或 swing low；
+         - 给出该距离的点数和折算后的 R 值（记为 R_clean）：
+           · 例如："最近反向结构为 15m supply 87200-87500，entry→supply_low≈0.8R"；
+         - 若 R_clean < 1.0：
+             · 视为“空间不足”，默认不得作为常规模型的新开仓信号；
+             · 但对 trade_style="LTF_scalp" 允许更细分的门槛（用于提升短线开仓频率，同时保留质量约束）：
+               (a) 若 trade_style="LTF_scalp" 且 R_clean < 0.5：
+                   - 仍视为“空间严重不足”，action 必须为 "wait"/"hold"，禁止新建 open_long/open_short。
+               (b) 若 trade_style="LTF_scalp" 且 R_clean ∈ [0.5, 1.0)：
+                   - 仅允许在“趋势尾声反转型 LTF_scalp”例外场景下小仓试单（见 C7 一致性闸门的例外条件），
+                     且必须满足：pattern∈{EDGE, BO_RETEST} + 5m Confirm-1/2 + edge_score ≥ 0.65 + confidence ≥ 70；否则一律 wait。
+               (c) 若 trade_style="HTF_swing"：
+                   - 仍按原逻辑：R_clean < 1.0 默认不得开仓；
+                   - 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚）。
         6. 若是开仓（open_long/open_short），还需明确说明本次止损 sl_struct 依托的结构：
           - 对多单：例如“sl_struct 设在最近 15m demand 区下沿 2.065，再下方留出 ≈0.2*ATR 作为缓冲”；
           - 对空单：例如“sl_struct 设在最近 30m supply 区上沿 0.1459，上方留出若干 tick 作为缓冲”；
@@ -1877,28 +1936,27 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                    且在不违反 ProfitFloor 的前提下尽量接近 ProfitFloor / break-even。
                  · 若严格的“最小距离”或其他软约束导致找不到完全完美的价位，
                    应优先牺牲软约束（例如适度放宽与现价距离的下限），也不得返回 stop_update:null。
-    3. 对于「已有持仓」的 symbol：
-    - 默认只做仓位管理，不允许再输出 open_*：
-      - "action" 必须为 "hold"（除非你要主动平仓：action="close" 且 close_pct>0）
-    - "stop_update" 允许为 null，但须遵守：
-      - 若本轮不是 TP 触发锁盈事件：
-        - 仅当同时满足下列条件时，才输出 stop_update 对象：
-          A) 通过 ProfitFloor / 可执行性 / StructureFence 校验：
-             · new_stop 不得穿过 ProfitFloor（如有）；
-             · new_stop 必须处于关键结构外部（不得落入供需区/FVG/VPVR POC 带/重要 SR/通道/ST/Fib/swing band 内）；
-          B) 通过更新门槛约束：|new_stop - prev_stop| ≥ min_tick_move_to_update*tick_size；
-          C) 与现价距离约束：
-             · LONG：需 new_stop ≤ last_price - stop_distance_min_ticks*tick_size
-             · SHORT：需 new_stop ≥ last_price + stop_distance_min_ticks*tick_size
-        - 若任意条件不满足 ⇒ 必须输出 "stop_update": null（禁止为了“字段非空”而回填 prev_stop/new_stop）。
-      - 若本轮为 TP 触发锁盈事件：
-        - 必须输出非 null 的 stop_update，并给出新的 new_stop：
-          · new_stop 必须满足 StructureFence 的“结构外”约束与方向单调性：
-             - LONG：new_stop ≥ max(prev_stop, ProfitFloor, break_even_with_costs)
-             - SHORT：new_stop ≤ min(prev_stop, ProfitFloor, break_even_with_costs)
-          · new_stop 与 prev_stop 的差值原则上应 ≥ min_tick_move_to_update*tick_size；
-            若略小于该门槛但仍能显著改善锁盈质量，可以适度放宽（属于 TP 强制锁盈的例外），
-            但绝不能返回 stop_update:null。
+3. 对于「已有持仓」的 symbol：
+- 默认只做仓位管理，不允许再输出 open_*：
+  - "action" 必须为 "hold"（除非你要主动平仓：action="close" 且 close_pct>0）
+- "stop_update" 允许为 null，但须遵守：
+  - 若本轮不是 TP 触发锁盈事件：
+    - 仅当同时满足下列条件时，才输出 stop_update 对象：
+      A) 通过 ProfitFloor / 可执行性 / StructureFence 校验：
+         · new_stop 不得穿过 ProfitFloor（如有）；
+         · new_stop 必须处于关键结构外部（不得落入供需区/FVG/VPVR POC 带/重要 SR/通道/ST/Fib/swing band 内）；
+      B) 通过更新门槛约束：|new_stop - prev_stop| ≥ min_tick_move_to_update*tick_size；
+      C) 与现价距离约束：
+         · LONG：需 new_stop ≤ last_price - stop_distance_min_ticks*tick_size
+         · SHORT：需 new_stop ≥ last_price + stop_distance_min_ticks*tick_size
+    - 若任意条件不满足 ⇒ 必须输出 "stop_update": null（禁止为了“字段非空”而回填 prev_stop/new_stop）。
+  - 若本轮为 TP 触发锁盈事件：
+    - 必须输出非 null 的 stop_update，并给出新的 new_stop：
+      · new_stop 必须满足 StructureFence 的“结构外”约束与方向单调性：
+         - LONG：new_stop ≥ max(prev_stop, ProfitFloor, break_even_with_costs)
+         - SHORT：new_stop ≤ min(prev_stop, ProfitFloor, break_even_with_costs)
+      · new_stop 与 prev_stop 的差值原则上应 ≥ min_tick_move_to_update*tick_size；
+        若略小于该门槛但仍能显著改善锁盈质量，可以适度放宽（属于 TP 强制锁盈的例外），但绝不能返回 stop_update:null。
 4. 对于「没有持仓」的 symbol（以 open_positions 列表为准）：
    - 若该 symbol 不在 open_positions 中：
      * "action" 只能是 "open_long"、"open_short" 或 "wait"；
@@ -1954,15 +2012,15 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
      - 若 5m 缺少 open/high/low/close/close_time 或 x!=true：action 必须为 "wait"（禁止 open_long/open_short），且 B 段必须写 xF。
   2) K:（必须包含：多时间框架分析结构 + ctx 统计指标）
      规则：
-     - 从 {SZ,SR,VP,ST,FVG,FIB,CH,DT} 选 2~3 个；每个必须带 1 个数字或区间（区间用字符串，不得用数组）。
-     - 至少 1 个锚点必须来自 `多时间框架分析[tf]` 的结构对象，并在该锚点末尾附带 ctx（来自该结构的 ctx 字段）：
-       ctx=z<strength_z> v<vol_ratio> (w<width_atr>) (r<rank_pct*100>)
-       * z/v 必须写；w/r 可选（字符不够时优先保留 z/v）
-     - 若关键锚点无 ctx：必须写 "ctxNA"，并强制降级（setup_grade 最高只能为 C；且不得评 A）。
+      - 从 {SZ,SR,VP,ST,FVG,FIB,CH,DT} 选 2~3 个；每个必须带 1 个数字或区间。
+      - 【必须】显式引用主要依托结构的 ctx 数据（z-score）：
+        * 格式：ctx=z<strength_z> v<vol_ratio>
+        * 若 z < -0.5，必须在 reasoning 文本中简述应对策略（如 "z-0.8弱支撑需等待Rej"）。
+      - 若关键锚点无 ctx：必须写 "ctxNA"，并强制降级（setup_grade 最高只能为 C）。
   3) R:（风险 + 止损锁盈逻辑：必须出现 SL 与 TP；若 hold 必须出现 Trail/Lock）
-     固定格式：
-     R: Rc≈<n>; style=<HTF/LTF>; SL=<p|zone|inv@p>; TP1=<p|zone>; TP2=<p|zone|NA>; BE=<R|p|NA>; Trail=<rule|NA>; Part=<p%>@<TP1|TP2|NA>
+     固定格式：R: Rc=<Dist_TP>/<Dist_SL>=<n>; style=<HTF/LTF>; SL=<p|zone|inv@p>; TP1=<p|zone>; TP2=<p|zone|NA>; BE=<R|p|NA>;
      约束：
+     - Rc 字段必须显示除法算式（例如：Rc=40/20=2.0），严禁只写结果（如 Rc≈2.0）。若算式结果 n < 1.3，则 Action 必须为 wait。
      - 所有价格/区间必须引用 K 段锚点或其相邻合理外延（不得凭空写“一个大概的止损”）。
      - open_* 必须给：SL + TP1（TP2 可 NA）；BE 可选；Trail 可选；Part 可选。
      - hold 必须给：Trail 或 Lock（至少一个非 NA）。若采用锁盈，写法并入 Trail 字段，例如：
