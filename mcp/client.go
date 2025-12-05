@@ -23,21 +23,25 @@ const (
 
 // Client AI API配置
 type Client struct {
-	Provider   Provider
-	APIKey     string
-	BaseURL    string
-	Model      string
-	Timeout    time.Duration
-	UseFullURL bool // 是否使用完整URL（不添加/chat/completions）
+	Provider     Provider
+	APIKey       string
+	BaseURL      string
+	Model        string
+	Timeout      time.Duration
+	UseFullURL   bool                // 是否使用完整URL（不添加/chat/completions）
+	CustomHeaders map[string]string  // 自定义请求头
+	RequestFormat string             // 请求格式：openai（默认）、anthropic
 }
 
 func New() *Client {
 	// 默认配置
 	return &Client{
-		Provider: ProviderDeepSeek,
-		BaseURL:  "https://api.deepseek.com/v1",
-		Model:    "deepseek-chat",
-		Timeout:  600 * time.Second, // 增加到600秒（10分钟），减少超时发生
+		Provider:      ProviderDeepSeek,
+		BaseURL:       "https://api.deepseek.com/v1",
+		Model:         "deepseek-chat",
+		Timeout:       600 * time.Second, // 增加到600秒（10分钟），减少超时发生
+		CustomHeaders: make(map[string]string),
+		RequestFormat: "openai", // 默认使用OpenAI格式
 	}
 }
 
@@ -95,18 +99,74 @@ func (client *Client) SetQwenAPIKey(apiKey string, customURL string, customModel
 func (client *Client) SetCustomAPI(apiURL, apiKey, modelName string) {
 	client.Provider = ProviderCustom
 	client.APIKey = apiKey
+	client.CustomHeaders = make(map[string]string) // 重置自定义请求头
+	client.RequestFormat = "openai" // 默认OpenAI格式
 
-	// 检查URL是否以#结尾，如果是则使用完整URL（不添加/chat/completions）
-	if strings.HasSuffix(apiURL, "#") {
-		client.BaseURL = strings.TrimSuffix(apiURL, "#")
-		client.UseFullURL = true
+	// 检测是否是Anthropic API
+	if strings.Contains(apiURL, "anthropic") || strings.Contains(apiURL, "claude") {
+		client.RequestFormat = "anthropic"
+		client.UseFullURL = true // Anthropic API使用完整URL
+		if strings.HasSuffix(apiURL, "#") {
+			client.BaseURL = strings.TrimSuffix(apiURL, "#")
+		} else {
+			client.BaseURL = apiURL
+		}
+		
+		// 设置Anthropic专用请求头
+		client.CustomHeaders["x-api-key"] = apiKey
+		client.CustomHeaders["anthropic-version"] = "2023-06-01"
+		client.CustomHeaders["content-type"] = "application/json"
+		
+		log.Printf("🔧 [MCP] 检测到Anthropic API，使用专用配置")
+		log.Printf("🔧 [MCP] Anthropic BaseURL: %s", client.BaseURL)
+		log.Printf("🔧 [MCP] 已设置Anthropic专用请求头")
 	} else {
-		client.BaseURL = apiURL
-		client.UseFullURL = false
+		// OpenAI兼容API的原有逻辑
+		if strings.HasSuffix(apiURL, "#") {
+			client.BaseURL = strings.TrimSuffix(apiURL, "#")
+			client.UseFullURL = true
+		} else {
+			client.BaseURL = apiURL
+			client.UseFullURL = false
+		}
 	}
 
 	client.Model = modelName
 	client.Timeout = 600 * time.Second // 增加到600秒，适应大模型长响应
+}
+
+// SetCustomHeaders 设置自定义请求头（高级功能）
+func (client *Client) SetCustomHeaders(headers map[string]string) {
+	if client.CustomHeaders == nil {
+		client.CustomHeaders = make(map[string]string)
+	}
+	for key, value := range headers {
+		client.CustomHeaders[key] = value
+	}
+	log.Printf("🔧 [MCP] 已设置%d个自定义请求头", len(headers))
+}
+
+// SetAnthropicAPI 专用方法：设置Anthropic Claude API
+func (client *Client) SetAnthropicAPI(apiURL, apiKey, modelName string) {
+	client.Provider = ProviderCustom
+	client.APIKey = apiKey
+	client.BaseURL = apiURL
+	client.Model = modelName
+	client.UseFullURL = true
+	client.RequestFormat = "anthropic"
+	client.Timeout = 600 * time.Second
+	
+	// 初始化自定义请求头
+	client.CustomHeaders = map[string]string{
+		"x-api-key":          apiKey,
+		"anthropic-version":  "2023-06-01",
+		"content-type":       "application/json",
+	}
+	
+	log.Printf("🔧 [MCP] Anthropic API配置完成")
+	log.Printf("🔧 [MCP] BaseURL: %s", client.BaseURL)
+	log.Printf("🔧 [MCP] Model: %s", client.Model)
+	log.Printf("🔧 [MCP] API Key: %s...%s", apiKey[:4], apiKey[len(apiKey)-4:])
 }
 
 // SetClient 设置完整的AI配置（高级用户）
@@ -169,76 +229,107 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	log.Printf("   Provider: %s", client.Provider)
 	log.Printf("   BaseURL: %s", client.BaseURL)
 	log.Printf("   Model: %s", client.Model)
-	log.Printf("   UseFullURL: %v", client.UseFullURL)
+	log.Printf("   RequestFormat: %s", client.RequestFormat)
 	if len(client.APIKey) > 8 {
 		log.Printf("   API Key: %s...%s", client.APIKey[:4], client.APIKey[len(client.APIKey)-4:])
 	}
 
-	// 构建 messages 数组
-	messages := []map[string]string{}
-
-	// 如果有 system prompt，添加 system message
-	if systemPrompt != "" {
-		messages = append(messages, map[string]string{
-			"role":    "system",
-			"content": systemPrompt,
-		})
-	}
-
-	// 添加 user message
-	messages = append(messages, map[string]string{
-		"role":    "user",
-		"content": userPrompt,
-	})
-
-	// 根据不同 AI 提供商设置合适的 max_tokens
+	// 根据API格式构建请求体
+	var requestBody map[string]interface{}
 	var maxTokens int
-	switch client.Provider {
-	case ProviderDeepSeek:
-		maxTokens = 8192 // DeepSeek API 限制为 8192
-	case ProviderQwen:
-		maxTokens = 32768 // Qwen 支持更高的 token 限制
-	case ProviderCustom:
-		maxTokens = 8000 // 自定义 API 默认使用较高限制
-	default:
-		maxTokens = 8000 // 默认使用较保守的限制
-	}
+	var messages []map[string]string // 🆕 在函数级别定义messages变量
 
-	// 构建请求体 - 支持新旧API格式，兼容ChatGPT-5和GPT-5.1
-	requestBody := map[string]interface{}{
-		"model":    client.Model,
-		"messages": messages,
-		// 移除temperature等采样参数以兼容ChatGPT-5和新版API
-		// 让模型使用默认参数以获得最佳性能
-	}
-
-	// 根据不同的API提供商使用不同的token限制参数名
-	// 新版OpenAI API要求使用max_completion_tokens而不是max_tokens
-	switch client.Provider {
-	case ProviderDeepSeek:
-		requestBody["max_tokens"] = maxTokens // DeepSeek仍使用max_tokens
-		requestBody["temperature"] = 0.5      // DeepSeek支持temperature参数
-	case ProviderQwen:
-		requestBody["max_tokens"] = maxTokens // Qwen仍使用max_tokens
-		requestBody["temperature"] = 0.5      // Qwen支持temperature参数
-	case ProviderCustom:
-		// 自定义API（通常是OpenAI兼容）- 支持GPT-5.1参数
-		requestBody["max_completion_tokens"] = maxTokens
-
-		// GPT-5.1专用参数
-		if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
-			requestBody["reasoning_effort"] = "low"
-			requestBody["prompt_cache_retention"] = "24h"
+	if client.RequestFormat == "anthropic" {
+		// Anthropic Claude API 格式
+		maxTokens = 4096 // Anthropic Claude默认token限制
+		
+		requestBody = map[string]interface{}{
+			"model":      client.Model,
+			"max_tokens": maxTokens,
 		}
-	default:
-		// 默认使用新格式，支持GPT-5.1参数
-		requestBody["max_completion_tokens"] = maxTokens
-
-		// GPT-5.1专用参数
-		if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
-			requestBody["reasoning_effort"] = "low"
-			requestBody["prompt_cache_retention"] = "24h"
+		
+		// Anthropic API格���：system作为独立参数，messages只包含用户消息
+		if systemPrompt != "" {
+			requestBody["system"] = systemPrompt
 		}
+		
+		// messages数组只包含用户消息
+		messages = []map[string]string{
+			{
+				"role":    "user", 
+				"content": userPrompt,
+			},
+		}
+		requestBody["messages"] = messages
+		
+		log.Printf("📤 [MCP] 使用Anthropic API格式")
+	} else {
+		// OpenAI兼容API格式（默认）
+		switch client.Provider {
+		case ProviderDeepSeek:
+			maxTokens = 8192 // DeepSeek API 限制为 8192
+		case ProviderQwen:
+			maxTokens = 32768 // Qwen 支持更高的 token 限制
+		case ProviderCustom:
+			maxTokens = 8000 // 自定义 API 默认使用较高限制
+		default:
+			maxTokens = 8000 // 默认使用较保守的限制
+		}
+		
+		// 构建 messages 数组
+		
+		// 如果有 system prompt，添加 system message
+		if systemPrompt != "" {
+			messages = append(messages, map[string]string{
+				"role":    "system",
+				"content": systemPrompt,
+			})
+		}
+		
+		// 添加 user message
+		messages = append(messages, map[string]string{
+			"role":    "user",
+			"content": userPrompt,
+		})
+
+		// 构建请求体 - 支持新旧API格式，兼容ChatGPT-5和GPT-5.1
+		requestBody = map[string]interface{}{
+			"model":    client.Model,
+			"messages": messages,
+			// 移除temperature等采样参数以兼容ChatGPT-5和新版API
+			// 让模型使用默认参数以获得最佳性能
+		}
+
+		// 根据不同的API提供商使用不同的token限制参数名
+		// 新版OpenAI API要求使用max_completion_tokens而不是max_tokens
+		switch client.Provider {
+		case ProviderDeepSeek:
+			requestBody["max_tokens"] = maxTokens // DeepSeek仍使用max_tokens
+			requestBody["temperature"] = 0.5      // DeepSeek支持temperature参数
+		case ProviderQwen:
+			requestBody["max_tokens"] = maxTokens // Qwen仍使用max_tokens
+			requestBody["temperature"] = 0.5      // Qwen支持temperature参数
+		case ProviderCustom:
+			// 自定义API（通常是OpenAI兼容）- 支持GPT-5.1参数
+			requestBody["max_completion_tokens"] = maxTokens
+
+			// GPT-5.1专用参数
+			if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
+				requestBody["reasoning_effort"] = "low"
+				requestBody["prompt_cache_retention"] = "24h"
+			}
+		default:
+			// 默认使用新格式，支持GPT-5.1参数
+			requestBody["max_completion_tokens"] = maxTokens
+
+			// GPT-5.1专用参数
+			if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
+				requestBody["reasoning_effort"] = "low"
+				requestBody["prompt_cache_retention"] = "24h"
+			}
+		}
+		
+		log.Printf("📤 [MCP] 使用OpenAI兼容API格式")
 	}
 
 	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持
@@ -314,6 +405,27 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", client.APIKey))
 	}
 
+	// 🆕 为Anthropic API设置自定义请求头
+	if client.RequestFormat == "anthropic" {
+		// 使用自定义请求头而不是Authorization header
+		for headerKey, headerValue := range client.CustomHeaders {
+			req.Header.Set(headerKey, headerValue)
+		}
+		log.Printf("🔧 [MCP] 已设置Anthropic专用请求头: %d个", len(client.CustomHeaders))
+	} else {
+		// 根据不同的Provider设置认证方式（OpenAI兼容API）
+		switch client.Provider {
+		case ProviderDeepSeek:
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", client.APIKey))
+		case ProviderQwen:
+			// 阿里云Qwen使用API-Key认证
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", client.APIKey))
+			// 注意：如果使用的不是兼容模式，可能需要不同的认证方式
+		default:
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", client.APIKey))
+		}
+	}
+
 	// 发送请求
 	httpClient := &http.Client{
 		Timeout: client.Timeout,
@@ -355,24 +467,58 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		return "", fmt.Errorf("API返回错误 (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	// 解析响应
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
+	// 🆕 根据API格式解析响应
+	var responseContent string
+	if client.RequestFormat == "anthropic" {
+		// Anthropic Claude API 响应格式
+		var anthropicResult struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		
+		if err := json.Unmarshal(body, &anthropicResult); err != nil {
+			return "", fmt.Errorf("解析Anthropic响应失败: %w", err)
+		}
+		
+		if len(anthropicResult.Content) == 0 {
+			return "", fmt.Errorf("Anthropic API返回空内容")
+		}
+		
+		// 拼接所有文本内容
+		for _, content := range anthropicResult.Content {
+			if content.Type == "text" {
+				responseContent += content.Text
+			}
+		}
+		
+		if responseContent == "" {
+			return "", fmt.Errorf("Anthropic API未返回文本内容")
+		}
+		
+		log.Printf("📥 [MCP] Anthropic响应解析成功: %d个内容块", len(anthropicResult.Content))
+	} else {
+		// OpenAI兼容API响应格式（默认）
+		var result struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
 
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("解析响应失败: %w", err)
-	}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return "", fmt.Errorf("解析OpenAI响应失败: %w", err)
+		}
 
-	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("API返回空响应")
-	}
+		if len(result.Choices) == 0 {
+			return "", fmt.Errorf("OpenAI API返回空响应")
+		}
 
-	responseContent := result.Choices[0].Message.Content
+		responseContent = result.Choices[0].Message.Content
+		log.Printf("📥 [MCP] OpenAI响应解析成功: %d个choices", len(result.Choices))
+	}
 
 	// 响应处理耗时统计
 	responseProcessDuration := time.Since(responseProcessStart)
