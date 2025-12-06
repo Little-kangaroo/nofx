@@ -163,7 +163,7 @@ func (monitor *OrderBookMonitor) monitoringLoop() {
 // performMonitoringCheck 执行监控检查
 func (monitor *OrderBookMonitor) performMonitoringCheck() {
 	// 获取当前盘口数据
-	orderBookData := monitor.calculator.GetCurrentOrderBookData(5)
+	orderBookData := monitor.calculator.GetCurrentOrderBookData(monitor.symbol, 5)
 	if orderBookData == nil || orderBookData.IsStale {
 		return
 	}

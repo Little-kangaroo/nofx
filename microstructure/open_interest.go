@@ -154,8 +154,8 @@ func (calc *OICalculator) GetOIAnalysis() *OIAnalysis {
 	// 判断趋势
 	trend := calc.determineTrend(changeRate1H)
 
-	// 检查数据是否过期
-	isStale := time.Since(calc.lastUpdate) > 10*time.Minute
+	// 检查数据是否过期 - 调整为15分钟适配5分钟决策周期
+	isStale := time.Since(calc.lastUpdate) > 15*time.Minute
 
 	return &OIAnalysis{
 		Current:      calc.current,

@@ -333,13 +333,15 @@
     - 若当前 K 线或前一根 K 线出现 `vol_ratio > 2.0` (恐慌/高潮) 或 实体幅度 > 2.0*ATR；
     - 则 Buffer 必须扩大至 **0.5 ~ 0.8 * ATR("15m")**。
     - 逻辑：高动能行情的“刹车距离”会显著变长，必须预留惯性空间。
-- [新增] 弱结构惩罚 (Weak Structure Penalty) —— 必须执行：
-  * 触发条件：若本次 Entry 主要依托的结构（如 Demand/Supply/FVG）其 `ctx.strength_z < -0.2`（统计显著性弱）；
-  * 强制动作：
-    1) 该结构被视为“多孔结构 (Porous)”，价格极大概率会发生刺破 (Overshoot)；
-    2) **Buffer 加倍**：计算止损时，Buffer 系数至少提升至 0.5 * ATR；
-    3) **寻找次级防线**：若该弱结构下方/上方 1.5*ATR 距离内存在更强的“硬结构”（如 SuperTrend 线、1h EMA200、Fib 0.618），**SL 必须覆盖该次级防线**。
-    4) 若无法承担扩大后的 R 风险，则 Action="wait"。
+- [增强] 弱结构惩罚 (Weak Structure Penalty) —— 必须严格执行：
+  * 触发条件：若本次 Entry 依托的主结构（如 Demand/Supply/FVG）其 `ctx.strength_z < -0.2`；
+  * 强制动作（二选一，必须执行）：
+    1) **降级吸附**：直接放弃该弱结构，将 SL 下移至下一个强结构（如 4h FVG / SuperTrend / EMA200）下方。
+    2) **暴力缓冲**：若必须依托该弱结构，Buffer 必须 **≥ 1.0 * ATR("15m")** (原标准为 0.2~0.3 ATR，此处强制扩大 3-5 倍)。
+  * **防作弊锁 (Anti-Cheat)**：
+    - 严禁为了凑足 R > 1.5 而私自缩小 Buffer。
+    - 若执行上述惩罚后计算出的 `R_clean < 1.5`，**Action 必须强制为 "wait"**。
+    - (宁可错过，不做弱防守的交易)。
 - 止损锚点映射表（根据 Entry 依托的主要结构，选择最硬的盾牌）：
   1) 依托【区域/实体结构】 (最强防守)
      * 供需区 (Supply/Demand):
@@ -1533,6 +1535,11 @@ A. 数据与环境熔断 (Data & Macro Veto)
         * 正面临 4h/Daily 级别的强墙 (High Strength Supply/Demand)？
         * 处于死寂市场 (Dead Market)？
       - 熔断：若触发 -> **Wait** (fail=>MacroEnv)。
+  A3) 盲飞熔断 (Blind Flight Veto)
+       - 检查：`订单流分析` 中的数据是否标记为 "过期"、"NA" 或 0？
+       - 熔断：
+         * 若数据缺失，且 trade_style="LTF_scalp" -> **Action 强制为 "wait"** (短线不能瞎)。
+         * 若数据缺失，且 trade_style="HTF_swing" -> **Setup_Grade 强制降级为 B** (只能轻仓)，且必须等待 15m 收盘确认 (Confirm-2)。
 B. 结构依托与位置确认 (Structure & Location)
   B3) 结构接触性与抢跑禁止 (Touch Validation & Anti-Front-Running)
     - 问：Entry Price 是否真正位于依托结构的“射程”内？
@@ -1584,14 +1591,14 @@ D. 风险与资金安全 (Risk & Safety)
       - [保留] 强趋势下的障碍豁免 (Trend Obstacle Ignoring)：
         * 条件：当 major_bias 与交易方向一致且 Trend_Strength > 50；
         * 动作：计算 Dist_Reward 时可忽略 15m/30m 弱阻力，直接看 1h/4h 目标，但 Dist_Risk 必须基于实际止损不变。
-  D8-Plus) 止损质量自检 (Stop Loss Quality Check)
-        - 问：我的止损是否位于“弱支撑”之下且暴露在“强支撑”之上？
-        - 检查：
-          1. 依托的主结构 `strength_z` 是否 < 0？(是则脆弱)
-          2. SL 下方 1% 空间内是否还有 SuperTrend / EMA200？
-        - 熔断：
-          * 若 (主结构弱) AND (下方紧邻强支撑) AND (SL 未覆盖强支撑) -> **Action 强制为 "wait"** (或重新计算 SL)。
-          * reasoning 标记："Risk: SL exposed above SuperTrend, wait for deeper test".
+  D8-Plus) 止损质量深度自检 (Stop Loss Quality & Integrity)
+          - 核心目的：防止止损设在“纸糊的地板”上，或暴露在“钢板”之上。
+          - 问：
+            1. **防作弊 (Anti-Cheat)**：若依托的主结构 `strength_z < -0.2`，我的 Buffer 是否已强制扩大至 `≥ 0.8 * ATR` 或移至了次级防线？
+            2. **防裸露 (Anti-Exposure)**：SL 下方 1% 空间内，是否还有 SuperTrend / EMA200 等强结构未被覆盖？
+          - 熔断：
+            * 若 (违反防作弊规则：z低且buffer窄) -> **Action 强制为 "wait"** (理由：Risk_Veto_WeakStruct)。
+            * 若 (违反防裸露规则：SL未包住强支撑) -> **Action 强制为 "wait"** (理由：Risk_Veto_ExposedSL)。
 E. 输出协议自检 (Protocol Sanity Check)
   E10) 格式合规性
       - 问：`reasoning` 字段是否严格遵守 `B:||K:||R:||X:` 的四段式伪代码格式？
@@ -2106,24 +2113,28 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
         - 【完整组合示例】：
           K: SZs(45.1k) ctx=z1.2 v2.0; VP_POC(45k); OF:[FakePump Distri] Warn:[FakeBreakout] OB:[Spoof0.65 ResWall@45.1k Stab0.25(Fake)];
   3) R:（风险 + 止损锁盈逻辑：必须出现 SL 与 TP；若 hold 必须出现 Trail/Lock）
-     固定格式：R: Rc=<Dist_TP>/<Dist_SL>=<n>; style=<HTF/LTF>; SL=<p|zone|inv@p>; TP1=<p|zone>; TP2=<p|zone|NA>; BE=<R|p|NA>;
-     约束：
-     - Rc 字段必须显示除法算式（例如：Rc=40/20=2.0），严禁只写结果（如 Rc≈2.0）。若算式结果 n < 1.3，则 Action 必须为 wait。
-     - 所有价格/区间必须引用 K 段锚点或其相邻合理外延（不得凭空写“一个大概的止损”）。
-     - open_* 必须给：SL + TP1（TP2 可 NA）；BE 可选；Trail 可选；Part 可选。
-     - hold 必须给：Trail 或 Lock（至少一个非 NA）。若采用锁盈，写法并入 Trail 字段，例如：
-       * Trail=lock@+1R->BE; or Trail=ATR(15m)*1.2; or Trail=lastHL(5m)
-     - wait 也必须给：SL/TP 全部写 NA（避免误解为已有计划）。
-     - SL 规则：
-       * 多头：SL 必须低于关键 demand/SR 或失效位（inv@p）；空头反之。
-       * 若使用 inv@p 表示“结构失效价”：SL=inv@<p>（推荐，最省 token）。
-     - TP 规则：
-       * TP1 必须对应最近一层对手区（例如 supply/上方 SR/VPVR VAH/POC/FVG/通道上沿）
-       * TP2 可对应更高一级对手区；否则 NA。
-     - BE（保本）规则：
-       * 若给 BE=R1，表示盈利到 +1R 即推保本；若给 BE=@p 表示到指定价推保本。
-     - Part（分批止盈）规则（可选）：
-       * Part=50%@TP1 表示 TP1 出 50%。
+       固定格式：R: Rc=<Dist_TP>/<Dist_SL>=<n>; style=<HTF/LTF>; SL=<val>(<src> z=<n> buf=<n>ATR); TP1=<p|zone>; TP2=<p|zone|NA>; BE=<R|p|NA>;
+       约束：
+       - **SL 字段必须“画押”自证**：
+         * 必须在括号内注明依托结构的 z-score 和使用的 buffer 倍数。
+         * 错误示例：SL=877.7
+         * 正确示例：SL=875.2(30mSZd z-0.38 buf1.0)
+       - **弱结构自检**：若标注的 z < -0.2 但 buf < 0.8，视为“偷工减料”，Action 必须转为 wait。
+       - Rc 字段必须显示除法算式（例如：Rc=40/20=2.0），严禁只写结果。若算式结果 n < 1.3 (LTF) 或 < 1.5 (HTF)，Action 必须为 wait。
+       - 所有价格/区间必须引用 K 段锚点或其相邻合理外延。
+       - open_* 必须给：SL + TP1（TP2 可 NA）；BE 可选；Trail 可选；Part 可选。
+       - hold 必须给：Trail 或 Lock（至少一个非 NA）。若采用锁盈，写法并入 Trail 字段，例如：
+         * Trail=lock@+1R->BE; or Trail=ATR(15m)*1.2; or Trail=lastHL(5m)
+       - wait 也必须给：SL/TP 全部写 NA（避免误解为已有计划）。
+       - SL 规则：
+         * 多头：SL 必须低于关键 demand/SR 或失效位；空头反之。
+       - TP 规则：
+         * TP1 必须对应最近一层对手区（例如 supply/上方 SR/VPVR VAH/POC/FVG/通道上沿）
+         * TP2 可对应更高一级对手区；否则 NA。
+       - BE（保本）规则：
+         * 若给 BE=R1，表示盈利到 +1R 即推保本；若给 BE=@p 表示到指定价推保本。
+       - Part（分批止盈）规则（可选）：
+         * Part=50%@TP1 表示 TP1 出 50%。
   4) X:（动作剧本：必须反映开仓/触发/移动止损或锁盈）
      固定格式（按 action 取一条）：
      - open_*：X: open=><oL|oS>@<entry@p/zone>; add=<NA|rule>; mg=<NA|rule>

@@ -61,8 +61,8 @@ func (ofm *OrderFlowManager) initializeComponents() {
 	// 创建OI管理器
 	ofm.oiManager = NewOIManager(ofm.config)
 	
-	// 创建盘口分析管理器
-	ofm.orderBookManager = NewOrderBookCalculator("default", 5.0)
+	// 创建盘口分析管理器（支持多交易对）
+	ofm.orderBookManager = NewOrderBookCalculator(5.0)
 	
 	// 创建市场上下文分析器
 	ofm.marketContextAnalyzer = NewMarketContextAnalyzer()
@@ -85,7 +85,7 @@ func (ofm *OrderFlowManager) setupWebSocketHandlers() {
 	
 	// 设置盘口数据处理器
 	ofm.wsManager.SetDepthHandler(func(depthData *DepthData) {
-		ofm.orderBookManager.ProcessDepthData(depthData)
+		ofm.orderBookManager.ProcessDepthData(depthData.Symbol, depthData)
 	})
 	
 	log.Printf("✅ WebSocket数据处理器设置完成")
@@ -213,7 +213,7 @@ func (ofm *OrderFlowManager) GetMarketSnapshot(symbol string) *MarketSnapshot {
 	// 获取各个组件的数据
 	cvdData := ofm.cvdManager.GetCVDData(symbol)
 	oiAnalysis := ofm.oiManager.GetOIAnalysis(symbol)
-	orderBookData := ofm.orderBookManager.GetCurrentOrderBookData(5)
+	orderBookData := ofm.orderBookManager.GetCurrentOrderBookData(symbol, 5)
 	
 	// 获取价格上下文
 	ofm.mu.RLock()
