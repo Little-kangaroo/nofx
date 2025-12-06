@@ -1,8 +1,12 @@
 package microstructure
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -186,21 +190,94 @@ func (ofm *OrderFlowManager) SubscribeSymbol(symbol string) error {
 
 // subscribeOIStream 订阅OI数据流（内部方法）
 func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
-	// 这里需要扩展WebSocket管理器以支持OI流
-	// 或者创建单独的OI WebSocket连接
-	
-	// 简化实现：通过HTTP API定期获取OI数据
+	// 启动定期获取OI数据的协程
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute) // 每5分钟获取一次OI数据
 		defer ticker.Stop()
 		
+		// 立即获取一次数据
+		ofm.fetchAndProcessOIData(symbol)
+		
 		for range ticker.C {
-			// 这里应该调用币安API获取OI数据
-			// 暂时跳过具体实现
+			// 检查是否仍在运行
+			ofm.mu.RLock()
+			running := ofm.isRunning
+			ofm.mu.RUnlock()
+			
+			if !running {
+				return
+			}
+			
+			ofm.fetchAndProcessOIData(symbol)
 		}
 	}()
 	
 	return nil
+}
+
+// fetchAndProcessOIData 获取并处理OI数据
+func (ofm *OrderFlowManager) fetchAndProcessOIData(symbol string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("❌ 获取OI数据异常 %s: %v", symbol, r)
+		}
+	}()
+	
+	// 调用币安API获取OI数据
+	oiData, err := ofm.getOpenInterestFromAPI(symbol)
+	if err != nil {
+		log.Printf("❌ 获取OI数据失败 %s: %v", symbol, err)
+		return
+	}
+	
+	// 传递给OI管理器处理
+	ofm.oiManager.ProcessOIData(symbol, oiData)
+	log.Printf("✅ 成功获取并处理OI数据 %s: %.0f", symbol, oiData.OpenInterest)
+}
+
+// getOpenInterestFromAPI 从币安API获取持仓量数据
+func (ofm *OrderFlowManager) getOpenInterestFromAPI(symbol string) (*OIData, error) {
+	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/openInterest?symbol=%s", symbol)
+	
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("API请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("API返回错误状态码: %d", resp.StatusCode)
+	}
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+	
+	var result struct {
+		OpenInterest string `json:"openInterest"`
+		Symbol       string `json:"symbol"`
+		Time         int64  `json:"time"`
+	}
+	
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %w", err)
+	}
+	
+	openInterest, err := strconv.ParseFloat(result.OpenInterest, 64)
+	if err != nil {
+		return nil, fmt.Errorf("解析持仓量失败: %w", err)
+	}
+	
+	return &OIData{
+		Symbol:       symbol,
+		OpenInterest: openInterest,
+		Timestamp:    time.Now(),
+	}, nil
 }
 
 // GetMarketSnapshot 获取市场快照（供AI使用）

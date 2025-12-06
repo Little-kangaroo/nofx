@@ -290,6 +290,12 @@ func (manager *OIManager) ProcessOIMessage(message []byte) error {
 	return nil
 }
 
+// ProcessOIData 处理来自API的OI数据
+func (manager *OIManager) ProcessOIData(symbol string, oiData *OIData) {
+	calc := manager.GetOrCreateCalculator(symbol)
+	calc.ProcessOIData(oiData)
+}
+
 // GetOIAnalysis 获取指定币种的OI分析
 func (manager *OIManager) GetOIAnalysis(symbol string) *OIAnalysis {
 	manager.mu.RLock()
