@@ -7,10 +7,10 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"nofx/microstructure"
 	"strconv"
 	"strings"
 	"time"
-	"nofx/microstructure"
 )
 
 // Get 获取指定代币的市场数据
@@ -132,30 +132,30 @@ func Get(symbol string) (*Data, error) {
 
 	// OHLC数据提取阶段
 	ohlcExtractionStart := time.Now()
-	
+
 	// 提取5m级别OHLC数据 (上一根已收盘 + 更早已收盘)
 	ohlc5mPrevClosed, ohlc5mEarlierClosed := extract5mOHLCData(klines5m)
-	
-	// 提取4h级别OHLC数据 (上一根已收盘)  
+
+	// 提取4h级别OHLC数据 (上一根已收盘)
 	ohlc4hPrevClosed := extract4hOHLCData(klines4h)
-	
+
 	ohlcExtractionDuration := time.Since(ohlcExtractionStart)
 	log.Printf("📊 [%s-OHLC提取] 耗时: %v (5m+4h级别)", symbol, ohlcExtractionDuration)
 
 	data := &Data{
-		Symbol:                 symbol,
-		CurrentPrice:           currentPrice,
-		PriceChange1h:          priceChange1h,
-		PriceChange4h:          priceChange4h,
-		CurrentEMA20:           currentEMA20,
-		CurrentMACD:            currentMACD,
-		CurrentRSI7:            currentRSI7,
-		
+		Symbol:        symbol,
+		CurrentPrice:  currentPrice,
+		PriceChange1h: priceChange1h,
+		PriceChange4h: priceChange4h,
+		CurrentEMA20:  currentEMA20,
+		CurrentMACD:   currentMACD,
+		CurrentRSI7:   currentRSI7,
+
 		// OHLC数据
-		OHLC5mPrevClosed:       ohlc5mPrevClosed,
-		OHLC5mEarlierClosed:    ohlc5mEarlierClosed,
-		OHLC4hPrevClosed:       ohlc4hPrevClosed,
-		
+		OHLC5mPrevClosed:    ohlc5mPrevClosed,
+		OHLC5mEarlierClosed: ohlc5mEarlierClosed,
+		OHLC4hPrevClosed:    ohlc4hPrevClosed,
+
 		OpenInterest:           oiData,
 		FundingRate:            fundingRate,
 		IntradaySeries:         intradayData,
@@ -203,7 +203,7 @@ func extract5mOHLCData(klines5m []Kline) (*OHLCData, *OHLCData) {
 		log.Printf("⚠️ [5m OHLC] K线数据不足，无法提取prev_closed")
 		return nil, nil
 	}
-	
+
 	// 上一根已收盘K线(倒数第2根) - 主要数据
 	prevClosed := extractOHLCData(klines5m[len(klines5m)-2])
 	// 更早的已收盘K线(倒数第3根) - 用于对比分析
@@ -211,7 +211,7 @@ func extract5mOHLCData(klines5m []Kline) (*OHLCData, *OHLCData) {
 	if len(klines5m) >= 3 {
 		earlierClosed = extractOHLCData(klines5m[len(klines5m)-3])
 	}
-	
+
 	return prevClosed, earlierClosed
 }
 
@@ -221,7 +221,7 @@ func extract4hOHLCData(klines4h []Kline) *OHLCData {
 		log.Printf("⚠️ [4h OHLC] K线数据不足，无法提取prev_closed")
 		return nil
 	}
-	
+
 	// 上一根已收盘K线(倒数第2根)
 	return extractOHLCData(klines4h[len(klines4h)-2])
 }
@@ -740,9 +740,9 @@ func FormatAsCompactData(data *Data) string {
 
 	result := map[string]interface{}{
 		data.Symbol: map[string]interface{}{
-			"基础指标":    calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
+			"基础指标":       calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
-			"订单流分析":   getOrderFlowDataForAI(data.Symbol),
+			"订单流分析":     getOrderFlowDataForAI(data.Symbol),
 		},
 	}
 
@@ -775,7 +775,7 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		if len(klines5m) >= 13 {
 			price1hAgo := klines5m[len(klines5m)-13].Close
 			if price1hAgo > 0 {
-				result["change_1h"] = FormatByDataTypeAndSymbol(((data.CurrentPrice - price1hAgo) / price1hAgo) * 100, "percentage", data.Symbol)
+				result["change_1h"] = FormatByDataTypeAndSymbol(((data.CurrentPrice-price1hAgo)/price1hAgo)*100, "percentage", data.Symbol)
 			}
 		}
 	}
@@ -784,7 +784,7 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 	if klines4h, exists := timeframeKlines["4h"]; exists && len(klines4h) >= 2 {
 		price4hAgo := klines4h[len(klines4h)-2].Close
 		if price4hAgo > 0 {
-			result["change_4h"] = FormatByDataTypeAndSymbol(((data.CurrentPrice - price4hAgo) / price4hAgo) * 100, "percentage", data.Symbol)
+			result["change_4h"] = FormatByDataTypeAndSymbol(((data.CurrentPrice-price4hAgo)/price4hAgo)*100, "percentage", data.Symbol)
 		}
 	}
 
@@ -951,7 +951,7 @@ func formatOHLCData(ohlcData *OHLCData, symbol string) map[string]interface{} {
 	if ohlcData == nil {
 		return nil
 	}
-	
+
 	return map[string]interface{}{
 		"open":       FormatByDataTypeAndSymbol(ohlcData.Open, "price", symbol),
 		"high":       FormatByDataTypeAndSymbol(ohlcData.High, "price", symbol),
@@ -981,12 +981,12 @@ func extractCompactMultiTimeframeAnalysis(data *Data) map[string]interface{} {
 		}
 
 		result[tf] = map[string]interface{}{
-			"道氏理论数据":  extractCompactDowTheory(tfData.DowTheory, data.Symbol),
-			"通道数据":    extractCompactChannelAnalysis(tfData.ChannelAnalysis, data.Symbol),
-			"VPVR数据":  extractCompactVPVR(tfData.VolumeProfile, data.Symbol),
-			"供需区数据":   extractCompactSupplyDemand(tfData.SupplyDemand, data.Symbol),
-			"FVG数据":   extractCompactFVG(tfData.FairValueGaps, data.Symbol),
-			"斐波纳契数据":  extractCompactFibonacci(tfData.Fibonacci, data.Symbol),
+			"道氏理论数据":   extractCompactDowTheory(tfData.DowTheory, data.Symbol),
+			"通道数据":       extractCompactChannelAnalysis(tfData.ChannelAnalysis, data.Symbol),
+			"VPVR数据":       extractCompactVPVR(tfData.VolumeProfile, data.Symbol),
+			"供需区数据":     extractCompactSupplyDemand(tfData.SupplyDemand, data.Symbol),
+			"FVG数据":        extractCompactFVG(tfData.FairValueGaps, data.Symbol),
+			"斐波纳契数据":   extractCompactFibonacci(tfData.Fibonacci, data.Symbol),
 			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance, data.Symbol),
 		}
 	}
@@ -1110,7 +1110,7 @@ func extractCompactSupplyDemand(data *SupplyDemandData, symbol string) map[strin
 			"touches":  zone.TouchCount,
 			"status":   zone.Status,
 		}
-		
+
 		// 添加上下文评分
 		if zone.Context != nil {
 			zoneInfo["ctx"] = map[string]interface{}{
@@ -1148,7 +1148,7 @@ func extractCompactSupplyDemand(data *SupplyDemandData, symbol string) map[strin
 	result["supply_zones"] = supplyZones
 	result["demand_zones"] = demandZones
 	result["zone_stats"] = map[string]interface{}{
-		"avg_strength": FormatByDataTypeAndSymbol(strengthSum / float64(len(data.ActiveZones)), "strength", symbol),
+		"avg_strength": FormatByDataTypeAndSymbol(strengthSum/float64(len(data.ActiveZones)), "strength", symbol),
 		"supply_count": supplyCount,
 		"demand_count": demandCount,
 	}
@@ -1185,7 +1185,7 @@ func extractCompactFVG(data *FVGData, symbol string) map[string]interface{} {
 	if len(data.ActiveFVGs) > 0 {
 		// 取第一个活跃的FVG作为最近的
 		fvg := data.ActiveFVGs[0]
-		result["nearest_gap"] = FormatByDataTypeAndSymbol((fvg.LowerBound + fvg.UpperBound) / 2, "price", symbol)
+		result["nearest_gap"] = FormatByDataTypeAndSymbol((fvg.LowerBound+fvg.UpperBound)/2, "price", symbol)
 		if fvg.Type == BullishFVG {
 			result["gap_type"] = "bullish"
 		} else if fvg.Type == BearishFVG {
@@ -1193,24 +1193,24 @@ func extractCompactFVG(data *FVGData, symbol string) map[string]interface{} {
 		} else {
 			result["gap_type"] = "neutral"
 		}
-		
+
 		// 添加详细的FVG信息
 		var gaps []map[string]interface{}
 		for _, gap := range data.ActiveFVGs {
 			gapInfo := map[string]interface{}{
-				"id":           gap.ID,
-				"type":         gap.Type,
-				"upper_bound":  FormatByDataTypeAndSymbol(gap.UpperBound, "price", symbol),
-				"lower_bound":  FormatByDataTypeAndSymbol(gap.LowerBound, "price", symbol),
-				"center_price": FormatByDataTypeAndSymbol(gap.CenterPrice, "price", symbol),
-				"width":        FormatByDataTypeAndSymbol(gap.Width, "price", symbol),
+				"id":            gap.ID,
+				"type":          gap.Type,
+				"upper_bound":   FormatByDataTypeAndSymbol(gap.UpperBound, "price", symbol),
+				"lower_bound":   FormatByDataTypeAndSymbol(gap.LowerBound, "price", symbol),
+				"center_price":  FormatByDataTypeAndSymbol(gap.CenterPrice, "price", symbol),
+				"width":         FormatByDataTypeAndSymbol(gap.Width, "price", symbol),
 				"width_percent": FormatByDataTypeAndSymbol(gap.WidthPercent, "percentage", symbol),
-				"strength":     FormatByDataTypeAndSymbol(gap.Strength, "strength", symbol),
-				"quality":      gap.Quality,
-				"status":       gap.Status,
-				"touch_count":  gap.TouchCount,
+				"strength":      FormatByDataTypeAndSymbol(gap.Strength, "strength", symbol),
+				"quality":       gap.Quality,
+				"status":        gap.Status,
+				"touch_count":   gap.TouchCount,
 			}
-			
+
 			// 添加上下文评分
 			if gap.Context != nil {
 				gapInfo["ctx"] = map[string]interface{}{
@@ -1222,7 +1222,7 @@ func extractCompactFVG(data *FVGData, symbol string) map[string]interface{} {
 					"rank_pct":   FormatByDataTypeAndSymbol(gap.Context.RankPct, "ratio", symbol),
 				}
 			}
-			
+
 			gaps = append(gaps, gapInfo)
 		}
 		result["gaps"] = gaps
@@ -1873,42 +1873,42 @@ func GetMultiSymbolAnalysis(symbols []string) (map[string]map[string]interface{}
 		symbolData := map[string]interface{}{
 			"5m": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "dow_theory"),
-				"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "channel_analysis"),
-				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "volume_profile"),
-				"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "supply_demand"),
-				"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fair_value_gaps"),
+				"通道数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "channel_analysis"),
+				"VPVR数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "volume_profile"),
+				"供需区数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "supply_demand"),
+				"FVG数据":      extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fair_value_gaps"),
 				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fibonacci"),
 			},
 			"15m": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "dow_theory"),
-				"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "channel_analysis"),
-				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "volume_profile"),
-				"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "supply_demand"),
-				"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fair_value_gaps"),
+				"通道数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "channel_analysis"),
+				"VPVR数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "volume_profile"),
+				"供需区数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "supply_demand"),
+				"FVG数据":      extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fair_value_gaps"),
 				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fibonacci"),
 			},
 			"30m": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "dow_theory"),
-				"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "channel_analysis"),
-				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "volume_profile"),
-				"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "supply_demand"),
-				"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fair_value_gaps"),
+				"通道数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "channel_analysis"),
+				"VPVR数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "volume_profile"),
+				"供需区数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "supply_demand"),
+				"FVG数据":      extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fair_value_gaps"),
 				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fibonacci"),
 			},
 			"1h": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "dow_theory"),
-				"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "channel_analysis"),
-				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "volume_profile"),
-				"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "supply_demand"),
-				"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fair_value_gaps"),
+				"通道数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "channel_analysis"),
+				"VPVR数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "volume_profile"),
+				"供需区数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "supply_demand"),
+				"FVG数据":      extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fair_value_gaps"),
 				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fibonacci"),
 			},
 			"4h": map[string]interface{}{
 				"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "dow_theory"),
-				"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "channel_analysis"),
-				"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "volume_profile"),
-				"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "supply_demand"),
-				"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fair_value_gaps"),
+				"通道数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "channel_analysis"),
+				"VPVR数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "volume_profile"),
+				"供需区数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "supply_demand"),
+				"FVG数据":      extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fair_value_gaps"),
 				"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fibonacci"),
 			},
 		}
@@ -1975,42 +1975,42 @@ func GetSingleSymbolAnalysis(symbol string) (map[string]interface{}, error) {
 	symbolData := map[string]interface{}{
 		"5m": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "dow_theory"),
-			"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "channel_analysis"),
-			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "volume_profile"),
-			"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "supply_demand"),
-			"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fair_value_gaps"),
+			"通道数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "channel_analysis"),
+			"VPVR数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "volume_profile"),
+			"供需区数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "supply_demand"),
+			"FVG数据":      extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fair_value_gaps"),
 			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "5m", "fibonacci"),
 		},
 		"15m": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "dow_theory"),
-			"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "channel_analysis"),
-			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "volume_profile"),
-			"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "supply_demand"),
-			"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fair_value_gaps"),
+			"通道数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "channel_analysis"),
+			"VPVR数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "volume_profile"),
+			"供需区数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "supply_demand"),
+			"FVG数据":      extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fair_value_gaps"),
 			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "15m", "fibonacci"),
 		},
 		"30m": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "dow_theory"),
-			"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "channel_analysis"),
-			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "volume_profile"),
-			"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "supply_demand"),
-			"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fair_value_gaps"),
+			"通道数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "channel_analysis"),
+			"VPVR数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "volume_profile"),
+			"供需区数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "supply_demand"),
+			"FVG数据":      extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fair_value_gaps"),
 			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "30m", "fibonacci"),
 		},
 		"1h": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "dow_theory"),
-			"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "channel_analysis"),
-			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "volume_profile"),
-			"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "supply_demand"),
-			"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fair_value_gaps"),
+			"通道数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "channel_analysis"),
+			"VPVR数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "volume_profile"),
+			"供需区数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "supply_demand"),
+			"FVG数据":      extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fair_value_gaps"),
 			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "1h", "fibonacci"),
 		},
 		"4h": map[string]interface{}{
 			"道氏理论数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "dow_theory"),
-			"通道数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "channel_analysis"),
-			"VPVR数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "volume_profile"),
-			"供需区数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "supply_demand"),
-			"FVG数据":  extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fair_value_gaps"),
+			"通道数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "channel_analysis"),
+			"VPVR数据":     extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "volume_profile"),
+			"供需区数据":   extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "supply_demand"),
+			"FVG数据":      extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fair_value_gaps"),
 			"斐波纳契数据": extractTimeframeData(data.MultiTimeframeAnalysis, "4h", "fibonacci"),
 		},
 	}
@@ -2290,11 +2290,11 @@ func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKli
 				"direction":    supertrend.Direction,
 				"current_line": FormatByDataTypeAndSymbol(supertrend.CurrentLine, "price", data.Symbol),
 			},
-			"通道数据":    extractCompactChannelAnalysis(tfData.ChannelAnalysis, data.Symbol),
-			"VPVR数据":  extractCompactVPVR(tfData.VolumeProfile, data.Symbol),
-			"供需区数据":   extractCompactSupplyDemand(tfData.SupplyDemand, data.Symbol),
-			"FVG数据":   extractCompactFVG(tfData.FairValueGaps, data.Symbol),
-			"斐波纳契数据":  extractCompactFibonacci(tfData.Fibonacci, data.Symbol),
+			"通道数据":       extractCompactChannelAnalysis(tfData.ChannelAnalysis, data.Symbol),
+			"VPVR数据":       extractCompactVPVR(tfData.VolumeProfile, data.Symbol),
+			"供需区数据":     extractCompactSupplyDemand(tfData.SupplyDemand, data.Symbol),
+			"FVG数据":        extractCompactFVG(tfData.FairValueGaps, data.Symbol),
+			"斐波纳契数据":   extractCompactFibonacci(tfData.Fibonacci, data.Symbol),
 			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance, data.Symbol),
 		}
 	}
@@ -2392,7 +2392,7 @@ func getOrderFlowDataForAI(symbol string) map[string]interface{} {
 			log.Printf("⚠️ 订单流数据获取失败 %s: %v", symbol, r)
 		}
 	}()
-	
+
 	// 检查订单流系统是否已初始化
 	ofm := microstructure.GetGlobalOrderFlowManager()
 	if ofm == nil {
@@ -2400,7 +2400,7 @@ func getOrderFlowDataForAI(symbol string) map[string]interface{} {
 			"状态": "订单流系统未初始化",
 		}
 	}
-	
+
 	// 获取市场快照（V2.0增强版本）
 	snapshot := ofm.GetMarketSnapshot(symbol)
 	if snapshot == nil {
@@ -2408,7 +2408,7 @@ func getOrderFlowDataForAI(symbol string) map[string]interface{} {
 			"状态": "暂无订单流数据",
 		}
 	}
-	
+
 	// 检查数据是否过期
 	if snapshot.CVDData.IsStale || snapshot.OIAnalysis.IsStale || snapshot.OrderBookData.IsStale {
 		return map[string]interface{}{
@@ -2417,30 +2417,30 @@ func getOrderFlowDataForAI(symbol string) map[string]interface{} {
 				"spot_cvd_delta_usd":    0,
 				"futures_cvd_delta_usd": 0,
 				"candle_intent":         "data_insufficient",
-				"数据质量":               "过期",
+				"数据质量":              "过期",
 			},
 			"宏观资金趋势": map[string]interface{}{
 				"spot_cvd_1h_usd":    0,
 				"futures_cvd_1h_usd": 0,
-				"数据质量":            "过期",
+				"数据质量":           "过期",
 			},
 		}
 	}
-	
+
 	// V2.0: 获取5分钟增量CVD数据 - 直接从快照获取
 	snapshot = ofm.GetMarketSnapshot(symbol)
 	if snapshot == nil {
 		return make(map[string]interface{})
 	}
-	
+
 	// 构建V2.0 AI数据格式
 	result := map[string]interface{}{
 		"本周期博弈_5m": buildCurrentPeriodData(snapshot),
-		"宏观资金趋势": buildMacroTrendData(snapshot),
-		"盘口结构_v2": buildEnhancedOrderBookData(snapshot.OrderBookData),
-		"数据质量": buildDataQualityInfo(snapshot),
+		"宏观资金趋势":  buildMacroTrendData(snapshot),
+		"盘口结构_v2":   buildEnhancedOrderBookData(snapshot.OrderBookData),
+		"数据质量":      buildDataQualityInfo(snapshot),
 	}
-	
+
 	return result
 }
 
@@ -2449,7 +2449,7 @@ func buildCurrentPeriodData(snapshot *microstructure.MarketSnapshot) map[string]
 	// 从缓存获取5分钟增量数据
 	globalCache := microstructure.GetGlobalCache()
 	cvdDelta5m := globalCache.GetCVDDelta5m(snapshot.Symbol)
-	
+
 	if cvdDelta5m == nil {
 		// 如果没有缓存数据，创建默认结构
 		return map[string]interface{}{
@@ -2465,7 +2465,7 @@ func buildCurrentPeriodData(snapshot *microstructure.MarketSnapshot) map[string]
 			"analysis_time":         time.Now().Format("15:04:05"),
 		}
 	}
-	
+
 	return map[string]interface{}{
 		"price_delta_pct":       FormatByDataTypeAndSymbol(cvdDelta5m.PriceDeltaPct, "percentage", snapshot.Symbol),
 		"spot_cvd_delta_usd":    FormatByDataTypeAndSymbol(cvdDelta5m.SpotCVDDeltaUSD, "volume", snapshot.Symbol),
@@ -2485,16 +2485,16 @@ func buildCurrentPeriodData(snapshot *microstructure.MarketSnapshot) map[string]
 // buildMacroTrendData 构建宏观趋势数据（保留1小时级别数据）
 func buildMacroTrendData(snapshot *microstructure.MarketSnapshot) map[string]interface{} {
 	return map[string]interface{}{
-		"spot_cvd_1h_usd":     FormatByDataTypeAndSymbol(snapshot.CVDData.SpotCVD1H, "volume", snapshot.Symbol),
-		"futures_cvd_1h_usd":  FormatByDataTypeAndSymbol(snapshot.CVDData.FuturesCVD1H, "volume", snapshot.Symbol),
-		"oi_change_1h_pct":    FormatByDataTypeAndSymbol(snapshot.OIAnalysis.ChangeRate1H, "percentage", snapshot.Symbol),
-		"cvd_divergence":      snapshot.MarketContext.CVDDivergence,
-		"context_inference":   snapshot.MarketContext.ContextInference,
-		"signal_strength":     FormatByDataTypeAndSymbol(snapshot.MarketContext.SignalStrength, "strength", snapshot.Symbol),
-		"market_regime":       snapshot.MarketContext.GameMatrix.MatrixType,
-		"dominant_direction":  snapshot.CVDData.Signal,
-		"trend_alignment":     calculateTrendAlignment(snapshot),
-		"confidence_level":    FormatByDataTypeAndSymbol(snapshot.MarketContext.SignalStrength/100.0, "confidence", snapshot.Symbol),
+		"spot_cvd_1h_usd":    FormatByDataTypeAndSymbol(snapshot.CVDData.SpotCVD1H, "volume", snapshot.Symbol),
+		"futures_cvd_1h_usd": FormatByDataTypeAndSymbol(snapshot.CVDData.FuturesCVD1H, "volume", snapshot.Symbol),
+		"oi_change_1h_pct":   FormatByDataTypeAndSymbol(snapshot.OIAnalysis.ChangeRate1H, "percentage", snapshot.Symbol),
+		"cvd_divergence":     snapshot.MarketContext.CVDDivergence,
+		"context_inference":  snapshot.MarketContext.ContextInference,
+		"signal_strength":    FormatByDataTypeAndSymbol(snapshot.MarketContext.SignalStrength, "strength", snapshot.Symbol),
+		"market_regime":      snapshot.MarketContext.GameMatrix.MatrixType,
+		"dominant_direction": snapshot.CVDData.Signal,
+		"trend_alignment":    calculateTrendAlignment(snapshot),
+		"confidence_level":   FormatByDataTypeAndSymbol(snapshot.MarketContext.SignalStrength/100.0, "confidence", snapshot.Symbol),
 	}
 }
 
@@ -2512,7 +2512,7 @@ func buildEnhancedOrderBookData(orderBookData *microstructure.OrderBookData) map
 			"support_wall":         nil,
 		}
 	}
-	
+
 	result := map[string]interface{}{
 		"imbalance_ratio":      FormatByDataTypeAndSymbol(orderBookData.ImbalanceRatio, "ratio", ""),
 		"imbalance_trend":      orderBookData.ImbalanceTrend,
@@ -2523,7 +2523,7 @@ func buildEnhancedOrderBookData(orderBookData *microstructure.OrderBookData) map
 		"bid_pressure":         FormatByDataTypeAndSymbol(orderBookData.BidPressure, "volume", ""),
 		"ask_pressure":         FormatByDataTypeAndSymbol(orderBookData.AskPressure, "volume", ""),
 	}
-	
+
 	// 增强版阻力墙信息（包含稳定性评分）
 	if orderBookData.NearestResistance != nil {
 		result["resistance_wall"] = map[string]interface{}{
@@ -2539,7 +2539,7 @@ func buildEnhancedOrderBookData(orderBookData *microstructure.OrderBookData) map
 			"avg_size":          FormatByDataTypeAndSymbol(orderBookData.NearestResistance.AverageSize, "volume", ""),
 		}
 	}
-	
+
 	// 增强版支撑墙信息
 	if orderBookData.NearestSupport != nil {
 		result["support_wall"] = map[string]interface{}{
@@ -2555,7 +2555,7 @@ func buildEnhancedOrderBookData(orderBookData *microstructure.OrderBookData) map
 			"avg_size":          FormatByDataTypeAndSymbol(orderBookData.NearestSupport.AverageSize, "volume", ""),
 		}
 	}
-	
+
 	return result
 }
 
@@ -2566,38 +2566,38 @@ func buildDataQualityInfo(snapshot *microstructure.MarketSnapshot) map[string]in
 	cvdDelta5m := globalCache.GetCVDDelta5m(snapshot.Symbol)
 	// 计算整体质量评分
 	overallScore := 1.0
-	
+
 	// CVD数据质量
 	cvdScore := 1.0
 	if snapshot.CVDData.IsStale {
 		cvdScore = 0.3
-	} else if time.Since(snapshot.CVDData.LastUpdate) > 2*time.Minute {
+	} else if time.Since(snapshot.CVDData.LastUpdate) > 7*time.Minute {
 		cvdScore = 0.7
 	}
-	
+
 	// 盘口数据质量
 	orderBookScore := 1.0
 	if snapshot.OrderBookData.IsStale {
 		orderBookScore = 0.3
-	} else if time.Since(snapshot.OrderBookData.LastUpdate) > time.Minute {
+	} else if time.Since(snapshot.OrderBookData.LastUpdate) > 6*time.Minute {
 		orderBookScore = 0.8
 	}
-	
+
 	// OI数据质量
 	oiScore := 1.0
 	if snapshot.OIAnalysis.IsStale {
 		oiScore = 0.5
 	}
-	
+
 	// 5分钟增量数据质量
 	incrementalScore := 0.5
 	if cvdDelta5m != nil {
 		incrementalScore = cvdDelta5m.DataQuality
 	}
-	
+
 	// 加权平均
 	overallScore = (cvdScore*0.3 + orderBookScore*0.3 + oiScore*0.2 + incrementalScore*0.2)
-	
+
 	// 确定状态
 	status := "正常"
 	if overallScore < 0.5 {
@@ -2605,7 +2605,7 @@ func buildDataQualityInfo(snapshot *microstructure.MarketSnapshot) map[string]in
 	} else if overallScore < 0.8 {
 		status = "延迟"
 	}
-	
+
 	return map[string]interface{}{
 		"cvd_reliability":       FormatByDataTypeAndSymbol(cvdScore, "ratio", ""),
 		"orderbook_reliability": FormatByDataTypeAndSymbol(orderBookScore, "ratio", ""),
@@ -2623,7 +2623,7 @@ func buildDataQualityInfo(snapshot *microstructure.MarketSnapshot) map[string]in
 func calculateTrendAlignment(snapshot *microstructure.MarketSnapshot) string {
 	spotCVD := snapshot.CVDData.SpotCVD1H
 	futuresCVD := snapshot.CVDData.FuturesCVD1H
-	
+
 	// 判断趋势一致性
 	if spotCVD > 0 && futuresCVD > 0 {
 		return "bullish_aligned"
