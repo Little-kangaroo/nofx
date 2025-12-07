@@ -346,6 +346,27 @@ func (manager *CVDManager) GetCVDDelta5m(symbol string) *CVDDelta5m {
 	return calc.GetCVDDelta5m()
 }
 
+// ForceUpdateAllCVDDeltas 强制更新所有币种的5分钟CVD增量数据（用于K线收盘同步）
+func (manager *CVDManager) ForceUpdateAllCVDDeltas() {
+	manager.mu.RLock()
+	symbols := make([]string, 0, len(manager.calculators))
+	for symbol := range manager.calculators {
+		symbols = append(symbols, symbol)
+	}
+	manager.mu.RUnlock()
+	
+	log.Printf("🔧 强制更新所有币种的CVD增量数据，共%d个币种", len(symbols))
+	
+	for _, symbol := range symbols {
+		calc := manager.calculators[symbol]
+		if calc != nil {
+			calc.ForceUpdate5MinuteDelta()
+		}
+	}
+	
+	log.Printf("✅ 所有CVD增量数据更新完成")
+}
+
 // GetAllCVDData 获取所有币种的CVD数据
 func (manager *CVDManager) GetAllCVDData() map[string]*CVDData {
 	manager.mu.RLock()
@@ -748,4 +769,14 @@ func (calc *CVDCalculator) GetCVDDelta5m() *CVDDelta5m {
 	}
 	
 	return latest
+}
+
+// ForceUpdate5MinuteDelta 强制更新5分钟增量数据（用于K线收盘同步）
+func (calc *CVDCalculator) ForceUpdate5MinuteDelta() {
+	calc.mu.Lock()
+	defer calc.mu.Unlock()
+	
+	currentTime := time.Now()
+	log.Printf("🔧 [%s] 强制更新5分钟增量数据", calc.symbol)
+	calc.update5MinuteDelta(currentTime)
 }

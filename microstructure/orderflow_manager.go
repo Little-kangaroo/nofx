@@ -407,6 +407,18 @@ func (ofm *OrderFlowManager) getSubscribedSymbolsList() []string {
 	return symbols
 }
 
+// ForceUpdateAllCVDDeltas 强制更新所有币种的5分钟CVD增量数据（用于K线收盘同步）
+func (ofm *OrderFlowManager) ForceUpdateAllCVDDeltas() {
+	ofm.mu.RLock()
+	defer ofm.mu.RUnlock()
+	
+	if ofm.cvdManager != nil {
+		ofm.cvdManager.ForceUpdateAllCVDDeltas()
+	} else {
+		log.Printf("⚠️ CVDManager为空，无法强制更新CVD增量数据")
+	}
+}
+
 // ===== 市场快照结构 =====
 
 // MarketSnapshot 市场快照（V2.0整合所有订单流数据）

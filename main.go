@@ -424,6 +424,16 @@ func main() {
 		callbackStart := time.Now()
 		log.Printf("🔔 BTCUSDT触发回调开始: %v", callbackStart.Format("15:04:05.000"))
 		
+		// 🔧 在AI分析前，强制更新所有币种的CVD增量数据
+		log.Printf("🔄 强制更新CVD增量数据...")
+		orderflowManager := microstructure.GetGlobalOrderFlowManager()
+		if orderflowManager != nil {
+			orderflowManager.ForceUpdateAllCVDDeltas()
+			log.Printf("✅ CVD增量数据更新完成")
+		} else {
+			log.Printf("⚠️ 无法获取OrderFlowManager")
+		}
+		
 		// 获取所有运行中的traders
 		allTraders := traderManager.GetAllTraders()
 		runningCount := 0
