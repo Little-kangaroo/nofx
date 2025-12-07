@@ -30,10 +30,6 @@ func (calc *CVDCalculator) ProcessTrade(trade *TradeData) {
 	calc.mu.Lock()
 	defer calc.mu.Unlock()
 
-	// 🔍 添加CVD处理监控
-	log.Printf("💹 CVD处理交易: %s %s 价格:%.4f USD价值:%.2f", 
-		calc.symbol, trade.MarketType, trade.Price, trade.Price*trade.Quantity)
-
 	// 计算交易的USD价值增量
 	volumeUSD := trade.Price * trade.Quantity
 	var deltaUSD float64
@@ -494,8 +490,11 @@ func (calc *CVDCalculator) update5MinuteDelta(currentTime time.Time) {
 	calc.last5mFuturesCVD = calc.currentFuturesCVD
 	calc.last5mSnapshot = currentTime
 	
-	log.Printf("📊 [%s] 5分钟CVD增量更新: 现货%.2f, 合约%.2f, 价格变化%.2f%%, 意图:%s (已缓存)",
-		calc.symbol, spotDelta, futuresDelta, priceDeltaPct, candleIntent)
+	// 只在意图不是整理状态或数据质量低时才打印日志
+	if candleIntent != CandleIntentConsolidation || delta5m.DataQuality < 0.5 {
+		log.Printf("📊 [%s] 5分钟CVD增量更新: 现货%.0f, 合约%.0f, 价格变化%.2f%%, 意图:%s",
+			calc.symbol, spotDelta, futuresDelta, priceDeltaPct, candleIntent)
+	}
 }
 
 // inferCandleIntent 推断K线意图（V2.0核心功能 - 增强版）

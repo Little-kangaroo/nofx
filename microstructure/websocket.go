@@ -291,9 +291,6 @@ func (wm *WSManager) connectAndListen(wsConn *WSConnection) error {
 			return fmt.Errorf("读取消息失败: %w", err)
 		}
 
-		// 🔍 添加消息接收日志
-		log.Printf("📨 收到消息 %s_%s_%s: %d字节", wsConn.symbol, wsConn.streamType, wsConn.marketType, len(message))
-
 		// 处理消息
 		if err := wm.processMessage(wsConn, message); err != nil {
 			log.Printf("⚠️ 消息处理失败 %s_%s_%s: %v", wsConn.symbol, wsConn.streamType, wsConn.marketType, err)
@@ -339,10 +336,6 @@ func (wm *WSManager) processAggTradeMessage(wsConn *WSConnection, message []byte
 		Timestamp:    time.Unix(0, msg.TradeTime*int64(time.Millisecond)),
 		MarketType:   wsConn.marketType,
 	}
-
-	// 🔍 添加关键监控日志
-	log.Printf("📊 接收交易数据: %s %s 价格:%.4f 数量:%.4f", 
-		tradeData.Symbol, tradeData.MarketType, tradeData.Price, tradeData.Quantity)
 
 	// 调用处理器
 	if wm.onTradeMessage != nil {
