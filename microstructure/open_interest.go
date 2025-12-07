@@ -110,7 +110,7 @@ func (calc *OICalculator) cleanupExpiredData() {
 	cutoffTime := time.Now().Add(-calc.windowDuration)
 	
 	// 找到第一个有效记录的位置
-	validStart := 0
+	validStart := -1 // 初始化为-1，表示没有找到有效记录
 	for i, change := range calc.changes {
 		if change.Timestamp.After(cutoffTime) {
 			validStart = i
@@ -118,10 +118,15 @@ func (calc *OICalculator) cleanupExpiredData() {
 		}
 	}
 
-	// 只保留有效的记录
+	// 根据找到的有效记录位置进行清理
 	if validStart > 0 {
+		// 有部分记录有效，从validStart开始保留
 		calc.changes = calc.changes[validStart:]
+	} else if validStart == -1 {
+		// 所有记录都过期，清空数组
+		calc.changes = calc.changes[:0]
 	}
+	// validStart == 0 表示所有记录都有效，不需要清理
 
 	// 限制最大记录数
 	if len(calc.changes) > calc.maxRecords {
@@ -154,8 +159,8 @@ func (calc *OICalculator) GetOIAnalysis() *OIAnalysis {
 	// 判断趋势
 	trend := calc.determineTrend(changeRate1H)
 
-	// 检查数据是否过期 - 调整为15分钟适配5分钟决策周期
-	isStale := time.Since(calc.lastUpdate) > 15*time.Minute
+	// 检查数据是否过期 - 调整为30分钟阈值，给数据更新留足时间
+	isStale := time.Since(calc.lastUpdate) > 30*time.Minute
 
 	return &OIAnalysis{
 		Current:      calc.current,

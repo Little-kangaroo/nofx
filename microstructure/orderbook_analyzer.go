@@ -412,8 +412,8 @@ func (calc *OrderBookCalculator) GetCurrentOrderBookData(symbol string, smoothPe
 	bidPressure := calc.calculatePressure(symbolData.currentBids)
 	askPressure := calc.calculatePressure(symbolData.currentAsks)
 
-	// 检查数据是否过期 - 调整为10分钟阈值适配5分钟决策周期
-	isStale := time.Since(symbolData.lastUpdate) > 10*time.Minute
+	// 检查数据是否过期 - 调整为30分钟阈值，给数据更新留足时间
+	isStale := time.Since(symbolData.lastUpdate) > 30*time.Minute
 
 	// V2.0: 计算额外的市场微观结构指标
 	imbalanceTrend := calc.calculateImbalanceTrend(symbol)
