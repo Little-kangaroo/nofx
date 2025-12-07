@@ -331,23 +331,33 @@ func (manager *OIManager) GetAllOIAnalysis() map[string]*OIAnalysis {
 	return result
 }
 
-// Cleanup 清理不活跃的计算器
+// Cleanup 清理过期数据（不删除计算器本身）
 func (manager *OIManager) Cleanup() {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
 
-	threshold := time.Now().Add(-2 * time.Hour) // 2小时无更新则清理
+	log.Printf("🧹 开始清理OI过期数据...")
+	cleanedCount := 0
 	
 	for symbol, calc := range manager.calculators {
-		calc.mu.RLock()
-		lastUpdate := calc.lastUpdate
-		calc.mu.RUnlock()
-
-		if lastUpdate.Before(threshold) {
-			delete(manager.calculators, symbol)
-			log.Printf("🗑️  清理不活跃的OI计算器: %s", symbol)
+		calc.mu.Lock()
+		beforeChanges := len(calc.changes)
+		
+		// 调用内部清理方法
+		calc.cleanupExpiredData()
+		
+		afterChanges := len(calc.changes)
+		calc.mu.Unlock()
+		
+		// 记录清理情况
+		if beforeChanges != afterChanges {
+			log.Printf("🗑️  [%s] OI数据清理: 变化记录 %d→%d", 
+				symbol, beforeChanges, afterChanges)
+			cleanedCount++
 		}
 	}
+	
+	log.Printf("✅ OI数据清理完成，清理了 %d 个币种的过期数据", cleanedCount)
 }
 
 // ===== WebSocket扩展支持OI流 =====

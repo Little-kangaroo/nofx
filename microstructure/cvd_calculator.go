@@ -376,25 +376,33 @@ func (manager *CVDManager) GetAllCVDData() map[string]*CVDData {
 	return result
 }
 
-// Cleanup 清理不活跃的计算器
+// Cleanup 清理过期数据（不删除计算器本身）
 func (manager *CVDManager) Cleanup() {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
 
-	threshold := time.Now().Add(-2 * manager.config.CVDWindowDuration)
+	log.Printf("🧹 开始清理CVD过期数据...")
+	cleanedCount := 0
 	
 	for symbol, calc := range manager.calculators {
-		calc.mu.RLock()
-		isEmpty := len(calc.spotDeltas) == 0 && len(calc.futuresDeltas) == 0
-		lastActivity := calc.lastCleanup
-		calc.mu.RUnlock()
-
-		// 如果计算器长时间无活动且无数据，则删除
-		if isEmpty && lastActivity.Before(threshold) {
-			delete(manager.calculators, symbol)
-			log.Printf("🗑️  清理不活跃的CVD计算器: %s", symbol)
+		// 调用每个计算器的内部清理方法
+		beforeSpot := len(calc.spotDeltas)
+		beforeFutures := len(calc.futuresDeltas)
+		
+		calc.cleanupExpiredData()
+		
+		afterSpot := len(calc.spotDeltas)
+		afterFutures := len(calc.futuresDeltas)
+		
+		// 记录清理情况
+		if beforeSpot != afterSpot || beforeFutures != afterFutures {
+			log.Printf("🗑️  [%s] CVD数据清理: 现货 %d→%d, 合约 %d→%d", 
+				symbol, beforeSpot, afterSpot, beforeFutures, afterFutures)
+			cleanedCount++
 		}
 	}
+	
+	log.Printf("✅ CVD数据清理完成，清理了 %d 个币种的过期数据", cleanedCount)
 }
 
 // ===== V2.0 5分钟CVD增量计算方法 =====

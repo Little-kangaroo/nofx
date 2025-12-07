@@ -129,7 +129,7 @@ func (ofm *OrderFlowManager) Start() error {
 	ofm.wsManager.Start()
 	
 	// 启动清理定时器
-	ofm.cleanupTicker = time.NewTicker(15 * time.Minute) // 每15分钟清理一次
+	ofm.cleanupTicker = time.NewTicker(60 * time.Minute) // 每60分钟清理一次
 	go ofm.runCleanupLoop()
 	
 	ofm.isRunning = true
