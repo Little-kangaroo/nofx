@@ -166,6 +166,9 @@ func (wm *WSManager) subscribeStream(symbol, streamType, marketType string) erro
 	}
 
 	fullURL := wsURL + stream
+	
+	// 🔍 添加URL调试信息
+	log.Printf("🌐 准备连接WebSocket: %s", fullURL)
 
 	// 创建连接
 	conn := &WSConnection{
@@ -276,18 +279,24 @@ func (wm *WSManager) connectAndListen(wsConn *WSConnection) error {
 	}()
 
 	// 监听消息
+	log.Printf("🎯 开始监听消息: %s_%s_%s", wsConn.symbol, wsConn.streamType, wsConn.marketType)
+	
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			wsConn.mu.Lock()
 			wsConn.isConnected = false
 			wsConn.mu.Unlock()
+			log.Printf("❌ WebSocket读取失败 %s_%s_%s: %v", wsConn.symbol, wsConn.streamType, wsConn.marketType, err)
 			return fmt.Errorf("读取消息失败: %w", err)
 		}
 
+		// 🔍 添加消息接收日志
+		log.Printf("📨 收到消息 %s_%s_%s: %d字节", wsConn.symbol, wsConn.streamType, wsConn.marketType, len(message))
+
 		// 处理消息
 		if err := wm.processMessage(wsConn, message); err != nil {
-			log.Printf("⚠️ 消息处理失败: %v", err)
+			log.Printf("⚠️ 消息处理失败 %s_%s_%s: %v", wsConn.symbol, wsConn.streamType, wsConn.marketType, err)
 		}
 	}
 }
@@ -331,9 +340,15 @@ func (wm *WSManager) processAggTradeMessage(wsConn *WSConnection, message []byte
 		MarketType:   wsConn.marketType,
 	}
 
+	// 🔍 添加关键监控日志
+	log.Printf("📊 接收交易数据: %s %s 价格:%.4f 数量:%.4f", 
+		tradeData.Symbol, tradeData.MarketType, tradeData.Price, tradeData.Quantity)
+
 	// 调用处理器
 	if wm.onTradeMessage != nil {
 		wm.onTradeMessage(tradeData)
+	} else {
+		log.Printf("⚠️ 交易处理器为空，数据被丢弃！")
 	}
 
 	return nil

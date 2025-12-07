@@ -199,7 +199,7 @@ func DefaultMicrostructureConfig() *MicrostructureConfig {
 		WallThresholdMultiple: 5.0,
 		ImbalanceSmoothing:    5,
 		
-		SpotWsURL:    "wss://stream.binance.com:9443/ws/",
+		SpotWsURL:    "wss://stream.binance.com/ws/",
 		FuturesWsURL: "wss://fstream.binance.com/ws/",
 		ReconnectInterval:    30 * time.Second,
 		StaleDataThreshold:   2 * time.Minute,

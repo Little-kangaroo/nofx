@@ -30,6 +30,10 @@ func (calc *CVDCalculator) ProcessTrade(trade *TradeData) {
 	calc.mu.Lock()
 	defer calc.mu.Unlock()
 
+	// 🔍 添加CVD处理监控
+	log.Printf("💹 CVD处理交易: %s %s 价格:%.4f USD价值:%.2f", 
+		calc.symbol, trade.MarketType, trade.Price, trade.Price*trade.Quantity)
+
 	// 计算交易的USD价值增量
 	volumeUSD := trade.Price * trade.Quantity
 	var deltaUSD float64
