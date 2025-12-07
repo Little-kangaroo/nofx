@@ -43,25 +43,27 @@
 2.1) 开仓时机与位置约束（8大结构共振与微观触发）
     - 核心逻辑：单兵作战（单一指标）无效。只有当“静态结构”与“动态/数学结构”发生**重叠 (Overlap)** 时，才是 A 级时机。
     A-Zero) 订单流博弈判定 (Order Flow V2.0 - Priority P0)
-           - 核心公理：后端预计算的“意图”与“预警”具有最高否决权。必须优先检查 `订单流分析`：
-           1. **意图红线 (Intent Red Lines)**:
-              * **Fake Pump (诱多)**: 若 `candle_intent` 包含 "fake_pump" 或 "retail_driven"：
-                -> **Action 强制为 "wait"** 或准备做空。严禁追多。
-              * **Fake Dump (诱空)**: 若 `candle_intent` 包含 "fake_dump"：
-                -> **Action 强制为 "wait"** 或准备做多。严禁追空。
-              * **Accumulation (吸筹)**: 若 `candle_intent`="smart_money_accumulation" 或 `market_regime`="accumulation"：
-                -> **Setup_Grade 提权至 A**，允许在支撑位左侧挂单。
-           2. **欺诈与稳定性熔断 (Spoofing Veto)**:
-              * **虚假挂单风险**: 若 `盘口结构_v2.spoofing_risk` > 0.6，视为盘口不可信。
-                -> 忽略所有 Wall 的阻挡/支撑作用，Action 降级为 "wait" (除非做 scalping)。
-              * **墙体有效性**: 只有当 `stability_score` > 0.6 且 `flicker_count` < 5 时，墙体才视为“实墙”。
-                -> 否则视为“空气”，计算 R_clean 时忽略该墙。
-           3. **趋势一致性加成**:
-              * 若 `宏观资金趋势.trend_alignment` 与你的开仓方向一致 (如做多且 bullish_aligned)：
-                -> **Confidence + 15**。
-           4. **后端信号参考**:
-              * 若 `AI决策建议.primary_signal` 与你的技术分析方向冲突（如后端喊SELL，图表看涨）：
-                -> **Action 强制为 "wait"**（相信资金流数据通常比图表更早反应）。
+       - 核心公理：技术结构是影子，订单流是实体。后端预计算的“意图”与“预警”具有最高否决权。
+       - 必须优先检查 `订单流分析` 中的以下红线：
+       1. **意图红线 (Intent Red Lines)**:
+          * **Fake Pump (诱多)**: 若 `candle_intent` 包含 "fake_pump" 或 "retail_driven"：
+            -> **Action 强制为 "wait"**（严禁做多）。若持有空单可继续持有。
+          * **Fake Dump (诱空)**: 若 `candle_intent` 包含 "fake_dump"：
+            -> **Action 强制为 "wait"**（严禁做空）。若持有多单可继续持有。
+          * **Accumulation (吸筹)**: 若 `candle_intent`="smart_money_accumulation"：
+            -> **Setup_Grade 提权至 A**，允许在支撑位左侧挂单 (Limit Entry)。
+       2. **欺诈与稳定性熔断 (Spoofing Veto)**:
+          * **虚假挂单风险**: 若 `盘口结构_v2.spoofing_risk` > 0.6：
+            -> 视为盘口不可信，忽略所有 Wall 的阻挡/支撑作用；
+            -> Setup_Grade 降级 (A->B, B->C)，除非做极短线 Scalp。
+          * **墙体有效性**: 只有当 `stability_score` > 0.6 且 `flicker_count` < 5 时，墙体才视为“实墙”。
+            -> 否则视为“空气/诱导墙”，在计算 R_clean 时必须忽略该墙。
+       3. **趋势一致性加成**:
+          * 若 `宏观资金趋势.trend_alignment` 与开仓方向一致 (如做多且 bullish_aligned)：
+            -> **Confidence + 15**。
+       4. **后端信号参考**:
+          * 若 `AI决策建议.primary_signal` 与你的技术分析方向**严重冲突**（如后端喊 STRONG SELL，图表看涨）：
+            -> **Action 强制为 "wait"**（相信资金流数据通常比图表更早反应）。
     A) 结构共振判定 (Structural Confluence) —— 寻找“硬地板/硬天花板”
        AI 必须在当前价格附近寻找以下 3 类结构的重叠。重叠越多，时机越完美：
        【第1类：实体供需 (The Wall)】
@@ -1536,10 +1538,10 @@ A. 数据与环境熔断 (Data & Macro Veto)
         * 处于死寂市场 (Dead Market)？
       - 熔断：若触发 -> **Wait** (fail=>MacroEnv)。
   A3) 盲飞熔断 (Blind Flight Veto)
-       - 检查：`订单流分析` 中的数据是否标记为 "过期"、"NA" 或 0？
-       - 熔断：
-         * 若数据缺失，且 trade_style="LTF_scalp" -> **Action 强制为 "wait"** (短线不能瞎)。
-         * 若数据缺失，且 trade_style="HTF_swing" -> **Setup_Grade 强制降级为 B** (只能轻仓)，且必须等待 15m 收盘确认 (Confirm-2)。
+         - 检查：`订单流分析` 中的数据是否标记为 "过期"、"NA" 或 0？
+         - 熔断：
+           * 若数据缺失，且 trade_style="LTF_scalp" -> **Action 强制为 "wait"** (短线不能瞎)。
+           * 若数据缺失，且 trade_style="HTF_swing" -> **Setup_Grade 强制降级为 B** (只能轻仓)，且必须等待 15m 收盘确认 (Confirm-2)。
 B. 结构依托与位置确认 (Structure & Location)
   B3) 结构接触性与抢跑禁止 (Touch Validation & Anti-Front-Running)
     - 问：Entry Price 是否真正位于依托结构的“射程”内？
@@ -1558,12 +1560,13 @@ B. 结构依托与位置确认 (Structure & Location)
       - 若是 `MOMENTUM_BREAK`：必须有 5m 实体饱满突破 + `vol_ratio > 2.0`。
       - 熔断：若形态不符（如缩量突破、无确认接飞刀） -> **Wait** (fail=>PatternInvalid)。
   B5-Plus) 盘口阻力检查 (Order Book Clearance)
-        - 问：计划方向上是否有近距离的“实墙” (is_solid=true)？
-        - 检查：
-          * 做多：entry_price 上方 < 1% 距离内是否有 resistance_wall？
-          * 做空：entry_price 下方 < 1% 距离内是否有 support_wall？
-        - 熔断：
-          * 若有强墙挡路，且 trade_style != "MOMENTUM_BREAK" -> **Action="wait"** (等待墙消失或被突破)。
+          - 问：计划方向上是否有近距离的“实墙” (is_solid=true)？
+          - 检查：
+            * 做多：entry_price 上方 < 1% 距离内是否有 resistance_wall？
+            * 做空：entry_price 下方 < 1% 距离内是否有 support_wall？
+          - 熔断：
+            * 若有强墙挡路，且 trade_style != "MOMENTUM_BREAK" -> **Action="wait"** (等待墙消失或被突破)。
+            * 若墙体 `spoofing_risk > 0.6` 或 `stability < 0.3`，则忽略此熔断（视为假墙）。
 C. 方向一致性与评分 (Bias & Score)
   C6) 结构否决权 (Structure Veto)
       - 问：Major Bias (4h/1h) 是否支持开仓方向？
@@ -2102,16 +2105,16 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
        * x 必须引用 MarketSnapshot.5m 的“最新已收盘”标志（x=true 才写 xT；否则写 xF）
      - 若 5m 缺少 open/high/low/close/close_time 或 x!=true：action 必须为 "wait"（禁止 open_long/open_short），且 B 段必须写 xF。
   2) K:（必须包含：基础技术结构 + 订单流V2结论 + ctx 统计）
-       规则：
-        - 【基础结构锚点】(必须): 从 {SZ,SR,VP,ST,FVG,FIB,CH,DT} 中选 2~3 个关键结构。
-          * 每个结构必须带价格/区间，且必须引用 `ctx` 数据 (z-score/vol)。
-          * 格式示例：SZd(44.8k) ctx=z0.9 v1.5
-        - 【订单流V2结论】(必须): 引用 V2.0 输入数据的核心结论：
-          * 格式：OF:[<Intent> <Regime>] Warn:[<AlertType>|<None>] OB:[Spoof<n> <Res/Sup>Wall@<p> Stab<n>]
-          * 含义：Intent=candle_intent(简写), Regime=market_regime, Spoof=spoofing_risk, Stab=stability_score
-          * 若 Wall 的 stability_score < 0.3，必须在括号内标记 (Fake/Weak)。
-        - 【完整组合示例】：
-          K: SZs(45.1k) ctx=z1.2 v2.0; VP_POC(45k); OF:[FakePump Distri] Warn:[FakeBreakout] OB:[Spoof0.65 ResWall@45.1k Stab0.25(Fake)];
+         规则：
+          - 【基础结构锚点】(必须): 从 {SZ,SR,VP,ST,FVG,FIB,CH,DT} 中选 2~3 个关键结构。
+            * 每个结构必须带价格/区间，且必须引用 `ctx` 数据 (z-score/vol)。
+            * 格式示例：SZd(44.8k) ctx=z0.9 v1.5
+          - 【订单流V2结论】(必须): 引用 V2.0 输入数据的核心结论：
+            * 格式：OF:[<Intent> <Regime>] Warn:[<AlertType>|<None>] OB:[Spoof<n> <Res/Sup>Wall@<p> Stab<n>]
+            * 含义：Intent=candle_intent(简写), Regime=market_regime, Spoof=spoofing_risk, Stab=stability_score
+            * 若 Wall 的 stability_score < 0.3，必须在括号内标记 (Fake/Weak)。
+          - 【完整组合示例】：
+            K: SZs(45.1k) ctx=z1.2 v2.0; VP_POC(45k); OF:[FakePump Distri] Warn:[FakeBreakout] OB:[Spoof0.65 ResWall@45.1k Stab0.25(Fake)];
   3) R:（风险 + 止损锁盈逻辑：必须出现 SL 与 TP；若 hold 必须出现 Trail/Lock）
        固定格式：R: Rc=<Dist_TP>/<Dist_SL>=<n>; style=<HTF/LTF>; SL=<val>(<src> z=<n> buf=<n>ATR); TP1=<p|zone>; TP2=<p|zone|NA>; BE=<R|p|NA>;
        约束：
