@@ -742,7 +742,7 @@ func FormatAsCompactData(data *Data) string {
 		data.Symbol: map[string]interface{}{
 			"基础指标":       calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
-			"订单流分析":     getOrderFlowDataForAI(data.Symbol),
+			"订单流分析":     GetOrderFlowDataForAIV2(data.Symbol),
 		},
 	}
 
@@ -2398,6 +2398,10 @@ func getOrderFlowDataForAI(symbol string) map[string]interface{} {
 	if ofm == nil {
 		return map[string]interface{}{
 			"状态": "订单流系统未初始化",
+			"本周期博弈_5m": buildEmptyCurrentPeriodDataV2(),
+			"宏观资金趋势":  buildEmptyMacroTrendDataV2(),
+			"盘口结构_v2":   buildEmptyOrderBookDataV2(),
+			"数据质量":      buildEmptyDataQualityInfoV2(),
 		}
 	}
 
@@ -2406,6 +2410,10 @@ func getOrderFlowDataForAI(symbol string) map[string]interface{} {
 	if snapshot == nil {
 		return map[string]interface{}{
 			"状态": "暂无订单流数据",
+			"本周期博弈_5m": buildEmptyCurrentPeriodDataV2(),
+			"宏观资金趋势":  buildEmptyMacroTrendDataV2(),
+			"盘口结构_v2":   buildEmptyOrderBookDataV2(),
+			"数据质量":      buildEmptyDataQualityInfoV2(),
 		}
 	}
 
@@ -2633,5 +2641,241 @@ func calculateTrendAlignment(snapshot *microstructure.MarketSnapshot) string {
 		return "neutral_consolidation"
 	} else {
 		return "divergent_mixed"
+	}
+}
+
+// ===== V2.0 Enhanced Order Flow Functions =====
+
+// buildEmptyCurrentPeriodDataV2 构建空的当前周期数据结构（V2.0完整版）
+func buildEmptyCurrentPeriodDataV2() map[string]interface{} {
+	return map[string]interface{}{
+		"price_delta_pct":       0.0,
+		"spot_cvd_delta_usd":    0,
+		"futures_cvd_delta_usd": 0,
+		"oi_delta_pct":          0.0,
+		"candle_intent":         "data_insufficient",
+		"volume_delta":          0,
+		"volume_ratio":          1.0,
+		"period_minutes":        5,
+		"data_quality":          0.0,
+		"period_start":          time.Now().Add(-5*time.Minute).Format("15:04:05"),
+		"period_end":            time.Now().Format("15:04:05"),
+		"analysis_time":         time.Now().Format("15:04:05"),
+	}
+}
+
+// buildEmptyMacroTrendDataV2 构建空的宏观趋势数据结构（V2.0完整版）
+func buildEmptyMacroTrendDataV2() map[string]interface{} {
+	return map[string]interface{}{
+		"spot_cvd_1h_usd":       0,
+		"futures_cvd_1h_usd":    0,
+		"oi_change_1h_pct":      0.0,
+		"cvd_divergence":        "unknown",
+		"context_inference":     "insufficient_data",
+		"signal_strength":       0.0,
+		"market_regime":         "unknown",
+		"dominant_direction":    "unknown",
+		"trend_alignment":       "unknown",
+		"confidence_level":      0.0,
+	}
+}
+
+// buildEmptyOrderBookDataV2 构建空的盘口结构数据（V2.0完整版）
+func buildEmptyOrderBookDataV2() map[string]interface{} {
+	return map[string]interface{}{
+		"imbalance_ratio":      0.0,
+		"imbalance_trend":      "insufficient_data",
+		"pressure_delta_5m":    0.0,
+		"spoofing_risk":        0.0,
+		"liquidity_score":      0.0,
+		"wall_change_count_5m": 0,
+		"bid_pressure":         0.0,
+		"ask_pressure":         0.0,
+		"resistance_wall":      nil,
+		"support_wall":         nil,
+	}
+}
+
+// buildEmptyDataQualityInfoV2 构建空的数据质量信息（V2.0完整版）
+func buildEmptyDataQualityInfoV2() map[string]interface{} {
+	return map[string]interface{}{
+		"cvd_reliability":       0.0,
+		"orderbook_reliability": 0.0,
+		"oi_reliability":        0.0,
+		"incremental_quality":   0.0,
+		"overall_score":         0.0,
+		"last_update":           time.Now().Format("15:04:05"),
+		"data_lag_ms":           0,
+		"status":                "insufficient_data",
+		"update_interval_s":     300,
+	}
+}
+
+// buildCurrentPeriodDataV2 构建增强版当前周期数据（V2.0）
+func buildCurrentPeriodDataV2(snapshot *microstructure.MarketSnapshot, isStale bool) map[string]interface{} {
+	if isStale {
+		data := buildEmptyCurrentPeriodDataV2()
+		data["candle_intent"] = "data_insufficient"
+		data["data_quality"] = 0.1
+		return data
+	}
+
+	// 从缓存获取5分钟增量数据
+	globalCache := microstructure.GetGlobalCache()
+	cvdDelta5m := globalCache.GetCVDDelta5m(snapshot.Symbol)
+
+	if cvdDelta5m == nil {
+		return buildEmptyCurrentPeriodDataV2()
+	}
+
+	return map[string]interface{}{
+		"price_delta_pct":       FormatByDataTypeAndSymbol(cvdDelta5m.PriceDeltaPct, "percentage", snapshot.Symbol),
+		"spot_cvd_delta_usd":    FormatByDataTypeAndSymbol(cvdDelta5m.SpotCVDDeltaUSD, "volume", snapshot.Symbol),
+		"futures_cvd_delta_usd": FormatByDataTypeAndSymbol(cvdDelta5m.FuturesCVDDeltaUSD, "volume", snapshot.Symbol),
+		"oi_delta_pct":          FormatByDataTypeAndSymbol(cvdDelta5m.OIDeltaPct, "percentage", snapshot.Symbol),
+		"candle_intent":         cvdDelta5m.CandleIntent,
+		"volume_delta":          FormatByDataTypeAndSymbol(cvdDelta5m.VolumeDelta, "volume", snapshot.Symbol),
+		"volume_ratio":          FormatByDataTypeAndSymbol(cvdDelta5m.VolumeRatio, "ratio", snapshot.Symbol),
+		"period_minutes":        5,
+		"data_quality":          FormatByDataTypeAndSymbol(cvdDelta5m.DataQuality, "ratio", snapshot.Symbol),
+		"period_start":          cvdDelta5m.PeriodStartTime.Format("15:04:05"),
+		"period_end":            cvdDelta5m.PeriodEndTime.Format("15:04:05"),
+		"analysis_time":         time.Now().Format("15:04:05"),
+	}
+}
+
+// buildMacroTrendDataV2 构建增强版宏观趋势数据（V2.0）
+func buildMacroTrendDataV2(snapshot *microstructure.MarketSnapshot, isStale bool) map[string]interface{} {
+	if isStale {
+		data := buildEmptyMacroTrendDataV2()
+		data["signal_strength"] = 0.1
+		data["confidence_level"] = 0.1
+		return data
+	}
+
+	return map[string]interface{}{
+		"spot_cvd_1h_usd":       FormatByDataTypeAndSymbol(snapshot.CVDData.SpotCVD1H, "volume", snapshot.Symbol),
+		"futures_cvd_1h_usd":    FormatByDataTypeAndSymbol(snapshot.CVDData.FuturesCVD1H, "volume", snapshot.Symbol),
+		"oi_change_1h_pct":      FormatByDataTypeAndSymbol(snapshot.OIAnalysis.ChangeRate1H, "percentage", snapshot.Symbol),
+		"cvd_divergence":        snapshot.MarketContext.CVDDivergence,
+		"context_inference":     snapshot.MarketContext.ContextInference,
+		"signal_strength":       FormatByDataTypeAndSymbol(snapshot.MarketContext.SignalStrength, "strength", snapshot.Symbol),
+		"market_regime":         snapshot.MarketContext.GameMatrix.MatrixType,
+		"dominant_direction":    snapshot.CVDData.Signal,
+		"trend_alignment":       calculateTrendAlignment(snapshot),
+		"confidence_level":      FormatByDataTypeAndSymbol(snapshot.MarketContext.SignalStrength/100.0, "confidence", snapshot.Symbol),
+	}
+}
+
+// buildEnhancedOrderBookDataV2 构建增强版盘口数据（V2.0）
+func buildEnhancedOrderBookDataV2(orderBookData *microstructure.OrderBookData, isStale bool) map[string]interface{} {
+	if isStale || orderBookData == nil {
+		return buildEmptyOrderBookDataV2()
+	}
+
+	result := map[string]interface{}{
+		"imbalance_ratio":      FormatByDataTypeAndSymbol(orderBookData.ImbalanceRatio, "ratio", ""),
+		"imbalance_trend":      orderBookData.ImbalanceTrend,
+		"pressure_delta_5m":    FormatByDataTypeAndSymbol(orderBookData.PressureDelta5m, "ratio", ""),
+		"spoofing_risk":        FormatByDataTypeAndSymbol(orderBookData.SpoofingRisk, "ratio", ""),
+		"liquidity_score":      FormatByDataTypeAndSymbol(orderBookData.LiquidityScore, "ratio", ""),
+		"wall_change_count_5m": orderBookData.WallChangeCount5m,
+		"bid_pressure":         FormatByDataTypeAndSymbol(orderBookData.BidPressure, "volume", ""),
+		"ask_pressure":         FormatByDataTypeAndSymbol(orderBookData.AskPressure, "volume", ""),
+	}
+
+	// 增强版阻力墙信息（包含V2.0新字段）
+	if orderBookData.NearestResistance != nil {
+		result["resistance_wall"] = map[string]interface{}{
+			"price":             FormatByDataTypeAndSymbol(orderBookData.NearestResistance.Price, "price", ""),
+			"strength_usd":      FormatByDataTypeAndSymbol(orderBookData.NearestResistance.StrengthUSD, "volume", ""),
+			"is_solid":          orderBookData.NearestResistance.IsSolid,
+			"distance_pct":      FormatByDataTypeAndSymbol(orderBookData.NearestResistance.Distance, "percentage", ""),
+			"stability_score":   FormatByDataTypeAndSymbol(orderBookData.NearestResistance.StabilityScore, "ratio", ""),
+			"flicker_count":     orderBookData.NearestResistance.FlickerCount,
+			"existence_minutes": int(orderBookData.NearestResistance.ExistenceDuration.Minutes()),
+			"level_count":       orderBookData.NearestResistance.LevelCount,
+			"max_size":          FormatByDataTypeAndSymbol(orderBookData.NearestResistance.MaxSize, "volume", ""),
+			"avg_size":          FormatByDataTypeAndSymbol(orderBookData.NearestResistance.AverageSize, "volume", ""),
+		}
+	}
+
+	// 增强版支撑墙信息
+	if orderBookData.NearestSupport != nil {
+		result["support_wall"] = map[string]interface{}{
+			"price":             FormatByDataTypeAndSymbol(orderBookData.NearestSupport.Price, "price", ""),
+			"strength_usd":      FormatByDataTypeAndSymbol(orderBookData.NearestSupport.StrengthUSD, "volume", ""),
+			"is_solid":          orderBookData.NearestSupport.IsSolid,
+			"distance_pct":      FormatByDataTypeAndSymbol(orderBookData.NearestSupport.Distance, "percentage", ""),
+			"stability_score":   FormatByDataTypeAndSymbol(orderBookData.NearestSupport.StabilityScore, "ratio", ""),
+			"flicker_count":     orderBookData.NearestSupport.FlickerCount,
+			"existence_minutes": int(orderBookData.NearestSupport.ExistenceDuration.Minutes()),
+			"level_count":       orderBookData.NearestSupport.LevelCount,
+			"max_size":          FormatByDataTypeAndSymbol(orderBookData.NearestSupport.MaxSize, "volume", ""),
+			"avg_size":          FormatByDataTypeAndSymbol(orderBookData.NearestSupport.AverageSize, "volume", ""),
+		}
+	}
+
+	return result
+}
+
+// buildDataQualityInfoV2 构建增强版数据质量信息（V2.0）
+func buildDataQualityInfoV2(snapshot *microstructure.MarketSnapshot, isStale bool) map[string]interface{} {
+	// 从缓存获取5分钟增量数据
+	globalCache := microstructure.GetGlobalCache()
+	cvdDelta5m := globalCache.GetCVDDelta5m(snapshot.Symbol)
+	
+	// 计算整体质量评分
+	overallScore := 1.0
+
+	// CVD数据质量
+	cvdScore := 1.0
+	if isStale || snapshot.CVDData.IsStale {
+		cvdScore = 0.3
+	} else if time.Since(snapshot.CVDData.LastUpdate) > 7*time.Minute {
+		cvdScore = 0.7
+	}
+
+	// 盘口数据质量
+	orderBookScore := 1.0
+	if isStale || snapshot.OrderBookData.IsStale {
+		orderBookScore = 0.3
+	} else if time.Since(snapshot.OrderBookData.LastUpdate) > 6*time.Minute {
+		orderBookScore = 0.8
+	}
+
+	// OI数据质量
+	oiScore := 1.0
+	if isStale || snapshot.OIAnalysis.IsStale {
+		oiScore = 0.5
+	}
+
+	// 5分钟增量数据质量
+	incrementalScore := 0.5
+	if cvdDelta5m != nil {
+		incrementalScore = cvdDelta5m.DataQuality
+	}
+
+	// 加权平均
+	overallScore = (cvdScore*0.3 + orderBookScore*0.3 + oiScore*0.2 + incrementalScore*0.2)
+
+	// 确定状态
+	status := "正常"
+	if overallScore < 0.5 {
+		status = "异常"
+	} else if overallScore < 0.8 {
+		status = "延迟"
+	}
+
+	return map[string]interface{}{
+		"cvd_reliability":       FormatByDataTypeAndSymbol(cvdScore, "ratio", ""),
+		"orderbook_reliability": FormatByDataTypeAndSymbol(orderBookScore, "ratio", ""),
+		"oi_reliability":        FormatByDataTypeAndSymbol(oiScore, "ratio", ""),
+		"incremental_quality":   FormatByDataTypeAndSymbol(incrementalScore, "ratio", ""),
+		"overall_score":         FormatByDataTypeAndSymbol(overallScore, "ratio", ""),
+		"last_update":           snapshot.Timestamp.Format("15:04:05"),
+		"data_lag_ms":           time.Since(snapshot.Timestamp).Milliseconds(),
+		"status":                status,
+		"update_interval_s":     300, // 5分钟更新间隔
 	}
 }
