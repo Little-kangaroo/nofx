@@ -60,33 +60,36 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 	if len(klines) >= 14 { // 确保有足够数据计算ATR
 		currentPrice := klines[len(klines)-1].Close
 		atr := sda.calculateATR(klines, 14)
-		
+
 		// 验证供给区位置的合理性
 		validSupplyZones := []*SupplyDemandZone{}
 		for _, zone := range supplyZones {
 			if sda.validateZonePosition(zone, currentPrice, atr) {
 				validSupplyZones = append(validSupplyZones, zone)
 			} else {
-				log.Printf("⚠️ [P0验证] 供给区%.2f-%.2f位置不合理，已过滤 (当前价格%.2f)", 
-					zone.LowerBound, zone.UpperBound, currentPrice)
+				// 🔧 优化：减少P0验证日志频率，避免日志污染
+				// log.Printf("⚠️ [P0验证] 供给区%.2f-%.2f位置不合理，已过滤 (当前价格%.2f)",
+				//	zone.LowerBound, zone.UpperBound, currentPrice)
 			}
 		}
 		supplyZones = validSupplyZones
-		
+
 		// 验证需求区位置的合理性
 		validDemandZones := []*SupplyDemandZone{}
 		for _, zone := range demandZones {
 			if sda.validateZonePosition(zone, currentPrice, atr) {
 				validDemandZones = append(validDemandZones, zone)
 			} else {
-				log.Printf("⚠️ [P0验证] 需求区%.2f-%.2f位置不合理，已过滤 (当前价格%.2f)", 
-					zone.LowerBound, zone.UpperBound, currentPrice)
+				// 🔧 优化：减少P0验证日志频率，避免日志污染
+				// log.Printf("⚠️ [P0验证] 需求区%.2f-%.2f位置不合理，已过滤 (当前价格%.2f)",
+				//	zone.LowerBound, zone.UpperBound, currentPrice)
 			}
 		}
 		demandZones = validDemandZones
-		
-		log.Printf("✅ [P0验证完成] ATR=%.2f, 有效供给区=%d, 有效需求区=%d", 
-			atr, len(supplyZones), len(demandZones))
+
+		// 🔧 优化：减少P0验证完成日志频率，避免日志污染
+		// log.Printf("✅ [P0验证完成] ATR=%.2f, 有效供给区=%d, 有效需求区=%d",
+		//	atr, len(supplyZones), len(demandZones))
 	}
 
 	// 合并并排序所有区域
@@ -107,12 +110,12 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 				currentPrice := klines[len(klines)-1].Close
 				atr := sda.calculateATR(klines, 14)
 				if !sda.validateZonePosition(zone, currentPrice, atr) {
-					log.Printf("⚠️ [P0验证] 备用区域%.2f-%.2f位置不合理，已跳过", 
+					log.Printf("⚠️ [P0验证] 备用区域%.2f-%.2f位置不合理，已跳过",
 						zone.LowerBound, zone.UpperBound)
 					continue
 				}
 			}
-			
+
 			if !sda.isZoneOverlapping(zone, allZones) {
 				allZones = append(allZones, zone)
 				if zone.IsActive {
@@ -140,12 +143,12 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 		Statistics:   &SDStatistics{}, // 临时统计，将被重新计算
 		LastAnalysis: time.Now().UnixMilli(),
 	}
-	
+
 	// 应用数据清洗
 	cleaner := NewDataCleaner()
 	cleanedData, cleaningStats := cleaner.CleanSupplyDemandData(dataData)
-	
-	log.Printf("🧹 [P2数据清洗] 清洗完成: 原始=%d, 清洗后=%d, 过滤率=%.1f%%, 质量评分=%.1f", 
+
+	log.Printf("🧹 [P2数据清洗] 清洗完成: 原始=%d, 清洗后=%d, 过滤率=%.1f%%, 质量评分=%.1f",
 		cleaningStats.TotalZones, len(cleanedData.ActiveZones), cleaningStats.FilterRate, cleaningStats.QualityScore)
 
 	// 使用清洗后的数据
@@ -572,17 +575,17 @@ func (sda *SupplyDemandAnalyzer) identifyFreshDemand(klines []Kline, index int) 
 // findBaseArea 寻找整理区域 (大幅简化版：适应真实市场形态)
 func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, isRally bool) (int, int) {
 	// 简化版：固定窗口搜索，不要求完美平整
-	maxLookback := 8  // 最多向左右各看8根（对5m周期约40分钟）
-	minBase := 2      // 最少2根K线形成Base
-	
+	maxLookback := 8 // 最多向左右各看8根（对5m周期约40分钟）
+	minBase := 2     // 最少2根K线形成Base
+
 	if centerIndex < maxLookback || centerIndex >= len(klines)-maxLookback {
 		return -1, -1
 	}
-	
+
 	// 简化逻辑：寻找相对平缓��价格区域（允许倾斜和收敛）
-	baseStart := centerIndex - 2  // 默认向左2根
-	baseEnd := centerIndex + 2    // 默认向右2根
-	
+	baseStart := centerIndex - 2 // 默认向左2根
+	baseEnd := centerIndex + 2   // 默认向右2根
+
 	// 扩展Base范围：允许更宽松的条件
 	for i := centerIndex - 1; i >= centerIndex-maxLookback && i >= 0; i-- {
 		// 简单条件：如果价格变化不是极端波动，就包含
@@ -594,9 +597,9 @@ func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, i
 			break // 遇到大波动停止
 		}
 	}
-	
+
 	for i := centerIndex + 1; i <= centerIndex+maxLookback && i < len(klines); i++ {
-		currentRange := klines[i].High - klines[i].Low  
+		currentRange := klines[i].High - klines[i].Low
 		avgPrice := (klines[i].High + klines[i].Low) / 2
 		if avgPrice > 0 && currentRange/avgPrice < 0.08 {
 			baseEnd = i
@@ -604,16 +607,16 @@ func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, i
 			break
 		}
 	}
-	
+
 	// 确保最少有minBase根K线
-	if baseEnd - baseStart + 1 < minBase {
+	if baseEnd-baseStart+1 < minBase {
 		return -1, -1
 	}
-	
+
 	// 计算整个Base区域的价格范围
 	high := klines[baseStart].High
 	low := klines[baseStart].Low
-	
+
 	for i := baseStart; i <= baseEnd; i++ {
 		if klines[i].High > high {
 			high = klines[i].High
@@ -622,7 +625,7 @@ func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, i
 			low = klines[i].Low
 		}
 	}
-	
+
 	// 大幅放宽Base宽度限制：允许12%的波动范围
 	avgPrice := (high + low) / 2
 	if avgPrice > 0 {
@@ -638,7 +641,7 @@ func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, i
 			return -1, -1
 		}
 	}
-	
+
 	return baseStart, baseEnd
 }
 
@@ -660,7 +663,7 @@ func (sda *SupplyDemandAnalyzer) validateLeftMove(klines []Kline, baseStart int,
 
 	// 大幅放宽条件：从1%降低到0.3%，且允许累积效应
 	minChange := sda.config.MinImpulsePercent
-	
+
 	if isRally {
 		return priceChange > minChange
 	} else {
@@ -869,8 +872,8 @@ func (sda *SupplyDemandAnalyzer) calculateZoneStrength(zone *SupplyDemandZone, k
 	// 修复3: 基于区域宽度的强度 (更加友好的评分)
 	if zone.WidthPercent > 0 && zone.WidthPercent <= 12 { // 12%内的宽度都给分
 		// 优化宽度评分：不再惩罚较宽的区域，而是给出基础分数
-		widthScore := math.Max(0, 10 - zone.WidthPercent) // 越窄分数越���，但最宽也有最少2分
-		strength += math.Max(widthScore, 2) // 保底2分
+		widthScore := math.Max(0, 10-zone.WidthPercent) // 越窄分数越���，但最宽也有最少2分
+		strength += math.Max(widthScore, 2)             // 保底2分
 	}
 
 	// 修复4: 基于模式类型的强度 (提高基础分数)
@@ -889,7 +892,7 @@ func (sda *SupplyDemandAnalyzer) calculateZoneStrength(zone *SupplyDemandZone, k
 
 	// 限制在合理范围，但提高上限
 	zone.Strength = math.Max(15.0, math.Min(strength, 100.0)) // 最低15分，最高100分
-	
+
 	// ===== 集成Z-Score标准化 =====
 	// 尝试获取全局强度标准化器
 	normalizer := GetGlobalStrengthNormalizer()
@@ -908,23 +911,24 @@ func (sda *SupplyDemandAnalyzer) calculateZoneStrength(zone *SupplyDemandZone, k
 				VolumeRatio:  zone.Volume / avgVolume,
 				WidthPercent: zone.WidthPercent,
 			}
-			
+
 			// 获取标准化Z-Score (先计算Z分数，再添加到历史记录)
 			zScoreResult := normalizer.GetZScoreWithUpdate(symbol, timeframe, zone.Strength, zoneRecord)
-			
+
 			// 更新供需区的标准化强度
 			zone.StrengthZ = zScoreResult.ZScore
 			zone.StrengthZReady = zScoreResult.IsReady
 			zone.SampleCount = zScoreResult.SampleCount
-			
+
+			// 🔧 优化：减少供需区强度标准化日志频率，避免日志污染
 			// 调试日志：记录标准化过程
-			if zScoreResult.IsReady {
-				log.Printf("🎯 [%s_%s] 供需区强度标准化: 原始=%.2f → Z分数=%.2f (样本=%d)", 
-					symbol, timeframe, zone.Strength, zone.StrengthZ, zone.SampleCount)
-			} else {
-				log.Printf("⚠️ [%s_%s] 供需区强度标准化: 样本不足 (%d<%d)，使用原始强度", 
-					symbol, timeframe, zone.SampleCount, MinSampleSize)
-			}
+			// if zScoreResult.IsReady {
+			//	log.Printf("🎯 [%s_%s] 供需区强度标准化: 原始=%.2f → Z分数=%.2f (样本=%d)",
+			//		symbol, timeframe, zone.Strength, zone.StrengthZ, zone.SampleCount)
+			// } else {
+			//	log.Printf("⚠️ [%s_%s] 供需区强度标准化: 样本不足 (%d<%d)，使用原始强度",
+			//		symbol, timeframe, zone.SampleCount, MinSampleSize)
+			// }
 		} else {
 			// 静默跳过Z-Score标准化 - 这是向后兼容的正常fallback
 		}
@@ -938,7 +942,7 @@ func (sda *SupplyDemandAnalyzer) calculateZoneStrength(zone *SupplyDemandZone, k
 func (sda *SupplyDemandAnalyzer) calculateZoneStrengthWithSymbol(zone *SupplyDemandZone, klines []Kline, symbol, timeframe string) {
 	// 首先调用原有的强度计算逻辑
 	sda.calculateZoneStrength(zone, klines)
-	
+
 	// ===== 集成Z-Score标准化 =====
 	// 只有在明确提供symbol和timeframe时才进行标准化
 	if symbol != "" && timeframe != "" {
@@ -950,7 +954,7 @@ func (sda *SupplyDemandAnalyzer) calculateZoneStrengthWithSymbol(zone *SupplyDem
 			if avgVolume > 0 {
 				volumeRatio = zone.Volume / avgVolume
 			}
-			
+
 			// 创建供需区强度记录
 			zoneRecord := &ZoneStrengthRecord{
 				Symbol:       symbol,
@@ -962,23 +966,24 @@ func (sda *SupplyDemandAnalyzer) calculateZoneStrengthWithSymbol(zone *SupplyDem
 				VolumeRatio:  volumeRatio,
 				WidthPercent: zone.WidthPercent,
 			}
-			
+
 			// 获取标准化Z-Score (先计算Z分数，再添加到历史记录)
 			zScoreResult := normalizer.GetZScoreWithUpdate(symbol, timeframe, zone.Strength, zoneRecord)
-			
+
 			// 更新供需区的标准化强度
 			zone.StrengthZ = zScoreResult.ZScore
 			zone.StrengthZReady = zScoreResult.IsReady
 			zone.SampleCount = zScoreResult.SampleCount
-			
+
+			// 🔧 优化：减少供需区强度标准化日志频率，避免日志污染
 			// 调试日志：记录标准化过程
-			if zScoreResult.IsReady {
-				log.Printf("🎯 [%s_%s] 供需区强度标准化: 原始=%.2f → Z分数=%.2f (样本=%d)", 
-					symbol, timeframe, zone.Strength, zone.StrengthZ, zone.SampleCount)
-			} else {
-				log.Printf("⚠️ [%s_%s] 供需区强度标准化: 样本不足 (%d<%d)，使用原始强度", 
-					symbol, timeframe, zone.SampleCount, MinSampleSize)
-			}
+			// if zScoreResult.IsReady {
+			//	log.Printf("🎯 [%s_%s] 供需区强度标准化: 原始=%.2f → Z分数=%.2f (样本=%d)",
+			//		symbol, timeframe, zone.Strength, zone.StrengthZ, zone.SampleCount)
+			// } else {
+			//	log.Printf("⚠️ [%s_%s] 供需区强度标准化: 样本不足 (%d<%d)，使用原始强度",
+			//		symbol, timeframe, zone.SampleCount, MinSampleSize)
+			// }
 		} else {
 			log.Printf("⚠️ 强度标准化器未初始化，使用原始强度评分")
 		}
@@ -1022,7 +1027,7 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 
 	currentTime := klines[len(klines)-1].OpenTime
 	currentPrice := klines[len(klines)-1].Close
-	
+
 	// 计算ATR用于准确的突破判定
 	atr := sda.calculateATR(klines, 14)
 
@@ -1037,21 +1042,21 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 
 		// 【关键修复】使用增强的突破判定逻辑��区分Testing和Broken状态
 		breakoutResult := sda.analyzeZoneInteraction(zone, currentPrice, atr)
-		
+
 		switch breakoutResult {
 		case "no_interaction":
 			// 价格未接触区域，保持现状
-			
+
 		case "testing":
 			// 【核心修复】价格正在测试区域，但未有效突破 - 保持活跃状态
 			zone.Status = StatusTesting
-			zone.IsActive = true  // 确保Testing状态的区域保持活跃
+			zone.IsActive = true // 确保Testing状态的区域保持活跃
 			log.Printf("🎯 [Testing状态] 区域%s被价格测试(%.2f)，保持活跃监控", zone.ID, currentPrice)
-			
+
 		case "true_breakout":
 			// 真正的突破 - 进行类型转换处理
 			sda.handleZoneBreakout(zone, currentPrice, klines)
-			
+
 			if strings.Contains(zone.ID, "breaker_") {
 				// Breaker区域：继续活跃，只是改变了类型
 				log.Printf("✅ [Breaker激活] 区域%s类型转换完成，继续监控", zone.ID)
@@ -1116,67 +1121,67 @@ func (sda *SupplyDemandAnalyzer) isZoneBroken(zone *SupplyDemandZone, klines []K
 func (sda *SupplyDemandAnalyzer) handleZoneBreakout(zone *SupplyDemandZone, currentPrice float64, klines []Kline) {
 	// 计算ATR用于真假突破判定
 	atr := sda.calculateATR(klines, 14) // 使用14期ATR
-	
+
 	// 检查是否为真正的突破（而非SFP假突破）
 	isTrueBreak := sda.isTrueBreakout(zone, currentPrice, atr)
-	
+
 	originalType := zone.Type
-	
+
 	if zone.Type == DemandZone && currentPrice < zone.LowerBound {
 		if isTrueBreak {
 			// 【真突破】需求区被真正跌破 → 转换为供给区（阻力位）
 			zone.Type = SupplyZone
-			zone.ID = "breaker_" + zone.ID  // 更新ID标识转换
-			
+			zone.ID = "breaker_" + zone.ID // 更新ID标识转换
+
 			// 更新模式类型为Breaker
 			if zone.Origin != nil {
 				zone.Origin.PatternType = "demand_breaker" // 新的模式类型
 			}
-			
-			log.Printf("🔄 [真突破确认] 需求区%.2f-%.2f被真正跌破(ATR缓冲%.2f)，转换为供给区", 
+
+			log.Printf("🔄 [真突破确认] 需求区%.2f-%.2f被真正跌破(ATR缓冲%.2f)，转换为供给区",
 				zone.LowerBound, zone.UpperBound, 0.2*atr)
 		} else {
 			// 【假突破/SFP】仅标记为测试状态，不转换类型
 			zone.Status = StatusTesting
-			log.Printf("🎯 [SFP检测] 需求区%.2f-%.2f价格刺破但未达真突破阈值，标记为Testing状态", 
+			log.Printf("🎯 [SFP检测] 需求区%.2f-%.2f价格刺破但未达真突破阈值，标记为Testing状态",
 				zone.LowerBound, zone.UpperBound)
 			return // 不进行类型转换
 		}
-		
+
 	} else if zone.Type == SupplyZone && currentPrice > zone.UpperBound {
 		if isTrueBreak {
 			// 【真突破】供给区被真正突破 → 转换为需求区（支撑位）
 			zone.Type = DemandZone
 			zone.ID = "breaker_" + zone.ID
-			
+
 			if zone.Origin != nil {
 				zone.Origin.PatternType = "supply_breaker"
 			}
-			
-			log.Printf("🔄 [真突破确认] 供给区%.2f-%.2f被真正突破(ATR缓冲%.2f)，转换为需求区", 
+
+			log.Printf("🔄 [真突破确认] 供给区%.2f-%.2f被真正突破(ATR缓冲%.2f)，转换为需求区",
 				zone.LowerBound, zone.UpperBound, 0.2*atr)
 		} else {
 			// 【假突破/SFP】仅标记为测试状态，不转换类型
 			zone.Status = StatusTesting
-			log.Printf("🎯 [SFP检测] 供给区%.2f-%.2f价格刺破但未达真突破阈值，标记为Testing状态", 
+			log.Printf("🎯 [SFP检测] 供给区%.2f-%.2f价格刺破但未达真突破阈值，标记为Testing状态",
 				zone.LowerBound, zone.UpperBound)
 			return // 不进行类型转换
 		}
 	}
-	
+
 	// 如果发生了真正的类型转换，重置区域状态
 	if zone.Type != originalType {
-		zone.Status = StatusTested      // 重置为已测试状态
-		zone.TouchCount = 1           // 重置触及计数
-		zone.IsActive = true          // 重新激活
-		zone.IsBroken = false         // 不再是broken状态
-		zone.BreakTime = 0           // 清除突破时间
-		
+		zone.Status = StatusTested // 重置为已测试状态
+		zone.TouchCount = 1        // 重置触及计数
+		zone.IsActive = true       // 重新激活
+		zone.IsBroken = false      // 不再是broken状态
+		zone.BreakTime = 0         // 清除突破时间
+
 		// 重新计算强度（Breaker区域通常强度较高）
-		zone.Strength = math.Min(zone.Strength * 1.2, 100.0) // 提升20%强度，上限100
-		zone.Quality = QualityGood   // 设置为良好质量
-		
-		log.Printf("✅ [区域转换完成] ATR=%.2f, 缓冲距离=%.2f, 新类型=%s", 
+		zone.Strength = math.Min(zone.Strength*1.2, 100.0) // 提升20%强度，上限100
+		zone.Quality = QualityGood                         // 设置为良好质量
+
+		log.Printf("✅ [区域转换完成] ATR=%.2f, 缓冲距离=%.2f, 新类型=%s",
 			atr, 0.2*atr, zone.Type)
 	}
 }
@@ -1186,7 +1191,7 @@ func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines
 	count := 0
 	lastTouchIndex := -1
 	minGapBetweenTouches := 5 // 【优化】至少间隔5根K线才算新的触及（更严格聚类）
-	
+
 	// 【修复幽灵支撑Bug】从区域诞生开始检查完整历史，不截断数据
 	// 必须检查完整生命周期以发现历史的Zone Broken事件
 	startIndex := 0
@@ -1194,7 +1199,7 @@ func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines
 		startIndex = zone.Origin.KlineIndex + 1
 	}
 	endIndex := len(klines)
-	
+
 	// 【安全检查】确保索引有效
 	if startIndex < 0 {
 		startIndex = 0
@@ -1202,15 +1207,15 @@ func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines
 	if startIndex >= endIndex {
 		return 0 // 没有后续数据可检查
 	}
-	
+
 	// 【完整历史扫描】不使用maxLookback截断，确保技术分析的准确性
 	for i := startIndex; i < endIndex; i++ {
 		if sda.priceInZone(klines[i].High, klines[i].Low, zone) {
 			// 聚类机制：只有与上次触及间隔足够远才计为新触及
-			if lastTouchIndex == -1 || i - lastTouchIndex >= minGapBetweenTouches {
+			if lastTouchIndex == -1 || i-lastTouchIndex >= minGapBetweenTouches {
 				count++
 				lastTouchIndex = i
-				
+
 				// 【关键优化】严格限制最大触及次数，适配AI V-10.0规则（Touches>8废弃）
 				if count >= 8 {
 					break // 最多8次触及，确保通过AI验证
@@ -1218,7 +1223,7 @@ func (sda *SupplyDemandAnalyzer) countZoneTouches(zone *SupplyDemandZone, klines
 			}
 		}
 	}
-	
+
 	return count
 }
 
@@ -1305,14 +1310,14 @@ func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone) []
 
 	for _, zone := range zones {
 		// 【关键修复】扩展活跃区域的保留条件，确保Testing状态区域不会消失
-		shouldKeepActive := zone.IsActive || 
-						   zone.Status == StatusTesting ||  // Testing状态必须保留
-						   zone.Status == StatusWeakened || // Weakened状态也给AI判断机会
-						   (zone.Status == StatusBroken && sda.isRecentZone(zone)) // 新区域即使Broken也给观察期
-		
+		shouldKeepActive := zone.IsActive ||
+			zone.Status == StatusTesting || // Testing状态必须保留
+			zone.Status == StatusWeakened || // Weakened状态也给AI判断机会
+			(zone.Status == StatusBroken && sda.isRecentZone(zone)) // 新区域即使Broken也给观察期
+
 		if shouldKeepActive {
 			active = append(active, zone)
-			
+
 			// 调试日志：记录保留原因
 			reason := ""
 			if zone.IsActive {
@@ -1324,9 +1329,9 @@ func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone) []
 			} else if zone.Status == StatusBroken && sda.isRecentZone(zone) {
 				reason = "新区域观察期保护"
 			}
-			
+
 			if reason != "活跃状态" { // 只记录特殊保护情况
-				log.Printf("🛡️ [区域保护] 区域%s被保留(%s) - %.2f-%.2f", 
+				log.Printf("🛡️ [区域保护] 区域%s被保留(%s) - %.2f-%.2f",
 					zone.ID, reason, zone.LowerBound, zone.UpperBound)
 			}
 		}
@@ -1827,7 +1832,7 @@ func (sda *SupplyDemandAnalyzer) identifyBasicZonesWithSymbol(klines []Kline, sy
 		zones = append(zones, zone)
 	}
 
-	// 创建需求区（基于最低点） - 提升质量和强度  
+	// 创建需求区（基于最低点） - 提升质量和强度
 	if lowestIndex > start+5 && lowestIndex < len(klines)-5 {
 		demandUpper := klines[lowestIndex].High
 		demandLower := klines[lowestIndex].Low
@@ -1901,30 +1906,32 @@ func (sda *SupplyDemandAnalyzer) inferSymbolTimeframe(klines []Kline) (string, s
 // 作用：确保供给区在当前价格上方，需求区在当前价格下方
 func (sda *SupplyDemandAnalyzer) validateZonePosition(zone *SupplyDemandZone, currentPrice float64, atr float64) bool {
 	bufferDistance := 0.1 * atr // 使用较小的缓冲区用于位置验证
-	
+
 	if zone.Type == SupplyZone {
 		// 供给区应该在当前价格上方（或接近）
 		minValidPrice := currentPrice - bufferDistance
 		isValid := zone.LowerBound >= minValidPrice
-		
+
 		if !isValid {
-			log.Printf("🚫 [位置验证失败] 供给区%.2f-%.2f在当前价格%.2f下方，不符合市场物理定律", 
-				zone.LowerBound, zone.UpperBound, currentPrice)
+			// 🔧 优化：移除冗余的位置验证失败日志，静默处理
+			// log.Printf("🚫 [位置验证失败] 供给区%.2f-%.2f在当前价格%.2f下方，不符合市场物理定律",
+			//	zone.LowerBound, zone.UpperBound, currentPrice)
 		}
 		return isValid
-		
+
 	} else if zone.Type == DemandZone {
 		// 需求区应该在当前价格下方（或接近）
 		maxValidPrice := currentPrice + bufferDistance
 		isValid := zone.UpperBound <= maxValidPrice
-		
+
 		if !isValid {
-			log.Printf("🚫 [位置验证失败] 需求区%.2f-%.2f在当前价格%.2f上方，不符合市场物理定律", 
-				zone.LowerBound, zone.UpperBound, currentPrice)
+			// 🔧 优化：移除冗余的位置验证失败日志，静默处理
+			// log.Printf("🚫 [位置验证失败] 需求区%.2f-%.2f在当前价格%.2f上方，不符合市场物理定律",
+			//	zone.LowerBound, zone.UpperBound, currentPrice)
 		}
 		return isValid
 	}
-	
+
 	return true
 }
 
@@ -1941,29 +1948,29 @@ func (sda *SupplyDemandAnalyzer) calculateATR(klines []Kline, period int) float6
 		}
 		return 50.0 // 保底默认值
 	}
-	
+
 	var trSum float64 = 0
 	validPeriods := 0
-	
+
 	// 计算指定周期内的平均真实波动率
 	for i := 1; i < len(klines) && validPeriods < period; i++ {
 		current := klines[i]
 		previous := klines[i-1]
-		
+
 		// 真实波动率公式：TR = max(当日高低差, |当日高-前日收|, |当日低-前日收|)
-		tr1 := current.High - current.Low                    
-		tr2 := math.Abs(current.High - previous.Close)       
-		tr3 := math.Abs(current.Low - previous.Close)        
-		
+		tr1 := current.High - current.Low
+		tr2 := math.Abs(current.High - previous.Close)
+		tr3 := math.Abs(current.Low - previous.Close)
+
 		trCurrent := math.Max(tr1, math.Max(tr2, tr3))
 		trSum += trCurrent
 		validPeriods++
 	}
-	
+
 	if validPeriods == 0 {
 		return 50.0
 	}
-	
+
 	atr := trSum / float64(validPeriods)
 	log.Printf("🔢 [ATR计算] 周期=%d, ATR=%.2f (市场波动性基准)", validPeriods, atr)
 	return atr
@@ -1973,29 +1980,29 @@ func (sda *SupplyDemandAnalyzer) calculateATR(klines []Kline, period int) float6
 // 作用：区分真突破和假突破(SFP)，防止误判导致错误的区域类型转换
 func (sda *SupplyDemandAnalyzer) isTrueBreakout(zone *SupplyDemandZone, currentPrice float64, atr float64) bool {
 	bufferDistance := 0.2 * atr // 0.2倍ATR作为缓冲距离，这是经验值，可以过滤掉大部分假突破
-	
+
 	if zone.Type == DemandZone {
 		// 需求区突破判定：价格必须跌破 (区域下沿 - 0.2*ATR) 才算真正突破
 		breakoutThreshold := zone.LowerBound - bufferDistance
 		isTrue := currentPrice < breakoutThreshold
-		
-		log.Printf("🎯 [真假突破判定] 需求区%.2f, 当前%.2f, 阈值%.2f (缓冲%.2f), 结果=%s", 
-			zone.LowerBound, currentPrice, breakoutThreshold, bufferDistance, 
+
+		log.Printf("🎯 [真假突破判定] 需求区%.2f, 当前%.2f, 阈值%.2f (缓冲%.2f), 结果=%s",
+			zone.LowerBound, currentPrice, breakoutThreshold, bufferDistance,
 			map[bool]string{true: "真突破", false: "假突破/测试"}[isTrue])
-		
+
 		return isTrue
 	} else if zone.Type == SupplyZone {
 		// 供给区突破判定：价格必须突破 (区域上沿 + 0.2*ATR) 才算真正突破
 		breakoutThreshold := zone.UpperBound + bufferDistance
 		isTrue := currentPrice > breakoutThreshold
-		
-		log.Printf("🎯 [真假突破判定] 供给区%.2f, 当前%.2f, 阈值%.2f (缓冲%.2f), 结果=%s", 
+
+		log.Printf("🎯 [真假突破判定] 供给区%.2f, 当前%.2f, 阈值%.2f (缓冲%.2f), 结果=%s",
 			zone.UpperBound, currentPrice, breakoutThreshold, bufferDistance,
 			map[bool]string{true: "真突破", false: "假突破/测试"}[isTrue])
-		
+
 		return isTrue
 	}
-	
+
 	return false
 }
 
@@ -2005,12 +2012,12 @@ func (sda *SupplyDemandAnalyzer) ValidateZonePositions(sdData *SupplyDemandData,
 	if sdData == nil || len(klines) < 14 {
 		return sdData
 	}
-	
+
 	currentPrice := klines[len(klines)-1].Close
 	atr := sda.calculateATR(klines, 14)
-	
+
 	log.Printf("🔍 [P0全面验证] 开始验证所有区域位置，当前价格=%.2f, ATR=%.2f", currentPrice, atr)
-	
+
 	// 验证和清理供给区
 	validSupplyZones := []*SupplyDemandZone{}
 	removedSupplyCount := 0
@@ -2019,11 +2026,11 @@ func (sda *SupplyDemandAnalyzer) ValidateZonePositions(sdData *SupplyDemandData,
 			validSupplyZones = append(validSupplyZones, zone)
 		} else {
 			removedSupplyCount++
-			log.Printf("🗑️ [清理供给区] 移除位置不合理的供给区: %.2f-%.2f (ID: %s)", 
+			log.Printf("🗑️ [清理供给区] 移除位置不合理的供给区: %.2f-%.2f (ID: %s)",
 				zone.LowerBound, zone.UpperBound, zone.ID)
 		}
 	}
-	
+
 	// 验证和清理需求区
 	validDemandZones := []*SupplyDemandZone{}
 	removedDemandCount := 0
@@ -2032,11 +2039,11 @@ func (sda *SupplyDemandAnalyzer) ValidateZonePositions(sdData *SupplyDemandData,
 			validDemandZones = append(validDemandZones, zone)
 		} else {
 			removedDemandCount++
-			log.Printf("🗑️ [清理需求区] 移除位置不合理的需求区: %.2f-%.2f (ID: %s)", 
+			log.Printf("🗑️ [清理需求区] 移除位置不合理的需求区: %.2f-%.2f (ID: %s)",
 				zone.LowerBound, zone.UpperBound, zone.ID)
 		}
 	}
-	
+
 	// 重新构建活跃区域列表
 	allValidZones := append(validSupplyZones, validDemandZones...)
 	validActiveZones := []*SupplyDemandZone{}
@@ -2045,13 +2052,13 @@ func (sda *SupplyDemandAnalyzer) ValidateZonePositions(sdData *SupplyDemandData,
 			validActiveZones = append(validActiveZones, zone)
 		}
 	}
-	
+
 	// 重新计算统计信息
 	stats := sda.calculateStatistics(validSupplyZones, validDemandZones, validActiveZones)
-	
-	log.Printf("✅ [P0全面验证完成] 移除供给区%d个, 需求区%d个, 剩余活跃区域%d个", 
+
+	log.Printf("✅ [P0全面验证完成] 移除供给区%d个, 需求区%d个, 剩余活跃区域%d个",
 		removedSupplyCount, removedDemandCount, len(validActiveZones))
-	
+
 	return &SupplyDemandData{
 		SupplyZones:  validSupplyZones,
 		DemandZones:  validDemandZones,
@@ -2069,20 +2076,20 @@ func (sda *SupplyDemandAnalyzer) ValidateZonePositions(sdData *SupplyDemandData,
 func (sda *SupplyDemandAnalyzer) analyzeZoneInteraction(zone *SupplyDemandZone, currentPrice float64, atr float64) string {
 	// 计算价格到区域的距离
 	distanceToZone := sda.calculateDistanceToZone(zone, currentPrice)
-	
+
 	// 级别1：未接触区域 - 价格距离区域超过1%
 	if distanceToZone > 0.01 { // 1%以外不算交互
 		return "no_interaction"
 	}
-	
+
 	// 判断价格是否在区域内部
 	priceInZone := currentPrice >= zone.LowerBound && currentPrice <= zone.UpperBound
-	
+
 	if priceInZone {
 		// 价格在区域内 = Testing状态，不应该失效
 		return "testing"
 	}
-	
+
 	// 计算刺破距离（使用ATR作为基准）
 	penetrationDistance := 0.0
 	if zone.Type == DemandZone && currentPrice < zone.LowerBound {
@@ -2090,11 +2097,11 @@ func (sda *SupplyDemandAnalyzer) analyzeZoneInteraction(zone *SupplyDemandZone, 
 	} else if zone.Type == SupplyZone && currentPrice > zone.UpperBound {
 		penetrationDistance = currentPrice - zone.UpperBound
 	}
-	
+
 	// 设置ATR缓冲标准
-	minPenetrationForTesting := 0.1 * atr    // 0.1*ATR以内算轻微测试
-	minPenetrationForBreakout := 0.5 * atr   // 0.5*ATR以上才考虑真突破
-	
+	minPenetrationForTesting := 0.1 * atr  // 0.1*ATR以内算轻微测试
+	minPenetrationForBreakout := 0.5 * atr // 0.5*ATR以上才考虑真突破
+
 	if penetrationDistance <= minPenetrationForTesting {
 		// 轻微刺破 = Testing状态
 		return "testing"
