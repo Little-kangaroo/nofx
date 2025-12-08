@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -138,7 +139,7 @@ func (ofm *OrderFlowManager) Start() error {
 	go ofm.runCleanupLoop()
 	
 	// 🆕 启动协程监控定时器
-	ofm.goroutineCheckTicker = time.NewTicker(10 * time.Minute) // 每10分钟检查一次协程状态
+	ofm.goroutineCheckTicker = time.NewTicker(1 * time.Minute) // 每1分钟检查一次协程状态
 	go ofm.runGoroutineMonitor()
 	
 	ofm.isRunning = true
@@ -149,12 +150,19 @@ func (ofm *OrderFlowManager) Start() error {
 
 // Stop 停止订单流管理器
 func (ofm *OrderFlowManager) Stop() {
+	// 🆕 记录完整的调用栈，找出真凶！
+	log.Printf("🚨 OrderFlowManager.Stop() 被调用！正在记录调用栈...")
+	log.Printf("🔍 调用栈详情:\n%s", string(debug.Stack()))
+	
 	ofm.mu.Lock()
 	defer ofm.mu.Unlock()
 	
 	if !ofm.isRunning {
+		log.Printf("⚠️ OrderFlowManager已经停止，忽略重复调用")
 		return
 	}
+	
+	log.Printf("⛔ 开始停止OrderFlowManager...")
 	
 	// 停止WebSocket管理器
 	ofm.wsManager.Stop()
@@ -680,7 +688,13 @@ func InitGlobalOrderFlowManager(config *MicrostructureConfig) error {
 
 // StopGlobalOrderFlowManager 停止全局订单流管理器
 func StopGlobalOrderFlowManager() {
+	// 🆕 记录全局停止的调用栈
+	log.Printf("🚨 StopGlobalOrderFlowManager() 被调用！正在记录调用栈...")
+	log.Printf("🔍 全局停止调用栈:\n%s", string(debug.Stack()))
+	
 	if globalOrderFlowManager != nil {
 		globalOrderFlowManager.Stop()
+	} else {
+		log.Printf("⚠️ 全局OrderFlowManager为nil，无需停止")
 	}
 }
