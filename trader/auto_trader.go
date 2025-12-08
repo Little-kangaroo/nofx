@@ -10,6 +10,7 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
+	"nofx/microstructure"
 	"nofx/pool"
 	"strconv"
 	"strings"
@@ -269,6 +270,28 @@ func (at *AutoTrader) Run() error {
 	log.Printf("💰 初始余额: %.2f USDT", at.initialBalance)
 	log.Println("🕐 使用BTCUSDT 5分钟收盘事件触发AI分析")
 	log.Println("🤖 AI将全权决定杠杆、仓位大小、止损止盈等参数")
+
+	// 🆕 启动OI协程 - 使用交易员的币种配置
+	log.Printf("🚀 [%s] 启动OI协程...", at.name)
+	
+	var symbols []string
+	if len(at.tradingCoins) > 0 {
+		symbols = at.tradingCoins
+		log.Printf("📊 [%s] 使用自定义币种: %v", at.name, symbols)
+	} else if len(at.defaultCoins) > 0 {
+		symbols = at.defaultCoins
+		log.Printf("📊 [%s] 使用默认币种: %v", at.name, symbols)
+	} else {
+		// 兜底方案
+		symbols = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT"}
+		log.Printf("⚠️ [%s] 未配置币种，使用兜底方案: %v", at.name, symbols)
+	}
+	
+	if err := microstructure.InitOrderFlowForSymbols(symbols); err != nil {
+		log.Printf("⚠️ [%s] 启动OI协程失败: %v", at.name, err)
+	} else {
+		log.Printf("✅ [%s] 已启动OI协程，监控 %d 个币种: %v", at.name, len(symbols), symbols)
+	}
 
 	// 🆕 启动WebSocket订单管理器
 	if at.wsOrderManager != nil {

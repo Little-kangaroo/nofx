@@ -337,14 +337,6 @@ func main() {
 		log.Printf("✓ 已配置OI Top API")
 	}
 
-	// 🔗 为订单流系统订阅默认币种
-	log.Printf("🔗 为订单流系统订阅默认币种...")
-	if err := microstructure.InitOrderFlowForSymbols(defaultCoins); err != nil {
-		log.Printf("⚠️ 订单流系统币种订阅失败: %v", err)
-	} else {
-		log.Printf("✅ 已为订单流系统订阅 %d 个币种", len(defaultCoins))
-	}
-
 	// 创建TraderManager
 	traderManager := manager.NewTraderManager()
 
