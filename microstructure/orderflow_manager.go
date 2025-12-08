@@ -150,19 +150,23 @@ func (ofm *OrderFlowManager) Start() error {
 
 // Stop 停止订单流管理器
 func (ofm *OrderFlowManager) Stop() {
-	// 🆕 记录完整的调用栈，找出真凶！
-	log.Printf("🚨 OrderFlowManager.Stop() 被调用！正在记录调用栈...")
-	log.Printf("🔍 调用栈详情:\n%s", string(debug.Stack()))
+	// 🆕🆕🆕 强制记录调用栈 - 多重日志确保能看到
+	fmt.Printf("🚨🚨🚨 [CRITICAL] OrderFlowManager.Stop() 被调用！时间: %s\n", time.Now().Format("15:04:05.000"))
+	fmt.Printf("🔍🔍🔍 [CRITICAL] 调用栈详情:\n%s\n", string(debug.Stack()))
+	log.Printf("🚨🚨🚨 [CRITICAL] OrderFlowManager.Stop() 被调用！时间: %s", time.Now().Format("15:04:05.000"))
+	log.Printf("🔍🔍🔍 [CRITICAL] 调用栈详情:\n%s", string(debug.Stack()))
 	
 	ofm.mu.Lock()
 	defer ofm.mu.Unlock()
 	
 	if !ofm.isRunning {
-		log.Printf("⚠️ OrderFlowManager已经停止，忽略重复调用")
+		fmt.Printf("⚠️⚠️⚠️ [CRITICAL] OrderFlowManager已经停止，忽略重复调用\n")
+		log.Printf("⚠️⚠️⚠️ [CRITICAL] OrderFlowManager已经停止，忽略重复调用")
 		return
 	}
 	
-	log.Printf("⛔ 开始停止OrderFlowManager...")
+	fmt.Printf("⛔⛔⛔ [CRITICAL] 开始停止OrderFlowManager...\n")
+	log.Printf("⛔⛔⛔ [CRITICAL] 开始停止OrderFlowManager...")
 	
 	// 停止WebSocket管理器
 	ofm.wsManager.Stop()
@@ -177,8 +181,11 @@ func (ofm *OrderFlowManager) Stop() {
 		ofm.goroutineCheckTicker.Stop()
 	}
 	
+	fmt.Printf("🚨🚨🚨 [CRITICAL] 即将设置isRunning=false！调用栈:\n%s\n", string(debug.Stack()))
+	log.Printf("🚨🚨🚨 [CRITICAL] 即将设置isRunning=false！调用栈:\n%s", string(debug.Stack()))
 	ofm.isRunning = false
-	log.Printf("⛔ 订单流管理器已停止")
+	fmt.Printf("⛔⛔⛔ [CRITICAL] 订单流管理器已停止\n")
+	log.Printf("⛔⛔⛔ [CRITICAL] 订单流管理器已停止")
 }
 
 // SubscribeSymbol 订阅币种的订单流数据
@@ -688,13 +695,18 @@ func InitGlobalOrderFlowManager(config *MicrostructureConfig) error {
 
 // StopGlobalOrderFlowManager 停止全局订单流管理器
 func StopGlobalOrderFlowManager() {
-	// 🆕 记录全局停止的调用栈
-	log.Printf("🚨 StopGlobalOrderFlowManager() 被调用！正在记录调用栈...")
-	log.Printf("🔍 全局停止调用栈:\n%s", string(debug.Stack()))
+	// 🆕🆕🆕 强制记录全局停止的调用栈 - 多重日志
+	fmt.Printf("🚨🚨🚨 [CRITICAL] StopGlobalOrderFlowManager() 被调用！时间: %s\n", time.Now().Format("15:04:05.000"))
+	fmt.Printf("🔍🔍🔍 [CRITICAL] 全局停止调用栈:\n%s\n", string(debug.Stack()))
+	log.Printf("🚨🚨🚨 [CRITICAL] StopGlobalOrderFlowManager() 被调用！时间: %s", time.Now().Format("15:04:05.000"))
+	log.Printf("🔍🔍🔍 [CRITICAL] 全局停止调用栈:\n%s", string(debug.Stack()))
 	
 	if globalOrderFlowManager != nil {
+		fmt.Printf("🛑🛑🛑 [CRITICAL] 调用globalOrderFlowManager.Stop()\n")
+		log.Printf("🛑🛑🛑 [CRITICAL] 调用globalOrderFlowManager.Stop()")
 		globalOrderFlowManager.Stop()
 	} else {
-		log.Printf("⚠️ 全局OrderFlowManager为nil，无需停止")
+		fmt.Printf("⚠️⚠️⚠️ [CRITICAL] 全局OrderFlowManager为nil，无需停止\n")
+		log.Printf("⚠️⚠️⚠️ [CRITICAL] 全局OrderFlowManager为nil，无需停止")
 	}
 }
