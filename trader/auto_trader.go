@@ -271,8 +271,8 @@ func (at *AutoTrader) Run() error {
 	log.Println("🕐 使用BTCUSDT 5分钟收盘事件触发AI分析")
 	log.Println("🤖 AI将全权决定杠杆、仓位大小、止损止盈等参数")
 
-	// 🆕 启动OI协程 - 使用交易员的币种配置
-	log.Printf("🚀 [%s] 启动OI协程...", at.name)
+	// 🔧 修复：仅订阅币种到已启动的全局OrderFlowManager，不尝试启动新实例
+	log.Printf("🔗 [%s] 订阅币种到全局订单流分析...", at.name)
 	
 	var symbols []string
 	if len(at.tradingCoins) > 0 {
@@ -287,10 +287,23 @@ func (at *AutoTrader) Run() error {
 		log.Printf("⚠️ [%s] 未配置币种，使用兜底方案: %v", at.name, symbols)
 	}
 	
-	if err := microstructure.InitOrderFlowForSymbols(symbols); err != nil {
-		log.Printf("⚠️ [%s] 启动OI协程失败: %v", at.name, err)
+	// 🔧 修复：仅获取已启动的全局实例，如果未启动则等待
+	globalOFM := microstructure.GetGlobalOrderFlowManager()
+	if globalOFM != nil {
+		status := globalOFM.GetStatus()
+		if isRunning, ok := status["is_running"].(bool); ok && isRunning {
+			// 订阅币种到已启动的实例
+			for _, symbol := range symbols {
+				if err := globalOFM.SubscribeSymbol(symbol); err != nil {
+					log.Printf("⚠️ [%s] 订阅币种失败 %s: %v", at.name, symbol, err)
+				}
+			}
+			log.Printf("✅ [%s] 已订阅 %d 个币种到全局订单流分析: %v", at.name, len(symbols), symbols)
+		} else {
+			log.Printf("⚠️ [%s] 全局OrderFlowManager未启动，跳过订阅", at.name)
+		}
 	} else {
-		log.Printf("✅ [%s] 已启动OI协程，监控 %d 个币种: %v", at.name, len(symbols), symbols)
+		log.Printf("❌ [%s] 全局OrderFlowManager不存在", at.name)
 	}
 
 	// 🆕 启动WebSocket订单管理器

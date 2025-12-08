@@ -260,7 +260,7 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 		for range ticker.C {
 			log.Printf("🔄 [%s] 定时器触发，准备获取OI数据", symbol)
 			
-			// 🔧 修复: 检查币种订阅状态而不是全局运行状态，防止单个trader停止影响全局系统
+			// 🔧 修复：增强状态检查，防止协程意外退出
 			ofm.mu.RLock()
 			globalRunning := ofm.isRunning
 			symbolSubscribed := ofm.subscribedSymbols[symbol]
@@ -268,7 +268,7 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 			
 			log.Printf("🔄 [%s] 检查状态: 全局运行=%v, 币种订阅=%v", symbol, globalRunning, symbolSubscribed)
 			
-			// 只有在全局停止或币种取消订阅时才退出
+			// 🔧 修复：只有在明确停止时才退出，避免误判
 			if !globalRunning {
 				log.Printf("⛔ [%s] 全局OrderFlowManager已停止，协程退出", symbol)
 				return
@@ -276,6 +276,12 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 			
 			if !symbolSubscribed {
 				log.Printf("⚠️ [%s] 币种已取消订阅，协程退出", symbol)
+				return
+			}
+			
+			// 🔧 修复：增加防护检查，确保实例仍然有效
+			if ofm == nil {
+				log.Printf("❌ [%s] OrderFlowManager实例为nil，协程异常退出", symbol)
 				return
 			}
 			
@@ -689,8 +695,22 @@ func InitGlobalOrderFlowManager(config *MicrostructureConfig) error {
 		config = DefaultMicrostructureConfig()
 	}
 	
-	globalOrderFlowManager = NewOrderFlowManager(config)
-	return globalOrderFlowManager.Start()
+	// 🔧 修复：确保单例一致性，避免重复创建
+	globalOFMOnce.Do(func() {
+		globalOrderFlowManager = NewOrderFlowManager(config)
+	})
+	
+	// 如果已经运行，直接返回
+	if globalOrderFlowManager != nil {
+		status := globalOrderFlowManager.GetStatus()
+		if isRunning, ok := status["is_running"].(bool); ok && isRunning {
+			log.Printf("✅ 全局OrderFlowManager已在运行，跳过重复启动")
+			return nil
+		}
+		return globalOrderFlowManager.Start()
+	}
+	
+	return fmt.Errorf("无法创建全局OrderFlowManager")
 }
 
 // StopGlobalOrderFlowManager 停止全局订单流管理器
