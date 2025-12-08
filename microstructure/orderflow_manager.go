@@ -192,23 +192,31 @@ func (ofm *OrderFlowManager) SubscribeSymbol(symbol string) error {
 func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 	// 启动定期获取OI数据的协程
 	go func() {
+		log.Printf("🔄 [%s] OI更新协程启动", symbol)
 		ticker := time.NewTicker(5 * time.Minute) // 每5分钟获取一次OI数据
 		defer ticker.Stop()
+		defer log.Printf("⚠️ [%s] OI更新协程退出", symbol)
 		
 		// 立即获取一次数据
+		log.Printf("🔄 [%s] 执行立即OI获取", symbol)
 		ofm.fetchAndProcessOIData(symbol)
 		
 		for range ticker.C {
+			log.Printf("🔄 [%s] 定时器触发，准备获取OI数据", symbol)
 			// 检查是否仍在运行
 			ofm.mu.RLock()
 			running := ofm.isRunning
 			ofm.mu.RUnlock()
 			
+			log.Printf("🔄 [%s] 检查运行状态: running=%v", symbol, running)
 			if !running {
+				log.Printf("⚠️ [%s] isRunning=false，协程退出", symbol)
 				return
 			}
 			
+			log.Printf("🔄 [%s] 开始获取OI数据", symbol)
 			ofm.fetchAndProcessOIData(symbol)
+			log.Printf("🔄 [%s] OI数据获取完成", symbol)
 		}
 	}()
 	
