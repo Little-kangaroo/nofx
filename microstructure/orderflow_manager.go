@@ -29,6 +29,10 @@ type OrderFlowManager struct {
 	isRunning           bool
 	subscribedSymbols   map[string]bool // 已订阅的币种
 	
+	// 🆕 协程监控
+	activeOIGoroutines  map[string]time.Time // symbol -> 上次活动时间
+	goroutineCheckTicker *time.Ticker        // 协程检查定时器
+	
 	// 数据缓存（用于快速获取）
 	latestPriceContext  map[string]*PriceContext // symbol -> PriceContext
 	
@@ -46,6 +50,7 @@ func NewOrderFlowManager(config *MicrostructureConfig) *OrderFlowManager {
 		config:              config,
 		subscribedSymbols:   make(map[string]bool),
 		latestPriceContext:  make(map[string]*PriceContext),
+		activeOIGoroutines:  make(map[string]time.Time), // 🆕 初始化协程监控
 	}
 
 	// 初始化各个组件
@@ -132,6 +137,10 @@ func (ofm *OrderFlowManager) Start() error {
 	ofm.cleanupTicker = time.NewTicker(60 * time.Minute) // 每60分钟清理一次
 	go ofm.runCleanupLoop()
 	
+	// 🆕 启动协程监控定时器
+	ofm.goroutineCheckTicker = time.NewTicker(10 * time.Minute) // 每10分钟检查一次协程状态
+	go ofm.runGoroutineMonitor()
+	
 	ofm.isRunning = true
 	log.Printf("🚀 订单流管理器启动完成")
 	
@@ -155,6 +164,11 @@ func (ofm *OrderFlowManager) Stop() {
 		ofm.cleanupTicker.Stop()
 	}
 	
+	// 🆕 停止协程监控定时器
+	if ofm.goroutineCheckTicker != nil {
+		ofm.goroutineCheckTicker.Stop()
+	}
+	
 	ofm.isRunning = false
 	log.Printf("⛔ 订单流管理器已停止")
 }
@@ -172,6 +186,8 @@ func (ofm *OrderFlowManager) SubscribeSymbol(symbol string) error {
 		return nil // 已订阅
 	}
 	ofm.subscribedSymbols[symbol] = true
+	// 🆕 初始化协程监控记录
+	ofm.activeOIGoroutines[symbol] = time.Now()
 	ofm.mu.Unlock()
 	
 	// 订阅各种数据流
@@ -195,7 +211,32 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 		log.Printf("🔄 [%s] OI更新协程启动", symbol)
 		ticker := time.NewTicker(5 * time.Minute) // 每5分钟获取一次OI数据
 		defer ticker.Stop()
-		defer log.Printf("⚠️ [%s] OI更新协程退出", symbol)
+		
+		// 🆕 增强的协程退出检测和日志
+		defer func() {
+			// 检查协程退出原因
+			ofm.mu.Lock() // 使用Lock而不是RLock，因为需要删除监控记录
+			globalRunning := ofm.isRunning
+			symbolSubscribed := ofm.subscribedSymbols[symbol]
+			
+			// 🆕 清理协程监控记录
+			delete(ofm.activeOIGoroutines, symbol)
+			
+			ofm.mu.Unlock()
+			
+			if globalRunning && symbolSubscribed {
+				// 如果全局还在运行且币种还在订阅中，但协程退出了，这是异常情况
+				log.Printf("❌ [%s] OI更新协程异常退出！全局运行状态: %v, 币种订阅状态: %v", 
+					symbol, globalRunning, symbolSubscribed)
+				log.Printf("❌ [%s] 这可能导致订单流数据过期问题，需要检查系统状态", symbol)
+			} else if !globalRunning {
+				log.Printf("⛔ [%s] OI更新协程正常退出: 全局OrderFlowManager已停止", symbol)
+			} else if !symbolSubscribed {
+				log.Printf("✅ [%s] OI更新协程正常退出: 币种已取消订阅", symbol)
+			} else {
+				log.Printf("⚠️ [%s] OI更新协程退出", symbol)
+			}
+		}()
 		
 		// 立即获取一次数据
 		log.Printf("🔄 [%s] 执行立即OI获取", symbol)
@@ -203,14 +244,23 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 		
 		for range ticker.C {
 			log.Printf("🔄 [%s] 定时器触发，准备获取OI数据", symbol)
-			// 检查是否仍在运行
+			
+			// 🔧 修复: 检查币种订阅状态而不是全局运行状态，防止单个trader停止影响全局系统
 			ofm.mu.RLock()
-			running := ofm.isRunning
+			globalRunning := ofm.isRunning
+			symbolSubscribed := ofm.subscribedSymbols[symbol]
 			ofm.mu.RUnlock()
 			
-			log.Printf("🔄 [%s] 检查运行状态: running=%v", symbol, running)
-			if !running {
-				log.Printf("⚠️ [%s] isRunning=false，协程退出", symbol)
+			log.Printf("🔄 [%s] 检查状态: 全局运行=%v, 币种订阅=%v", symbol, globalRunning, symbolSubscribed)
+			
+			// 只有在全局停止或币种取消订阅时才退出
+			if !globalRunning {
+				log.Printf("⛔ [%s] 全局OrderFlowManager已停止，协程退出", symbol)
+				return
+			}
+			
+			if !symbolSubscribed {
+				log.Printf("⚠️ [%s] 币种已取消订阅，协程退出", symbol)
 				return
 			}
 			
@@ -230,6 +280,11 @@ func (ofm *OrderFlowManager) fetchAndProcessOIData(symbol string) {
 			log.Printf("❌ 获取OI数据异常 %s: %v", symbol, r)
 		}
 	}()
+	
+	// 🆕 记录协程活动时间
+	ofm.mu.Lock()
+	ofm.activeOIGoroutines[symbol] = time.Now()
+	ofm.mu.Unlock()
 	
 	// 调用币安API获取OI数据
 	oiData, err := ofm.getOpenInterestFromAPI(symbol)
@@ -351,6 +406,60 @@ func (ofm *OrderFlowManager) GetAllMarketSnapshots() map[string]*MarketSnapshot 
 func (ofm *OrderFlowManager) runCleanupLoop() {
 	for range ofm.cleanupTicker.C {
 		ofm.performCleanup()
+	}
+}
+
+// 🆕 runGoroutineMonitor 运行协程监控
+func (ofm *OrderFlowManager) runGoroutineMonitor() {
+	for range ofm.goroutineCheckTicker.C {
+		ofm.checkGoroutineHealth()
+	}
+}
+
+// 🆕 checkGoroutineHealth 检查协程健康状态
+func (ofm *OrderFlowManager) checkGoroutineHealth() {
+	ofm.mu.RLock()
+	defer ofm.mu.RUnlock()
+	
+	now := time.Now()
+	deadlineMinutes := 8 // 如果8分钟内没有活动，则认为协程可能已死
+	
+	log.Printf("🔍 检查OI协程健康状态...")
+	
+	deadGoroutines := 0
+	totalGoroutines := 0
+	
+	for symbol, isSubscribed := range ofm.subscribedSymbols {
+		if !isSubscribed {
+			continue // 跳过已取消订阅的币种
+		}
+		
+		totalGoroutines++
+		lastActive, exists := ofm.activeOIGoroutines[symbol]
+		
+		if !exists {
+			log.Printf("❌ [%s] OI协程监控记录不存在，协程可能未正常启动", symbol)
+			deadGoroutines++
+			continue
+		}
+		
+		inactiveMinutes := now.Sub(lastActive).Minutes()
+		
+		if inactiveMinutes > float64(deadlineMinutes) {
+			log.Printf("❌ [%s] OI协程可能已死！上次活动: %.1f分钟前", symbol, inactiveMinutes)
+			log.Printf("❌ [%s] 这会导致30分钟后订单流数据过期，需要重启系统或重新订阅", symbol)
+			deadGoroutines++
+		} else if inactiveMinutes > 6 { // 6分钟给出警告
+			log.Printf("⚠️ [%s] OI协程活动缓慢，上次活动: %.1f分钟前", symbol, inactiveMinutes)
+		}
+	}
+	
+	if deadGoroutines > 0 {
+		log.Printf("❌ 协程健康检查完成: %d/%d 协程异常，系统可能需要重启", deadGoroutines, totalGoroutines)
+	} else if totalGoroutines > 0 {
+		log.Printf("✅ 协程健康检查完成: 所有 %d 个OI协程运行正常", totalGoroutines)
+	} else {
+		log.Printf("⚠️ 协程健康检查完成: 没有活跃的OI协程")
 	}
 }
 
