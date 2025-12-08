@@ -140,6 +140,8 @@ func (calc *OICalculator) GetOIAnalysis() *OIAnalysis {
 	defer calc.mu.RUnlock()
 
 	if len(calc.changes) == 0 {
+		// 检查数据是否过期 - 即使没有历史变化数据，也要基于lastUpdate判断
+		isStale := time.Since(calc.lastUpdate) > 30*time.Minute
 		return &OIAnalysis{
 			Current:     calc.current,
 			Change1H:    0,
@@ -148,7 +150,7 @@ func (calc *OICalculator) GetOIAnalysis() *OIAnalysis {
 			ChangeRate4H: 0,
 			Trend:       "no_data",
 			LastUpdate:  calc.lastUpdate,
-			IsStale:     true,
+			IsStale:     isStale,
 		}
 	}
 
