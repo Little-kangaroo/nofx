@@ -182,8 +182,32 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCal
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapLow * 100
 
-	// 🔥 修复：计算形成时ATR，避免时空错配
-	formationATR := fvg.calculateATR(klines[index-15:index], 14) // 使用形成时的局部ATR
+	// 🔥 修复：计算形成时ATR，避免时空错配，并处理边界情况
+	var formationATR float64
+	atrPeriod := 14
+	atrLookback := 15
+	
+	// 确保有足够的数据计算ATR
+	if index >= atrLookback {
+		formationATR = fvg.calculateATR(klines[index-atrLookback:index], atrPeriod)
+	} else if index >= atrPeriod {
+		// 如果数据不足15根，但超过ATR周期，使用可用数据
+		formationATR = fvg.calculateATR(klines[:index], atrPeriod)
+	} else {
+		// 数据不足，使用简化ATR计算或设置默认值
+		if index >= 2 {
+			// 至少有3根K线，计算简单的波动率作为ATR近似值
+			recentRange := 0.0
+			for i := 1; i < index; i++ {
+				tr := fvg.calculateTrueRange(klines[i], klines[i-1])
+				recentRange += tr
+			}
+			formationATR = recentRange / float64(index-1)
+		} else {
+			// 数据极度不足，设为0，后续过滤会处理
+			formationATR = 0
+		}
+	}
 	if shouldFilterByTimeframe(klines, gapWidthPercent, formationATR, gapWidth) {
 		return nil
 	}
@@ -287,8 +311,32 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, contextCal
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapHigh * 100
 
-	// 🔥 修复：计算形成时ATR，避免时空错配
-	formationATR := fvg.calculateATR(klines[index-15:index], 14) // 使用形成时的局部ATR
+	// 🔥 修复：计算形成时ATR，避免时空错配，并处理边界情况
+	var formationATR float64
+	atrPeriod := 14
+	atrLookback := 15
+	
+	// 确保有足够的数据计算ATR
+	if index >= atrLookback {
+		formationATR = fvg.calculateATR(klines[index-atrLookback:index], atrPeriod)
+	} else if index >= atrPeriod {
+		// 如果数据不足15根，但超过ATR周期，使用可用数据
+		formationATR = fvg.calculateATR(klines[:index], atrPeriod)
+	} else {
+		// 数据不足，使用简化ATR计算或设置默认值
+		if index >= 2 {
+			// 至少有3根K线，计算简单的波动率作为ATR近似值
+			recentRange := 0.0
+			for i := 1; i < index; i++ {
+				tr := fvg.calculateTrueRange(klines[i], klines[i-1])
+				recentRange += tr
+			}
+			formationATR = recentRange / float64(index-1)
+		} else {
+			// 数据极度不足，设为0，后续过滤会处理
+			formationATR = 0
+		}
+	}
 	if shouldFilterByTimeframe(klines, gapWidthPercent, formationATR, gapWidth) {
 		return nil
 	}
