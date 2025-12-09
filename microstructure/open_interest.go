@@ -2,8 +2,11 @@ package microstructure
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
+	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -75,6 +78,12 @@ func (calc *OICalculator) ProcessOIData(oiData *OIData) {
 	calc.mu.Lock()
 	defer calc.mu.Unlock()
 
+	// 🔧 修复: 增加数据验证和异常处理
+	if err := calc.validateOIData(oiData); err != nil {
+		log.Printf("❌ OI数据验证失败 %s: %v", calc.symbol, err)
+		return
+	}
+
 	// 计算变化量
 	var change float64
 	var changeRate float64
@@ -82,6 +91,13 @@ func (calc *OICalculator) ProcessOIData(oiData *OIData) {
 	if calc.current > 0 {
 		change = oiData.OpenInterest - calc.current
 		changeRate = change / calc.current * 100
+		
+		// 🔧 修复: 检测异常变化
+		if err := calc.detectAnomalousChange(change, changeRate); err != nil {
+			log.Printf("⚠️ 检测到异常OI变化 %s: %v, 当前=%.0f, 新值=%.0f", 
+				calc.symbol, err, calc.current, oiData.OpenInterest)
+			// 不直接拒绝数据，而是标记为可疑并继续处理
+		}
 	}
 
 	// 更新当前持仓量
@@ -299,6 +315,12 @@ func (manager *OIManager) ProcessOIMessage(message []byte) error {
 
 // ProcessOIData 处理来自API的OI数据
 func (manager *OIManager) ProcessOIData(symbol string, oiData *OIData) {
+	// 🔧 修复: 增加全局数据验证
+	if err := manager.validateOIDataGlobal(symbol, oiData); err != nil {
+		log.Printf("❌ OI管理器数据验证失败 %s: %v", symbol, err)
+		return
+	}
+	
 	calc := manager.GetOrCreateCalculator(symbol)
 	calc.ProcessOIData(oiData)
 }
@@ -365,6 +387,92 @@ func (manager *OIManager) Cleanup() {
 	}
 	
 	log.Printf("✅ OI数据清理完成，清理了 %d 个币种的过期数据", cleanedCount)
+}
+
+// ===== 🔧 修复: OI数据验证和异常处理方法 =====
+
+// validateOIData 验证单个OI数据的有效性
+func (calc *OICalculator) validateOIData(oiData *OIData) error {
+	if oiData == nil {
+		return fmt.Errorf("OI数据为nil")
+	}
+	
+	if oiData.Symbol != calc.symbol {
+		return fmt.Errorf("交易对不匹配: 期望%s, 实际%s", calc.symbol, oiData.Symbol)
+	}
+	
+	if oiData.OpenInterest < 0 {
+		return fmt.Errorf("持仓量不能为负数: %.2f", oiData.OpenInterest)
+	}
+	
+	// 检查是否为异常大的数值（可能是API错误）
+	if oiData.OpenInterest > 1e12 { // 1万亿 - 不合理的大值
+		return fmt.Errorf("持仓量异常过大: %.2f", oiData.OpenInterest)
+	}
+	
+	if oiData.Timestamp.IsZero() {
+		return fmt.Errorf("时间戳无效")
+	}
+	
+	// 检查时间戳是否过于陈旧或未来时间
+	now := time.Now()
+	if oiData.Timestamp.After(now.Add(5*time.Minute)) {
+		return fmt.Errorf("时间戳过于未来: %v", oiData.Timestamp)
+	}
+	
+	if oiData.Timestamp.Before(now.Add(-24*time.Hour)) {
+		return fmt.Errorf("时间戳过于陈旧: %v", oiData.Timestamp)
+	}
+	
+	return nil
+}
+
+// detectAnomalousChange 检测异常的OI变化
+func (calc *OICalculator) detectAnomalousChange(change, changeRate float64) error {
+	// 检测异常大的变化率
+	if math.Abs(changeRate) > 50 { // 50%以上的变化认为异常
+		return fmt.Errorf("变化率异常: %.2f%%", changeRate)
+	}
+	
+	// 检测异常大的绝对变化
+	if math.Abs(change) > calc.current*0.3 { // 30%以上的绝对变化
+		return fmt.Errorf("绝对变化异常: %.2f (当前持仓: %.2f)", change, calc.current)
+	}
+	
+	return nil
+}
+
+// validateOIDataGlobal OI管理器全局数据验证
+func (manager *OIManager) validateOIDataGlobal(symbol string, oiData *OIData) error {
+	if symbol == "" {
+		return fmt.Errorf("交易对符号为空")
+	}
+	
+	if oiData == nil {
+		return fmt.Errorf("OI数据为nil")
+	}
+	
+	// 检查是否为已知的交易对
+	if !manager.isValidSymbol(symbol) {
+		return fmt.Errorf("未识别的交易对: %s", symbol)
+	}
+	
+	return nil
+}
+
+// isValidSymbol 检查是否为有效的交易对
+func (manager *OIManager) isValidSymbol(symbol string) bool {
+	// 简单的交易对格式验证
+	if len(symbol) < 6 {
+		return false
+	}
+	
+	// 检查是否以USDT结尾（简化验证）
+	if !strings.HasSuffix(strings.ToUpper(symbol), "USDT") {
+		return false
+	}
+	
+	return true
 }
 
 // ===== WebSocket扩展支持OI流 =====

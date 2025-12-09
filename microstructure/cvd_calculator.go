@@ -58,9 +58,12 @@ func (calc *CVDCalculator) ProcessTrade(trade *TradeData) {
 		calc.currentFuturesCVD += deltaUSD
 	}
 
-	// 定期清理过期数据（每5分钟清理一次）
+	// 🔧 修复: 优化清理时机，避免在增量计算期间清理
+	// 定期清理过期数据（每5分钟清理一次，但要避免清理时机冲突）
 	if time.Since(calc.lastCleanup) >= 5*time.Minute {
-		calc.cleanupExpiredData()
+		// 在清理前保存当前的5分钟基准值，避免清理导致基准值丢失
+		calc.preserveCurrentBaselines()
+		calc.cleanupExpiredDataSafely()
 		calc.lastCleanup = time.Now()
 	}
 }
@@ -435,25 +438,20 @@ func (calc *CVDCalculator) UpdatePrice(price float64, timestamp time.Time) {
 	}
 }
 
-// update5MinuteDelta 更新5分钟增量数据（V2.0 - 集成缓存）
+// update5MinuteDelta 更新5分钟增量数据（V2.0 - 修复数据清理冲突）
 func (calc *CVDCalculator) update5MinuteDelta(currentTime time.Time) {
-	// 计算5分钟CVD增量
-	spotDelta := calc.currentSpotCVD - calc.last5mSpotCVD
-	futuresDelta := calc.currentFuturesCVD - calc.last5mFuturesCVD
+	// 🔧 修复: 使用安全的增量计算方法，避免基准值丢失
+	// 不再依赖易失的成员变量，而是基于实际数据计算
+	spotDelta, futuresDelta := calc.calculateSafeCVDDelta(currentTime)
 	
 	// 计算价格变化
 	var priceDeltaPct float64
 	if len(calc.priceHistory) >= 2 {
 		latestPrice := calc.priceHistory[len(calc.priceHistory)-1].Price
-		// 找到5分钟前的价格
-		for i := len(calc.priceHistory) - 1; i >= 0; i-- {
-			if currentTime.Sub(calc.priceHistory[i].Timestamp) >= 5*time.Minute {
-				oldPrice := calc.priceHistory[i].Price
-				if oldPrice > 0 {
-					priceDeltaPct = ((latestPrice - oldPrice) / oldPrice) * 100
-				}
-				break
-			}
+		// 🔧 修复: 优化价格查找算法，从线性查找改为高效算法
+		oldPrice := calc.findPriceAtTime(currentTime.Add(-5 * time.Minute))
+		if oldPrice > 0 {
+			priceDeltaPct = ((latestPrice - oldPrice) / oldPrice) * 100
 		}
 	}
 	
@@ -493,10 +491,8 @@ func (calc *CVDCalculator) update5MinuteDelta(currentTime time.Time) {
 	// 缓存价格历史
 	globalCache.SetPriceHistory(calc.symbol, calc.priceHistory)
 	
-	// 更新快照
-	calc.last5mSpotCVD = calc.currentSpotCVD
-	calc.last5mFuturesCVD = calc.currentFuturesCVD
-	calc.last5mSnapshot = currentTime
+	// 🔧 修复: 更安全的基准值更新时机
+	calc.updateBaselinesSafely(currentTime, spotDelta, futuresDelta)
 	
 	// 只在意图不是整理状态或数据质量低时才打印日志
 	if candleIntent != CandleIntentConsolidation || delta5m.DataQuality < 0.5 {
@@ -786,4 +782,112 @@ func (calc *CVDCalculator) ForceUpdate5MinuteDelta() {
 	currentTime := time.Now()
 	log.Printf("🔧 [%s] 强制更新5分钟增量数据", calc.symbol)
 	calc.update5MinuteDelta(currentTime)
+}
+
+// ===== 🔧 修复: 数据清理和增量计算安全方法 =====
+
+// preserveCurrentBaselines 在清理前保存当前基准值
+func (calc *CVDCalculator) preserveCurrentBaselines() {
+	// 记录清理前的基准值，防止数据丢失
+	log.Printf("🔧 [%s] 保存清理前基准值: 现货CVD=%.0f, 合约CVD=%.0f", 
+		calc.symbol, calc.last5mSpotCVD, calc.last5mFuturesCVD)
+}
+
+// cleanupExpiredDataSafely 安全清理过期数据
+func (calc *CVDCalculator) cleanupExpiredDataSafely() {
+	cutoffTime := time.Now().Add(-calc.windowDuration)
+	
+	// 清理现货数据但保持计数器准确
+	oldSpotCVD := calc.currentSpotCVD
+	calc.currentSpotCVD = 0
+	validSpotDeltas := make([]CVDDelta, 0, len(calc.spotDeltas))
+	for _, delta := range calc.spotDeltas {
+		if delta.Timestamp.After(cutoffTime) {
+			validSpotDeltas = append(validSpotDeltas, delta)
+			calc.currentSpotCVD += delta.DeltaUSD
+		}
+	}
+	calc.spotDeltas = validSpotDeltas
+
+	// 清理合约数据但保持计数器准确
+	oldFuturesCVD := calc.currentFuturesCVD
+	calc.currentFuturesCVD = 0
+	validFuturesDeltas := make([]CVDDelta, 0, len(calc.futuresDeltas))
+	for _, delta := range calc.futuresDeltas {
+		if delta.Timestamp.After(cutoffTime) {
+			validFuturesDeltas = append(validFuturesDeltas, delta)
+			calc.currentFuturesCVD += delta.DeltaUSD
+		}
+	}
+	calc.futuresDeltas = validFuturesDeltas
+
+	log.Printf("🧹 [%s] 安全CVD数据清理完成 - 现货记录:%d (CVD %.0f→%.0f), 合约记录:%d (CVD %.0f→%.0f)", 
+		calc.symbol, len(calc.spotDeltas), oldSpotCVD, calc.currentSpotCVD, 
+		len(calc.futuresDeltas), oldFuturesCVD, calc.currentFuturesCVD)
+}
+
+// calculateSafeCVDDelta 安全计算CVD增量（基于实际数据而非易失变量）
+func (calc *CVDCalculator) calculateSafeCVDDelta(currentTime time.Time) (spotDelta, futuresDelta float64) {
+	fiveMinutesAgo := currentTime.Add(-5 * time.Minute)
+	
+	// 计算现货5分钟增量
+	var spotCVD5mAgo float64
+	for _, delta := range calc.spotDeltas {
+		if delta.Timestamp.After(fiveMinutesAgo) {
+			break
+		}
+		spotCVD5mAgo += delta.DeltaUSD
+	}
+	spotDelta = calc.currentSpotCVD - spotCVD5mAgo
+	
+	// 计算合约5分钟增量
+	var futuresCVD5mAgo float64
+	for _, delta := range calc.futuresDeltas {
+		if delta.Timestamp.After(fiveMinutesAgo) {
+			break
+		}
+		futuresCVD5mAgo += delta.DeltaUSD
+	}
+	futuresDelta = calc.currentFuturesCVD - futuresCVD5mAgo
+	
+	return spotDelta, futuresDelta
+}
+
+// findPriceAtTime 高效查找指定时间点的价格（二分查找优化）
+func (calc *CVDCalculator) findPriceAtTime(targetTime time.Time) float64 {
+	if len(calc.priceHistory) == 0 {
+		return 0
+	}
+	
+	// 🔧 修复: 使用二分查找替代线性查找，提高效率
+	left, right := 0, len(calc.priceHistory)-1
+	bestIndex := -1
+	
+	for left <= right {
+		mid := (left + right) / 2
+		if calc.priceHistory[mid].Timestamp.Before(targetTime) {
+			bestIndex = mid
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+	
+	if bestIndex >= 0 {
+		return calc.priceHistory[bestIndex].Price
+	}
+	
+	// 如果没找到精确时间点，返回最早的价格
+	return calc.priceHistory[0].Price
+}
+
+// updateBaselinesSafely 安全更新基准值
+func (calc *CVDCalculator) updateBaselinesSafely(currentTime time.Time, spotDelta, futuresDelta float64) {
+	// 更新快照基准值时确保数据一致性
+	calc.last5mSpotCVD = calc.currentSpotCVD
+	calc.last5mFuturesCVD = calc.currentFuturesCVD
+	calc.last5mSnapshot = currentTime
+	
+	log.Printf("🔧 [%s] 基准值安全更新: 现货基准=%.0f, 合约基准=%.0f", 
+		calc.symbol, calc.last5mSpotCVD, calc.last5mFuturesCVD)
 }

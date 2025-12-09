@@ -139,6 +139,10 @@ func (calc *OrderBookCalculator) calculateImbalance(symbol string) float64 {
 	maxLevels := int(math.Min(float64(len(symbolData.currentBids)), 10))
 	for i := 0; i < maxLevels; i++ {
 		bid := symbolData.currentBids[i]
+		// 🔧 修复: 防止无效的价格和数量数据
+		if bid.Price <= 0 || bid.Quantity <= 0 {
+			continue
+		}
 		totalBidValue += bid.Price * bid.Quantity
 	}
 
@@ -147,16 +151,30 @@ func (calc *OrderBookCalculator) calculateImbalance(symbol string) float64 {
 	maxLevels = int(math.Min(float64(len(symbolData.currentAsks)), 10))
 	for i := 0; i < maxLevels; i++ {
 		ask := symbolData.currentAsks[i]
+		// 🔧 修复: 防止无效的价格和数量数据
+		if ask.Price <= 0 || ask.Quantity <= 0 {
+			continue
+		}
 		totalAskValue += ask.Price * ask.Quantity
 	}
 
-	// 计算失衡比例 (-1 到 1)
+	// 🔧 修复: 增强除零保护和边界情况处理
 	totalValue := totalBidValue + totalAskValue
-	if totalValue == 0 {
+	if totalValue <= 0 || math.IsNaN(totalValue) || math.IsInf(totalValue, 0) {
+		log.Printf("⚠️ [%s] 计算失衡比例时发现异常总值: %.2f (买单:%.2f, 卖单:%.2f)", 
+			symbol, totalValue, totalBidValue, totalAskValue)
 		return 0
 	}
 
-	return (totalBidValue - totalAskValue) / totalValue
+	imbalance := (totalBidValue - totalAskValue) / totalValue
+	
+	// 🔧 修复: 确保返回值在有效范围内
+	if math.IsNaN(imbalance) || math.IsInf(imbalance, 0) {
+		log.Printf("⚠️ [%s] 计算失衡比例结果异常: %.6f", symbol, imbalance)
+		return 0
+	}
+
+	return imbalance
 }
 
 // addImbalancePoint 添加失衡记录点
@@ -208,11 +226,30 @@ func (calc *OrderBookCalculator) calculateAverageLevel(levels []OrderBookLevel) 
 	}
 
 	var totalValue float64
+	validLevels := 0
+	
 	for _, level := range levels {
-		totalValue += level.Price * level.Quantity
+		// 🔧 修复: 跳过无效的档位数据
+		if level.Price <= 0 || level.Quantity <= 0 {
+			continue
+		}
+		
+		levelValue := level.Price * level.Quantity
+		// 🔧 修复: 检查计算结果是否有效
+		if math.IsNaN(levelValue) || math.IsInf(levelValue, 0) {
+			continue
+		}
+		
+		totalValue += levelValue
+		validLevels++
 	}
 
-	return totalValue / float64(len(levels))
+	// 🔧 修复: 确保有有效档位数据
+	if validLevels == 0 || totalValue <= 0 {
+		return 0
+	}
+
+	return totalValue / float64(validLevels)
 }
 
 // findResistanceWall 查找阻力墙
@@ -755,27 +792,56 @@ func (calc *OrderBookCalculator) calculateLiquidityScore(symbol string) float64 
 	if len(symbolData.currentBids) > 0 && len(symbolData.currentAsks) > 0 {
 		bestBid := symbolData.currentBids[0].Price
 		bestAsk := symbolData.currentAsks[0].Price
-		spread := (bestAsk - bestBid) / bestBid
-		spreadScore := math.Max(0, 1.0-spread*1000) // 价差越小评分越高
-		liquidityScore += spreadScore * 0.3
+		
+		// 🔧 修复: 增强价差计算的安全性
+		if bestBid > 0 && bestAsk > bestBid {
+			spread := (bestAsk - bestBid) / bestBid
+			// 🔧 修复: 检查spread是否为有效值
+			if !math.IsNaN(spread) && !math.IsInf(spread, 0) && spread >= 0 {
+				spreadScore := math.Max(0, 1.0-spread*1000) // 价差越小评分越高
+				liquidityScore += spreadScore * 0.3
+			}
+		}
 	}
 	
 	// 3. 总量评分 (30%权重)
 	totalBidValue := 0.0
 	totalAskValue := 0.0
+	
 	for _, bid := range symbolData.currentBids {
-		totalBidValue += bid.Price * bid.Quantity
+		// 🔧 修复: 跳过无效数据
+		if bid.Price > 0 && bid.Quantity > 0 {
+			bidValue := bid.Price * bid.Quantity
+			if !math.IsNaN(bidValue) && !math.IsInf(bidValue, 0) {
+				totalBidValue += bidValue
+			}
+		}
 	}
+	
 	for _, ask := range symbolData.currentAsks {
-		totalAskValue += ask.Price * ask.Quantity
+		// 🔧 修复: 跳过无效数据
+		if ask.Price > 0 && ask.Quantity > 0 {
+			askValue := ask.Price * ask.Quantity
+			if !math.IsNaN(askValue) && !math.IsInf(askValue, 0) {
+				totalAskValue += askValue
+			}
+		}
 	}
 	
 	totalLiquidity := totalBidValue + totalAskValue
-	// 假设1000万USD为高流动性基准
-	volumeScore := math.Min(totalLiquidity/10000000.0, 1.0)
-	liquidityScore += volumeScore * 0.3
+	// 🔧 修复: 确保总流动性计算有效
+	if totalLiquidity > 0 && !math.IsNaN(totalLiquidity) && !math.IsInf(totalLiquidity, 0) {
+		// 假设1000万USD为高流动性基准
+		volumeScore := math.Min(totalLiquidity/10000000.0, 1.0)
+		liquidityScore += volumeScore * 0.3
+	}
 	
-	return liquidityScore
+	// 🔧 修复: 确保最终评分在有效范围内
+	if math.IsNaN(liquidityScore) || math.IsInf(liquidityScore, 0) {
+		return 0
+	}
+
+	return math.Max(0, math.Min(1, liquidityScore))
 }
 
 // getWallFirstSeen 获取墙���首次出现时间
@@ -828,4 +894,137 @@ func (calc *OrderBookCalculator) getWallMinSize(symbol string, price float64) fl
 		return entry.minSize
 	}
 	return 0
+}
+
+// ===== 🔧 修复: 内存管理和清理机制 =====
+
+// Cleanup 清理过期数据和内存（防止内存泄漏）
+func (calc *OrderBookCalculator) Cleanup() {
+	calc.mu.Lock()
+	defer calc.mu.Unlock()
+
+	now := time.Now()
+	cleanedSymbols := 0
+
+	for symbol, symbolData := range calc.symbolData {
+		if symbolData == nil {
+			delete(calc.symbolData, symbol)
+			cleanedSymbols++
+			continue
+		}
+
+		// 清理过期的失衡历史记录（只保留最近1小时的数据）
+		cutoffTime := now.Add(-1 * time.Hour)
+		var validHistory []ImbalancePoint
+		for _, point := range symbolData.imbalanceHistory {
+			if point.Timestamp.After(cutoffTime) {
+				validHistory = append(validHistory, point)
+			}
+		}
+		
+		// 只有在数据变化时才更新，减少内存分配
+		if len(validHistory) != len(symbolData.imbalanceHistory) {
+			symbolData.imbalanceHistory = validHistory
+		}
+
+		// 清理墙追踪历史中的过期记录
+		if symbolData.wallTracker != nil {
+			calc.cleanupWallTrackerMemory(symbolData, now)
+		}
+
+		// 如果交易对数据已经很久没有更新，删除整个交易对的数据
+		if now.Sub(symbolData.lastUpdate) > 2*time.Hour {
+			delete(calc.symbolData, symbol)
+			cleanedSymbols++
+			log.Printf("🗑️ [内存清理] 删除过期交易对数据: %s (最后更新: %s)", 
+				symbol, symbolData.lastUpdate.Format("15:04:05"))
+		}
+	}
+
+	if cleanedSymbols > 0 {
+		log.Printf("✅ OrderBook内存清理完成，清理了 %d 个交易对的过期数据", cleanedSymbols)
+	}
+}
+
+// cleanupWallTrackerMemory 清理墙追踪器的内存
+func (calc *OrderBookCalculator) cleanupWallTrackerMemory(symbolData *SymbolOrderBookData, now time.Time) {
+	if symbolData.wallTracker == nil {
+		return
+	}
+
+	cleanedWalls := 0
+	maxWallAge := 2 * time.Hour // 墙的最大存活时间
+
+	for price, entry := range symbolData.wallTracker.wallHistory {
+		if entry == nil || now.Sub(entry.lastSeen) > maxWallAge {
+			delete(symbolData.wallTracker.wallHistory, price)
+			cleanedWalls++
+			continue
+		}
+
+		// 限制每个墙的大小历史记录数量，防止无限增长
+		if len(entry.sizeHistory) > 100 {
+			// 只保留最近的50个记录
+			entry.sizeHistory = entry.sizeHistory[len(entry.sizeHistory)-50:]
+			
+			// 重新计算平均值
+			total := 0.0
+			for _, size := range entry.sizeHistory {
+				total += size
+			}
+			if len(entry.sizeHistory) > 0 {
+				entry.avgSize = total / float64(len(entry.sizeHistory))
+			}
+		}
+	}
+
+	if cleanedWalls > 0 {
+		log.Printf("🗑️ [墙追踪清理] 清理了 %d 个过期墙记录", cleanedWalls)
+	}
+}
+
+// GetMemoryStats 获取内存使用统计（用于监控）
+func (calc *OrderBookCalculator) GetMemoryStats() map[string]interface{} {
+	calc.mu.RLock()
+	defer calc.mu.RUnlock()
+
+	totalSymbols := len(calc.symbolData)
+	totalImbalancePoints := 0
+	totalWallRecords := 0
+
+	for _, symbolData := range calc.symbolData {
+		if symbolData != nil {
+			totalImbalancePoints += len(symbolData.imbalanceHistory)
+			if symbolData.wallTracker != nil {
+				totalWallRecords += len(symbolData.wallTracker.wallHistory)
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"total_symbols":         totalSymbols,
+		"total_imbalance_points": totalImbalancePoints,
+		"total_wall_records":     totalWallRecords,
+		"avg_imbalance_per_symbol": func() float64 {
+			if totalSymbols == 0 {
+				return 0
+			}
+			return float64(totalImbalancePoints) / float64(totalSymbols)
+		}(),
+		"avg_walls_per_symbol": func() float64 {
+			if totalSymbols == 0 {
+				return 0
+			}
+			return float64(totalWallRecords) / float64(totalSymbols)
+		}(),
+		"memory_health": func() string {
+			if totalSymbols > 100 {
+				return "内存使用过高"
+			} else if totalSymbols > 50 {
+				return "内存使用较高"
+			} else {
+				return "内存使用正常"
+			}
+		}(),
+	}
 }
