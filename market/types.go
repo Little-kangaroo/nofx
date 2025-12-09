@@ -418,6 +418,8 @@ type DowTheoryConfig struct {
 	TrendLineConfig  TrendLineConfig  `json:"trend_line_config"`
 	ChannelConfig    ChannelConfig    `json:"channel_config"`
 	SignalConfig     SignalConfig     `json:"signal_config"`
+	ThresholdConfig  ThresholdConfig  `json:"threshold_config"`  // 新增：阈值配置
+	VolumeConfig     VolumeConfig     `json:"volume_config"`     // 新增：成交量配置
 }
 
 type SwingPointConfig struct {
@@ -425,6 +427,7 @@ type SwingPointConfig struct {
 	MinStrength    float64 `json:"min_strength"`     // 最小强度阈值
 	ConfirmPeriod  int     `json:"confirm_period"`   // 确认周期
 	MinPriceChange float64 `json:"min_price_change"` // 最小价格变化百分比
+	FractalReduction float64 `json:"fractal_reduction"` // 分形强度降低系数
 }
 
 type TrendLineConfig struct {
@@ -449,6 +452,32 @@ type SignalConfig struct {
 	VolumeConfirmation bool    `json:"volume_confirmation"` // 是否需要成交量确认
 }
 
+// 🔥 新增：动态阈值配置
+type ThresholdConfig struct {
+	DefaultThreshold   float64 `json:"default_threshold"`    // 默认趋势阈值 (2%)
+	MinThreshold       float64 `json:"min_threshold"`        // 最小阈值 (0.5%)
+	MaxThreshold       float64 `json:"max_threshold"`        // 最大阈值 (5%)
+	ATRMultiplier      float64 `json:"atr_multiplier"`       // ATR倍数 (1.5)
+	ATRPeriod          int     `json:"atr_period"`           // ATR周期 (14)
+	TrendConfirmWindow int     `json:"trend_confirm_window"` // 趋势确认窗口 (50)
+}
+
+// 🔥 新增：成交量验证配置
+type VolumeConfig struct {
+	WeightInStrength     float64 `json:"weight_in_strength"`      // 在强度计算中的权重 (0.5)
+	WeightInQuality      float64 `json:"weight_in_quality"`       // 在质量评估中的权重 (0.4)
+	SupportThreshold     float64 `json:"support_threshold"`       // 支撑阈值 (40)
+	PenaltyMultiplier    float64 `json:"penalty_multiplier"`      // 惩罚系数 (0.7)
+	ConfirmationRatios   VolumeRatios `json:"confirmation_ratios"`  // 成交量确认比例
+}
+
+type VolumeRatios struct {
+	Strong     float64 `json:"strong"`      // 强确认 (2.0)
+	Moderate   float64 `json:"moderate"`    // 较强确认 (1.5)
+	Normal     float64 `json:"normal"`      // 一般确认 (1.2)
+	WeakPenalty float64 `json:"weak_penalty"` // 弱确认惩罚 (0.6)
+}
+
 var config = Config{
 	AlertThresholds: AlertThresholds{
 		VolumeSpike:      3.0,
@@ -468,10 +497,11 @@ var config = Config{
 
 var dowConfig = DowTheoryConfig{
 	SwingPointConfig: SwingPointConfig{
-		LookbackPeriod: 5,
-		MinStrength:    0.5,
-		ConfirmPeriod:  3,
-		MinPriceChange: 0.01, // 1%
+		LookbackPeriod:   5,
+		MinStrength:      0.5,
+		ConfirmPeriod:    3,
+		MinPriceChange:   0.01, // 1%
+		FractalReduction: 0.7,  // 分形强度降低30%
 	},
 	TrendLineConfig: TrendLineConfig{
 		MinTouches:     2,
@@ -491,6 +521,28 @@ var dowConfig = DowTheoryConfig{
 		RiskRewardMin:      1.5,
 		BreakoutStrength:   0.015, // 1.5%
 		VolumeConfirmation: true,
+	},
+	// 🔥 新增配置：动态阈值
+	ThresholdConfig: ThresholdConfig{
+		DefaultThreshold:   0.02,  // 2% 默认阈值（替代8%）
+		MinThreshold:       0.005, // 0.5% 最小阈值
+		MaxThreshold:       0.05,  // 5% 最大阈值
+		ATRMultiplier:      1.5,   // ATR倍数
+		ATRPeriod:          14,    // ATR周期
+		TrendConfirmWindow: 50,    // 趋势确认窗口
+	},
+	// 🔥 新增配置：成交量验证
+	VolumeConfig: VolumeConfig{
+		WeightInStrength:  0.5,  // 在强度计算中50%权重（替代30%）
+		WeightInQuality:   0.4,  // 在质量评估中40%权重（替代33%）
+		SupportThreshold:  40.0, // 成交量支撑阈值
+		PenaltyMultiplier: 0.7,  // 不足时的惩罚系数
+		ConfirmationRatios: VolumeRatios{
+			Strong:      2.0, // 强确认比例
+			Moderate:    1.5, // 较强确认比例
+			Normal:      1.2, // 一般确认比例
+			WeakPenalty: 0.6, // 弱确认惩罚
+		},
 	},
 }
 

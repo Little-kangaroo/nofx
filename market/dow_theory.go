@@ -63,7 +63,7 @@ func (dta *DowTheoryAnalyzer) Analyze(klines3m, klines4h []Kline, currentPrice f
 	}
 }
 
-// identifySwingPoints 识别摆动点
+// identifySwingPoints 识别摆动点（修复未来函数问题）
 func (dta *DowTheoryAnalyzer) identifySwingPoints(klines []Kline) []*SwingPoint {
 	if len(klines) < dta.config.SwingPointConfig.LookbackPeriod*2+1 {
 		return nil
@@ -72,6 +72,7 @@ func (dta *DowTheoryAnalyzer) identifySwingPoints(klines []Kline) []*SwingPoint 
 	var swingPoints []*SwingPoint
 	lookback := dta.config.SwingPointConfig.LookbackPeriod
 
+	// 🔥 修复1：确认的摆动点（原逻辑，需要未来数据确认）
 	for i := lookback; i < len(klines)-lookback; i++ {
 		current := klines[i]
 
@@ -85,7 +86,7 @@ func (dta *DowTheoryAnalyzer) identifySwingPoints(klines []Kline) []*SwingPoint 
 					Time:      current.OpenTime,
 					Index:     i,
 					Strength:  strength,
-					Confirmed: i < len(klines)-dta.config.SwingPointConfig.ConfirmPeriod,
+					Confirmed: true, // 这些都是已确认的
 				}
 				swingPoints = append(swingPoints, swingPoint)
 			}
@@ -101,14 +102,114 @@ func (dta *DowTheoryAnalyzer) identifySwingPoints(klines []Kline) []*SwingPoint 
 					Time:      current.OpenTime,
 					Index:     i,
 					Strength:  strength,
-					Confirmed: i < len(klines)-dta.config.SwingPointConfig.ConfirmPeriod,
+					Confirmed: true, // 这些都是已确认的
 				}
 				swingPoints = append(swingPoints, swingPoint)
 			}
 		}
 	}
 
+	// 🔥 修复2：添加实时分形检测（William's Fractal）
+	realtimeSwings := dta.identifyRealtimeFractals(klines)
+	swingPoints = append(swingPoints, realtimeSwings...)
+
 	return swingPoints
+}
+
+// identifyRealtimeFractals 识别实时分形（Williams Fractal逻辑）
+func (dta *DowTheoryAnalyzer) identifyRealtimeFractals(klines []Kline) []*SwingPoint {
+	var fractals []*SwingPoint
+	
+	if len(klines) < 5 {
+		return fractals
+	}
+
+	// 检查最近10根K线中的5根分形模式（只需要左右各2根）
+	start := len(klines) - 10
+	if start < 2 {
+		start = 2
+	}
+
+	for i := start; i < len(klines)-2; i++ {
+		// 分形高点：中间K线的高点高于左右2根
+		if dta.isFractalHigh(klines, i) {
+			strength := dta.calculateSwingPointStrength(klines, i, SwingHigh)
+			
+			// 对于未确认的分形，使用配置的降低系数
+			if strength >= dta.config.SwingPointConfig.MinStrength * dta.config.SwingPointConfig.FractalReduction {
+				fractal := &SwingPoint{
+					Type:      SwingHigh,
+					Price:     klines[i].High,
+					Time:      klines[i].OpenTime,
+					Index:     i,
+					Strength:  strength * 0.8, // 未确认分形强度打折
+					Confirmed: false,          // 标记为未确认
+				}
+				fractals = append(fractals, fractal)
+			}
+		}
+
+		// 分形低点：中间K线的低点低于左右2根
+		if dta.isFractalLow(klines, i) {
+			strength := dta.calculateSwingPointStrength(klines, i, SwingLow)
+			
+			if strength >= dta.config.SwingPointConfig.MinStrength * dta.config.SwingPointConfig.FractalReduction {
+				fractal := &SwingPoint{
+					Type:      SwingLow,
+					Price:     klines[i].Low,
+					Time:      klines[i].OpenTime,
+					Index:     i,
+					Strength:  strength * 0.8, // 未确认分形强度打折
+					Confirmed: false,          // 标记为未确认
+				}
+				fractals = append(fractals, fractal)
+			}
+		}
+	}
+
+	return fractals
+}
+
+// isFractalHigh 检查是否为分形高点（5根K线模式）
+func (dta *DowTheoryAnalyzer) isFractalHigh(klines []Kline, index int) bool {
+	if index < 2 || index >= len(klines)-2 {
+		return false
+	}
+
+	centerHigh := klines[index].High
+	
+	// 检查左侧2根和右侧2根
+	for i := index - 2; i <= index + 2; i++ {
+		if i == index {
+			continue
+		}
+		if klines[i].High >= centerHigh {
+			return false
+		}
+	}
+	
+	return true
+}
+
+// isFractalLow 检查是否为分形低点（5根K线模式）
+func (dta *DowTheoryAnalyzer) isFractalLow(klines []Kline, index int) bool {
+	if index < 2 || index >= len(klines)-2 {
+		return false
+	}
+
+	centerLow := klines[index].Low
+	
+	// 检查左侧2根和右侧2根
+	for i := index - 2; i <= index + 2; i++ {
+		if i == index {
+			continue
+		}
+		if klines[i].Low <= centerLow {
+			return false
+		}
+	}
+	
+	return true
 }
 
 // isSwingHigh 判断是否为摆动高点
@@ -238,8 +339,11 @@ func (dta *DowTheoryAnalyzer) calculateSwingPointStrength(klines []Kline, index 
 		}
 	}
 
-	// 综合计算强度
-	strength := priceRange*0.7 + math.Min(volumeWeight, 2.0)*0.3
+	// 🔥 修复：使用配置的成交量权重
+	// 综合计算强度：价格范围和成交量权重按配置比例
+	priceWeight := 1.0 - dta.config.VolumeConfig.WeightInStrength
+	volumeWeightRatio := dta.config.VolumeConfig.WeightInStrength
+	strength := priceRange*priceWeight + math.Min(volumeWeight, 3.0)*volumeWeightRatio
 	return math.Min(strength, 10.0) // 限制最大强度
 }
 
@@ -656,7 +760,7 @@ func (dta *DowTheoryAnalyzer) calculateCurrentPosition(currentPrice, upperPrice,
 	return position, ratio
 }
 
-// assessTrendStrength 评估趋势强度
+// assessTrendStrength 评估趋势强度（加强成交量验证）
 func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, swingPoints []*SwingPoint, trendLines []*TrendLine) *TrendStrength {
 	if len(klines4h) < 20 {
 		return &TrendStrength{
@@ -672,7 +776,7 @@ func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, sw
 	// 计算长期趋势强度（基于4小时数据）
 	longTerm := dta.calculateLongTermStrength(klines4h)
 
-	// 计算整体趋势强度（更平衡的权重）
+	// 🔥 修复：调整权重，更平衡短期和长期
 	overall := (shortTerm*0.4 + longTerm*0.6)
 
 	// 确定趋势方向
@@ -684,11 +788,18 @@ func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, sw
 	// 计算一致性评分
 	consistency := dta.calculateConsistency(klines3m, klines4h)
 
-	// 计算成交量支撑度
+	// 🔥 修复：大幅提升成交量支撑度权重
 	volumeSupport := dta.calculateVolumeSupport(klines4h)
 
-	// 确定趋势质量
+	// 确定趋势质量（成交量权重大幅提升）
 	quality := dta.determineTrendQuality(overall, consistency, volumeSupport)
+
+	// 🔥 修复：如果成交量不支撑，使用配置的惩罚系数
+	volumePenalty := 1.0
+	if volumeSupport < dta.config.VolumeConfig.SupportThreshold { // 使用配置的成交量支撑阈值
+		volumePenalty = dta.config.VolumeConfig.PenaltyMultiplier // 使用配置的惩罚系数
+	}
+	overall *= volumePenalty
 
 	return &TrendStrength{
 		Overall:       overall,
@@ -702,9 +813,8 @@ func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, sw
 	}
 }
 
-// calculateShortTermStrength 计算短期趋势强度（修复版）
+// calculateShortTermStrength 计算短期趋势强度（修复评分偏低问题）
 func (dta *DowTheoryAnalyzer) calculateShortTermStrength(klines []Kline) float64 {
-	// 修复1: 增加最小K线数要求，确保能计算最长的指标
 	if len(klines) < 30 {
 		return 0
 	}
@@ -715,12 +825,12 @@ func (dta *DowTheoryAnalyzer) calculateShortTermStrength(klines []Kline) float64
 	// 计算价格动量（保留方向性）
 	priceChange := (recentKlines[len(recentKlines)-1].Close - recentKlines[0].Open) / recentKlines[0].Open
 
-	// 修复2: 使用有效的MA周期（确保数据充足）
+	// 计算移动平均
 	ma5 := dta.calculateMA(recentKlines, 5)
 	ma10 := dta.calculateMA(recentKlines, 10)
 	ma20 := dta.calculateMA(recentKlines, 20)
 
-	// 修复3: 保留MA趋势的方向性
+	// MA趋势判断（保留方向性）
 	maTrend := 0.0
 	if ma5 > ma10 && ma10 > ma20 {
 		maTrend = 1.0 // 多头排列
@@ -730,31 +840,57 @@ func (dta *DowTheoryAnalyzer) calculateShortTermStrength(klines []Kline) float64
 
 	// 计算波动性（标准化到0-1范围）
 	volatility := dta.calculateVolatility(recentKlines)
-	
-	// 修复4: 安全的波动性处理，避免负值
 	volatilityScore := math.Max(0, math.Min(1, 1-volatility*10)) // 将波动性映射到0-1分数
 
-	// 修复5: 标准化计算，保留方向性
-	// 价格动量分量（-50到+50）
-	momentumScore := math.Max(-50, math.Min(50, priceChange*100*10)) // priceChange*1000标准化
+	// 🔥 修复：重新设计评分机制，提高敏感度
+	// 1. 价格动量分数（-40到+40）- 降低倍数，提高敏感度
+	momentumScore := math.Max(-40, math.Min(40, priceChange*500)) // 从1000降低到500
 	
-	// MA趋势分量（-30到+30）
-	trendScore := maTrend * 30
+	// 2. MA趋势分数（-25到+25）
+	trendScore := maTrend * 25
 	
-	// 波动性分量（0到+20）
-	volScore := volatilityScore * 20
+	// 3. 波动性分数（0到+15）
+	volScore := volatilityScore * 15
+	
+	// 4. 添加相对强度评分 - 基于最近表现
+	relativeStrength := dta.calculateRelativeStrength(recentKlines)
+	rsScore := relativeStrength * 20 // (-20到+20)
 
-	// 修复6: 综合计算保留方向，范围-80到+100
-	rawStrength := momentumScore + trendScore + volScore
+	// 综合评分（-85到+100）
+	rawStrength := momentumScore + trendScore + volScore + rsScore
 	
-	// 标准化到0-100范围，但保留强弱信息
+	// 🔥 修复：改进标准化逻辑，提高区分度
+	// 中性点设定在40而非50，使得小幅趋势也能获得50+分数
+	neutralPoint := 40.0
+	maxRange := 85.0
+	
 	if rawStrength >= 0 {
-		// 正值：强度越高分数越高
-		return math.Min(50 + rawStrength*0.5, 100.0)
+		// 正值映射到 [neutralPoint, 100]
+		return math.Min(neutralPoint + (rawStrength/100.0)*(100-neutralPoint), 100.0)
 	} else {
-		// 负值：转换为低分数（0-50范围）
-		return math.Max(50 + rawStrength*0.5, 0.0)
+		// 负值映射到 [0, neutralPoint]
+		return math.Max(neutralPoint + (rawStrength/maxRange)*neutralPoint, 0.0)
 	}
+}
+
+// calculateRelativeStrength 计算相对强度（近期相对表现）
+func (dta *DowTheoryAnalyzer) calculateRelativeStrength(klines []Kline) float64 {
+	if len(klines) < 10 {
+		return 0
+	}
+	
+	// 最近5根相对前5根的表现
+	recent5 := klines[len(klines)-5:]
+	previous5 := klines[len(klines)-10:len(klines)-5]
+	
+	recentChange := (recent5[len(recent5)-1].Close - recent5[0].Open) / recent5[0].Open
+	previousChange := (previous5[len(previous5)-1].Close - previous5[0].Open) / previous5[0].Open
+	
+	// 相对强度 = 最近表现 - 历史表现
+	relativeStrength := recentChange - previousChange
+	
+	// 标准化到 -1 到 +1 范围
+	return math.Max(-1, math.Min(1, relativeStrength*10))
 }
 
 // calculateLongTermStrength 计算长期趋势强度（修复版）
@@ -967,20 +1103,78 @@ func (dta *DowTheoryAnalyzer) calculateRSquared(prices []float64) float64 {
 	return math.Max(0, math.Min(1, rSquared))
 }
 
+// calculateDynamicThreshold 计算基于波动率的动态阈值
+func (dta *DowTheoryAnalyzer) calculateDynamicThreshold(klines []Kline) float64 {
+	if len(klines) < 20 {
+		return dta.config.ThresholdConfig.DefaultThreshold // 使用配置的默认阈值
+	}
+
+	// 计算ATR (平均真实波幅)
+	atr := dta.calculateATR(klines, dta.config.ThresholdConfig.ATRPeriod) // 使用配置的ATR周期
+	currentPrice := klines[len(klines)-1].Close
+	
+	// 将ATR转换为百分比
+	atrPercent := atr / currentPrice
+	
+	// 动态阈值 = 配置倍数*ATR，但限制在配置范围内
+	threshold := atrPercent * dta.config.ThresholdConfig.ATRMultiplier
+	threshold = math.Max(
+		dta.config.ThresholdConfig.MinThreshold, 
+		math.Min(dta.config.ThresholdConfig.MaxThreshold, threshold),
+	)
+	
+	return threshold
+}
+
+// calculateATR 计算平均真实波幅
+func (dta *DowTheoryAnalyzer) calculateATR(klines []Kline, period int) float64 {
+	if len(klines) < period+1 {
+		return 0
+	}
+	
+	var trueRanges []float64
+	for i := 1; i < len(klines); i++ {
+		high := klines[i].High
+		low := klines[i].Low
+		prevClose := klines[i-1].Close
+		
+		tr1 := high - low
+		tr2 := math.Abs(high - prevClose)
+		tr3 := math.Abs(low - prevClose)
+		
+		trueRange := math.Max(tr1, math.Max(tr2, tr3))
+		trueRanges = append(trueRanges, trueRange)
+	}
+	
+	// 计算ATR (简单移动平均)
+	sum := 0.0
+	start := len(trueRanges) - period
+	if start < 0 {
+		start = 0
+		period = len(trueRanges)
+	}
+	
+	for i := start; i < len(trueRanges); i++ {
+		sum += trueRanges[i]
+	}
+	
+	return sum / float64(period)
+}
+
 // determineTrendDirection 确定趋势方向（道氏理论标准）
 func (dta *DowTheoryAnalyzer) determineTrendDirection(klines []Kline, swingPoints []*SwingPoint) TrendDirection {
 	if len(klines) < 30 {
 		return TrendFlat
 	}
 
-	// 使用更长时间窗口进行趋势判断（50根K线，约8天）
-	windowSize := 50
+	// 使用配置的时间窗口进行趋势判断
+	windowSize := dta.config.ThresholdConfig.TrendConfirmWindow
 	if len(klines) < windowSize {
 		windowSize = len(klines)
 	}
 	recentKlines := klines[len(klines)-windowSize:]
 	
-	// 计算长期价格趋势（提高阈值到5%）
+	// 计算长期价格趋势
 	longTermChange := (recentKlines[len(recentKlines)-1].Close - recentKlines[0].Open) / recentKlines[0].Open
 
 	// 基于摆动点的道氏理论判断（更严格的条件）
@@ -1046,10 +1240,13 @@ func (dta *DowTheoryAnalyzer) determineTrendDirection(klines []Kline, swingPoint
 	// 综合判断（提高权重给道氏摆动点分析）
 	overallDirection := longTermChange*0.3 + swingDirection*0.5 + maDirection*0.2
 
-	// 提高阈值，减少误判
-	if overallDirection > 0.08 { // 8%以上才认为是上升
+	// 🔥 修复：使用动态阈值替代硬编码的8%
+	dynamicThreshold := dta.calculateDynamicThreshold(recentKlines)
+	
+	// 动态趋势判断
+	if overallDirection > dynamicThreshold {
 		return TrendUp
-	} else if overallDirection < -0.08 { // 8%以下才认为是下降
+	} else if overallDirection < -dynamicThreshold {
 		return TrendDown
 	}
 
@@ -1148,9 +1345,14 @@ func (dta *DowTheoryAnalyzer) calculateVolumeSupport(klines []Kline) float64 {
 	return support
 }
 
-// determineTrendQuality 确定趋势质量
+// determineTrendQuality 确定趋势质量（使用配置的成交量权重）
 func (dta *DowTheoryAnalyzer) determineTrendQuality(overall, consistency, volumeSupport float64) TrendQuality {
-	score := (overall + consistency + volumeSupport) / 3
+	// 使用配置的成交量权重
+	volumeWeight := dta.config.VolumeConfig.WeightInQuality
+	consistencyWeight := 0.2
+	overallWeight := 1.0 - volumeWeight - consistencyWeight
+
+	score := (overall*overallWeight + consistency*consistencyWeight + volumeSupport*volumeWeight)
 
 	if score > 75 {
 		return TrendStrong
@@ -1458,7 +1660,7 @@ func (dta *DowTheoryAnalyzer) calculateRiskReward(signal *TradingSignal) float64
 	return reward / risk
 }
 
-// confirmWithVolume 通过成交量确认信号
+// confirmWithVolume 通过成交量确认信号（使用配置的比例）
 func (dta *DowTheoryAnalyzer) confirmWithVolume(klines []Kline) float64 {
 	if len(klines) < 10 {
 		return 0.8 // 默认确认度
@@ -1485,15 +1687,16 @@ func (dta *DowTheoryAnalyzer) confirmWithVolume(klines []Kline) float64 {
 
 	volumeRatio := recentVolume / avgVolume
 
-	// 成交量确认度评分
-	if volumeRatio > 2.0 {
+	// 使用配置的成交量确认比例
+	ratios := dta.config.VolumeConfig.ConfirmationRatios
+	if volumeRatio > ratios.Strong {
 		return 1.0 // 强确认
-	} else if volumeRatio > 1.5 {
+	} else if volumeRatio > ratios.Moderate {
 		return 0.9 // 较强确认
-	} else if volumeRatio > 1.2 {
+	} else if volumeRatio > ratios.Normal {
 		return 0.8 // 一般确认
 	} else {
-		return 0.6 // 弱确认
+		return ratios.WeakPenalty // 弱确认，使用配置的惩罚值
 	}
 }
 
