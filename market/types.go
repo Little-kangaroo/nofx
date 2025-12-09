@@ -1254,6 +1254,7 @@ type FibonacciConfig struct {
 	DefaultRatios     []float64 `json:"default_ratios"`      // 默认比率
 	SwingLookback     int       `json:"swing_lookback"`      // 摆动点回望周期
 	MinSwingSize      float64   `json:"min_swing_size"`      // 最小摆动幅度(%)
+	MinSampleSize     int       `json:"min_sample_size"`     // StrengthZ计算最小样本数量
 }
 
 // 枚举类型定义
@@ -1342,6 +1343,7 @@ var defaultFibonacciConfig = FibonacciConfig{
 	DefaultRatios:     []float64{0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618, 2.618}, // 标准斐波比率
 	SwingLookback:     15,    // 15周期回望（优化后的值）
 	MinSwingSize:      0.025, // 2.5%最小摆动幅度 (已移除硬过滤，AI自主判断)
+	MinSampleSize:     15,    // StrengthZ计算最小样本数量
 }
 
 // ====================== 市场联动性和上下文分析 ======================

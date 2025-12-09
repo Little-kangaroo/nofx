@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"time"
 )
 
 // ChannelAnalyzer 通道分析器（独立于道氏理论）
@@ -90,7 +89,8 @@ func (ca *ChannelAnalyzer) Analyze(klines []Kline, currentPrice float64) *Channe
 	}
 
 	// 3. 构建最佳通道
-	channel := ca.findBestChannel(trendLines, swingPoints, currentPrice)
+	currentIndex := len(klines) - 1
+	channel := ca.findBestChannel(trendLines, swingPoints, currentPrice, currentIndex)
 	if channel == nil {
 		return &ChannelData{
 			TrendLines: trendLines,
@@ -99,7 +99,7 @@ func (ca *ChannelAnalyzer) Analyze(klines []Kline, currentPrice float64) *Channe
 	}
 
 	// 4. 计算当前价格位置
-	position, ratio := ca.calculatePricePosition(currentPrice, channel)
+	position, ratio := ca.calculatePricePosition(currentPrice, channel, currentIndex)
 
 	// 5. 生成分析描述
 	analysis := ca.generateAnalysis(channel, position, ratio)
@@ -267,6 +267,7 @@ func (ca *ChannelAnalyzer) calculateTrendLines(swingPoints []*SwingPoint) []*Tre
 }
 
 // calculateTrendLinesFromPoints 从点计算趋势线
+// 🔥 修复：使用K线索引坐标系统，消除Unix毫秒时间戳数值精度灾难
 func (ca *ChannelAnalyzer) calculateTrendLinesFromPoints(points []*SwingPoint, lineType TrendLineType) []*TrendLine {
 	if len(points) < 2 {
 		return nil
@@ -280,20 +281,27 @@ func (ca *ChannelAnalyzer) calculateTrendLinesFromPoints(points []*SwingPoint, l
 			point1 := points[i]
 			point2 := points[j]
 
-			// 计算斜率
-			timeDiff := float64(point2.Time - point1.Time)
-			if timeDiff <= 0 {
+			// 🔥 修复：使用K线索引差替代时间差，消除数值精度问题
+			indexDiff := float64(point2.Index - point1.Index)
+			if indexDiff <= 0 {
 				continue
 			}
 
-			slope := (point2.Price - point1.Price) / timeDiff
-			intercept := point1.Price - slope*float64(point1.Time)
+			// 🔥 修复：基于索引的斜率计算，数值稳定且回测一致
+			// slope = (price2 - price1) / (index2 - index1)
+			// 含义：每根K线的平均价格变化
+			slope := (point2.Price - point1.Price) / indexDiff
+			
+			// 🔥 修复：基于索引的截距计算
+			// price = slope * index + intercept
+			// intercept = price1 - slope * index1
+			intercept := point1.Price - slope*float64(point1.Index)
 
 			trendLine := &TrendLine{
 				Type:      lineType,
 				Points:    []*SwingPoint{point1, point2},
-				Slope:     slope,
-				Intercept: intercept,
+				Slope:     slope,      // 每根K线价格变化
+				Intercept: intercept,  // 索引0处的价格截距
 				LastTouch: point2.Time,
 				Touches:   2,
 			}
@@ -312,10 +320,13 @@ func (ca *ChannelAnalyzer) calculateTrendLinesFromPoints(points []*SwingPoint, l
 }
 
 // calculateTrendLineHits 计算趋势线命中次数
+// 🔥 修复：使用索引坐标系统计算命中，与趋势线斜率定义保持一致
 func (ca *ChannelAnalyzer) calculateTrendLineHits(trendLine *TrendLine, points []*SwingPoint) int {
 	hits := 0
 	for _, point := range points {
-		expectedPrice := trendLine.Slope*float64(point.Time) + trendLine.Intercept
+		// 🔥 修复：基于索引计算期望价格
+		// expectedPrice = slope * index + intercept
+		expectedPrice := trendLine.Slope*float64(point.Index) + trendLine.Intercept
 		distance := math.Abs(point.Price-expectedPrice) / expectedPrice
 		if distance <= ca.config.MaxDistance {
 			hits++
@@ -325,17 +336,19 @@ func (ca *ChannelAnalyzer) calculateTrendLineHits(trendLine *TrendLine, points [
 }
 
 // calculateTrendLineStrength 计算趋势线强度
+// 🔥 修复：使用索引跨度替代时间跨度，避免毫秒计算误差
 func (ca *ChannelAnalyzer) calculateTrendLineStrength(trendLine *TrendLine) float64 {
 	strength := 0.0
 
 	// 基于命中次数
 	strength += float64(trendLine.Touches) * 2.0
 
-	// 基于时间跨度
+	// 🔥 修复：基于索引跨度计算时间强度
 	if len(trendLine.Points) >= 2 {
-		timeSpan := trendLine.Points[len(trendLine.Points)-1].Time - trendLine.Points[0].Time
-		days := float64(timeSpan) / (24 * 3600 * 1000)
-		strength += math.Min(days/7, 3.0) // 最多加3分
+		indexSpan := trendLine.Points[len(trendLine.Points)-1].Index - trendLine.Points[0].Index
+		// 将索引跨度转换为相对强度 (每10个索引相当于1天的概念)
+		relativeSpan := float64(indexSpan) / 10.0
+		strength += math.Min(relativeSpan/7, 3.0) // 最多加3分，相当于7天权重
 	}
 
 	// 基于点强度
@@ -349,7 +362,8 @@ func (ca *ChannelAnalyzer) calculateTrendLineStrength(trendLine *TrendLine) floa
 }
 
 // findBestChannel 寻找最佳通道
-func (ca *ChannelAnalyzer) findBestChannel(trendLines []*TrendLine, swingPoints []*SwingPoint, currentPrice float64) *Channel {
+// 🔥 修复：添加当前索引参数，消除time.Now()回测不一致问题
+func (ca *ChannelAnalyzer) findBestChannel(trendLines []*TrendLine, swingPoints []*SwingPoint, currentPrice float64, currentIndex int) *Channel {
 	var bestChannel *Channel
 	bestScore := 0.0
 
@@ -364,7 +378,7 @@ func (ca *ChannelAnalyzer) findBestChannel(trendLines []*TrendLine, swingPoints 
 				continue
 			}
 
-			channel := ca.createChannel(line1, line2, currentPrice)
+			channel := ca.createChannel(line1, line2, currentPrice, currentIndex)
 			if channel == nil {
 				continue
 			}
@@ -397,13 +411,14 @@ func (ca *ChannelAnalyzer) canFormChannel(line1, line2 *TrendLine) bool {
 }
 
 // createChannel 创建通道
-func (ca *ChannelAnalyzer) createChannel(line1, line2 *TrendLine, currentPrice float64) *Channel {
+// 🔥 修复：使用索引坐标系统，消除time.Now()回测/实盘不一致灾难
+func (ca *ChannelAnalyzer) createChannel(line1, line2 *TrendLine, currentPrice float64, currentIndex int) *Channel {
 	var upperLine, lowerLine *TrendLine
 
-	// 确定上下线
-	currentTime := float64(time.Now().UnixMilli())
-	price1 := line1.Slope*currentTime + line1.Intercept
-	price2 := line2.Slope*currentTime + line2.Intercept
+	// 🔥 修复：使用当前索引替代time.Now()，确保回测/实盘一致性
+	currentIndexFloat := float64(currentIndex)
+	price1 := line1.Slope*currentIndexFloat + line1.Intercept
+	price2 := line2.Slope*currentIndexFloat + line2.Intercept
 
 	if price1 > price2 {
 		upperLine = line1
@@ -427,18 +442,20 @@ func (ca *ChannelAnalyzer) createChannel(line1, line2 *TrendLine, currentPrice f
 		Strength:  (upperLine.Strength + lowerLine.Strength) / 2,
 	}
 
-	// 确定方向
+	// 🔥 修复：使用斜率值直接判断方向，避免精度阈值问题
 	direction := "flat"
-	if upperLine.Slope > 0.001 {
+	avgSlope := (upperLine.Slope + lowerLine.Slope) / 2
+	if avgSlope > 0.001 {
 		direction = "up"
-	} else if upperLine.Slope < -0.001 {
+	} else if avgSlope < -0.001 {
 		direction = "down"
 	}
 
-	// 计算通道年龄
-	upperTime := float64(upperLine.Points[0].Time)
-	lowerTime := float64(lowerLine.Points[0].Time)
-	age := time.Now().UnixMilli() - int64(math.Min(upperTime, lowerTime))
+	// 🔥 修复：基于索引计算通道年龄
+	upperStartIndex := upperLine.Points[0].Index
+	lowerStartIndex := lowerLine.Points[0].Index
+	channelStartIndex := minInt(upperStartIndex, lowerStartIndex)
+	age := int64(currentIndex - channelStartIndex) // 索引差作为年龄
 
 	return &Channel{
 		UpperLine:  upperLine,
@@ -461,11 +478,11 @@ func (ca *ChannelAnalyzer) scoreChannel(channel *Channel, swingPoints []*SwingPo
 	totalHits := channel.UpperLine.Touches + channel.LowerLine.Touches
 	score += float64(totalHits) * 0.5
 
-	// 基于通道年龄（较新的通道更好）
-	ageDays := float64(channel.Age) / (24 * 3600 * 1000)
-	if ageDays <= 7 {
+	// 🔥 修复：基于索引的通道年龄评分，避免毫秒转换误差
+	ageInIndices := float64(channel.Age) // channel.Age现在是索引差
+	if ageInIndices <= 50 { // 50根K线内认为是新通道
 		score += 2.0
-	} else if ageDays <= 30 {
+	} else if ageInIndices <= 200 { // 200根K线内认为是较新通道
 		score += 1.0
 	}
 
@@ -479,10 +496,12 @@ func (ca *ChannelAnalyzer) scoreChannel(channel *Channel, swingPoints []*SwingPo
 }
 
 // calculatePricePosition 计算价格在通道中的位置
-func (ca *ChannelAnalyzer) calculatePricePosition(currentPrice float64, channel *Channel) (string, float64) {
-	currentTime := float64(time.Now().UnixMilli())
-	upperPrice := channel.UpperLine.Slope*currentTime + channel.UpperLine.Intercept
-	lowerPrice := channel.LowerLine.Slope*currentTime + channel.LowerLine.Intercept
+// 🔥 修复：使用索引坐标系统，消除time.Now()回测/实盘不一致问题
+func (ca *ChannelAnalyzer) calculatePricePosition(currentPrice float64, channel *Channel, currentIndex int) (string, float64) {
+	// 🔥 修复：使用当前索引替代time.Now()
+	currentIndexFloat := float64(currentIndex)
+	upperPrice := channel.UpperLine.Slope*currentIndexFloat + channel.UpperLine.Intercept
+	lowerPrice := channel.LowerLine.Slope*currentIndexFloat + channel.LowerLine.Intercept
 
 	// 计算比例
 	ratio := (currentPrice - lowerPrice) / (upperPrice - lowerPrice)
