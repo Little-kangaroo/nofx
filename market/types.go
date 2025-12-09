@@ -921,6 +921,8 @@ type FairValueGap struct {
 	CenterPrice    float64     `json:"center_price"`    // 中心价格
 	Width          float64     `json:"width"`           // 缺口宽度
 	WidthPercent   float64     `json:"width_percent"`   // 缺口宽度百分比
+	WidthATR       float64     `json:"width_atr"`       // 缺口宽度相对ATR倍数（使用形成时ATR）
+	FormationATR   float64     `json:"formation_atr"`   // 🔥 新增：形成时的ATR（避免时空错配）
 	Origin         *FVGOrigin  `json:"origin"`          // 缺口起源
 	Strength       float64     `json:"strength"`        // 缺口强度
 	Quality        FVGQuality  `json:"quality"`         // 缺口质量
@@ -933,6 +935,9 @@ type FairValueGap struct {
 	IsActive       bool        `json:"is_active"`       // 是否活跃
 	IsFilled       bool        `json:"is_filled"`       // 是否已填补
 	IsPartialFill  bool        `json:"is_partial_fill"` // 是否部分填补
+	// 🔥 新增：Inversion FVG概念
+	IsInversion    bool        `json:"is_inversion"`    // 是否为反转FVG（Failed FVG转化）
+	InversionTime  int64       `json:"inversion_time"`  // 反转时间
 	VolumeContext  *FVGVolume  `json:"volume_context"`  // 成交量上下文
 	Validation     *FVGValidation `json:"validation"`   // 验证信息
 	Context        *ContextMetrics `json:"ctx"`         // 上下文评分
@@ -997,6 +1002,8 @@ const (
 	FVGStatusPartialFill FVGStatus = "partial_fill" // 部分填补
 	FVGStatusFilled      FVGStatus = "filled"       // 已填补
 	FVGStatusExpired     FVGStatus = "expired"      // 已过期
+	// 🔥 新增：Inversion FVG状态
+	FVGStatusInversion   FVGStatus = "inversion"    // 反转FVG（Failed FVG转化为支撑/阻力）
 )
 
 // FVGVolume FVG成交量上下文
@@ -1033,6 +1040,9 @@ type FVGConfig struct {
 	EnableValidation  bool      `json:"enable_validation"`   // 是否启用验证
 	QualityThreshold  float64   `json:"quality_threshold"`   // 质量阈值
 	RequireVolConf    bool      `json:"require_vol_conf"`    // 是否需要成交量确认
+	// 🔥 新增：Body-to-Body FVG配置
+	UseBodyGap        bool      `json:"use_body_gap"`        // 是否使用实体缺口（高波动市场推荐）
+	VolumeBasePeriod  int       `json:"volume_base_period"`  // 成交量基准周期（用于排除当前爆发K线）
 }
 
 // FVGStatistics FVG统计信息
@@ -1089,6 +1099,9 @@ var defaultFVGConfig = FVGConfig{
 	EnableValidation: true,
 	QualityThreshold: 0.6,    // 60%质量阈值
 	RequireVolConf:   false,  // 不强制要求成交量确认
+	// 🔥 新增配置项
+	UseBodyGap:       false,  // 默认使用High/Low，高波动币种可开启Body Gap
+	VolumeBasePeriod: 20,     // 成交量基准周期（排除当前爆发，避免幸存者偏差）
 }
 
 // ====================== 斐波纳契分析相关数据结构 ======================

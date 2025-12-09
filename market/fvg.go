@@ -139,7 +139,7 @@ func (fvg *FVGAnalyzer) calculateTrueRange(current, previous Kline) float64 {
 	return math.Max(tr1, math.Max(tr2, tr3))
 }
 
-// identifyBullishFVG 识别看涨FVG
+// identifyBullishFVG 识别看涨FVG（支持Body Gap模式）
 func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCalc *ContextCalculator) *FairValueGap {
 	if index < 2 || index >= len(klines) {
 		return nil
@@ -151,23 +151,40 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCal
 	middleCandle := klines[index-1] // 中间K线
 	currentCandle := klines[index]  // 当前K线（第三根）
 
-	// 看涨FVG条件：当前K线的低点 > 第一根K线的高点
+	// 🔥 修复：支持Body-to-Body FVG检测
+	var firstBound, currentBound float64
+	if fvg.config.UseBodyGap {
+		// Body Gap模式：使用实体价格，减少影线干扰（高波动币种推荐）
+		firstBound = math.Max(firstCandle.Open, firstCandle.Close) // 第一根K线实体上沿
+		currentBound = math.Min(currentCandle.Open, currentCandle.Close) // 当前K线实体下沿
+	} else {
+		// 传统ICT模式：使用High/Low（标准定义）
+		firstBound = firstCandle.High
+		currentBound = currentCandle.Low
+	}
+
+	// 看涨FVG条件：当前K线边界 > 第一根K线边界
 	// 说明中间存在向上缺口，表明买方力量强劲
-	if currentCandle.Low <= firstCandle.High {
+	if currentBound <= firstBound {
 		return nil
 	}
 
-	// 按标准FVG计算方式：
-	// 上边界 = 当前K线的低点
-	// 下边界 = 第一根K线的高点
-	gapHigh := currentCandle.Low // 上边界
-	gapLow := firstCandle.High   // 下边界
+	// 按FVG计算方式：缺口边界
+	// 🔥 修复：根据模式选择边界计算
+	var gapHigh, gapLow float64
+	if fvg.config.UseBodyGap {
+		gapHigh = math.Min(currentCandle.Open, currentCandle.Close) // 当前K线实体下沿
+		gapLow = math.Max(firstCandle.Open, firstCandle.Close)      // 第一根K线实体上沿
+	} else {
+		gapHigh = currentCandle.Low // 当前K线的低点
+		gapLow = firstCandle.High   // 第一根K线的高点
+	}
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapLow * 100
 
-	// 智能预过滤：基于时间框架的自适应阈值
-	atr := fvg.calculateATR(klines, 14) // 需要ATR数据进行LTF过滤
-	if shouldFilterByTimeframe(klines, gapWidthPercent, atr, gapWidth) {
+	// 🔥 修复：计算形成时ATR，避免时空错配
+	formationATR := fvg.calculateATR(klines[index-15:index], 14) // 使用形成时的局部ATR
+	if shouldFilterByTimeframe(klines, gapWidthPercent, formationATR, gapWidth) {
 		return nil
 	}
 
@@ -176,10 +193,12 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCal
 		return nil
 	}
 
-	// 成交量确认改为可选，不强制过滤
+	// 🔥 修复：成交量确认改为可选，修复幸存者偏差
 	volumeConfirmed := false
 	if fvg.config.RequireVolConf {
-		avgVolume := fvg.calculateAverageVolume(klines, index-10, index)
+		// 使用配置的基准周期，排除当前爆发K线避免幸存者偏差
+		basePeriod := fvg.config.VolumeBasePeriod
+		avgVolume := fvg.calculateAverageVolume(klines, index-basePeriod-1, index-1) // 排除当前爆发K线
 		volumeConfirmed = middleCandle.Volume >= avgVolume*fvg.config.MinVolumeRatio
 	} else {
 		volumeConfirmed = true // 不要求成交量确认时默认为true
@@ -197,6 +216,9 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCal
 		CenterPrice:  (gapHigh + gapLow) / 2,
 		Width:        gapWidth,
 		WidthPercent: gapWidthPercent,
+		// 🔥 修复：保存形成时ATR，避免时空错配
+		FormationATR: formationATR,
+		WidthATR:     gapWidth / formationATR, // 使用形成时ATR计算相对宽度
 		Origin: &FVGOrigin{
 			KlineIndex:     index,
 			PreviousCandle: fvg.createCandleInfo(&firstCandle, index-2),
@@ -222,7 +244,7 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCal
 	return gap
 }
 
-// identifyBearishFVG 识别看跌FVG
+// identifyBearishFVG 识别看跌FVG（支持Body Gap模式）
 func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, contextCalc *ContextCalculator) *FairValueGap {
 	if index < 2 || index >= len(klines) {
 		return nil
@@ -234,23 +256,40 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, contextCal
 	middleCandle := klines[index-1] // 中间K线
 	currentCandle := klines[index]  // 当前K线（第三根）
 
-	// 看跌FVG条件：当前K线的高点 < 第一根K线的低点
+	// 🔥 修复：支持Body-to-Body FVG检测
+	var firstBound, currentBound float64
+	if fvg.config.UseBodyGap {
+		// Body Gap模式：使用实体价格，减少影线干扰（高波动币种推荐）
+		firstBound = math.Min(firstCandle.Open, firstCandle.Close) // 第一根K线实体下沿
+		currentBound = math.Max(currentCandle.Open, currentCandle.Close) // 当前K线实体上沿
+	} else {
+		// 传统ICT模式：使用High/Low（标准定义）
+		firstBound = firstCandle.Low
+		currentBound = currentCandle.High
+	}
+
+	// 看跌FVG条件：当前K线边界 < 第一根K线边界
 	// 说明中间存在向下缺口，表明卖方力量强劲
-	if currentCandle.High >= firstCandle.Low {
+	if currentBound >= firstBound {
 		return nil
 	}
 
-	// 按标准FVG计算方式：
-	// 上边界 = 第一根K线的低点
-	// 下边界 = 当前K线的高点
-	gapHigh := firstCandle.Low   // 上边界
-	gapLow := currentCandle.High // 下边界
+	// 按FVG计算方式：缺口边界
+	// 🔥 修复：根据模式选择边界计算
+	var gapHigh, gapLow float64
+	if fvg.config.UseBodyGap {
+		gapHigh = math.Min(firstCandle.Open, firstCandle.Close)  // 第一根K线实体下沿
+		gapLow = math.Max(currentCandle.Open, currentCandle.Close) // 当前K线实体上沿
+	} else {
+		gapHigh = firstCandle.Low   // 第一根K线的低点
+		gapLow = currentCandle.High // 当前K线的高点
+	}
 	gapWidth := gapHigh - gapLow
 	gapWidthPercent := gapWidth / gapHigh * 100
 
-	// 智能预过滤：基于时间框架的自适应阈值
-	atr := fvg.calculateATR(klines, 14) // 需要ATR数据进行LTF过滤
-	if shouldFilterByTimeframe(klines, gapWidthPercent, atr, gapWidth) {
+	// 🔥 修复：计算形成时ATR，避免时空错配
+	formationATR := fvg.calculateATR(klines[index-15:index], 14) // 使用形成时的局部ATR
+	if shouldFilterByTimeframe(klines, gapWidthPercent, formationATR, gapWidth) {
 		return nil
 	}
 
@@ -259,10 +298,12 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, contextCal
 		return nil
 	}
 
-	// 成交量确认改为可选，不强制过滤  
+	// 🔥 修复：成交量确认改为可选，修复幸存者偏差  
 	volumeConfirmed := false
 	if fvg.config.RequireVolConf {
-		avgVolume := fvg.calculateAverageVolume(klines, index-10, index)
+		// 使用配置的基准周期，排除当前爆发K线避免幸存者偏差
+		basePeriod := fvg.config.VolumeBasePeriod
+		avgVolume := fvg.calculateAverageVolume(klines, index-basePeriod-1, index-1) // 排除当前爆发K线
 		volumeConfirmed = middleCandle.Volume >= avgVolume*fvg.config.MinVolumeRatio
 	} else {
 		volumeConfirmed = true // 不要求成交量确认时默认为true
@@ -280,6 +321,9 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, contextCal
 		CenterPrice:  (gapHigh + gapLow) / 2,
 		Width:        gapWidth,
 		WidthPercent: gapWidthPercent,
+		// 🔥 修复：保存形成时ATR，避免时空错配
+		FormationATR: formationATR,
+		WidthATR:     gapWidth / formationATR, // 使用形成时ATR计算相对宽度
 		Origin: &FVGOrigin{
 			KlineIndex:     index,
 			PreviousCandle: fvg.createCandleInfo(&firstCandle, index-2),
@@ -386,9 +430,10 @@ func (fvg *FVGAnalyzer) calculateVolumeContext(klines []Kline, index int) *FVGVo
 	}
 }
 
-// calculateVolumeContextWithConfirmation 计算成交量上下文（包含确认状态）
+// calculateVolumeContextWithConfirmation 计算成交量上下文（包含确认状态，修复幸存者偏差）
 func (fvg *FVGAnalyzer) calculateVolumeContextWithConfirmation(klines []Kline, index int, volumeConfirmed bool) *FVGVolume {
-	if index < 10 || index >= len(klines) {
+	basePeriod := fvg.config.VolumeBasePeriod
+	if index < basePeriod || index >= len(klines) {
 		return &FVGVolume{
 			VolumeConfirmation: volumeConfirmed, // 传递确认状态
 		}
@@ -396,7 +441,8 @@ func (fvg *FVGAnalyzer) calculateVolumeContextWithConfirmation(klines []Kline, i
 
 	// 修正：使用中间K线（产生缺口的关键K线）的成交量
 	formationVolume := klines[index-1].Volume
-	avgVolume := fvg.calculateAverageVolume(klines, index-10, index)
+	// 🔥 修复：排除当前爆发K线，避免幸存者偏差
+	avgVolume := fvg.calculateAverageVolume(klines, index-basePeriod-1, index-1)
 
 	volumeRatio := 1.0
 	if avgVolume > 0 {
@@ -439,7 +485,7 @@ func (fvg *FVGAnalyzer) calculateAverageVolume(klines []Kline, start, end int) f
 	return totalVolume / float64(count)
 }
 
-// updateFVGStatuses 更新FVG状态
+// updateFVGStatuses 更新FVG状态（增强填补逻辑，支持Inversion FVG）
 func (fvg *FVGAnalyzer) updateFVGStatuses(gaps []*FairValueGap, klines []Kline) {
 	if len(klines) == 0 {
 		return
@@ -466,6 +512,15 @@ func (fvg *FVGAnalyzer) updateFVGStatuses(gaps []*FairValueGap, klines []Kline) 
 			gap.IsFilled = true
 			gap.IsActive = false
 			gap.FillTime = currentTime
+			
+			// 🔥 新增：Failed FVG转化为Inversion FVG概念
+			// 当FVG被完全填补后，它往往变成反向的支撑/阻力位（Mitigation Block）
+			if !gap.IsInversion && fvg.shouldConvertToInversion(gap, klines) {
+				gap.IsInversion = true
+				gap.InversionTime = currentTime
+				gap.IsActive = true // 重新激活为反转FVG
+				gap.Status = FVGStatusInversion // 需要在types.go中定义这个新状态
+			}
 		} else if fillProgress > 20 { // 20%以上算部分填补
 			gap.Status = FVGStatusPartialFill
 			gap.IsPartialFill = true
@@ -487,6 +542,38 @@ func (fvg *FVGAnalyzer) updateFVGStatuses(gaps []*FairValueGap, klines []Kline) 
 			gap.LastTouch = currentTime
 		}
 	}
+}
+
+// shouldConvertToInversion 判断是否应该将Failed FVG转化为Inversion FVG
+func (fvg *FVGAnalyzer) shouldConvertToInversion(gap *FairValueGap, klines []Kline) bool {
+	// 🔥 新增：Inversion FVG判断逻辑
+	// 1. FVG强度足够高（高强度FVG失败后更容易成为反向支撑/阻力）
+	if gap.Strength < 3.0 {
+		return false
+	}
+	
+	// 2. 形成时有较强的冲击性移动
+	if gap.Origin.ImpulsiveMove < 0.02 { // 小于2%的移动不足以形成有效反转区域
+		return false
+	}
+	
+	// 3. 成交量验证：形成时有足够成交量支撑
+	if gap.VolumeContext != nil && gap.VolumeContext.VolumeRatio < 1.5 {
+		return false
+	}
+	
+	// 4. 不是太老的FVG（超过30根K线的FVG反转意义有限）
+	age := fvg.calculateAge(gap, klines)
+	if age > 30 {
+		return false
+	}
+	
+	// 5. 宽度适中（太小的FVG反转效果有限，太大的FVG可能信号过强）
+	if gap.WidthATR < 0.5 || gap.WidthATR > 3.0 {
+		return false
+	}
+	
+	return true // 满足所有条件，可以转化为Inversion FVG
 }
 
 // calculateAge 计算FVG年龄
