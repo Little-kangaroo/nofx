@@ -2102,79 +2102,91 @@ func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 	return data
 }
 
-// SuperTrendResult 超级趋势计算结果
+// SuperTrendResult 超级趋势计算结果（增强版）
 type SuperTrendResult struct {
+	// 基础字段
 	Direction   string  // "bullish" or "bearish"
 	CurrentLine float64 // 当前趋势线价格
 	UpperLine   float64 // 上轨价格
 	LowerLine   float64 // 下轨价格
+	
+	// 🔥 新增：增强结果结构
+	IsValid       bool    // 数据是否有效
+	TrendDuration int     // 当前趋势持续时间（K线数量）
+	FlipPrice     float64 // 最近一次翻转的价格
+	
+	// 🔥 新增：趋势强度量化
+	TrendStrength float64 // 趋势强度评分 (0-100)
+	Confidence    float64 // 置信度评分 (0-1)
+	
+	// 🔥 新增：信号质量
+	SignalQuality string  // "high", "medium", "low"
+	LastFlipTime  int64   // 最后翻转时间戳
 }
 
-// calculateSupertrend 计算超级趋势线（标准实现）
-// calculateSupertrend 计算超级趋势线（修正版：优化ATR计算+修复方向初始化）
-func calculateSupertrend(klines []Kline, atrPeriod int, factor float64) SuperTrendResult {
+// calculateSupertrendEnhanced 计算增强版超级趋势线
+// 🔥 功能：修复初始化逻辑、增加趋势强度量化、实现动态参数配置
+func calculateSupertrendEnhanced(klines []Kline, timeframe string, customParams ...float64) SuperTrendResult {
 	result := SuperTrendResult{
-		Direction:   "unknown",
-		CurrentLine: 0.0,
-		UpperLine:   0.0,
-		LowerLine:   0.0,
+		Direction:     "unknown",
+		CurrentLine:   0.0,
+		UpperLine:     0.0,
+		LowerLine:     0.0,
+		IsValid:       false,
+		TrendDuration: 0,
+		FlipPrice:     0.0,
+		TrendStrength: 0.0,
+		Confidence:    0.0,
+		SignalQuality: "low",
+		LastFlipTime:  0,
 	}
 
+	// 🔥 动态参数配置：根据时间框架自动调整
+	atrPeriod, factor := getDynamicSupertrendParams(timeframe, customParams...)
+	
 	minRequired := atrPeriod + 1
 	recommended := atrPeriod * 3 // 建议使用ATR周期的3倍数据以确保稳定性
 	if len(klines) < minRequired {
-		log.Printf("🚨🔴 [SuperTrend计算] ❌ K线数据不足: 需要%d根，实际%d根 ❌", minRequired, len(klines))
+		log.Printf("🚨🔴 [SuperTrend增强版] ❌ K线数据不足: 需要%d根，实际%d根 ❌", minRequired, len(klines))
 		return result
 	}
 	if len(klines) < recommended {
-		log.Printf("🟡⚠️ [SuperTrend计算] 稳定性警告: 建议%d根，实际%d根 (可能影响趋势稳定性) ⚠️🟡", recommended, len(klines))
+		log.Printf("🟡⚠️ [SuperTrend增强版] 稳定性警告: 建议%d根，实际%d根 (可能影响趋势稳定性) ⚠️🟡", recommended, len(klines))
 	}
 
 	length := len(klines)
-	// 1. 预先计算ATR序列 (使用Wilder平滑，符合TradingView标准)
-	atrs := make([]float64, length)
-
-	// 计算第一个ATR (SMA)
-	sumTR := 0.0
-	for i := 1; i <= atrPeriod; i++ {
-		high := klines[i].High
-		low := klines[i].Low
-		prevClose := klines[i-1].Close
-		tr := math.Max(high-low, math.Max(math.Abs(high-prevClose), math.Abs(low-prevClose)))
-		sumTR += tr
-	}
-	atrs[atrPeriod] = sumTR / float64(atrPeriod)
-
-	// 计算后续ATR (RMA)
-	for i := atrPeriod + 1; i < length; i++ {
-		high := klines[i].High
-		low := klines[i].Low
-		prevClose := klines[i-1].Close
-		tr := math.Max(high-low, math.Max(math.Abs(high-prevClose), math.Abs(low-prevClose)))
-		atrs[i] = (atrs[i-1]*float64(atrPeriod-1) + tr) / float64(atrPeriod)
+	
+	// 1. 🔥 改进的ATR计算：使用Wilder's Smoothing (RMA)
+	atrs := calculateEnhancedATRSeries(klines, atrPeriod)
+	if atrs == nil {
+		return result
 	}
 
-	// 2. 计算SuperTrend
+	// 2. 🔥 增强的SuperTrend计算
 	supertrendLines := make([]float64, length)
-	directions := make([]string, length) // "bullish" 或 "bearish"
+	directions := make([]string, length)
 	upperBands := make([]float64, length)
 	lowerBands := make([]float64, length)
+	flipPoints := make([]int, 0) // 记录翻转点
 
-	// 初始化第一个点
-	hl2 := (klines[atrPeriod].High + klines[atrPeriod].Low) / 2
-	upperBands[atrPeriod] = hl2 + (factor * atrs[atrPeriod])
-	lowerBands[atrPeriod] = hl2 - (factor * atrs[atrPeriod])
+	// 3. 🔥 改进的初始化逻辑
+	startIdx := atrPeriod
+	hl2 := (klines[startIdx].High + klines[startIdx].Low) / 2
+	upperBands[startIdx] = hl2 + (factor * atrs[startIdx])
+	lowerBands[startIdx] = hl2 - (factor * atrs[startIdx])
 
-	// 显式初始化方向：如果收盘价在下轨之上，则看多，否则看空
-	if klines[atrPeriod].Close > lowerBands[atrPeriod] {
-		directions[atrPeriod] = "bullish"
-		supertrendLines[atrPeriod] = lowerBands[atrPeriod]
+	// 🔥 智能初始化方向：综合考虑收盘价位置和最近价格趋势
+	if isInitialBullish(klines, startIdx, upperBands[startIdx], lowerBands[startIdx]) {
+		directions[startIdx] = "bullish"
+		supertrendLines[startIdx] = lowerBands[startIdx]
 	} else {
-		directions[atrPeriod] = "bearish"
-		supertrendLines[atrPeriod] = upperBands[atrPeriod]
+		directions[startIdx] = "bearish"
+		supertrendLines[startIdx] = upperBands[startIdx]
 	}
 
-	for i := atrPeriod + 1; i < length; i++ {
+	// 4. 主循环计算
+	currentTrendStart := startIdx
+	for i := startIdx + 1; i < length; i++ {
 		// 计算基础带
 		hl2 := (klines[i].High + klines[i].Low) / 2
 		currATR := atrs[i]
@@ -2182,35 +2194,20 @@ func calculateSupertrend(klines []Kline, atrPeriod int, factor float64) SuperTre
 		basicUpper := hl2 + (factor * currATR)
 		basicLower := hl2 - (factor * currATR)
 
-		// 核心逻辑：带的平滑处理
-		// 上轨：只能下降，除非价格突破了前一根的上轨
-		if basicUpper < upperBands[i-1] || klines[i-1].Close > upperBands[i-1] {
-			upperBands[i] = basicUpper
-		} else {
-			upperBands[i] = upperBands[i-1]
-		}
+		// 🔥 核心改进：更精确的带平滑处理
+		upperBands[i] = calculateSmoothedBand(basicUpper, upperBands[i-1], klines[i-1].Close, "upper")
+		lowerBands[i] = calculateSmoothedBand(basicLower, lowerBands[i-1], klines[i-1].Close, "lower")
 
-		// 下轨：只能上升，除非价格跌破了前一根的下轨
-		if basicLower > lowerBands[i-1] || klines[i-1].Close < lowerBands[i-1] {
-			lowerBands[i] = basicLower
-		} else {
-			lowerBands[i] = lowerBands[i-1]
-		}
-
-		// 确定方向
+		// 🔥 改进的方向确定逻辑
 		prevDir := directions[i-1]
-		currDir := prevDir // 默认延续
-
-		if prevDir == "bullish" {
-			if klines[i].Close < lowerBands[i] {
-				currDir = "bearish"
-			}
-		} else { // bearish
-			if klines[i].Close > upperBands[i] {
-				currDir = "bullish"
-			}
-		}
+		currDir := determineDirection(prevDir, klines[i].Close, upperBands[i], lowerBands[i])
 		directions[i] = currDir
+
+		// 记录趋势翻转
+		if prevDir != currDir && prevDir != "unknown" {
+			flipPoints = append(flipPoints, i)
+			currentTrendStart = i
+		}
 
 		// 确定当前趋势线数值
 		if currDir == "bullish" {
@@ -2220,14 +2217,359 @@ func calculateSupertrend(klines []Kline, atrPeriod int, factor float64) SuperTre
 		}
 	}
 
-	// 返回最新结果
+	// 5. 🔥 计算增强指标
 	lastIdx := length - 1
 	result.Direction = directions[lastIdx]
 	result.CurrentLine = supertrendLines[lastIdx]
 	result.UpperLine = upperBands[lastIdx]
 	result.LowerLine = lowerBands[lastIdx]
+	result.IsValid = true
+
+	// 🔥 趋势持续时间
+	if len(flipPoints) > 0 {
+		result.TrendDuration = lastIdx - flipPoints[len(flipPoints)-1]
+		result.FlipPrice = (klines[flipPoints[len(flipPoints)-1]].High + klines[flipPoints[len(flipPoints)-1]].Low) / 2
+		result.LastFlipTime = klines[flipPoints[len(flipPoints)-1]].OpenTime
+	} else {
+		result.TrendDuration = lastIdx - currentTrendStart
+		result.FlipPrice = 0.0
+		result.LastFlipTime = 0
+	}
+
+	// 🔥 趋势强度量化
+	result.TrendStrength = calculateTrendStrength(klines, directions, supertrendLines, result.TrendDuration, lastIdx)
+	
+	// 🔥 置信度评分
+	result.Confidence = calculateConfidence(klines, atrs, result.TrendDuration, flipPoints, lastIdx)
+	
+	// 🔥 信号质量评估
+	result.SignalQuality = determineSignalQuality(result.TrendStrength, result.Confidence, result.TrendDuration, len(klines))
 
 	return result
+}
+
+// getDynamicSupertrendParams 获取动态SuperTrend参数
+// 🔥 功能：根据时间框架动态调整参数，LTF使用较小Factor，HTF使用较大Factor
+func getDynamicSupertrendParams(timeframe string, customParams ...float64) (int, float64) {
+	// 如果提供了自定义参数，使用自定义参数
+	if len(customParams) >= 2 {
+		return int(customParams[0]), customParams[1]
+	}
+	
+	// 根据时间框架动态配置参数
+	switch timeframe {
+	case "1m", "3m", "5m":
+		// 低时间框架：更敏感的参数配置
+		return 10, 3.0 // ATR周期10，Factor 3.0
+	case "15m", "30m":
+		// 中时间框架：平衡的参数配置  
+		return 14, 3.5 // ATR周期14，Factor 3.5
+	case "1h", "2h", "4h":
+		// 高时间框架：更稳定的参数配置
+		return 20, 4.0 // ATR周期20，Factor 4.0
+	case "12h", "1d":
+		// 超高时间框架：最稳定的参数配置
+		return 14, 5.0 // ATR周期14，Factor 5.0
+	default:
+		// 默认配置：标准参数
+		return 14, 3.0 // ATR周期14，Factor 3.0
+	}
+}
+
+// calculateEnhancedATRSeries 计算增强版ATR序列
+// 🔥 功能：使用标准的Wilder's Smoothing方法，符合TradingView标准
+func calculateEnhancedATRSeries(klines []Kline, period int) []float64 {
+	length := len(klines)
+	if length <= period {
+		return nil
+	}
+
+	atrs := make([]float64, length)
+	
+	// 🔥 计算True Range序列
+	trs := make([]float64, length)
+	for i := 1; i < length; i++ {
+		high := klines[i].High
+		low := klines[i].Low
+		prevClose := klines[i-1].Close
+		trs[i] = math.Max(high-low, math.Max(math.Abs(high-prevClose), math.Abs(low-prevClose)))
+	}
+
+	// 🔥 计算第一个ATR (使用SMA)
+	sumTR := 0.0
+	for i := 1; i <= period; i++ {
+		sumTR += trs[i]
+	}
+	atrs[period] = sumTR / float64(period)
+
+	// 🔥 计算后续ATR (使用Wilder's RMA)
+	// 公式：ATR = ((previous ATR) * (period - 1) + current TR) / period
+	for i := period + 1; i < length; i++ {
+		atrs[i] = (atrs[i-1]*float64(period-1) + trs[i]) / float64(period)
+	}
+
+	return atrs
+}
+
+// isInitialBullish 智能判断初始趋势方向
+// 🔥 功能：改进初始化逻辑，避免错误的初始方向判断
+func isInitialBullish(klines []Kline, startIdx int, upperBand, lowerBand float64) bool {
+	currentClose := klines[startIdx].Close
+	
+	// 基础判断：收盘价与带的关系
+	if currentClose > upperBand {
+		return true
+	}
+	if currentClose < lowerBand {
+		return false
+	}
+	
+	// 增强判断：分析最近几根K线的趋势
+	lookback := 5
+	if startIdx < lookback {
+		lookback = startIdx
+	}
+	
+	bullishSignals := 0
+	for i := startIdx - lookback; i <= startIdx; i++ {
+		if i > 0 {
+			// 检查收盘价趋势
+			if klines[i].Close > klines[i-1].Close {
+				bullishSignals++
+			}
+			// 检查实体强度
+			bodySize := math.Abs(klines[i].Close - klines[i].Open)
+			shadowSize := (klines[i].High - klines[i].Low) - bodySize
+			if bodySize > shadowSize && klines[i].Close > klines[i].Open {
+				bullishSignals++
+			}
+		}
+	}
+	
+	// 如果看涨信号数量超过总信号的50%，则判断为看涨
+	return bullishSignals > lookback
+}
+
+// calculateSmoothedBand 计算平滑的带线
+// 🔥 功能：更精确的带平滑处理，减少假信号
+func calculateSmoothedBand(basicBand, prevBand, prevClose float64, bandType string) float64 {
+	if bandType == "upper" {
+		// 上轨：只能下降，除非价格突破了前一根的上轨
+		if basicBand < prevBand || prevClose > prevBand {
+			return basicBand
+		} else {
+			return prevBand
+		}
+	} else { // lower
+		// 下轨：只能上升，除非价格跌破了前一根的下轨
+		if basicBand > prevBand || prevClose < prevBand {
+			return basicBand
+		} else {
+			return prevBand
+		}
+	}
+}
+
+// determineDirection 确定趋势方向
+// 🔥 功能：改进的方向确定逻辑，减少频繁翻转
+func determineDirection(prevDirection string, currentClose, upperBand, lowerBand float64) string {
+	switch prevDirection {
+	case "bullish":
+		// 只有明确跌破下轨才转为看跌
+		if currentClose < lowerBand {
+			return "bearish"
+		}
+		return "bullish"
+	case "bearish":
+		// 只有明确突破上轨才转为看涨
+		if currentClose > upperBand {
+			return "bullish"
+		}
+		return "bearish"
+	default:
+		// 初始状态：根据价格位置确定方向
+		if currentClose > upperBand {
+			return "bullish"
+		} else if currentClose < lowerBand {
+			return "bearish"
+		} else {
+			return "bullish" // 默认看涨
+		}
+	}
+}
+
+// calculateTrendStrength 计算趋势强度
+// 🔥 功能：量化趋势的强度，考虑价格距离、成交量、一致性等因素
+func calculateTrendStrength(klines []Kline, directions []string, supertrendLines []float64, duration, lastIdx int) float64 {
+	if duration <= 0 || lastIdx < duration {
+		return 0.0
+	}
+	
+	totalStrength := 0.0
+	factors := 0
+	
+	// 1. 价格距离强度 (权重: 30%)
+	currentPrice := klines[lastIdx].Close
+	supertrendPrice := supertrendLines[lastIdx]
+	priceDistance := math.Abs(currentPrice - supertrendPrice) / currentPrice
+	distanceStrength := math.Min(priceDistance * 500, 100) // 距离越大，强度越高，最大100
+	totalStrength += distanceStrength * 0.3
+	factors++
+	
+	// 2. 趋势一致性强度 (权重: 25%)
+	consistentBars := 0
+	startIdx := lastIdx - duration + 1
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	
+	currentDirection := directions[lastIdx]
+	for i := startIdx; i <= lastIdx; i++ {
+		if directions[i] == currentDirection {
+			consistentBars++
+		}
+	}
+	consistencyStrength := float64(consistentBars) / float64(duration) * 100
+	totalStrength += consistencyStrength * 0.25
+	
+	// 3. 成交量支撑强度 (权重: 20%)
+	if len(klines) > duration {
+		avgVolume := 0.0
+		for i := startIdx; i <= lastIdx; i++ {
+			avgVolume += klines[i].Volume
+		}
+		avgVolume /= float64(duration)
+		
+		recentVolume := klines[lastIdx].Volume
+		volumeRatio := recentVolume / avgVolume
+		volumeStrength := math.Min(volumeRatio * 50, 100) // 成交量比率转换为强度
+		totalStrength += volumeStrength * 0.2
+	}
+	
+	// 4. 持续时间强度 (权重: 15%)
+	durationStrength := math.Min(float64(duration) * 2, 100) // 持续时间越长，强度越高
+	totalStrength += durationStrength * 0.15
+	
+	// 5. 价格动量强度 (权重: 10%)
+	if duration >= 3 {
+		recentRange := 3
+		if duration < 3 {
+			recentRange = duration
+		}
+		
+		momentum := 0.0
+		for i := lastIdx - recentRange + 1; i <= lastIdx; i++ {
+			if i > 0 {
+				priceChange := (klines[i].Close - klines[i-1].Close) / klines[i-1].Close
+				if currentDirection == "bullish" && priceChange > 0 {
+					momentum += priceChange
+				} else if currentDirection == "bearish" && priceChange < 0 {
+					momentum += math.Abs(priceChange)
+				}
+			}
+		}
+		momentumStrength := math.Min(momentum * 1000, 100) // 动量转换为强度
+		totalStrength += momentumStrength * 0.1
+	}
+	
+	return math.Max(0, math.Min(100, totalStrength))
+}
+
+// calculateConfidence 计算置信度
+// 🔥 功能：评估SuperTrend信号的可靠性
+func calculateConfidence(klines []Kline, atrs []float64, duration int, flipPoints []int, lastIdx int) float64 {
+	if lastIdx <= 0 || len(atrs) <= lastIdx {
+		return 0.0
+	}
+	
+	confidence := 0.0
+	factors := 0
+	
+	// 1. 数据充分性 (权重: 25%)
+	dataRatio := float64(len(klines)) / float64(50) // 50根K线为基准
+	dataConfidence := math.Min(dataRatio, 1.0)
+	confidence += dataConfidence * 0.25
+	factors++
+	
+	// 2. 趋势稳定性 (权重: 20%)
+	flipFrequency := 0.0
+	if len(flipPoints) > 0 && len(klines) > 0 {
+		flipFrequency = float64(len(flipPoints)) / float64(len(klines))
+	}
+	stabilityConfidence := math.Max(0, 1.0 - flipFrequency*10) // 翻转频率越低，稳定性越高
+	confidence += stabilityConfidence * 0.2
+	
+	// 3. 持续时间置信度 (权重: 20%)
+	durationConfidence := math.Min(float64(duration) / 20.0, 1.0) // 20根K线为基准
+	confidence += durationConfidence * 0.2
+	
+	// 4. ATR相对强度 (权重: 15%)
+	currentATR := atrs[lastIdx]
+	avgATR := 0.0
+	atrPeriod := 14
+	if lastIdx >= atrPeriod {
+		for i := lastIdx - atrPeriod + 1; i <= lastIdx; i++ {
+			avgATR += atrs[i]
+		}
+		avgATR /= float64(atrPeriod)
+		
+		atrRatio := currentATR / avgATR
+		atrConfidence := math.Max(0, math.Min(1.0, atrRatio)) // ATR相对稳定时置信度较高
+		confidence += atrConfidence * 0.15
+	}
+	
+	// 5. 价格行为一致性 (权重: 20%)
+	behaviorConsistency := 0.0
+	if duration >= 5 {
+		consistentMoves := 0
+		totalMoves := 0
+		
+		startIdx := lastIdx - duration + 1
+		if startIdx < 1 {
+			startIdx = 1
+		}
+		
+		for i := startIdx; i <= lastIdx; i++ {
+			if i > 0 {
+				priceMove := klines[i].Close - klines[i-1].Close
+				totalMoves++
+				
+				// 检查价格移动是否与趋势一致
+				if (priceMove > 0 && klines[i].Close > klines[i].Open) || 
+				   (priceMove < 0 && klines[i].Close < klines[i].Open) {
+					consistentMoves++
+				}
+			}
+		}
+		
+		if totalMoves > 0 {
+			behaviorConsistency = float64(consistentMoves) / float64(totalMoves)
+		}
+	}
+	confidence += behaviorConsistency * 0.2
+	
+	return math.Max(0, math.Min(1.0, confidence))
+}
+
+// determineSignalQuality 确定信号质量
+// 🔥 功能：基于趋势强度、置信度等综合评估信号质量
+func determineSignalQuality(trendStrength, confidence float64, duration, totalBars int) string {
+	// 计算综合评分
+	score := (trendStrength * 0.4) + (confidence * 100 * 0.3) + (math.Min(float64(duration)/10, 10) * 10 * 0.2) + (math.Min(float64(totalBars)/100, 1) * 100 * 0.1)
+	
+	if score >= 70 && trendStrength >= 60 && confidence >= 0.7 {
+		return "high"
+	} else if score >= 50 && trendStrength >= 40 && confidence >= 0.5 {
+		return "medium"
+	} else {
+		return "low"
+	}
+}
+
+// calculateSupertrend 标准SuperTrend计算函数（向后兼容）
+func calculateSupertrend(klines []Kline, atrPeriod int, factor float64) SuperTrendResult {
+	// 使用增强版计算，timeframe设为默认，不传入自定义参数
+	return calculateSupertrendEnhanced(klines, "default")
 }
 
 // calculateATRAtIndex 计算指定位置的ATR
