@@ -2,6 +2,7 @@ package market
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"time"
 )
@@ -63,12 +64,38 @@ func (fa *FibonacciAnalyzer) Analyze(klines []Kline) *FibonacciData {
 	}
 }
 
-// identifySwingPoints 识别关键摆动点
+// identifySwingPoints 识别关键摆动点（混合方法：固定窗口+ZigZag动态）
+// 🔥 修复：采用混合策略，兼顾历史稳定性和近期动态识别
 func (fa *FibonacciAnalyzer) identifySwingPoints(klines []Kline) []PricePoint {
-	var swingPoints []PricePoint
-	lookback := fa.config.SwingLookback // 使用配置的回望周期
+	if len(klines) < 10 {
+		return nil
+	}
 
-	for i := lookback; i < len(klines)-lookback; i++ {
+	// 方法1：固定窗口方法识别历史确认的摆动点（稳定性优先）
+	historicalSwings := fa.identifyHistoricalSwingPoints(klines)
+	
+	// 方法2：ZigZag方法识别近期动态摆动点（准确性优先）
+	recentSwings := fa.identifyRecentZigZagSwings(klines)
+	
+	// 合并和去重
+	combinedSwings := fa.mergeAndDeduplicateSwings(historicalSwings, recentSwings)
+	
+	return combinedSwings
+}
+
+// identifyHistoricalSwingPoints 使用固定窗口识别历史摆动点
+// 用于确保历史斐波纳契分析的稳定性
+func (fa *FibonacciAnalyzer) identifyHistoricalSwingPoints(klines []Kline) []PricePoint {
+	var swingPoints []PricePoint
+	lookback := fa.config.SwingLookback
+
+	// 只分析历史数据，保留最后20%的数据给ZigZag方法
+	historicalEnd := int(float64(len(klines)) * 0.8)
+	if historicalEnd > len(klines)-lookback {
+		historicalEnd = len(klines) - lookback
+	}
+
+	for i := lookback; i < historicalEnd; i++ {
 		current := klines[i]
 		
 		// 检查是否为摆动高点
@@ -89,32 +116,11 @@ func (fa *FibonacciAnalyzer) identifySwingPoints(klines []Kline) []PricePoint {
 			}
 		}
 		
-		// 🆕 添加最小摆动幅度过滤
+		// ATR自适应过滤
 		if isSwingHigh || isSwingLow {
-			// 计算当前点相对于回望窗口内的价格变化幅度
-			var minPrice, maxPrice float64
-			minPrice = klines[i-lookback].Low
-			maxPrice = klines[i-lookback].High
-			
-			// 找到回望窗口内的最高和最低价
-			for j := i - lookback; j <= i + lookback; j++ {
-				if klines[j].High > maxPrice {
-					maxPrice = klines[j].High
-				}
-				if klines[j].Low < minPrice {
-					minPrice = klines[j].Low
-				}
+			if !fa.passesATRFilter(klines, i, lookback) {
+				continue
 			}
-			
-			// 移除最小摆动幅度硬阈值过滤
-			// 原有过滤: 计算价格波动幅度，如果小于阈值则跳过
-			// 让AI根据市场环境和币种特性判断摆动重要性
-			// 
-			// priceRange := maxPrice - minPrice
-			// swingAmplitude := priceRange / ((maxPrice + minPrice) / 2) // 相对幅度
-			// if swingAmplitude < fa.config.MinSwingSize {
-			//     continue // 跳过幅度太小的摆动点
-			// }
 		}
 		
 		// 添加摆动点
@@ -136,6 +142,289 @@ func (fa *FibonacciAnalyzer) identifySwingPoints(klines []Kline) []PricePoint {
 	return swingPoints
 }
 
+// identifyRecentZigZagSwings 使用ZigZag方法识别近期摆动点
+// 用于捕捉最新的市场结构变化
+func (fa *FibonacciAnalyzer) identifyRecentZigZagSwings(klines []Kline) []PricePoint {
+	if len(klines) < 20 {
+		return nil
+	}
+
+	// 只分析最近30%的数据
+	recentStart := int(float64(len(klines)) * 0.7)
+	recentKlines := klines[recentStart:]
+
+	// 计算动态阈值
+	dynamicThreshold := fa.calculateDynamicSwingThreshold(klines)
+	
+	// ZigZag算法
+	zigzagSwings := fa.performZigZagAnalysis(recentKlines, dynamicThreshold, recentStart)
+	
+	return zigzagSwings
+}
+
+// calculateDynamicSwingThreshold 计算动态摆动阈值
+func (fa *FibonacciAnalyzer) calculateDynamicSwingThreshold(klines []Kline) float64 {
+	if len(klines) < 20 {
+		return 0.01 // 默认1%
+	}
+	
+	// 计算ATR
+	atr := fa.calculateATR(klines, 14)
+	currentPrice := klines[len(klines)-1].Close
+	
+	// ATR百分比
+	atrPercent := atr / currentPrice
+	
+	// 动态阈值：1.5倍ATR，限制在0.3%-3%范围内
+	threshold := atrPercent * 1.5
+	threshold = math.Max(0.003, math.Min(0.03, threshold))
+	
+	// 根据市场状态调整
+	volatility := fa.calculateRecentVolatility(klines)
+	if volatility > 0.02 { // 高波动
+		threshold *= 1.3
+	} else if volatility < 0.005 { // 低波动
+		threshold *= 0.8
+	}
+	
+	return threshold
+}
+
+// performZigZagAnalysis 执行ZigZag分析
+func (fa *FibonacciAnalyzer) performZigZagAnalysis(klines []Kline, threshold float64, offsetIndex int) []PricePoint {
+	var swingPoints []PricePoint
+	
+	if len(klines) < 3 {
+		return swingPoints
+	}
+
+	type ZigZagState int
+	const (
+		SearchingHigh ZigZagState = iota
+		SearchingLow
+	)
+
+	// 初始化
+	state := SearchingHigh
+	if len(klines) > 1 && klines[1].Close < klines[0].Close {
+		state = SearchingLow
+	}
+
+	var candidateHigh, candidateLow PricePoint
+
+	for i, current := range klines {
+		switch state {
+		case SearchingHigh:
+			// 更新候选高点
+			if current.High > candidateHigh.Price || candidateHigh.Index == 0 {
+				candidateHigh = PricePoint{
+					Price:     current.High,
+					Timestamp: current.OpenTime,
+					Index:     i + offsetIndex,
+				}
+			}
+			
+			// 检查反向移动
+			if candidateHigh.Price > 0 {
+				reversalPercent := (candidateHigh.Price - current.Low) / candidateHigh.Price
+				if reversalPercent >= threshold {
+					// 确认高点
+					swingPoints = append(swingPoints, candidateHigh)
+					
+					// 切换状态
+					state = SearchingLow
+					candidateLow = PricePoint{
+						Price:     current.Low,
+						Timestamp: current.OpenTime,
+						Index:     i + offsetIndex,
+					}
+				}
+			}
+			
+		case SearchingLow:
+			// 更新候选低点
+			if current.Low < candidateLow.Price || candidateLow.Index == 0 {
+				candidateLow = PricePoint{
+					Price:     current.Low,
+					Timestamp: current.OpenTime,
+					Index:     i + offsetIndex,
+				}
+			}
+			
+			// 检查反向移动
+			if candidateLow.Price > 0 {
+				reversalPercent := (current.High - candidateLow.Price) / candidateLow.Price
+				if reversalPercent >= threshold {
+					// 确认低点
+					swingPoints = append(swingPoints, candidateLow)
+					
+					// 切换状态
+					state = SearchingHigh
+					candidateHigh = PricePoint{
+						Price:     current.High,
+						Timestamp: current.OpenTime,
+						Index:     i + offsetIndex,
+					}
+				}
+			}
+		}
+	}
+
+	return swingPoints
+}
+
+// calculateATR 计算平均真实波幅
+func (fa *FibonacciAnalyzer) calculateATR(klines []Kline, period int) float64 {
+	if len(klines) < period+1 {
+		return 0
+	}
+
+	var sum float64
+	for i := 1; i <= period && i < len(klines); i++ {
+		if len(klines)-i-1 >= 0 {
+			tr := fa.calculateTrueRange(klines[len(klines)-i], klines[len(klines)-i-1])
+			sum += tr
+		}
+	}
+
+	return sum / float64(period)
+}
+
+// calculateTrueRange 计算真实范围
+func (fa *FibonacciAnalyzer) calculateTrueRange(current, previous Kline) float64 {
+	tr1 := current.High - current.Low
+	tr2 := math.Abs(current.High - previous.Close)
+	tr3 := math.Abs(current.Low - previous.Close)
+	return math.Max(tr1, math.Max(tr2, tr3))
+}
+
+// calculateRecentVolatility 计算近期波动性
+func (fa *FibonacciAnalyzer) calculateRecentVolatility(klines []Kline) float64 {
+	if len(klines) < 20 {
+		return 0.01
+	}
+	
+	// 计算最近20根K线的价格波动性
+	recentKlines := klines[len(klines)-20:]
+	var returns []float64
+	
+	for i := 1; i < len(recentKlines); i++ {
+		ret := (recentKlines[i].Close - recentKlines[i-1].Close) / recentKlines[i-1].Close
+		returns = append(returns, ret)
+	}
+	
+	// 计算标准差
+	var sum float64
+	for _, ret := range returns {
+		sum += ret
+	}
+	mean := sum / float64(len(returns))
+	
+	var variance float64
+	for _, ret := range returns {
+		variance += math.Pow(ret-mean, 2)
+	}
+	
+	stdDev := math.Sqrt(variance / float64(len(returns)))
+	return stdDev
+}
+
+// passesATRFilter ATR自适应过滤器
+func (fa *FibonacciAnalyzer) passesATRFilter(klines []Kline, index, lookback int) bool {
+	if index < lookback || index >= len(klines)-lookback {
+		return false
+	}
+	
+	// 计算当前区间的ATR
+	localATR := fa.calculateATR(klines[index-10:index+10], 14)
+	if localATR == 0 {
+		return true // 无法计算ATR时默认通过
+	}
+	
+	// 计算摆动幅度
+	var minPrice, maxPrice float64
+	for i := index - lookback; i <= index + lookback; i++ {
+		if i == index-lookback {
+			minPrice = klines[i].Low
+			maxPrice = klines[i].High
+		} else {
+			if klines[i].Low < minPrice {
+				minPrice = klines[i].Low
+			}
+			if klines[i].High > maxPrice {
+				maxPrice = klines[i].High
+			}
+		}
+	}
+	
+	swingRange := maxPrice - minPrice
+	
+	// 摆动范围必须超过0.5倍ATR才被认为有意义
+	return swingRange > localATR*0.5
+}
+
+// mergeAndDeduplicateSwings 合并和去重摆动点
+func (fa *FibonacciAnalyzer) mergeAndDeduplicateSwings(historical, recent []PricePoint) []PricePoint {
+	// 合并所有摆动点
+	allSwings := append(historical, recent...)
+	
+	// 按时间排序
+	sort.Slice(allSwings, func(i, j int) bool {
+		return allSwings[i].Index < allSwings[j].Index
+	})
+	
+	// 去重和过滤太近的点
+	var deduplicated []PricePoint
+	minDistance := 5 // 最小间隔（5根K线）
+	
+	for i, swing := range allSwings {
+		// 检查是否与已有点太近
+		tooClose := false
+		for _, existing := range deduplicated {
+			if math.Abs(float64(swing.Index-existing.Index)) < float64(minDistance) {
+				// 如果太近，保留更極端的价格
+				if math.Abs(swing.Price-existing.Price) > math.Abs(swing.Price)*0.001 {
+					// 替换为更极端的点
+					for j := range deduplicated {
+						if deduplicated[j].Index == existing.Index {
+							// 选择更极端的价格
+							if (swing.Price > existing.Price && isLikelyHigh(swing, allSwings, i)) ||
+							   (swing.Price < existing.Price && isLikelyLow(swing, allSwings, i)) {
+								deduplicated[j] = swing
+							}
+							break
+						}
+					}
+				}
+				tooClose = true
+				break
+			}
+		}
+		
+		if !tooClose {
+			deduplicated = append(deduplicated, swing)
+		}
+	}
+	
+	return deduplicated
+}
+
+// isLikelyHigh 判断是否可能是高点
+func isLikelyHigh(point PricePoint, allSwings []PricePoint, index int) bool {
+	// 检查前后几个点的价格关系
+	higherThanPrevious := index == 0 || point.Price > allSwings[index-1].Price
+	higherThanNext := index == len(allSwings)-1 || point.Price > allSwings[index+1].Price
+	return higherThanPrevious || higherThanNext
+}
+
+// isLikelyLow 判断是否可能是低点
+func isLikelyLow(point PricePoint, allSwings []PricePoint, index int) bool {
+	// 检查前后几个点的价格关系
+	lowerThanPrevious := index == 0 || point.Price < allSwings[index-1].Price
+	lowerThanNext := index == len(allSwings)-1 || point.Price < allSwings[index+1].Price
+	return lowerThanPrevious || lowerThanNext
+}
+
 // calculateRetracements 计算斐波纳契回调
 func (fa *FibonacciAnalyzer) calculateRetracements(swingPoints []PricePoint, klines []Kline) []*FibRetracement {
 	var retracements []*FibRetracement
@@ -143,7 +432,6 @@ func (fa *FibonacciAnalyzer) calculateRetracements(swingPoints []PricePoint, kli
 	for i := 0; i < len(swingPoints)-1; i++ {
 		startPoint := swingPoints[i]
 		endPoint := swingPoints[i+1]
-		
 		// 移除最小趋势长度硬阈值过滤  
 		// 原有过滤: 计算价格变动幅度，如果小于阈值则跳过
 		// 让AI根据币种波动特性判断趋势重要性
@@ -185,7 +473,10 @@ func (fa *FibonacciAnalyzer) calculateRetracements(swingPoints []PricePoint, kli
 			CreatedAt:  time.Now().Unix(),
 		}
 		
-		retracements = append(retracements, retracement)
+		// 🔥 修复：添加生存偏差过滤，移除无效历史斐波线
+		if fa.isFibRetracementValid(retracement, klines) {
+			retracements = append(retracements, retracement)
+		}
 	}
 
 	return retracements
@@ -355,48 +646,62 @@ func (fa *FibonacciAnalyzer) calculateTouchCounts(levels []FibLevel, klines []Kl
 	return touchCount
 }
 
-// calculateExtensions 计算斐波纳契扩展
+// calculateExtensions 计算斐波纳契扩展（优化基准波选择逻辑）
+// 🔥 修复：智能基准波选择，提高扩展级别的可靠性和精确度
 func (fa *FibonacciAnalyzer) calculateExtensions(swingPoints []PricePoint, klines []Kline) []*FibExtension {
 	var extensions []*FibExtension
 
-	// 需要至少3个摆动点来计算扩展
-	for i := 0; i < len(swingPoints)-2; i++ {
-		wave1Start := swingPoints[i]
-		wave1End := swingPoints[i+1]
-		wave2End := swingPoints[i+2]
-		
-		baseWave := PriceWave{
-			StartPoint: wave1Start,
-			EndPoint:   wave1End,
-			Length:     abs(wave1End.Price - wave1Start.Price),
-			Duration:   wave1End.Timestamp - wave1Start.Timestamp,
-		}
-		
-		returnWave := PriceWave{
-			StartPoint: wave1End,
-			EndPoint:   wave2End,
-			Length:     abs(wave2End.Price - wave1End.Price),
-			Duration:   wave2End.Timestamp - wave1End.Timestamp,
-		}
-		
-		// 计算扩展级别
-		levels := fa.calculateExtensionLevels(baseWave, returnWave)
-		
-		// 评估质量
-		quality := fa.evaluateExtensionQuality(baseWave, returnWave)
-		
-		extension := &FibExtension{
-			ID:          fmt.Sprintf("fib_ext_%d_%d_%d", wave1Start.Index, wave1End.Index, wave2End.Index),
-			BaseWave:    baseWave,
-			ReturnWave:  returnWave,
-			Levels:      levels,
-			Quality:     quality,
-			Confidence:  fa.calculateExtensionConfidence(baseWave, returnWave),
-			IsProjected: wave2End.Index == len(klines)-1, // 如果是最后一个点，则为预测
-		}
-		
-		extensions = append(extensions, extension)
+	if len(swingPoints) < 3 {
+		return extensions
 	}
+
+	// 计算ATR用于波段幅度验证
+	atr := fa.calculateATR(klines, 14)
+	
+	// 🔥 修复：智能基准波候选选择
+	baseWaveCandidates := fa.identifyValidBaseWaves(swingPoints, klines, atr)
+	
+	// 为每个有效的基准波计算扩展
+	for _, candidate := range baseWaveCandidates {
+		// 🔥 修复：寻找匹配的回调波
+		returnWaves := fa.findMatchingReturnWaves(candidate, swingPoints, klines, atr)
+		
+		for _, returnWave := range returnWaves {
+			// 验证波段关系的有效性
+			if !fa.validateWaveRelationship(candidate.BaseWave, returnWave) {
+				continue
+			}
+			
+			// 计算扩展级别
+			levels := fa.calculateExtensionLevels(candidate.BaseWave, returnWave)
+			
+			// 评估质量（使用增强的质量评估）
+			quality := fa.evaluateExtensionQualityEnhanced(candidate, returnWave, klines)
+			
+			// 🔥 修复：过滤低质量扩展
+			if quality == FibQualityLow && fa.calculateExtensionConfidenceEnhanced(candidate, returnWave) < 0.4 {
+				continue
+			}
+			
+			extension := &FibExtension{
+				ID:          fmt.Sprintf("fib_ext_%d_%d_%d", 
+					candidate.BaseWave.StartPoint.Index, 
+					candidate.BaseWave.EndPoint.Index, 
+					returnWave.EndPoint.Index),
+				BaseWave:    candidate.BaseWave,
+				ReturnWave:  returnWave,
+				Levels:      levels,
+				Quality:     quality,
+				Confidence:  fa.calculateExtensionConfidenceEnhanced(candidate, returnWave),
+				IsProjected: returnWave.EndPoint.Index == len(klines)-1,
+			}
+			
+			extensions = append(extensions, extension)
+		}
+	}
+
+	// 🔥 修复：按质量和置信度排序，保留最佳扩展
+	extensions = fa.filterAndRankExtensions(extensions)
 
 	return extensions
 }
@@ -486,6 +791,411 @@ func (fa *FibonacciAnalyzer) calculateExtensionConfidence(baseWave, returnWave P
 	} else {
 		return 0.3
 	}
+}
+
+// BaseWaveCandidate 基准波候选结构
+type BaseWaveCandidate struct {
+	BaseWave     PriceWave
+	Quality      float64   // 波段质量评分
+	Strength     float64   // 波段强度
+	ValidityScore float64  // 作为基准波的有效性评分
+}
+
+// identifyValidBaseWaves 识别有效的基准波候选
+// 🔥 修复：智能筛选合适的基准波，避免使用无意义的小幅波动
+func (fa *FibonacciAnalyzer) identifyValidBaseWaves(swingPoints []PricePoint, klines []Kline, atr float64) []*BaseWaveCandidate {
+	var candidates []*BaseWaveCandidate
+	
+	// 至少需要3个摆动点才能形成基准波
+	if len(swingPoints) < 3 {
+		return candidates
+	}
+	
+	// 遍历可能的基准波
+	for i := 0; i < len(swingPoints)-1; i++ {
+		baseWave := PriceWave{
+			StartPoint: swingPoints[i],
+			EndPoint:   swingPoints[i+1],
+			Length:     abs(swingPoints[i+1].Price - swingPoints[i].Price),
+			Duration:   swingPoints[i+1].Timestamp - swingPoints[i].Timestamp,
+		}
+		
+		// 🔥 修复1：ATR幅度验证 - 基准波必须有足够的幅度
+		lengthATR := baseWave.Length / atr
+		if lengthATR < 0.8 { // 基准波至少0.8倍ATR
+			continue
+		}
+		
+		// 🔥 修复2：时间验证 - 避免过于快速或缓慢的波段
+		if !fa.validateWaveTiming(baseWave, klines) {
+			continue
+		}
+		
+		// 🔥 修复3：成交量验证 - 基准波应该有足够的成交量支撑
+		volumeQuality := fa.assessWaveVolumeQuality(baseWave, klines)
+		if volumeQuality < 0.3 {
+			continue
+		}
+		
+		// 🔥 修复4：结构质量评估 - 基准波应该是清晰的趋势波
+		structureQuality := fa.assessWaveStructureQuality(baseWave, swingPoints, i)
+		if structureQuality < 0.4 {
+			continue
+		}
+		
+		// 计算综合质量评分
+		overallQuality := (lengthATR/3.0 + volumeQuality + structureQuality) / 3.0
+		strength := fa.calculateWaveStrength(baseWave, klines, atr)
+		validityScore := overallQuality * strength
+		
+		candidate := &BaseWaveCandidate{
+			BaseWave:      baseWave,
+			Quality:       overallQuality,
+			Strength:      strength,
+			ValidityScore: validityScore,
+		}
+		
+		candidates = append(candidates, candidate)
+	}
+	
+	// 🔥 修复5：按有效性评分排序，只保留最优候选
+	if len(candidates) > 0 {
+		// 简单排序：按ValidityScore降序
+		for i := 0; i < len(candidates)-1; i++ {
+			for j := i + 1; j < len(candidates); j++ {
+				if candidates[j].ValidityScore > candidates[i].ValidityScore {
+					candidates[i], candidates[j] = candidates[j], candidates[i]
+				}
+			}
+		}
+		
+		// 限制候选数量，避免过多无意义计算
+		maxCandidates := 5
+		if len(candidates) > maxCandidates {
+			candidates = candidates[:maxCandidates]
+		}
+	}
+	
+	return candidates
+}
+
+// findMatchingReturnWaves 寻找与基准波匹配的回调波
+// 🔥 修复：智能匹配回调波，确保符合斐波纳契扩展的经典模式
+func (fa *FibonacciAnalyzer) findMatchingReturnWaves(baseCandidate *BaseWaveCandidate, swingPoints []PricePoint, klines []Kline, atr float64) []PriceWave {
+	var returnWaves []PriceWave
+	
+	// 找到基准波结束点的索引
+	baseEndIndex := -1
+	for i, point := range swingPoints {
+		if point.Index == baseCandidate.BaseWave.EndPoint.Index {
+			baseEndIndex = i
+			break
+		}
+	}
+	
+	if baseEndIndex == -1 || baseEndIndex >= len(swingPoints)-1 {
+		return returnWaves
+	}
+	
+	// 🔥 修复：寻找符合条件的回调波
+	for i := baseEndIndex + 1; i < len(swingPoints); i++ {
+		returnWave := PriceWave{
+			StartPoint: baseCandidate.BaseWave.EndPoint,
+			EndPoint:   swingPoints[i],
+			Length:     abs(swingPoints[i].Price - baseCandidate.BaseWave.EndPoint.Price),
+			Duration:   swingPoints[i].Timestamp - baseCandidate.BaseWave.EndPoint.Timestamp,
+		}
+		
+		// 🔥 修复1：方向验证 - 回调波必须与基准波方向相反
+		baseDirection := baseCandidate.BaseWave.EndPoint.Price > baseCandidate.BaseWave.StartPoint.Price
+		returnDirection := returnWave.EndPoint.Price > returnWave.StartPoint.Price
+		if baseDirection == returnDirection {
+			continue // 方向相同，不是有效的回调
+		}
+		
+		// 🔥 修复2：回调幅度验证 - 回调不能超过基准波的100%
+		retracementRatio := returnWave.Length / baseCandidate.BaseWave.Length
+		if retracementRatio > 1.0 || retracementRatio < 0.1 {
+			continue // 回调过大或过小
+		}
+		
+		// 🔥 修复3：ATR验证 - 回调波也需要足够的幅度
+		returnLengthATR := returnWave.Length / atr
+		if returnLengthATR < 0.5 { // 回调波至少0.5倍ATR
+			continue
+		}
+		
+		// 🔥 修复4：时间关系验证
+		if !fa.validateReturnWaveTiming(baseCandidate.BaseWave, returnWave) {
+			continue
+		}
+		
+		returnWaves = append(returnWaves, returnWave)
+		
+		// 限制回调波数量，避免过多计算
+		if len(returnWaves) >= 3 {
+			break
+		}
+	}
+	
+	return returnWaves
+}
+
+// validateWaveRelationship 验证波段关系的有效性
+func (fa *FibonacciAnalyzer) validateWaveRelationship(baseWave, returnWave PriceWave) bool {
+	// 1. 时间顺序验证
+	if returnWave.StartPoint.Timestamp <= baseWave.EndPoint.Timestamp {
+		return false
+	}
+	
+	// 2. 连续性验证 - 回调波必须从基准波结束点开始
+	if returnWave.StartPoint.Index != baseWave.EndPoint.Index {
+		return false
+	}
+	
+	// 3. 比例合理性验证
+	ratio := returnWave.Length / baseWave.Length
+	return ratio >= 0.1 && ratio <= 0.9 // 回调在10%-90%之间比较合理
+}
+
+// validateWaveTiming 验证波段时间有效性
+func (fa *FibonacciAnalyzer) validateWaveTiming(wave PriceWave, klines []Kline) bool {
+	if len(klines) == 0 {
+		return true
+	}
+	
+	// 计算平均K线间隔
+	if len(klines) < 2 {
+		return true
+	}
+	avgInterval := (klines[len(klines)-1].OpenTime - klines[0].OpenTime) / int64(len(klines)-1)
+	
+	// 波段持续时间应该在合理范围内
+	minDuration := avgInterval * 2    // 至少2根K线
+	maxDuration := avgInterval * 50   // 最多50根K线
+	
+	return wave.Duration >= minDuration && wave.Duration <= maxDuration
+}
+
+// validateReturnWaveTiming 验证回调波时间关系
+func (fa *FibonacciAnalyzer) validateReturnWaveTiming(baseWave, returnWave PriceWave) bool {
+	// 回调波的持续时间不应该过长
+	maxReturnDuration := baseWave.Duration * 3 // 最多3倍基准波时间
+	return returnWave.Duration <= maxReturnDuration
+}
+
+// assessWaveVolumeQuality 评估波段成交量质量
+func (fa *FibonacciAnalyzer) assessWaveVolumeQuality(wave PriceWave, klines []Kline) float64 {
+	if len(klines) == 0 {
+		return 0.5 // 默认中等质量
+	}
+	
+	// 找到波段对应的K线区间
+	startIdx := wave.StartPoint.Index
+	endIdx := wave.EndPoint.Index
+	
+	if startIdx < 0 || endIdx >= len(klines) || startIdx >= endIdx {
+		return 0.5
+	}
+	
+	// 计算波段期间的平均成交量
+	var waveVolume float64
+	for i := startIdx; i <= endIdx; i++ {
+		waveVolume += klines[i].Volume
+	}
+	avgWaveVolume := waveVolume / float64(endIdx-startIdx+1)
+	
+	// 计算历史平均成交量
+	lookback := 20
+	var historicalVolume float64
+	validCount := 0
+	
+	start := endIdx - lookback
+	if start < 0 {
+		start = 0
+	}
+	
+	for i := start; i < endIdx; i++ {
+		historicalVolume += klines[i].Volume
+		validCount++
+	}
+	
+	if validCount == 0 {
+		return 0.5
+	}
+	
+	avgHistoricalVolume := historicalVolume / float64(validCount)
+	
+	if avgHistoricalVolume == 0 {
+		return 0.5
+	}
+	
+	// 成交量比率评分
+	volumeRatio := avgWaveVolume / avgHistoricalVolume
+	
+	if volumeRatio > 1.5 {
+		return 1.0 // 优秀
+	} else if volumeRatio > 1.2 {
+		return 0.8 // 良好
+	} else if volumeRatio > 0.8 {
+		return 0.6 // 一般
+	} else {
+		return 0.3 // 较差
+	}
+}
+
+// assessWaveStructureQuality 评估波段结构质量
+func (fa *FibonacciAnalyzer) assessWaveStructureQuality(wave PriceWave, swingPoints []PricePoint, waveIndex int) float64 {
+	score := 0.5 // 基础评分
+	
+	// 1. 检查波段是否是单向的（没有被中间摆动点破坏）
+	direction := wave.EndPoint.Price > wave.StartPoint.Price
+	
+	for _, point := range swingPoints {
+		if point.Index > wave.StartPoint.Index && point.Index < wave.EndPoint.Index {
+			// 有中间摆动点，检查是否破坏了趋势
+			if direction {
+				// 上升波段，中间不应该有更高的高点
+				if point.Price > wave.EndPoint.Price {
+					score -= 0.2
+				}
+			} else {
+				// 下降波段，中间不应该有更低的低点
+				if point.Price < wave.EndPoint.Price {
+					score -= 0.2
+				}
+			}
+		}
+	}
+	
+	// 2. 波段的相对位置评分（是否处于明显的趋势中）
+	if waveIndex > 0 && waveIndex < len(swingPoints)-2 {
+		prevPoint := swingPoints[waveIndex-1]
+		nextPoint := swingPoints[waveIndex+2]
+		
+		// 检查是否符合趋势延续
+		if direction {
+			if wave.StartPoint.Price > prevPoint.Price && wave.EndPoint.Price < nextPoint.Price {
+				score += 0.3 // 符合上升趋势
+			}
+		} else {
+			if wave.StartPoint.Price < prevPoint.Price && wave.EndPoint.Price > nextPoint.Price {
+				score += 0.3 // 符合下降趋势
+			}
+		}
+	}
+	
+	return math.Max(0.1, math.Min(1.0, score))
+}
+
+// calculateWaveStrength 计算波段强度
+func (fa *FibonacciAnalyzer) calculateWaveStrength(wave PriceWave, klines []Kline, atr float64) float64 {
+	if atr == 0 {
+		return 0.5
+	}
+	
+	// 基于ATR的相对强度
+	lengthATR := wave.Length / atr
+	
+	// 标准化到0-1范围
+	if lengthATR > 3.0 {
+		return 1.0 // 非常强
+	} else if lengthATR > 2.0 {
+		return 0.8 // 强
+	} else if lengthATR > 1.0 {
+		return 0.6 // 中等
+	} else if lengthATR > 0.5 {
+		return 0.4 // 较弱
+	} else {
+		return 0.2 // 弱
+	}
+}
+
+// evaluateExtensionQualityEnhanced 增强的扩展质量评估
+func (fa *FibonacciAnalyzer) evaluateExtensionQualityEnhanced(baseCandidate *BaseWaveCandidate, returnWave PriceWave, klines []Kline) FibQuality {
+	score := 0.0
+	
+	// 1. 基准波质量权重 (40%)
+	score += baseCandidate.Quality * 40
+	
+	// 2. 波段比例评分 (30%)
+	lengthRatio := returnWave.Length / baseCandidate.BaseWave.Length
+	if lengthRatio > 0.3 && lengthRatio < 0.7 {
+		score += 30 // 理想的回调幅度
+	} else if lengthRatio > 0.2 && lengthRatio < 0.8 {
+		score += 20
+	} else {
+		score += 10
+	}
+	
+	// 3. 时间比例评分 (20%)
+	timeRatio := float64(returnWave.Duration) / float64(baseCandidate.BaseWave.Duration)
+	if timeRatio > 0.3 && timeRatio < 1.5 {
+		score += 20
+	} else {
+		score += 10
+	}
+	
+	// 4. 成交量确认评分 (10%)
+	volumeQuality := fa.assessWaveVolumeQuality(returnWave, klines)
+	score += volumeQuality * 10
+	
+	if score >= 70 {
+		return FibQualityHigh
+	} else if score >= 50 {
+		return FibQualityMedium
+	} else {
+		return FibQualityLow
+	}
+}
+
+// calculateExtensionConfidenceEnhanced 增强的扩展置信度计算
+func (fa *FibonacciAnalyzer) calculateExtensionConfidenceEnhanced(baseCandidate *BaseWaveCandidate, returnWave PriceWave) float64 {
+	confidence := 0.0
+	
+	// 1. 基准波有效性评分权重
+	confidence += baseCandidate.ValidityScore * 0.4
+	
+	// 2. 经典斐波比例评分
+	lengthRatio := returnWave.Length / baseCandidate.BaseWave.Length
+	if lengthRatio >= 0.382 && lengthRatio <= 0.618 {
+		confidence += 0.4 // 黄金比例回调
+	} else if lengthRatio >= 0.3 && lengthRatio <= 0.7 {
+		confidence += 0.3
+	} else if lengthRatio >= 0.236 && lengthRatio <= 0.786 {
+		confidence += 0.2
+	} else {
+		confidence += 0.1
+	}
+	
+	// 3. 波段强度评分
+	confidence += baseCandidate.Strength * 0.2
+	
+	return math.Min(1.0, confidence)
+}
+
+// filterAndRankExtensions 过滤和排序扩展
+func (fa *FibonacciAnalyzer) filterAndRankExtensions(extensions []*FibExtension) []*FibExtension {
+	if len(extensions) == 0 {
+		return extensions
+	}
+	
+	// 按置信度排序（降序）
+	for i := 0; i < len(extensions)-1; i++ {
+		for j := i + 1; j < len(extensions); j++ {
+			if extensions[j].Confidence > extensions[i].Confidence {
+				extensions[i], extensions[j] = extensions[j], extensions[i]
+			}
+		}
+	}
+	
+	// 限制扩展数量，保留最优的
+	maxExtensions := 8
+	if len(extensions) > maxExtensions {
+		extensions = extensions[:maxExtensions]
+	}
+	
+	return extensions
 }
 
 // analyzeGoldenPocket 分析黄金口袋(0.618-0.65范围)
@@ -1124,4 +1834,242 @@ func convertFibQualityToSignalQuality(fibQuality FibQuality) SignalQuality {
 	default:
 		return SignalQualityMedium
 	}
+}
+
+// isFibRetracementValid 检查斐波纳契回调是否有效（修复生存偏差）
+// 通过历史验证过滤掉无效的斐波线，避免"幸存者偏差"
+func (fa *FibonacciAnalyzer) isFibRetracementValid(retracement *FibRetracement, klines []Kline) bool {
+	// 1. 基础有效性检查
+	if retracement == nil || len(retracement.Levels) == 0 {
+		return false
+	}
+
+	// 2. 趋势幅度检查 - 过滤微小趋势
+	priceMove := math.Abs(retracement.EndPoint.Price - retracement.StartPoint.Price)
+	priceMovePercent := priceMove / retracement.StartPoint.Price
+	
+	// 使用ATR自适应阈值替代固定阈值
+	atr := fa.calculateATR(klines, 14)
+	minTrendThreshold := fa.calculateMinTrendThreshold(klines, atr)
+	
+	if priceMovePercent < minTrendThreshold {
+		return false // 趋势过小，不足以产生有意义的斐波回调
+	}
+
+	// 3. 历史验证检查 - 检查斐波线是否被历史价格验证
+	historicalValidation := fa.validateFibWithHistory(retracement, klines)
+	if !historicalValidation {
+		return false // 未通过历史验证
+	}
+
+	// 4. 质量阈值检查 - 过滤低质量回调
+	if retracement.Quality == FibQualityLow && retracement.Strength < 30 {
+		return false // 质量和强度都太低
+	}
+
+	// 5. 时间有效性检查 - 过滤过期的斐波线
+	if retracement.Age > fa.config.MaxRetracementAge {
+		return false // 太老的斐波线失去意义
+	}
+
+	// 6. 成交量确认检查（可选）
+	if fa.config.VolumeWeight > 0.0 {
+		volumeConfirmation := fa.checkVolumeConfirmation(retracement, klines)
+		if !volumeConfirmation {
+			return false // 缺乏成交量支撑
+		}
+	}
+
+	return true
+}
+
+// calculateMinTrendThreshold 计算基于ATR的最小趋势阈值
+func (fa *FibonacciAnalyzer) calculateMinTrendThreshold(klines []Kline, atr float64) float64 {
+	if len(klines) == 0 || atr == 0 {
+		return fa.config.MinTrendLength // 使用配置的默认值
+	}
+
+	// 基于ATR的自适应阈值：趋势至少应该是2倍ATR
+	currentPrice := klines[len(klines)-1].Close
+	atrPercent := atr / currentPrice
+	adaptiveThreshold := atrPercent * 2.0
+
+	// 限制在合理范围内
+	minThreshold := 0.005 // 最小0.5%
+	maxThreshold := 0.08  // 最大8%
+
+	return math.Max(minThreshold, math.Min(maxThreshold, adaptiveThreshold))
+}
+
+// validateFibWithHistory 通过历史价格验证斐波线
+func (fa *FibonacciAnalyzer) validateFibWithHistory(retracement *FibRetracement, klines []Kline) bool {
+	// 检查斐波线形成后的价格行为
+	startIdx := retracement.EndPoint.Index
+	if startIdx >= len(klines)-5 {
+		return true // 太新的斐波线暂时认为有效
+	}
+
+	historicalKlines := klines[startIdx:]
+	if len(historicalKlines) < 5 {
+		return true // 历史数据不足
+	}
+
+	validLevels := 0
+	totalLevels := 0
+
+	// 检查每个重要斐波级别的历史表现
+	for _, level := range retracement.Levels {
+		if level.Importance < 0.7 {
+			continue // 跳过不重要的级别
+		}
+
+		totalLevels++
+		
+		// 检查该级别是否被历史价格触及或接近
+		wasRespected := fa.checkLevelRespected(level, historicalKlines)
+		if wasRespected {
+			validLevels++
+		}
+	}
+
+	// 如果没有重要级别，或者超过50%的重要级别被历史验证，则认为有效
+	if totalLevels == 0 {
+		return true
+	}
+
+	validationRate := float64(validLevels) / float64(totalLevels)
+	return validationRate >= 0.4 // 至少40%的重要级别需要被历史验证
+}
+
+// checkLevelRespected 检查斐波级别是否被历史价格尊重
+func (fa *FibonacciAnalyzer) checkLevelRespected(level FibLevel, klines []Kline) bool {
+	tolerance := fa.config.TouchSensitivity
+	touchCount := 0
+	significantReactions := 0
+
+	for i, kline := range klines {
+		// 检查价格是否触及该级别
+		if fa.isPriceTouchingLevel(kline, level.Price, tolerance) {
+			touchCount++
+
+			// 检查触及后是否有显著反应
+			if i < len(klines)-3 {
+				reaction := fa.calculateReactionAfterTouch(klines, i, level.Price)
+				if reaction > 0.01 { // 1%以上的反应认为是显著的
+					significantReactions++
+				}
+			}
+		}
+	}
+
+	// 级别有效的条件：
+	// 1. 被触及过至少一次，或者
+	// 2. 有显著反应，或者  
+	// 3. 从未被明显突破（保持尊重）
+	if touchCount == 0 {
+		return !fa.wasLevelBroken(level.Price, klines) // 未触及但也未被破坏
+	}
+
+	// 被触及过，检查反应率
+	if touchCount > 0 && significantReactions > 0 {
+		reactionRate := float64(significantReactions) / float64(touchCount)
+		return reactionRate >= 0.3 // 至少30%的触及产生了显著反应
+	}
+
+	return false
+}
+
+// isPriceTouchingLevel 检查价格是否触及级别
+func (fa *FibonacciAnalyzer) isPriceTouchingLevel(kline Kline, levelPrice float64, tolerance float64) bool {
+	return math.Abs(kline.Low-levelPrice)/levelPrice <= tolerance ||
+		   math.Abs(kline.High-levelPrice)/levelPrice <= tolerance ||
+		   (kline.Low <= levelPrice && kline.High >= levelPrice)
+}
+
+// calculateReactionAfterTouch 计算触及后的反应幅度
+func (fa *FibonacciAnalyzer) calculateReactionAfterTouch(klines []Kline, touchIndex int, levelPrice float64) float64 {
+	if touchIndex >= len(klines)-3 {
+		return 0
+	}
+
+	// 计算接下来3根K线的最大移动幅度
+	maxMove := 0.0
+	touchPrice := (klines[touchIndex].High + klines[touchIndex].Low) / 2
+
+	for i := 1; i <= 3 && touchIndex+i < len(klines); i++ {
+		nextKline := klines[touchIndex+i]
+		moveHigh := math.Abs(nextKline.High-touchPrice) / touchPrice
+		moveLow := math.Abs(nextKline.Low-touchPrice) / touchPrice
+		
+		if moveHigh > maxMove {
+			maxMove = moveHigh
+		}
+		if moveLow > maxMove {
+			maxMove = moveLow
+		}
+	}
+
+	return maxMove
+}
+
+// wasLevelBroken 检查级别是否被明显突破
+func (fa *FibonacciAnalyzer) wasLevelBroken(levelPrice float64, klines []Kline) bool {
+	breakThreshold := 0.02 // 2%的突破阈值
+
+	for _, kline := range klines {
+		// 检查是否有明显的突破（收盘价突破超过阈值）
+		if math.Abs(kline.Close-levelPrice)/levelPrice > breakThreshold {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkVolumeConfirmation 检查成交量确认
+func (fa *FibonacciAnalyzer) checkVolumeConfirmation(retracement *FibRetracement, klines []Kline) bool {
+	// 计算趋势形成期间的平均成交量
+	startIdx := retracement.StartPoint.Index
+	endIdx := retracement.EndPoint.Index
+
+	if startIdx >= endIdx || endIdx >= len(klines) {
+		return true // 无法计算，默认通过
+	}
+
+	trendVolume := 0.0
+	trendLength := endIdx - startIdx
+
+	for i := startIdx; i <= endIdx && i < len(klines); i++ {
+		trendVolume += klines[i].Volume
+	}
+
+	if trendLength == 0 {
+		return true
+	}
+
+	avgTrendVolume := trendVolume / float64(trendLength)
+
+	// 计算同期的历史平均成交量
+	lookback := 50
+	historicalStart := startIdx - lookback
+	if historicalStart < 0 {
+		historicalStart = 0
+	}
+
+	historicalVolume := 0.0
+	historicalLength := startIdx - historicalStart
+
+	for i := historicalStart; i < startIdx && i < len(klines); i++ {
+		historicalVolume += klines[i].Volume
+	}
+
+	if historicalLength == 0 {
+		return true
+	}
+
+	avgHistoricalVolume := historicalVolume / float64(historicalLength)
+
+	// 要求趋势期间成交量至少是历史平均的80%
+	volumeRatio := avgTrendVolume / avgHistoricalVolume
+	return volumeRatio >= 0.8
 }
