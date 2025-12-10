@@ -3,6 +3,7 @@ package microstructure
 import (
 	"log"
 	"math"
+	"sort"
 	"sync"
 	"time"
 )
@@ -536,9 +537,12 @@ func (calc *CVDCalculator) update5MinuteDelta(currentTime time.Time) {
 	// 推断K线意图（基于价格和CVD的组合）
 	candleIntent := calc.inferCandleIntent(priceDeltaPct, spotDelta, futuresDelta)
 	
-	// 计算成交量变化（修复硬编码问题）
-	volumeDelta := math.Abs(spotDelta) + math.Abs(futuresDelta)
-	volumeRatio := calc.calculateVolumeRatio(volumeDelta) // 🔧 修复：实现真实的成交量比率计算
+	// 计算真实的5分钟滑动窗口成交量 - 修复CVD Delta vs 真实成交量混淆问题
+	realVolumeUSD := calc.calculateRollingVolumeUSD(5*time.Minute, currentTime)
+	volumeRatio := calc.calculateVolumeRatio(realVolumeUSD) // 🔧 修复：使用真实成交量而非CVD变化量
+	
+	// 保留CVD Delta作为VolumeDelta字段（用于其他分析）
+	cvdDelta := math.Abs(spotDelta) + math.Abs(futuresDelta)
 	
 	// 创建5分钟增量数据
 	delta5m := &CVDDelta5m{
@@ -547,7 +551,7 @@ func (calc *CVDCalculator) update5MinuteDelta(currentTime time.Time) {
 		FuturesCVDDeltaUSD:  futuresDelta,
 		OIDeltaPct:          0, // 需要OI数据
 		CandleIntent:        candleIntent,
-		VolumeDelta:         volumeDelta,
+		VolumeDelta:         cvdDelta,  // CVD变化量（用于其他分析）
 		VolumeRatio:         volumeRatio,
 		PeriodStartTime:     calc.last5mSnapshot,
 		PeriodEndTime:       currentTime,
@@ -927,9 +931,10 @@ func (calc *CVDCalculator) update5MinuteDeltaWithExactTiming(klineCloseTime time
 	// 推断K线意图（基于精确时间窗口）
 	candleIntent := calc.inferCandleIntent(priceDeltaPct, spotDelta, futuresDelta)
 	
-	// 计算成交量变化（基于精确时间窗口）
-	volumeDelta := math.Abs(spotDelta) + math.Abs(futuresDelta)
-	volumeRatio := calc.calculateVolumeRatioForPeriod(periodStartTime, periodEndTime)
+	// 计算真实的5分钟成交量和比率（修复CVD Delta vs 真实成交量混淆问题）
+	realVolumeUSD := calc.calculateRollingVolumeUSD(periodEndTime.Sub(periodStartTime), periodEndTime)
+	cvdDelta := math.Abs(spotDelta) + math.Abs(futuresDelta)  // CVD变化量
+	volumeRatio := calc.calculateVolumeRatio(realVolumeUSD)   // 使用真实成交量计算比率
 	
 	// 创建精确时序的5分钟增量数据
 	delta5m := &CVDDelta5m{
@@ -938,7 +943,7 @@ func (calc *CVDCalculator) update5MinuteDeltaWithExactTiming(klineCloseTime time
 		FuturesCVDDeltaUSD:  futuresDelta,
 		OIDeltaPct:          0, // 需要OI数据
 		CandleIntent:        candleIntent,
-		VolumeDelta:         volumeDelta,
+		VolumeDelta:         cvdDelta,  // CVD变化量（用于其他分析）
 		VolumeRatio:         volumeRatio,
 		PeriodStartTime:     periodStartTime,
 		PeriodEndTime:       periodEndTime,
@@ -1032,11 +1037,11 @@ func (calc *CVDCalculator) calculateVolumeRatioForPeriod(startTime, endTime time
 	avgHistoricalVolume := totalHistoricalVolume / float64(historicalPeriods)
 	ratio := safeDivision(currentPeriodVolume, avgHistoricalVolume)
 	
-	// 限制比率在合理范围内
-	if ratio > 50.0 {
-		ratio = 50.0
-	} else if ratio < 0.01 {
-		ratio = 0.01
+	// 限制比率在合理范围内 - 允许显示到千分之一，区分"低迷(0.1)"和"死亡(0.001)"
+	if ratio > 100.0 {
+		ratio = 100.0  // 提高上限，防止爆发时被削顶
+	} else if ratio < 0.001 {
+		ratio = 0.001  // 降低下限，让AI看到真实的死寂
 	}
 	
 	return safeFloat64(ratio, 1.0)
@@ -1203,37 +1208,79 @@ func (calc *CVDCalculator) calculateVolumeRatio(currentVolumeUSD float64) float6
 		return 1.0 // 数据不足时返回默认值
 	}
 	
-	// 计算最近1小时的平均成交量
+	// 计算最近1小时的中位数成交量 - 修复基准线被巨量污染问题
 	oneHourAgo := time.Now().Add(-1 * time.Hour)
-	var totalVolume float64
-	var count int
+	var recentVolumes []float64
 	
 	for _, snapshot := range calc.volumeHistory {
 		if snapshot.Timestamp.After(oneHourAgo) {
 			// 🔧 修复: 验证历史数据有效性
 			volumeUSD := safeFloat64(snapshot.VolumeUSD, 0)
 			if volumeUSD > 0 {
-				totalVolume += volumeUSD
-				count++
+				recentVolumes = append(recentVolumes, volumeUSD)
 			}
 		}
 	}
 	
-	if count == 0 || totalVolume <= 0 {
+	if len(recentVolumes) == 0 {
 		return 1.0 // 避免除零
 	}
 	
-	// 🔧 修复: 使用安全除法计算比率
-	ratio := safeDivision(currentVolumeUSD, totalVolume/float64(count))
+	// 使用中位数而非平均数，抵御极端值污染
+	median := calc.calculateMedianVolume(recentVolumes)
 	
-	// 限制比率在合理范围内，避免极端值
-	if ratio > 50.0 {
-		ratio = 50.0
-	} else if ratio < 0.01 {
-		ratio = 0.01
+	// 🔧 修复: 使用中位数计算比率，而非平均数
+	ratio := safeDivision(currentVolumeUSD, median)
+	
+	// 限制比率在合理范围内，避免极端值 - 允许显示到千分之一，区分"低迷(0.1)"和"死亡(0.001)"
+	if ratio > 100.0 {
+		ratio = 100.0  // 提高上限，防止爆发时被削顶
+	} else if ratio < 0.001 {
+		ratio = 0.001  // 降低下限，让AI看到真实的死寂
 	}
 	
 	return safeFloat64(ratio, 1.0) // 🔧 修复: 确保返回值有效
+}
+
+// calculateRollingVolumeUSD 计算指定时间窗口内的实时滑动成交量
+// 这是修复CVD Delta vs 真实成交量混淆问题的核心方法
+func (calc *CVDCalculator) calculateRollingVolumeUSD(duration time.Duration, endTime time.Time) float64 {
+	startTime := endTime.Add(-duration)
+	var totalVolume float64
+	
+	// 遍历成交量历史，累计指定时间窗口内的成交量
+	for _, snapshot := range calc.volumeHistory {
+		if (snapshot.Timestamp.Equal(startTime) || snapshot.Timestamp.After(startTime)) && 
+		   (snapshot.Timestamp.Before(endTime) || snapshot.Timestamp.Equal(endTime)) {
+			volumeUSD := safeFloat64(snapshot.VolumeUSD, 0)
+			if volumeUSD > 0 {
+				totalVolume += volumeUSD
+			}
+		}
+	}
+	
+	return safeFloat64(totalVolume, 0)
+}
+
+// calculateMedianVolume 计算成交量中位数，抵御极端值污染
+func (calc *CVDCalculator) calculateMedianVolume(volumes []float64) float64 {
+	if len(volumes) == 0 {
+		return 0
+	}
+	
+	// 复制切片并排序
+	sortedVolumes := make([]float64, len(volumes))
+	copy(sortedVolumes, volumes)
+	sort.Float64s(sortedVolumes)
+	
+	n := len(sortedVolumes)
+	if n%2 == 0 {
+		// 偶数个元素，取中间两个数的平均值
+		return (sortedVolumes[n/2-1] + sortedVolumes[n/2]) / 2
+	} else {
+		// 奇数个元素，取中间值
+		return sortedVolumes[n/2]
+	}
 }
 
 // ===== 🔧 修复: K线意图置信度校准工具函数 =====
