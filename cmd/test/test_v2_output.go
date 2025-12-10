@@ -218,7 +218,7 @@ func testOrderBookMonitoring() {
 	log.Println("\n👀 测试订单簿监控...")
 	
 	// 创建模拟订单簿计算器
-	calculator := microstructure.NewOrderBookCalculator("BTCUSDT", 5.0)
+	calculator := microstructure.NewOrderBookCalculator(5.0)
 	
 	// 创建警报回调函数
 	alertCallback := func(alert *microstructure.OrderBookAlert) {

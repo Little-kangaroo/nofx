@@ -389,7 +389,7 @@ func (manager *CVDManager) UpdatePrice(symbol string, price float64, timestamp t
 	calc.UpdatePrice(price, timestamp)
 }
 
-// GetCVDDelta5m 获取指定币种的5分钟CVD增量数据
+// GetCVDDelta5m 获取指定币种的5分钟CVD增量数据（已缓存）
 func (manager *CVDManager) GetCVDDelta5m(symbol string) *CVDDelta5m {
 	manager.mu.RLock()
 	calc, exists := manager.calculators[symbol]
@@ -400,6 +400,22 @@ func (manager *CVDManager) GetCVDDelta5m(symbol string) *CVDDelta5m {
 	}
 
 	return calc.GetCVDDelta5m()
+}
+
+// CalculateRealtimeCVDDelta5m 🔧 修复致命断层1：强制实时计算CVD增量，绕过缓存陷阱
+// 专门为哨兵触发和AI请求使用，确保获取最新鲜的数据而非过期缓存
+func (manager *CVDManager) CalculateRealtimeCVDDelta5m(symbol string, currentTime time.Time) *CVDDelta5m {
+	manager.mu.RLock()
+	calc, exists := manager.calculators[symbol]
+	manager.mu.RUnlock()
+
+	if !exists {
+		log.Printf("⚠️ [%s] CVD计算器不存在，返回空数据", symbol)
+		return nil
+	}
+
+	// 强制实时计算，不使用任何缓存
+	return calc.CalculateRealtimeCVDDelta5m(currentTime)
 }
 
 // ForceUpdateAllCVDDeltas 强制更新所有币种的5分钟CVD增量数据（用于K线收盘同步）
@@ -885,6 +901,57 @@ func (calc *CVDCalculator) GetCVDDelta5m() *CVDDelta5m {
 	return latest
 }
 
+// CalculateRealtimeCVDDelta5m 🔧 修复致命断层1：实时计算CVD增量，绕过缓存
+// 这是专门为哨兵触发设计的实时计算方法，确保AI获得最新数据
+func (calc *CVDCalculator) CalculateRealtimeCVDDelta5m(currentTime time.Time) *CVDDelta5m {
+	calc.mu.RLock()
+	defer calc.mu.RUnlock()
+	
+	log.Printf("🔥 [%s] 强制实时计算CVD增量 - 绕过缓存陷阱", calc.symbol)
+	
+	// 使用安全的增量计算方法，基于实际交易数据
+	spotDelta, futuresDelta := calc.calculateSafeCVDDelta(currentTime)
+	
+	// 计算价格变化
+	var priceDeltaPct float64
+	if len(calc.priceHistory) >= 2 {
+		latestPrice := calc.priceHistory[len(calc.priceHistory)-1].Price
+		oldPrice := calc.findPriceAtTime(currentTime.Add(-5 * time.Minute))
+		if oldPrice > 0 {
+			priceDeltaPct = ((latestPrice - oldPrice) / oldPrice) * 100
+		}
+	}
+	
+	// 推断K线意图（基于价格和CVD的组合）
+	candleIntent := calc.inferCandleIntent(priceDeltaPct, spotDelta, futuresDelta)
+	
+	// 🔧 修复致命断层2：计算真实的5分钟滑动成交量，基于deltas而非稀疏快照
+	realVolumeUSD := calc.calculateRealtime5MinVolume(currentTime)
+	volumeRatio := calc.calculateVolumeRatio(realVolumeUSD)
+	
+	// 保留CVD Delta作为VolumeDelta字段（用于其他分析）
+	cvdDelta := math.Abs(spotDelta) + math.Abs(futuresDelta)
+	
+	// 创建实时5分钟增量数据
+	realtimeDelta := &CVDDelta5m{
+		PriceDeltaPct:       priceDeltaPct,
+		SpotCVDDeltaUSD:     spotDelta,
+		FuturesCVDDeltaUSD:  futuresDelta,
+		OIDeltaPct:          0, // 需要OI数据
+		CandleIntent:        candleIntent,
+		VolumeDelta:         cvdDelta,
+		VolumeRatio:         volumeRatio,
+		PeriodStartTime:     currentTime.Add(-5 * time.Minute),
+		PeriodEndTime:       currentTime,
+		DataQuality:         calc.calculateDataQuality(),
+	}
+	
+	log.Printf("🔥 [%s] 实时CVD计算完成: 现货=%.0f, 合约=%.0f, vR=%.3f, 价格变化=%.2f%%", 
+		calc.symbol, spotDelta, futuresDelta, volumeRatio, priceDeltaPct)
+	
+	return realtimeDelta
+}
+
 // ForceUpdate5MinuteDelta 强制更新5分钟增量数据（用于K线收盘同步）
 func (calc *CVDCalculator) ForceUpdate5MinuteDelta() {
 	calc.mu.Lock()
@@ -1199,7 +1266,8 @@ func (calc *CVDCalculator) updateVolumeHistory(volumeUSD float64, timestamp time
 	calc.volumeHistory = validHistory
 }
 
-// calculateVolumeRatio 计算当前成交量相对于历史平均值的倍数（修复硬编码问题）
+// calculateVolumeRatio 🔧 修复P0-1：CVD比率分子分母错配问题  
+// 确保分子分母都使用相同的时间量纲，解决vR虚高/虚低问题
 func (calc *CVDCalculator) calculateVolumeRatio(currentVolumeUSD float64) float64 {
 	// 🔧 修复: 验证输入数据的有效性
 	currentVolumeUSD = safeFloat64(currentVolumeUSD, 0)
@@ -1208,38 +1276,87 @@ func (calc *CVDCalculator) calculateVolumeRatio(currentVolumeUSD float64) float6
 		return 1.0 // 数据不足时返回默认值
 	}
 	
-	// 计算最近1小时的中位数成交量 - 修复基准线被巨量污染问题
-	oneHourAgo := time.Now().Add(-1 * time.Hour)
-	var recentVolumes []float64
+	// 🔧 修复P0-1：强制统一时间量纲为"每分钟成交额"
+	// 分子：currentVolumeUSD是5分钟总量 -> 转换为每分钟速率
+	currentRatePerMin := currentVolumeUSD / 5.0
 	
-	for _, snapshot := range calc.volumeHistory {
-		if snapshot.Timestamp.After(oneHourAgo) {
-			// 🔧 修复: 验证历史数据有效性
-			volumeUSD := safeFloat64(snapshot.VolumeUSD, 0)
-			if volumeUSD > 0 {
-				recentVolumes = append(recentVolumes, volumeUSD)
-			}
+	// 🔧 修复P0-1：基准线必须使用相同的每分钟时间量纲
+	// 不再使用 volumeHistory（单笔交易），改用 deltas 聚合的每分钟量
+	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	var historicalRatesPerMin []float64
+	
+	// 🔧 修复P0-1：从原始交易deltas重建正确的每分钟基准
+	for i := 0; i < 60; i++ { // 过去60分钟
+		sampleTime := time.Now().Add(-time.Duration(i) * time.Minute)
+		if sampleTime.Before(oneHourAgo) {
+			break
+		}
+		
+		// 关键：使用 deltas 计算真实的1分钟聚合成交量，确保量纲一致
+		minuteAggregatedVolume := calc.calculateAggregated1MinVolumeFromDeltas(sampleTime)
+		if minuteAggregatedVolume > 0 {
+			historicalRatesPerMin = append(historicalRatesPerMin, minuteAggregatedVolume)
 		}
 	}
 	
-	if len(recentVolumes) == 0 {
+	if len(historicalRatesPerMin) == 0 {
 		return 1.0 // 避免除零
 	}
 	
-	// 使用中位数而非平均数，抵御极端值污染
-	median := calc.calculateMedianVolume(recentVolumes)
+	// 使用中位数抵御极端值污染
+	medianRatePerMin := calc.calculateMedianVolume(historicalRatesPerMin)
 	
-	// 🔧 修复: 使用中位数计算比率，而非平均数
-	ratio := safeDivision(currentVolumeUSD, median)
+	// 🔧 修复P0-1：现在分子分母都是"每分钟成交额"，单位完全一致
+	ratio := safeDivision(currentRatePerMin, medianRatePerMin)
 	
-	// 限制比率在合理范围内，避免极端值 - 允许显示到千分之一，区分"低迷(0.1)"和"死亡(0.001)"
+	// 限制比率在合理范围内，避免极端值
 	if ratio > 100.0 {
 		ratio = 100.0  // 提高上限，防止爆发时被削顶
 	} else if ratio < 0.001 {
 		ratio = 0.001  // 降低下限，让AI看到真实的死寂
 	}
 	
-	return safeFloat64(ratio, 1.0) // 🔧 修复: 确保返回值有效
+	log.Printf("🔧 [%s] P0-1修复后vR: 当前/分钟=%.0f, 基准/分钟=%.0f, vR=%.3f (修复前可能虚高5倍)", 
+		calc.symbol, currentRatePerMin, medianRatePerMin, ratio)
+	
+	return safeFloat64(ratio, 1.0)
+}
+
+// calculate1MinVolume 计算指定时刻往前推1分钟的成交量
+func (calc *CVDCalculator) calculate1MinVolume(endTime time.Time) float64 {
+	startTime := endTime.Add(-1 * time.Minute)
+	var totalVolume float64
+	
+	// 遍历现货交易记录
+	for i := len(calc.spotDeltas) - 1; i >= 0; i-- {
+		delta := calc.spotDeltas[i]
+		if delta.Timestamp.Before(startTime) {
+			break
+		}
+		if delta.Timestamp.After(startTime) && (delta.Timestamp.Before(endTime) || delta.Timestamp.Equal(endTime)) {
+			totalVolume += math.Abs(delta.DeltaUSD)
+		}
+	}
+	
+	// 遍历合约交易记录
+	for i := len(calc.futuresDeltas) - 1; i >= 0; i-- {
+		delta := calc.futuresDeltas[i]
+		if delta.Timestamp.Before(startTime) {
+			break
+		}
+		if delta.Timestamp.After(startTime) && (delta.Timestamp.Before(endTime) || delta.Timestamp.Equal(endTime)) {
+			totalVolume += math.Abs(delta.DeltaUSD)
+		}
+	}
+	
+	return safeFloat64(totalVolume, 0)
+}
+
+// calculateAggregated1MinVolumeFromDeltas 🔧 P0-1新增：从原始交易deltas聚合计算1分钟成交量
+// 与 calculate1MinVolume 逻辑相同，但命名更清楚表明用途
+func (calc *CVDCalculator) calculateAggregated1MinVolumeFromDeltas(endTime time.Time) float64 {
+	// 直接复用 calculate1MinVolume 的逻辑，确保计算方法一致
+	return calc.calculate1MinVolume(endTime)
 }
 
 // calculateRollingVolumeUSD 计算指定时间窗口内的实时滑动成交量
@@ -1259,6 +1376,38 @@ func (calc *CVDCalculator) calculateRollingVolumeUSD(duration time.Duration, end
 		}
 	}
 	
+	return safeFloat64(totalVolume, 0)
+}
+
+// calculateRealtime5MinVolume 🔧 修复致命断层2：基于deltas计算真实成交量，而非稀疏快照
+// 这是修复"粒度灾难"的核心方法，直接基于原始交易记录计算而非快照
+func (calc *CVDCalculator) calculateRealtime5MinVolume(currentTime time.Time) float64 {
+	startTime := currentTime.Add(-5 * time.Minute)
+	var totalVolume float64
+	
+	// 遍历现货交易记录（从新到旧，提前退出优化）
+	for i := len(calc.spotDeltas) - 1; i >= 0; i-- {
+		delta := calc.spotDeltas[i]
+		if delta.Timestamp.Before(startTime) {
+			break // 时间过早，提前退出
+		}
+		if delta.Timestamp.After(startTime) && (delta.Timestamp.Before(currentTime) || delta.Timestamp.Equal(currentTime)) {
+			totalVolume += math.Abs(delta.DeltaUSD)
+		}
+	}
+	
+	// 遍历合约交易记录（从新到旧，提前退出优化）
+	for i := len(calc.futuresDeltas) - 1; i >= 0; i-- {
+		delta := calc.futuresDeltas[i]
+		if delta.Timestamp.Before(startTime) {
+			break // 时间过早，提前退出
+		}
+		if delta.Timestamp.After(startTime) && (delta.Timestamp.Before(currentTime) || delta.Timestamp.Equal(currentTime)) {
+			totalVolume += math.Abs(delta.DeltaUSD)
+		}
+	}
+	
+	log.Printf("🔧 [%s] 实时5分钟成交量计算: %.0f USD (基于deltas而非快照)", calc.symbol, totalVolume)
 	return safeFloat64(totalVolume, 0)
 }
 

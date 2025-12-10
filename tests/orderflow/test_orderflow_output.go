@@ -30,9 +30,8 @@ func main() {
 	}
 	
 	// 模拟一些交易数据
-	tradeData1 := &microstructure.TradeData{
+	_ = &microstructure.TradeData{
 		Symbol:        symbol,
-		TradeId:       1,
 		Price:         50000.0,
 		Quantity:      1.0,
 		Timestamp:     time.Now(),
@@ -40,9 +39,8 @@ func main() {
 		MarketType:    "spot",
 	}
 	
-	tradeData2 := &microstructure.TradeData{
+	_ = &microstructure.TradeData{
 		Symbol:        symbol,
-		TradeId:       2,
 		Price:         49999.0,
 		Quantity:      0.5,
 		Timestamp:     time.Now(),
@@ -51,7 +49,7 @@ func main() {
 	}
 	
 	// 模拟盘口数据
-	depthData := &microstructure.DepthData{
+	_ = &microstructure.DepthData{
 		Symbol:    symbol,
 		Timestamp: time.Now(),
 		Bids: []microstructure.OrderBookLevel{
@@ -219,7 +217,7 @@ func createMockSnapshot(symbol string) *microstructure.MarketSnapshot {
 			IsStale:             false,
 		},
 		MarketContext: &microstructure.MarketContext{
-			CVDDivergence:     "bullish_divergence",
+			CVDDivergence:     true, // 修复：使用bool值
 			ContextInference:  "strong_buying_pressure",
 			SignalStrength:    85.0,
 		},

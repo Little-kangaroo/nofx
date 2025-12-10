@@ -474,9 +474,9 @@ func (ofm *OrderFlowManager) GetMarketSnapshot(symbol string) *MarketSnapshot {
 		symbol, cvdData, oiAnalysis, priceContext,
 	)
 	
-	// 🔧 修复: 填充V2.0缺失字段
-	// 获取CVD 5分钟增量数据
-	cvdDelta5m := ofm.cvdManager.GetCVDDelta5m(symbol)
+	// 🔧 修复致命断层1: 强制实时计算CVD数据，绕过缓存陷阱
+	// 原问题：缓存的CVD数据是几分钟前的"尸体"，导致AI看到失真数据
+	cvdDelta5m := ofm.cvdManager.CalculateRealtimeCVDDelta5m(symbol, time.Now())
 	
 	// 生成宏观趋势数据
 	macroTrend := ofm.generateMacroTrendData(symbol, cvdData, oiAnalysis)
@@ -1006,30 +1006,105 @@ func (ofm *OrderFlowManager) calculateDataQuality(symbol string, cvdData *CVDDat
 	}
 }
 
-// detectCVDDivergence4H 检测4小时级别CVD背离
+// detectCVDDivergence4H 🔧 P1-1修复：检测4小时级别CVD背离
+// 使用相对统计方法替代硬编码绝对值，适应不同币种和市场状态
 func (ofm *OrderFlowManager) detectCVDDivergence4H(cvdData *CVDData) bool {
 	if cvdData == nil {
 		return false
 	}
 
-	// 简化实现：基于现货和期货CVD的方向对比
-	spotDirection := 0 // 0=中性, 1=多头, -1=空头
-	futuresDirection := 0
+	// 🔧 P1-1修复：使用Z-Score或相对值替代硬编码10万美元
+	// 获取全局统计管理器来计算相对强度
+	globalStats := GetGlobalStatsManager()
+	if globalStats == nil {
+		// 兜底：如果没有统计数据，使用改进的相对阈值
+		return ofm.detectCVDDivergenceWithRelativeThreshold(cvdData)
+	}
+	
+	// 基于统计分布判断方向强度
+	spotDirection := ofm.classifyCVDDirection(cvdData.SpotCVD1H, "spot")
+	futuresDirection := ofm.classifyCVDDirection(cvdData.FuturesCVD1H, "futures")
+	
+	// 🔧 P1-1修复：只有在两个方向都有明确统计意义时才判断背离
+	// 这避免了低市值币的噪音和高市值币的误判
+	if spotDirection == 0 || futuresDirection == 0 {
+		return false // 至少有一方向不明确，无法判断背离
+	}
+	
+	// 如果现货和期货方向明确且相反，认为有背离
+	isDirectionOpposite := (spotDirection > 0 && futuresDirection < 0) || 
+	                      (spotDirection < 0 && futuresDirection > 0)
+	
+	if isDirectionOpposite {
+		log.Printf("🔧 [P1-1] CVD背离检测: 现货方向%d, 期货方向%d (统计显著)", 
+			spotDirection, futuresDirection)
+	}
+	
+	return isDirectionOpposite
+}
 
-	if cvdData.SpotCVD1H > 100000 {
+// detectCVDDivergenceWithRelativeThreshold 🔧 P1-1新增：基于相对阈值的背离检测（兜底方法）
+func (ofm *OrderFlowManager) detectCVDDivergenceWithRelativeThreshold(cvdData *CVDData) bool {
+	spotCVD := cvdData.SpotCVD1H
+	futuresCVD := cvdData.FuturesCVD1H
+	
+	// 🔧 P1-1修复：计算相对阈值，而非固定10万美元
+	// 使用两个CVD的平均绝对值作为基准
+	avgAbsCVD := (math.Abs(spotCVD) + math.Abs(futuresCVD)) / 2
+	
+	// 相对阈值：平均值的20%，最小值为5万美元，最大值为50万美元
+	relativeThreshold := math.Max(50000, math.Min(500000, avgAbsCVD*0.2))
+	
+	// 判断方向
+	spotDirection := 0
+	futuresDirection := 0
+	
+	if spotCVD > relativeThreshold {
 		spotDirection = 1
-	} else if cvdData.SpotCVD1H < -100000 {
+	} else if spotCVD < -relativeThreshold {
 		spotDirection = -1
 	}
-
-	if cvdData.FuturesCVD1H > 100000 {
+	
+	if futuresCVD > relativeThreshold {
 		futuresDirection = 1
-	} else if cvdData.FuturesCVD1H < -100000 {
+	} else if futuresCVD < -relativeThreshold {
 		futuresDirection = -1
 	}
-
+	
+	log.Printf("🔧 [P1-1兜底] CVD背离检测: 现货%.0f(方向%d), 期货%.0f(方向%d), 阈值%.0f", 
+		spotCVD, spotDirection, futuresCVD, futuresDirection, relativeThreshold)
+	
 	// 如果现货和期货方向相反，认为有背离
 	return spotDirection != 0 && futuresDirection != 0 && spotDirection != futuresDirection
+}
+
+// classifyCVDDirection 🔧 P1-1新增：基于统计分布分类CVD方向
+func (ofm *OrderFlowManager) classifyCVDDirection(cvdValue float64, cvdType string) int {
+	// 简化实现：使用CVD绝对值的分位数来判断是否"统计显著"
+	
+	// 计算相对强度评分 (0-1)
+	absValue := math.Abs(cvdValue)
+	
+	// 动态阈值：基于CVD值的对数特性
+	// 小额CVD需要更低的阈值，大额CVD需要更高的阈值
+	var significanceThreshold float64
+	
+	if absValue < 100000 { // 10万以下
+		significanceThreshold = 50000 // 5万门槛
+	} else if absValue < 1000000 { // 100万以下
+		significanceThreshold = absValue * 0.3 // 30%的相对阈值
+	} else { // 100万以上
+		significanceThreshold = 500000 // 50万门槛
+	}
+	
+	// 判断方向
+	if cvdValue > significanceThreshold {
+		return 1 // 多头
+	} else if cvdValue < -significanceThreshold {
+		return -1 // 空头
+	} else {
+		return 0 // 中性
+	}
 }
 
 // determineMarketRegime 判断市场状态

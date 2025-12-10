@@ -1,6 +1,7 @@
 package microstructure
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"sync"
@@ -42,7 +43,7 @@ type SentinelTriggerAlert struct {
 type SentinelTriggerEngine struct {
 	mu               sync.RWMutex
 	alertHandlers    []func(*SentinelTriggerAlert)      // 警报处理器
-	lastAlerts       map[string]time.Time        // symbol -> last alert time (冷却机制)
+	lastAlerts       map[string]time.Time        // 🔧 P2-2修复：symbol+scenario -> last alert time (精细化冷却机制)
 	cooldownPeriod   time.Duration               // 警报冷却期
 	isRunning        bool
 	ticker           *time.Ticker
@@ -66,7 +67,7 @@ type SentinelTriggerEngine struct {
 type MomentumThresholds struct {
 	CVDZScoreMin      float64 `json:"cvd_zscore_min"`      // CVD Z-Score最小值: 2.0
 	VolumeZScoreMin   float64 `json:"volume_zscore_min"`   // 成交量 Z-Score最小值: 1.5
-	PriceChangeMin    float64 `json:"price_change_min"`    // 价格变化最小值: 1.0%
+	PriceZScoreMin    float64 `json:"price_zscore_min"`    // 🔧 P0-2修复：价格Z-Score最小值: 3.0 (替代硬编码1%)
 	ConfidenceWeight  float64 `json:"confidence_weight"`   // 置信度权重: 0.4
 }
 
@@ -102,7 +103,7 @@ func NewSentinelTriggerEngine() *SentinelTriggerEngine {
 		momentumThresholds: MomentumThresholds{
 			CVDZScoreMin:     2.0,
 			VolumeZScoreMin:  1.5,
-			PriceChangeMin:   1.0,
+			PriceZScoreMin:   3.0, // 🔧 P0-2修复：使用Z-Score替代硬编码1%
 			ConfidenceWeight: 0.4,
 		},
 		spotRushThresholds: SpotRushThresholds{
@@ -380,30 +381,31 @@ func (ste *SentinelTriggerEngine) performScan() {
 			continue
 		}
 		
-		// 检查冷却期
-		if !ste.checkCooldown(symbol) {
-			continue
-		}
-		
 		// 获取Z-Score数据
 		zScores := globalStats.GetSymbolZScores(symbol, snapshot)
 		if len(zScores) == 0 {
 			continue // 数据不足，跳过
 		}
 		
-		// 场景A: 动量点燃检测
-		if alert := ste.detectMomentumIgnition(symbol, snapshot, zScores); alert != nil {
-			ste.triggerAlert(alert)
+		// 🔧 P2-2修复：场景A: 动量点燃检测（独立冷却检查）
+		if ste.checkCooldown(symbol, ScenarioMomentumIgnition) {
+			if alert := ste.detectMomentumIgnition(symbol, snapshot, zScores); alert != nil {
+				ste.triggerAlert(alert)
+			}
 		}
 		
-		// 场景B: 现货抢跑检测
-		if alert := ste.detectSpotRush(symbol, snapshot, zScores); alert != nil {
-			ste.triggerAlert(alert)
+		// 🔧 P2-2修复：场景B: 现货抢跑检测（独立冷却检查）
+		if ste.checkCooldown(symbol, ScenarioSpotRush) {
+			if alert := ste.detectSpotRush(symbol, snapshot, zScores); alert != nil {
+				ste.triggerAlert(alert)
+			}
 		}
 		
-		// 场景C: 虚假翻转检测
-		if alert := ste.detectSpoofingFlip(symbol, snapshot, zScores); alert != nil {
-			ste.triggerAlert(alert)
+		// 🔧 P2-2修复：场景C: 虚假翻转检测（独立冷却检查）
+		if ste.checkCooldown(symbol, ScenarioSpoofingFlip) {
+			if alert := ste.detectSpoofingFlip(symbol, snapshot, zScores); alert != nil {
+				ste.triggerAlert(alert)
+			}
 		}
 	}
 }
@@ -436,10 +438,11 @@ func (ste *SentinelTriggerEngine) detectMomentumIgnition(symbol string, snapshot
 	spotCVDZScore := zScores["spot_cvd_1m"]
 	futuresCVDZScore := zScores["futures_cvd_1m"] 
 	volumeZScore := zScores["volume_1m"]
+	priceZScore := zScores["price_change_1m"] // 🔧 P0-2修复：获取价格变化Z-Score
 	
-	// 🔥 业务逻辑修正1: ATR绝对值过滤，防止低流动性噪音
+	// 🔥 P0-2修复前的业务逻辑：ATR绝对值过滤依然保留，但作为辅助条件
 	priceChangeAbs := math.Abs(snapshot.CVDDelta5m.PriceDeltaPct)
-	minATRThreshold := 0.5 // 最小波动率要求0.5%
+	minATRThreshold := 0.1 // 🔧 降低最小波动率要求到0.1%，避免过度过滤
 	
 	// 如果价格变化太小，即使Z-Score很高也可能是噪音
 	if priceChangeAbs < minATRThreshold {
@@ -461,11 +464,12 @@ func (ste *SentinelTriggerEngine) detectMomentumIgnition(symbol string, snapshot
 	// 应用位置调整后的阈值
 	adjustedCVDThreshold := cvdThreshold * positionMultiplier
 	adjustedVolumeThreshold := volumeThreshold * positionMultiplier
+	adjustedPriceThreshold := ste.momentumThresholds.PriceZScoreMin * positionMultiplier // 🔧 P0-2修复：价格Z-Score阈值
 	
-	// 检查动量点燃条件（使用调整后的动态阈值）
+	// 🔧 P0-2修复：检查动量点燃条件（使用Z-Score替代硬编码百分比）
 	cvdCondition := spotCVDZScore >= adjustedCVDThreshold || futuresCVDZScore >= adjustedCVDThreshold
 	volumeCondition := volumeZScore >= adjustedVolumeThreshold
-	priceCondition := priceChangeAbs >= ste.momentumThresholds.PriceChangeMin
+	priceCondition := math.Abs(priceZScore) >= adjustedPriceThreshold // 关键修复：用Z-Score替代硬编码1%
 	
 	if !cvdCondition || !volumeCondition || !priceCondition {
 		return nil
@@ -495,10 +499,12 @@ func (ste *SentinelTriggerEngine) detectMomentumIgnition(symbol string, snapshot
 			"spot_cvd_zscore":      spotCVDZScore,
 			"futures_cvd_zscore":   futuresCVDZScore,
 			"volume_zscore":        volumeZScore,
+			"price_zscore":         priceZScore, // 🔧 P0-2修复：记录价格Z-Score
 			"price_change_pct":     snapshot.CVDDelta5m.PriceDeltaPct,
 			"volume_delta":         snapshot.CVDDelta5m.VolumeDelta,
 			"used_cvd_threshold":   cvdThreshold,
 			"used_volume_threshold": volumeThreshold,
+			"used_price_threshold": adjustedPriceThreshold, // 🔧 P0-2修复：记录价格Z-Score阈值
 			"market_regime":        func() string {
 				if dynamicThresholds != nil {
 					return string(dynamicThresholds.CurrentRegime)
@@ -529,8 +535,16 @@ func (ste *SentinelTriggerEngine) detectSpotRush(symbol string, snapshot *Market
 	// 检查现货抢跑条件（修正版）
 	spotCondition := spotCVDZScore >= ste.spotRushThresholds.SpotCVDZScoreMin
 	
-	// 🔥 关键修正: 不再要求合约CVD为负，而是要求净合力为正且现货主导
-	netForceCondition := netCVD > 0 && spotCVDValue > math.Abs(futuresCVDValue) // 现货绝对值大于合约绝对值
+	// 🔧 P1-2修复: 允许双核驱动场景，不再要求现货必须主导
+	// 场景A: 现货主导 - 现货强势，期货跟随或中性
+	spotLeading := netCVD > 0 && spotCVDValue > math.Abs(futuresCVDValue)
+	
+	// 🔧 P1-2新增: 场景B: 双核驱动 - 现货期货都强力买入，合力明显
+	dualCoreCondition := spotCVDValue > 0 && futuresCVDValue > 0 && netCVD > 0
+	dualCoreStrength := dualCoreCondition && (spotCVDValue > 50000 && futuresCVDValue > 50000) // 双方都有一定强度
+	
+	// 🔧 P1-2修复: 支持现货主导或双核驱动两种模式
+	netForceCondition := spotLeading || dualCoreStrength
 	ratioCondition := cvdRatioZScore >= ste.spotRushThresholds.CVDRatioZScoreMin
 	
 	// 添加对抗检测：如果现货和合约方向相反且力量接近，可能是对抗而非抢跑
@@ -541,6 +555,14 @@ func (ste *SentinelTriggerEngine) detectSpotRush(symbol string, snapshot *Market
 				symbol, spotCVDValue, math.Abs(futuresCVDValue), oppositionRatio)
 			return nil
 		}
+	}
+	
+	// 🔧 P1-2新增: 记录触发的具体模式，便于分析
+	triggerMode := ""
+	if spotLeading && !dualCoreStrength {
+		triggerMode = "spot_leading"
+	} else if dualCoreStrength {
+		triggerMode = "dual_core_driving"
 	}
 	
 	if !spotCondition || !netForceCondition || !ratioCondition {
@@ -559,13 +581,25 @@ func (ste *SentinelTriggerEngine) detectSpotRush(symbol string, snapshot *Market
 		Timestamp:   time.Now(),
 		Confidence:  confidence,
 		ZScoreData:  zScores,
-		Description: "检测到现货抢跑信号: 现货主导式资金流入",
+		Description: fmt.Sprintf("检测到现货抢跑信号 (%s): %s", triggerMode, 
+			func() string {
+				if triggerMode == "spot_leading" {
+					return "现货主导式资金流入"
+				} else if triggerMode == "dual_core_driving" {
+					return "现货期货双核驱动"
+				}
+				return "现货强势资金流入"
+			}()),
 		Metadata: map[string]interface{}{
 			"spot_cvd_zscore":    spotCVDZScore,
 			"futures_cvd_zscore": futuresCVDZScore,
 			"cvd_ratio_zscore":   cvdRatioZScore,
 			"spot_cvd_delta":     snapshot.CVDDelta5m.SpotCVDDeltaUSD,
 			"futures_cvd_delta":  snapshot.CVDDelta5m.FuturesCVDDeltaUSD,
+			"trigger_mode":       triggerMode, // 🔧 P1-2新增: 记录触发模式
+			"net_cvd":           netCVD,
+			"spot_leading":       spotLeading,
+			"dual_core_strength": dualCoreStrength,
 		},
 	}
 }
@@ -713,12 +747,18 @@ func (ste *SentinelTriggerEngine) calculateSpoofingConfidence(snapshot *MarketSn
 	return math.Min(1.0, confidence)
 }
 
-// checkCooldown 检查警报冷却期
-func (ste *SentinelTriggerEngine) checkCooldown(symbol string) bool {
+// 🔧 P2-2新增：生成冷却Key，实现Symbol+Scenario精细化冷却
+func (ste *SentinelTriggerEngine) getCooldownKey(symbol string, scenario TriggerScenario) string {
+	return fmt.Sprintf("%s:%s", symbol, scenario)
+}
+
+// checkCooldown 🔧 P2-2修复：检查警报冷却期（精细化到Symbol+Scenario）
+func (ste *SentinelTriggerEngine) checkCooldown(symbol string, scenario TriggerScenario) bool {
 	ste.mu.RLock()
 	defer ste.mu.RUnlock()
 	
-	lastAlert, exists := ste.lastAlerts[symbol]
+	cooldownKey := ste.getCooldownKey(symbol, scenario)
+	lastAlert, exists := ste.lastAlerts[cooldownKey]
 	if !exists {
 		return true
 	}
@@ -726,11 +766,12 @@ func (ste *SentinelTriggerEngine) checkCooldown(symbol string) bool {
 	return time.Since(lastAlert) > ste.cooldownPeriod
 }
 
-// triggerAlert 触发警报
+// triggerAlert 🔧 P2-2修复：触发警报（使用Symbol+Scenario精细化冷却）
 func (ste *SentinelTriggerEngine) triggerAlert(alert *SentinelTriggerAlert) {
-	// 更新冷却记录
+	// 🔧 P2-2修复：使用Symbol+Scenario组合Key更新冷却记录
 	ste.mu.Lock()
-	ste.lastAlerts[alert.Symbol] = alert.Timestamp
+	cooldownKey := ste.getCooldownKey(alert.Symbol, alert.Scenario)
+	ste.lastAlerts[cooldownKey] = alert.Timestamp
 	ste.mu.Unlock()
 	
 	// 记录日志

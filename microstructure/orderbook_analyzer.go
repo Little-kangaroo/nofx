@@ -48,12 +48,23 @@ type SymbolOrderBookData struct {
 	last5mReset       time.Time        // 最后5分钟重置时间
 }
 
+// PressureCalculationMode 压力计算模式
+type PressureCalculationMode int
+
+const (
+	PressureModeSimple      PressureCalculationMode = iota // 简单模式：前5档
+	PressureModeDeep                                        // 深度模式：前20档
+	PressureModeWeighted                                    // 加权模式：距离加权
+	PressureModeFull                                        // 全深度模式：所有档位
+)
+
 // OrderBookCalculator 盘口计算器（支持多交易对）
 type OrderBookCalculator struct {
 	mu               sync.RWMutex
 	symbolData       map[string]*SymbolOrderBookData // symbol -> 数据
 	wallThreshold    float64                          // 挂单墙阈值倍数（默认5倍平均档位量）
 	maxHistorySize   int                              // 最大历史记录数量
+	pressureMode     PressureCalculationMode          // 🔧 P2-1新增：压力计算模式
 }
 
 // NewOrderBookCalculator 创建盘口计算器（支持多交易对）
@@ -62,7 +73,25 @@ func NewOrderBookCalculator(wallThreshold float64) *OrderBookCalculator {
 		symbolData:       make(map[string]*SymbolOrderBookData),
 		wallThreshold:    wallThreshold,
 		maxHistorySize:   100,
+		pressureMode:     PressureModeDeep, // 🔧 P2-1修复：默认使用深度模式，比简单模式更准确
 	}
+}
+
+// NewOrderBookCalculatorWithMode 创建带模式的盘口计算器（🔧 P2-1新增）
+func NewOrderBookCalculatorWithMode(wallThreshold float64, mode PressureCalculationMode) *OrderBookCalculator {
+	return &OrderBookCalculator{
+		symbolData:       make(map[string]*SymbolOrderBookData),
+		wallThreshold:    wallThreshold,
+		maxHistorySize:   100,
+		pressureMode:     mode,
+	}
+}
+
+// SetPressureMode 设置压力计算模式（🔧 P2-1新增）
+func (calc *OrderBookCalculator) SetPressureMode(mode PressureCalculationMode) {
+	calc.mu.Lock()
+	defer calc.mu.Unlock()
+	calc.pressureMode = mode
 }
 
 // getOrCreateSymbolData 获取或创建交易对数据
@@ -474,9 +503,9 @@ func (calc *OrderBookCalculator) GetCurrentOrderBookData(symbol string, smoothPe
 	// 识别挂单墙
 	resistance, support := calc.findWalls(symbol)
 
-	// 计算买卖压力
-	bidPressure := calc.calculatePressure(symbolData.currentBids)
-	askPressure := calc.calculatePressure(symbolData.currentAsks)
+	// 计算买卖压力（使用新的压力计算方法）
+	bidPressure := calc.calculatePressureEnhanced(symbol, symbolData.currentBids, true)
+	askPressure := calc.calculatePressureEnhanced(symbol, symbolData.currentAsks, false)
 
 	// 检查数据是否过期 - 🔧 修复：使用更合理的过期判断，盘口数据应该更严格
 	// 盘口数据是实时的，5分钟无更新就应该标记为过期
@@ -508,19 +537,22 @@ func (calc *OrderBookCalculator) GetCurrentOrderBookData(symbol string, smoothPe
 	globalCache := GetGlobalCache()
 	globalCache.SetOrderBookData(symbol, orderBookData)
 
-	log.Printf("📊 [%s] 盘口数据已更新并缓存: 失衡比%.3f, 虚假挂单风险%.3f, 流动性评分%.3f",
-		symbol, imbalanceRatio, spoofingRisk, liquidityScore)
+	// 只在异常情况或调试模式下打印详细日志，避免日志噪音
+	if spoofingRisk > 0.8 || math.Abs(imbalanceRatio) > 0.9 || liquidityScore < 0.5 {
+		log.Printf("⚠️ [%s] 盘口异常: 失衡比%.3f, 虚假挂单风险%.3f, 流动性评分%.3f",
+			symbol, imbalanceRatio, spoofingRisk, liquidityScore)
+	}
 
 	return orderBookData
 }
 
-// calculatePressure 计算买卖压力强度
+// calculatePressure 计算买卖压力强度（保持向后兼容）
 func (calc *OrderBookCalculator) calculatePressure(levels []OrderBookLevel) float64 {
 	if len(levels) == 0 {
 		return 0
 	}
 
-	// 计算前5档的总价值
+	// 保持原有逻辑：计算前5档的总价值
 	var totalValue float64
 	maxLevels := int(math.Min(float64(len(levels)), 5))
 
@@ -530,6 +562,210 @@ func (calc *OrderBookCalculator) calculatePressure(levels []OrderBookLevel) floa
 	}
 
 	return totalValue
+}
+
+// calculatePressureEnhanced 🔧 P2-1新增：增强版压力计算，支持多种模式
+func (calc *OrderBookCalculator) calculatePressureEnhanced(symbol string, levels []OrderBookLevel, isBid bool) float64 {
+	if len(levels) == 0 {
+		return 0
+	}
+	
+	// 根据配置的压力计算模式选择算法
+	switch calc.pressureMode {
+	case PressureModeSimple:
+		return calc.calculatePressureSimple(levels)
+	case PressureModeDeep:
+		return calc.calculatePressureDeep(levels)
+	case PressureModeWeighted:
+		return calc.calculatePressureWeighted(symbol, levels, isBid)
+	case PressureModeFull:
+		return calc.calculatePressureFull(levels)
+	default:
+		return calc.calculatePressureSimple(levels)
+	}
+}
+
+// calculatePressureSimple 简单模式：前5档（原有逻辑）
+func (calc *OrderBookCalculator) calculatePressureSimple(levels []OrderBookLevel) float64 {
+	if len(levels) == 0 {
+		return 0
+	}
+
+	var totalValue float64
+	maxLevels := int(math.Min(float64(len(levels)), 5))
+
+	for i := 0; i < maxLevels; i++ {
+		level := levels[i]
+		if level.Price <= 0 || level.Quantity <= 0 {
+			continue
+		}
+		totalValue += level.Price * level.Quantity
+	}
+
+	return totalValue
+}
+
+// calculatePressureDeep 🔧 P2-1新增：深度模式：前20档
+func (calc *OrderBookCalculator) calculatePressureDeep(levels []OrderBookLevel) float64 {
+	if len(levels) == 0 {
+		return 0
+	}
+
+	var totalValue float64
+	maxLevels := int(math.Min(float64(len(levels)), 20)) // 扩展到20档
+
+	for i := 0; i < maxLevels; i++ {
+		level := levels[i]
+		if level.Price <= 0 || level.Quantity <= 0 {
+			continue
+		}
+		totalValue += level.Price * level.Quantity
+	}
+
+	return totalValue
+}
+
+// calculatePressureWeighted 🔧 P2-1新增：加权模式：距离加权计算
+func (calc *OrderBookCalculator) calculatePressureWeighted(symbol string, levels []OrderBookLevel, isBid bool) float64 {
+	if len(levels) == 0 {
+		return 0
+	}
+	
+	symbolData := calc.symbolData[symbol]
+	if symbolData == nil || symbolData.currentPrice <= 0 {
+		// 兜底：如果没有当前价格，使用深度模式
+		return calc.calculatePressureDeep(levels)
+	}
+	
+	currentPrice := symbolData.currentPrice
+	var weightedValue float64
+	maxLevels := int(math.Min(float64(len(levels)), 20)) // 加权计算前20档
+	
+	for i := 0; i < maxLevels; i++ {
+		level := levels[i]
+		if level.Price <= 0 || level.Quantity <= 0 {
+			continue
+		}
+		
+		// 计算距离权重：距离越近权重越高
+		var distance float64
+		if isBid {
+			// 买单：距离 = |当前价 - 买价| / 当前价
+			distance = math.Abs(currentPrice-level.Price) / currentPrice
+		} else {
+			// 卖单：距离 = |卖价 - 当前价| / 当前价
+			distance = math.Abs(level.Price-currentPrice) / currentPrice
+		}
+		
+		// 权重函数：距离越近权重越高，使用指数衰减
+		weight := math.Exp(-distance * 10) // 10为衰减系数，可调节
+		
+		// 加权价值：价值 × 权重
+		levelValue := level.Price * level.Quantity
+		weightedValue += levelValue * weight
+	}
+	
+	return weightedValue
+}
+
+// calculatePressureFull 🔧 P2-1新增：全深度模式：所有档位
+func (calc *OrderBookCalculator) calculatePressureFull(levels []OrderBookLevel) float64 {
+	if len(levels) == 0 {
+		return 0
+	}
+
+	var totalValue float64
+
+	for _, level := range levels {
+		if level.Price <= 0 || level.Quantity <= 0 {
+			continue
+		}
+		totalValue += level.Price * level.Quantity
+	}
+
+	return totalValue
+}
+
+// GetPressureCalculationInfo 🔧 P2-1新增：获取压力计算详细信息
+func (calc *OrderBookCalculator) GetPressureCalculationInfo(symbol string) map[string]interface{} {
+	calc.mu.RLock()
+	defer calc.mu.RUnlock()
+	
+	symbolData := calc.symbolData[symbol]
+	if symbolData == nil {
+		return map[string]interface{}{
+			"error": "symbol not found",
+		}
+	}
+	
+	// 计算所有模式的压力值进行对比
+	bidPressures := make(map[string]float64)
+	askPressures := make(map[string]float64)
+	
+	// 简单模式
+	bidPressures["simple"] = calc.calculatePressureSimple(symbolData.currentBids)
+	askPressures["simple"] = calc.calculatePressureSimple(symbolData.currentAsks)
+	
+	// 深度模式
+	bidPressures["deep"] = calc.calculatePressureDeep(symbolData.currentBids)
+	askPressures["deep"] = calc.calculatePressureDeep(symbolData.currentAsks)
+	
+	// 加权模式
+	bidPressures["weighted"] = calc.calculatePressureWeighted(symbol, symbolData.currentBids, true)
+	askPressures["weighted"] = calc.calculatePressureWeighted(symbol, symbolData.currentAsks, false)
+	
+	// 全深度模式
+	bidPressures["full"] = calc.calculatePressureFull(symbolData.currentBids)
+	askPressures["full"] = calc.calculatePressureFull(symbolData.currentAsks)
+	
+	return map[string]interface{}{
+		"symbol":               symbol,
+		"current_mode":         calc.getModeString(),
+		"current_price":        symbolData.currentPrice,
+		"bid_levels_count":     len(symbolData.currentBids),
+		"ask_levels_count":     len(symbolData.currentAsks),
+		"bid_pressures":        bidPressures,
+		"ask_pressures":        askPressures,
+		"pressure_ratios": map[string]float64{
+			"simple_ratio":   safeDivisionForOrderBook(bidPressures["simple"], askPressures["simple"]),
+			"deep_ratio":     safeDivisionForOrderBook(bidPressures["deep"], askPressures["deep"]),
+			"weighted_ratio": safeDivisionForOrderBook(bidPressures["weighted"], askPressures["weighted"]),
+			"full_ratio":     safeDivisionForOrderBook(bidPressures["full"], askPressures["full"]),
+		},
+		"last_update": symbolData.lastUpdate,
+	}
+}
+
+// getModeString 获取当前模式的字符串表示
+func (calc *OrderBookCalculator) getModeString() string {
+	switch calc.pressureMode {
+	case PressureModeSimple:
+		return "simple"
+	case PressureModeDeep:
+		return "deep"
+	case PressureModeWeighted:
+		return "weighted"
+	case PressureModeFull:
+		return "full"
+	default:
+		return "unknown"
+	}
+}
+
+// safeDivisionForOrderBook 安全除法，专用于OrderBook计算
+func safeDivisionForOrderBook(numerator, denominator float64) float64 {
+	if denominator == 0 || math.IsNaN(denominator) || math.IsInf(denominator, 0) {
+		return 0
+	}
+	if math.IsNaN(numerator) || math.IsInf(numerator, 0) {
+		return 0
+	}
+	
+	result := numerator / denominator
+	if math.IsNaN(result) || math.IsInf(result, 0) {
+		return 0
+	}
+	return result
 }
 
 // ===== V2.0 新增方法 =====
