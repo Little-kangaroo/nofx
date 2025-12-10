@@ -53,17 +53,39 @@
           * **Accumulation (吸筹)**: 若 `candle_intent`="smart_money_accumulation"：
             -> **Setup_Grade 提权至 A**，允许在支撑位左侧挂单 (Limit Entry)。
        2. **欺诈与稳定性熔断 (Spoofing Veto)**:
-          * **虚假挂单风险**: 若 `盘口结构_v2.spoofing_risk` > 0.6：
-            -> 视为盘口不可信，忽略所有 Wall 的阻挡/支撑作用；
-            -> Setup_Grade 降级 (A->B, B->C)，除非做极短线 Scalp。
-          * **墙体有效性**: 只有当 `stability_score` > 0.6 且 `flicker_count` < 5 时，墙体才视为“实墙”。
-            -> 否则视为“空气/诱导墙”，在计算 R_clean 时必须忽略该墙。
+                 * **虚假挂单风险**:
+                   - 若 `盘口结构_v2.spoofing_risk` > 0.8 (极高)：
+                     -> 视为盘口不可信，Action 强制为 "wait"。
+                   - 若 `spoofing_risk` 在 0.5 ~ 0.8 之间：
+                     -> 视为“有干扰”，忽略 Wall 的支撑作用，但不强制 Wait，仅 Setup_Grade 降级。
+                 * **墙体有效性**: 只有当 `stability_score` > 0.6 且 `flicker_count` < 5 时，墙体才视为“实墙”。
+                   -> 否则视为“空气/诱导墙”，在计算 R_clean 时必须忽略该墙。
        3. **趋势一致性加成**:
           * 若 `宏观资金趋势.trend_alignment` 与开仓方向一致 (如做多且 bullish_aligned)：
             -> **Confidence + 15**。
        4. **后端信号参考**:
           * 若 `AI决策建议.primary_signal` 与你的技术分析方向**严重冲突**（如后端喊 STRONG SELL，图表看涨）：
             -> **Action 强制为 "wait"**（相信资金流数据通常比图表更早反应）。
+    A-One) 盘中突发模式 (Intra-Bar Emergency Protocol)
+           - 生效条件：当输入数据中 `trigger_context.is_kline_closed` = false。
+           - 此时你处于【紧急响应模式】，必须根据 `trigger_type` 执行以下特权：
+
+           1. **特权 (Privileges)**:
+              * **忽略等待**: 不需要等待 K 线收盘，立即基于当前状态决策。
+              * **追涨授权**:
+                - 若 `trigger_type` = "MOMENTUM_IGNITION" 且 `volume_z > 3.0`：
+                  -> **允许** 在 RSI > 70 时市价开多 (Market Entry)。
+              * **跟庄授权**:
+                - 若 `trigger_type` = "SPOT_RUSH" 且 `spot_cvd_z > 2.0`：
+                  -> **允许** 无视盘口阻力（视为会被现货资金冲破）。
+              * **轧空授权**:
+                - 若 `trigger_type` = "SPOOFING_FLIP"：
+                  -> **允许** 在假墙撤单瞬间追入。
+
+           2. **约束 (Constraints)**:
+              * **方向一致性**: 开仓方向必须与 `trigger_type` 及 `trigger_reason` 暗示的方向一致。
+              * **盈亏比**: 目标位可按 ATR 扩展 (Entry + 3*ATR) 估算，要求 R > 1.2 (突发单R值要求略降)。
+              * **止损**: 必须使用紧凑止损 (最近1分钟K线极值 或 Entry ± 0.5*ATR)。
     A) 结构共振判定 (Structural Confluence) —— 寻找“硬地板/硬天花板”
        AI 必须在当前价格附近寻找以下 3 类结构的重叠。重叠越多，时机越完美：
        【第1类：实体供需 (The Wall)】
@@ -296,6 +318,17 @@
         "AI决策建议": {     // 参考：后端算法的初步建议
           "primary_signal": "SELL",
           "signal_strength": "强"
+        }
+    }
+2.3) 触发上下文 (Trigger Context - 仅在哨兵唤醒时存在)
+    "trigger_context": {
+        "is_kline_closed": false,             // false = 盘中突发模式
+        "trigger_type": "MOMENTUM_IGNITION",  // 触发类型: MOMENTUM_IGNITION | SPOT_RUSH | SPOOFING_FLIP
+        "trigger_reason": "Vol Z-Score > 3.0",
+        "statistical_significance": {         // 统计学特征 (Z-Score)
+            "price_velocity_z": 3.4,
+            "volume_z": 4.2,
+            "spot_cvd_z": 2.1
         }
     }
 3) 交易环境（ExchangeMeta）
@@ -713,14 +746,14 @@
              Total < 50分 或 触发死区/悬空否决。
              (含义：**Action = "wait"**，严禁开仓)
         [模块 V：订单流权重 (Order Flow Bonus) - 决定“真伪”]
-                 - **CVD 验证**:
-                   · 出现 Spot CVD 同向背离 (如吸筹/派发) -> +20 分
-                   · Spot CVD 与价格趋势完美同步 (真趋势) -> +10 分
+                 - **CVD 验证 (高权重)**:
+                   · **Spot CVD 净流入** 且与价格同向 (真金白银买入) -> +20 分
+                   · Spot CVD 出现底背离 (价格跌但现货大买) -> +25 分
                  - **盘口验证**:
-                   · 入场位背后有强 Support/Resistance Wall 护盘 -> +15 分
-                   · 盘口失衡率 (Imbalance) 支持交易方向 (>0.3 或 <-0.3) -> +10 分
+                   · 入场位背后有强 Support/Resistance Wall (Stability > 0.6) 护盘 -> +15 分
+                   · 盘口失衡率 (Imbalance) 显著支持交易方向 -> +10 分
                  [模块 VI：订单流一票否决 (OF Veto)]
-                 - **撞墙否决**: 计划做多，但头顶 1% 内有巨额 Resistance Wall -> 降级为 C (Action=Wait)。
+                 - **撞墙否决**: 计划做多，但头顶 1% 内有巨额 Resistance Wall 且由现货主导 -> 降级为 C (Action=Wait)。
                  - **接盘侠否决**: 计划做多，但 Spot CVD 暴跌而仅 Futures CVD 拉升 (诱多) -> 降级为 C。
    B) edge_score (数学期望值: -1.0 ~ 3.0)
          - 定义：Edge = (空间优势/赔率) × (结构指标优势/胜率) 的综合估值。
@@ -2106,6 +2139,9 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
      - 若 5m 缺少 open/high/low/close/close_time 或 x!=true：action 必须为 "wait"（禁止 open_long/open_short），且 B 段必须写 xF。
   2) K:（必须包含：基础技术结构 + 订单流V2结论 + ctx 统计）
          规则：
+         - 【触发源描述】(若为哨兵触发):
+                     * 必须在 K 段开头注明：[TRIGGER: <Type> Z=<MaxZScore>]
+                     * 例：K: [TRIGGER: MOMENTUM Z=4.2]; SZs...
           - 【基础结构锚点】(必须): 从 {SZ,SR,VP,ST,FVG,FIB,CH,DT} 中选 2~3 个关键结构。
             * 每个结构必须带价格/区间，且必须引用 `ctx` 数据 (z-score/vol)。
             * 格式示例：SZd(44.8k) ctx=z0.9 v1.5

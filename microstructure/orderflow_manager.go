@@ -86,6 +86,19 @@ func (ofm *OrderFlowManager) initializeComponents() {
 	sentinelMonitor := GetGlobalSentinelMonitor()
 	sentinelMonitor.Start()
 	
+	// V-12.2 启动哨兵触发引擎
+	sentinelTrigger := GetGlobalSentinelTriggerEngine()
+	sentinelTrigger.Start()
+	// 添加默认警报处理器
+	sentinelTrigger.AddAlertHandler(func(alert *SentinelTriggerAlert) {
+		log.Printf("📢 V-12.2战术机会 [%s] %s: %s (置信度: %.1f%%)", 
+			alert.Symbol, alert.Scenario, alert.Description, alert.Confidence*100)
+	})
+	
+	// V-12.2 启动动态阈值系统
+	dynamicThresholds := GetGlobalDynamicThresholdSystem()
+	dynamicThresholds.Start()
+	
 	// 设置WebSocket数据处理器
 	ofm.setupWebSocketHandlers()
 	
@@ -238,6 +251,14 @@ func (ofm *OrderFlowManager) Stop() {
 	// 🔧 修复：停止哨兵监控系统
 	sentinelMonitor := GetGlobalSentinelMonitor()
 	sentinelMonitor.Stop()
+	
+	// V-12.2 停止哨兵触发引擎
+	sentinelTrigger := GetGlobalSentinelTriggerEngine()
+	sentinelTrigger.Stop()
+	
+	// V-12.2 停止动态阈值系统
+	dynamicThresholds := GetGlobalDynamicThresholdSystem()
+	dynamicThresholds.Stop()
 	
 	fmt.Printf("🚨🚨🚨 [CRITICAL] 即将设置isRunning=false！调用栈:\n%s\n", string(debug.Stack()))
 	log.Printf("🚨🚨🚨 [CRITICAL] 即将设置isRunning=false！调用栈:\n%s", string(debug.Stack()))
@@ -658,8 +679,17 @@ type MarketSnapshot struct {
 	DataQuality    *DataQualityInfo `json:"data_quality"`     // 数据质量评估
 }
 
-// ToAIPayload 转换为AI输入的JSON格式（V2.0结构）
+// ToAIPayload 转换为AI输入的JSON格式（V2.0结构 + V-12.2增强）
 func (ms *MarketSnapshot) ToAIPayload() map[string]interface{} {
+	// 优先使用V-12.2 AI接口
+	aiInterface := GetGlobalAIInterfaceV12()
+	if aiInterface != nil {
+		if contextV12, err := aiInterface.GenerateAIContext(ms.Symbol); err == nil {
+			return contextV12.ToAIPromptFormat()
+		}
+	}
+	
+	// V2.0兜底格式
 	return map[string]interface{}{
 		"订单流分析": map[string]interface{}{
 			"本周期博弈_5m": func() map[string]interface{} {
