@@ -1120,7 +1120,7 @@ GET /api/status?trader_id=xxx            # System status
 GET /api/account?trader_id=xxx           # Account info
 GET /api/positions?trader_id=xxx         # Position list
 GET /api/equity-history?trader_id=xxx    # Equity history (chart data)
-GET /api/decisions/latest?trader_id=xxx  # Latest 10 decisions
+GET /api/decisions/latest?trader_id=xxx  # Latest 5 decisions
 GET /api/statistics?trader_id=xxx        # Statistics
 GET /api/performance?trader_id=xxx       # AI performance analysis
 ```

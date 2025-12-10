@@ -61,7 +61,7 @@ npm run build
 - `GET /api/account` - 账户信息
 - `GET /api/positions` - 持仓列表
 - `GET /api/decisions` - 决策日志（最近30条）
-- `GET /api/decisions/latest` - 最新决策（最近10条）
+- `GET /api/decisions/latest` - 最新决策（最近5条）
 - `GET /api/statistics` - 统计信息
 
 ## 项目结构
