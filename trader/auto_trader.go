@@ -366,9 +366,9 @@ func (at *AutoTrader) TriggerCycle() {
 func (at *AutoTrader) runCycle() error {
 	at.callCount++
 
-	log.Printf("\n" + strings.Repeat("=", 70))
+	log.Printf("%s", "\n" + strings.Repeat("=", 70))
 	log.Printf("⏰ %s - AI决策周期 #%d", time.Now().Format("2006-01-02 15:04:05"), at.callCount)
-	log.Printf(strings.Repeat("=", 70))
+	log.Printf("%s", strings.Repeat("=", 70))
 
 	// 创建决策记录
 	record := &logger.DecisionRecord{
