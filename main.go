@@ -412,16 +412,18 @@ func main() {
 	wsMonitor := market.NewWSMonitor(150)
 	
 	// 设置BTCUSDT触发器回调：触发所有运行中的trader执行AI分析
-	wsMonitor.SetBTCTrigger(func() {
+	// 🔧 修复: 使用精确K线时序触发器，确保订单流计算与K线时间边界精确对齐
+	wsMonitor.SetBTCTriggerWithTime(func(klineCloseTime time.Time) {
 		callbackStart := time.Now()
-		log.Printf("🔔 BTCUSDT触发回调开始: %v", callbackStart.Format("15:04:05.000"))
+		log.Printf("🔔 BTCUSDT精确时序触发回调开始: %v (K线收盘: %v)", 
+			callbackStart.Format("15:04:05.000"), klineCloseTime.Format("15:04:05"))
 		
-		// 🔧 在AI分析前，强制更新所有币种的CVD增量数据
-		log.Printf("🔄 强制更新CVD增量数据...")
+		// 🔧 在AI分析前，使用精确K线收盘时间强制更新所有币种的CVD增量数据
+		log.Printf("🔄 基于K线收盘时间强制更新CVD增量数据...")
 		orderflowManager := microstructure.GetGlobalOrderFlowManager()
 		if orderflowManager != nil {
-			orderflowManager.ForceUpdateAllCVDDeltas()
-			log.Printf("✅ CVD增量数据更新完成")
+			orderflowManager.ForceUpdateAllCVDDeltasWithKLineTime(klineCloseTime)
+			log.Printf("✅ CVD精确时序增量数据更新完成")
 		} else {
 			log.Printf("⚠️ 无法获取OrderFlowManager")
 		}
@@ -434,14 +436,14 @@ func main() {
 			status := trader.GetStatus()
 			if running, ok := status["is_running"].(bool); ok && running {
 				runningCount++
-				log.Printf("🕐 BTCUSDT触发AI分析: %s", traderID)
+				log.Printf("🕐 BTCUSDT精确时序触发AI分析: %s", traderID)
 				// 同步执行，与原来定时器方式一致
 				trader.TriggerCycle()
 			}
 		}
 		
 		totalDuration := time.Since(callbackStart)
-		log.Printf("🏁 所有AI分析完成: %d个traders, 总耗时 %v", runningCount, totalDuration)
+		log.Printf("🏁 所有精确时序AI分析完成: %d个traders, 总耗时 %v", runningCount, totalDuration)
 	})
 	
 	go wsMonitor.Start(database.GetCustomCoins())

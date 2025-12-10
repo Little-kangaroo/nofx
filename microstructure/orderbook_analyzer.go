@@ -15,14 +15,16 @@ type ImbalancePoint struct {
 
 // WallTracker 挂单墙追踪器（V2.0新增）
 type WallTracker struct {
-	wallHistory     map[float64]*WallHistoryEntry // 价格 -> 墙历史
-	maxWallAge      time.Duration                 // 墙的最大存活时间
-	flickerThreshold int                          // 闪烁阈值次数
+	wallHistory      map[int64]*WallHistoryEntry // 🔧 修复：使用分桶价格作为Key，避免浮点数陷阱
+	maxWallAge       time.Duration               // 墙的最大存活时间
+	flickerThreshold int                         // 闪烁阈值次数
+	tickSize         float64                     // 价格最小变动单位（用于分桶）
 }
 
 // WallHistoryEntry 挂单墙历史记录
 type WallHistoryEntry struct {
-	price         float64
+	bucketKey     int64     // 🔧 新增：分桶key，容许价格范围内的微调
+	priceRange    [2]float64 // 🔧 新增：价格范围 [min, max]
 	firstSeen     time.Time
 	lastSeen      time.Time
 	appearances   int        // 出现次数
@@ -75,15 +77,42 @@ func (calc *OrderBookCalculator) getOrCreateSymbolData(symbol string) *SymbolOrd
 		currentAsks:      make([]OrderBookLevel, 0, 20),
 		imbalanceHistory: make([]ImbalancePoint, 0, calc.maxHistorySize),
 		wallTracker: &WallTracker{
-			wallHistory:     make(map[float64]*WallHistoryEntry),
-			maxWallAge:      30 * time.Minute,
+			wallHistory:      make(map[int64]*WallHistoryEntry),
+			maxWallAge:       30 * time.Minute,
 			flickerThreshold: 3,
+			tickSize:         calc.calculateTickSize(symbol), // 🔧 动态计算分桶大小
 		},
 		last5mReset: time.Now(),
 	}
 	
 	calc.symbolData[symbol] = data
 	return data
+}
+
+// calculateTickSize 动态计算价格分桶大小
+func (calc *OrderBookCalculator) calculateTickSize(symbol string) float64 {
+	// 🔧 修复：基于币种动态计算分桶大小，解决浮点数陷阱
+	if symbol == "BTCUSDT" {
+		return 10.0 // BTC: 10USD为一个分桶
+	} else if symbol == "ETHUSDT" {
+		return 5.0  // ETH: 5USD为一个分桶
+	} else {
+		return 0.1  // 其他币种: 0.1USD为一个分桶
+	}
+}
+
+// priceToBucket 将价格转换为分桶Key
+func (calc *OrderBookCalculator) priceToBucket(price float64, tickSize float64) int64 {
+	// 🔧 修复：将相近价格归入同一个分桶，容忍价格微调
+	return int64(price / tickSize)
+}
+
+// bucketToPrice 将分桶Key转换回价格范围
+func (calc *OrderBookCalculator) bucketToPrice(bucketKey int64, tickSize float64) (float64, float64) {
+	// 返回分桶的价格范围 [min, max]
+	minPrice := float64(bucketKey) * tickSize
+	maxPrice := minPrice + tickSize
+	return minPrice, maxPrice
 }
 
 // ProcessDepthData 处理盘口数据更新
@@ -449,8 +478,9 @@ func (calc *OrderBookCalculator) GetCurrentOrderBookData(symbol string, smoothPe
 	bidPressure := calc.calculatePressure(symbolData.currentBids)
 	askPressure := calc.calculatePressure(symbolData.currentAsks)
 
-	// 检查数据是否过期 - 调整为30分钟阈值，给数据更新留足时间
-	isStale := time.Since(symbolData.lastUpdate) > 30*time.Minute
+	// 检查数据是否过期 - 🔧 修复：使用更合理的过期判断，盘口数据应该更严格
+	// 盘口数据是实时的，5分钟无更新就应该标记为过期
+	isStale := time.Since(symbolData.lastUpdate) > 5*time.Minute
 
 	// V2.0: 计算额外的市场微观结构指标
 	imbalanceTrend := calc.calculateImbalanceTrend(symbol)
@@ -535,21 +565,25 @@ func (calc *OrderBookCalculator) trackWall(symbol string, price, size float64, t
 		return
 	}
 	
-	entry, exists := symbolData.wallTracker.wallHistory[price]
+	// 🔧 修复：使用价格分桶机制，避免浮点数陷阱
+	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
+	entry, exists := symbolData.wallTracker.wallHistory[bucketKey]
 	
 	if !exists {
 		// 新墙
-		symbolData.wallTracker.wallHistory[price] = &WallHistoryEntry{
-			price:         price,
-			firstSeen:     timestamp,
-			lastSeen:      timestamp,
-			appearances:   1,
+		minPrice, maxPrice := calc.bucketToPrice(bucketKey, symbolData.wallTracker.tickSize)
+		symbolData.wallTracker.wallHistory[bucketKey] = &WallHistoryEntry{
+			bucketKey:      bucketKey,
+			priceRange:     [2]float64{minPrice, maxPrice},
+			firstSeen:      timestamp,
+			lastSeen:       timestamp,
+			appearances:    1,
 			disappearances: 0,
-			maxSize:       size,
-			minSize:       size,
-			avgSize:       size,
-			sizeHistory:   []float64{size},
-			isActive:      true,
+			maxSize:        size,
+			minSize:        size,
+			avgSize:        size,
+			sizeHistory:    []float64{size},
+			isActive:       true,
 		}
 		symbolData.wallChangeCount5m++
 	} else {
@@ -561,6 +595,14 @@ func (calc *OrderBookCalculator) trackWall(symbol string, price, size float64, t
 			entry.appearances++
 			entry.isActive = true
 			symbolData.wallChangeCount5m++
+		}
+		
+		// 更新价格范围（扩展到包含新价格）
+		if price < entry.priceRange[0] {
+			entry.priceRange[0] = price
+		}
+		if price > entry.priceRange[1] {
+			entry.priceRange[1] = price
 		}
 		
 		// 更新大小统计
@@ -590,12 +632,14 @@ func (calc *OrderBookCalculator) cleanupExpiredWalls(symbol string, timestamp ti
 	
 	cutoffTime := timestamp.Add(-symbolData.wallTracker.maxWallAge)
 	
-	for price, entry := range symbolData.wallTracker.wallHistory {
+	for bucketKey, entry := range symbolData.wallTracker.wallHistory {
 		if entry.lastSeen.Before(cutoffTime) {
-			delete(symbolData.wallTracker.wallHistory, price)
+			delete(symbolData.wallTracker.wallHistory, bucketKey)
 		} else if entry.isActive {
 			// 检查墙是否已消失（在当前盘口中不存在）
-			if !calc.isWallCurrentlyPresent(symbol, price) {
+			// 🔧 修复：将bucketKey转换为价格进行检查
+			minPrice, _ := calc.bucketToPrice(bucketKey, symbolData.wallTracker.tickSize)
+			if !calc.isWallCurrentlyPresent(symbol, minPrice) {
 				entry.isActive = false
 				entry.disappearances++
 				symbolData.wallChangeCount5m++
@@ -622,19 +666,27 @@ func (calc *OrderBookCalculator) isWallCurrentlyPresent(symbol string, price flo
 	
 	threshold := avgValue * calc.wallThreshold
 	
+	// 🔧 修复：使用分桶机制查找墙
+	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
+	minPrice, maxPrice := calc.bucketToPrice(bucketKey, symbolData.wallTracker.tickSize)
+	
 	// 检查买单档位
 	for _, bid := range symbolData.currentBids {
-		if math.Abs(bid.Price-price) < 0.0001 { // 价格匹配
+		if bid.Price >= minPrice && bid.Price <= maxPrice { // 价格在分桶范围内
 			levelValue := bid.Price * bid.Quantity
-			return levelValue > threshold
+			if levelValue > threshold {
+				return true
+			}
 		}
 	}
 	
 	// 检查卖单档位
 	for _, ask := range symbolData.currentAsks {
-		if math.Abs(ask.Price-price) < 0.0001 { // 价格匹配
+		if ask.Price >= minPrice && ask.Price <= maxPrice { // 价格在分桶范围内
 			levelValue := ask.Price * ask.Quantity
-			return levelValue > threshold
+			if levelValue > threshold {
+				return true
+			}
 		}
 	}
 	
@@ -648,7 +700,9 @@ func (calc *OrderBookCalculator) calculateWallStability(symbol string, price, cu
 		return 0.5, 0, 0
 	}
 	
-	entry, exists := symbolData.wallTracker.wallHistory[price]
+	// 🔧 修复：使用分桶机制查找墙历史
+	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
+	entry, exists := symbolData.wallTracker.wallHistory[bucketKey]
 	if !exists {
 		// 新墙，返回默认值
 		return 0.5, 0, 0
@@ -740,39 +794,74 @@ func (calc *OrderBookCalculator) calculatePressureDelta5m(symbol string, current
 	return currentImbalance - baseline
 }
 
-// calculateSpoofingRisk 计算虚假挂单风险评分（V2.0）
+// calculateSpoofingRisk 计算虚假挂单风险评分（V2.0修复版）
 func (calc *OrderBookCalculator) calculateSpoofingRisk(symbol string) float64 {
 	symbolData := calc.symbolData[symbol]
 	if symbolData == nil {
 		return 0
 	}
 	
-	riskScore := 0.0
+	now := time.Now()
+	recentTimeThreshold := now.Add(-5 * time.Minute) // 🔧 修复：只看最近5分钟的墙
 	
-	// 检查墙的闪烁频率
-	totalFlickers := 0
-	totalWalls := 0
+	var maxSingleRisk float64 = 0.0 // 🔧 修复：取单个墙的最大风险，而非累加
+	activeWallCount := 0
 	
+	// 🔧 修复：只遍历活跃且最近的墙
 	for _, entry := range symbolData.wallTracker.wallHistory {
-		if entry.isActive {
-			totalWalls++
-			// 如果闪烁次数超过阈值，增加风险评分
-			if entry.disappearances > symbolData.wallTracker.flickerThreshold {
-				totalFlickers++
-				riskScore += float64(entry.disappearances) / 10.0
+		// 🔧 修复：过滤条件 - 只看活跃且最近有活动的墙
+		if !entry.isActive || entry.lastSeen.Before(recentTimeThreshold) {
+			continue
+		}
+		
+		activeWallCount++
+		
+		// 计算单个墙的风险评分
+		singleRisk := 0.0
+		
+		// 闪烁风险：基于消失次数相对于出现次数的比例
+		if entry.appearances > 0 {
+			flickerRatio := float64(entry.disappearances) / float64(entry.appearances)
+			if flickerRatio > 0.5 { // 消失次数超过出现次数的一半才算风险
+				singleRisk += math.Min(0.6, flickerRatio) // 最高0.6分
 			}
+		}
+		
+		// 大小变化风险：如果墙的大小变化过于剧烈
+		if entry.maxSize > 0 && len(entry.sizeHistory) > 3 {
+			sizeVariation := (entry.maxSize - entry.minSize) / entry.maxSize
+			if sizeVariation > 0.8 { // 大小变化超过80%
+				singleRisk += math.Min(0.3, sizeVariation-0.5) // 最高0.3分
+			}
+		}
+		
+		// 时间衰减：越久的墙风险越低
+		existenceMinutes := now.Sub(entry.firstSeen).Minutes()
+		timeDecay := math.Max(0.1, 1.0-existenceMinutes/60) // 1小时后衰减到0.1
+		singleRisk *= timeDecay
+		
+		// 🔧 修复：取最大值而非累加
+		if singleRisk > maxSingleRisk {
+			maxSingleRisk = singleRisk
 		}
 	}
 	
-	// 如果5分钟内墙变化过于频繁
-	if symbolData.wallChangeCount5m > 10 {
-		riskScore += float64(symbolData.wallChangeCount5m) / 50.0
+	// 🔧 修复：基于5分钟内墙变化频率的额外风险（但有上限）
+	changeFrequencyRisk := 0.0
+	if symbolData.wallChangeCount5m > 20 { // 5分钟内变化超过20次才算异常
+		changeFrequencyRisk = math.Min(0.4, float64(symbolData.wallChangeCount5m-20)/50.0)
 	}
 	
-	// 标准化风险评分到0-1范围
-	riskScore = math.Min(1.0, riskScore)
+	// 🔧 修复：最终风险评分 = max(单墙风险, 变化频率风险)
+	finalRisk := math.Max(maxSingleRisk, changeFrequencyRisk)
 	
-	return riskScore
+	// 🔧 修复：如果没有活跃墙，风险为0
+	if activeWallCount == 0 {
+		finalRisk = 0
+	}
+	
+	// 确保在0-1范围内
+	return math.Max(0, math.Min(1, finalRisk))
 }
 
 // calculateLiquidityScore 计算流动性评分（V2.0）
@@ -851,7 +940,9 @@ func (calc *OrderBookCalculator) getWallFirstSeen(symbol string, price float64) 
 		return time.Now()
 	}
 	
-	if entry, exists := symbolData.wallTracker.wallHistory[price]; exists {
+	// 🔧 修复：将价格转换为bucketKey
+	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
+	if entry, exists := symbolData.wallTracker.wallHistory[bucketKey]; exists {
 		return entry.firstSeen
 	}
 	return time.Now() // 如果没有历史记录，返回当前时间
@@ -864,7 +955,9 @@ func (calc *OrderBookCalculator) getWallAverageSize(symbol string, price float64
 		return 0
 	}
 	
-	if entry, exists := symbolData.wallTracker.wallHistory[price]; exists {
+	// 🔧 修复：将价格转换为bucketKey
+	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
+	if entry, exists := symbolData.wallTracker.wallHistory[bucketKey]; exists {
 		return entry.avgSize
 	}
 	return 0
@@ -877,7 +970,9 @@ func (calc *OrderBookCalculator) getWallMaxSize(symbol string, price float64) fl
 		return 0
 	}
 	
-	if entry, exists := symbolData.wallTracker.wallHistory[price]; exists {
+	// 🔧 修复：将价格转换为bucketKey
+	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
+	if entry, exists := symbolData.wallTracker.wallHistory[bucketKey]; exists {
 		return entry.maxSize
 	}
 	return 0
@@ -890,7 +985,9 @@ func (calc *OrderBookCalculator) getWallMinSize(symbol string, price float64) fl
 		return 0
 	}
 	
-	if entry, exists := symbolData.wallTracker.wallHistory[price]; exists {
+	// 🔧 修复：将价格转换为bucketKey
+	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
+	if entry, exists := symbolData.wallTracker.wallHistory[bucketKey]; exists {
 		return entry.minSize
 	}
 	return 0

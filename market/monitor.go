@@ -25,7 +25,8 @@ type WSMonitor struct {
 	filterSymbols   sync.Map // 使用sync.Map来存储需要监控的币种和其状态
 	symbolStats     sync.Map // 存储币种统计信息
 	FilterSymbol    []string //经过筛选的币种
-	btcTriggerCallback func() // BTCUSDT 5分钟收盘事件触发器回调
+	btcTriggerCallback func() // BTCUSDT 5分钟收盘事件触发器回调（兼容版本）
+	btcTriggerCallbackWithTime func(time.Time) // 🔧 新增：支持精确K线收盘时间的触发器回调
 }
 type SymbolStats struct {
 	LastActiveTime   time.Time
@@ -221,8 +222,18 @@ func (m *WSMonitor) processKlineUpdate(symbol string, wsData KlineWSData, _time 
 		closeTime := time.UnixMilli(wsData.Kline.CloseTime)
 		log.Printf("🕐 BTCUSDT 5分钟K线收盘事件: %v", closeTime.Format("2006-01-02 15:04:05"))
 		
-		// 触发AI分析回调，传递触发时间用于性能统计
-		if m.btcTriggerCallback != nil {
+		// 🔧 优先使用精确时序触发器，支持K线收盘时间传递
+		if m.btcTriggerCallbackWithTime != nil {
+			go func() {
+				start := time.Now()
+				log.Printf("⏱️ 开始精确时序AI分析触发: %v (K线收盘: %v)", 
+					start.Format("15:04:05.000"), closeTime.Format("15:04:05"))
+				m.btcTriggerCallbackWithTime(closeTime)
+				duration := time.Since(start)
+				log.Printf("📊 精确时序AI分析完成耗时: %v", duration)
+			}()
+		} else if m.btcTriggerCallback != nil {
+			// 兼容原有触发器
 			go func() {
 				start := time.Now()
 				log.Printf("⏱️ 开始AI分析触发: %v", start.Format("15:04:05.000"))
@@ -299,6 +310,11 @@ func (m *WSMonitor) GetCurrentKlines(symbol string, _time string) ([]Kline, erro
 // SetBTCTrigger 设置BTCUSDT 5分钟收盘事件触发器回调
 func (m *WSMonitor) SetBTCTrigger(callback func()) {
 	m.btcTriggerCallback = callback
+}
+
+// SetBTCTriggerWithTime 设置BTCUSDT 5分钟收盘事件触发器回调（🔧 新增：支持精确时序）
+func (m *WSMonitor) SetBTCTriggerWithTime(callback func(time.Time)) {
+	m.btcTriggerCallbackWithTime = callback
 }
 
 func (m *WSMonitor) Close() {

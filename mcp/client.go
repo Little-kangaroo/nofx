@@ -23,14 +23,14 @@ const (
 
 // Client AI API配置
 type Client struct {
-	Provider     Provider
-	APIKey       string
-	BaseURL      string
-	Model        string
-	Timeout      time.Duration
-	UseFullURL   bool                // 是否使用完整URL（不添加/chat/completions）
-	CustomHeaders map[string]string  // 自定义请求头
-	RequestFormat string             // 请求格式：openai（默认）、anthropic
+	Provider      Provider
+	APIKey        string
+	BaseURL       string
+	Model         string
+	Timeout       time.Duration
+	UseFullURL    bool              // 是否使用完整URL（不添加/chat/completions）
+	CustomHeaders map[string]string // 自定义请求头
+	RequestFormat string            // 请求格式：openai（默认）、anthropic
 }
 
 func New() *Client {
@@ -100,7 +100,7 @@ func (client *Client) SetCustomAPI(apiURL, apiKey, modelName string) {
 	client.Provider = ProviderCustom
 	client.APIKey = apiKey
 	client.CustomHeaders = make(map[string]string) // 重置自定义请求头
-	client.RequestFormat = "openai" // 默认OpenAI格式
+	client.RequestFormat = "openai"                // 默认OpenAI格式
 
 	// 检测是否是Anthropic API
 	if strings.Contains(apiURL, "anthropic") || strings.Contains(apiURL, "claude") {
@@ -111,12 +111,12 @@ func (client *Client) SetCustomAPI(apiURL, apiKey, modelName string) {
 		} else {
 			client.BaseURL = apiURL
 		}
-		
+
 		// 设置Anthropic专用请求头
 		client.CustomHeaders["x-api-key"] = apiKey
 		client.CustomHeaders["anthropic-version"] = "2023-06-01"
 		client.CustomHeaders["content-type"] = "application/json"
-		
+
 		log.Printf("🔧 [MCP] 检测到Anthropic API，使用专用配置")
 		log.Printf("🔧 [MCP] Anthropic BaseURL: %s", client.BaseURL)
 		log.Printf("🔧 [MCP] 已设置Anthropic专用请求头")
@@ -155,14 +155,14 @@ func (client *Client) SetAnthropicAPI(apiURL, apiKey, modelName string) {
 	client.UseFullURL = true
 	client.RequestFormat = "anthropic"
 	client.Timeout = 600 * time.Second
-	
+
 	// 初始化自定义请求头
 	client.CustomHeaders = map[string]string{
-		"x-api-key":          apiKey,
-		"anthropic-version":  "2023-06-01",
-		"content-type":       "application/json",
+		"x-api-key":         apiKey,
+		"anthropic-version": "2023-06-01",
+		"content-type":      "application/json",
 	}
-	
+
 	log.Printf("🔧 [MCP] Anthropic API配置完成")
 	log.Printf("🔧 [MCP] BaseURL: %s", client.BaseURL)
 	log.Printf("🔧 [MCP] Model: %s", client.Model)
@@ -242,26 +242,26 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	if client.RequestFormat == "anthropic" {
 		// Anthropic Claude API 格式
 		maxTokens = 4096 // Anthropic Claude默认token限制
-		
+
 		requestBody = map[string]interface{}{
 			"model":      client.Model,
 			"max_tokens": maxTokens,
 		}
-		
+
 		// Anthropic API格���：system作为独立参数，messages只包含用户消息
 		if systemPrompt != "" {
 			requestBody["system"] = systemPrompt
 		}
-		
+
 		// messages数组只包含用户消息
 		messages = []map[string]string{
 			{
-				"role":    "user", 
+				"role":    "user",
 				"content": userPrompt,
 			},
 		}
 		requestBody["messages"] = messages
-		
+
 		log.Printf("📤 [MCP] 使用Anthropic API格式")
 	} else {
 		// OpenAI兼容API格式（默认）
@@ -275,9 +275,9 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		default:
 			maxTokens = 8000 // 默认使用较保守的限制
 		}
-		
+
 		// 构建 messages 数组
-		
+
 		// 如果有 system prompt，添加 system message
 		if systemPrompt != "" {
 			messages = append(messages, map[string]string{
@@ -285,7 +285,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 				"content": systemPrompt,
 			})
 		}
-		
+
 		// 添加 user message
 		messages = append(messages, map[string]string{
 			"role":    "user",
@@ -305,7 +305,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		switch client.Provider {
 		case ProviderDeepSeek:
 			requestBody["max_tokens"] = maxTokens // DeepSeek仍使用max_tokens
-			requestBody["temperature"] = 0.5      // DeepSeek支持temperature参数
+			requestBody["temperature"] = 1        // DeepSeek支持temperature参数
 		case ProviderQwen:
 			requestBody["max_tokens"] = maxTokens // Qwen仍使用max_tokens
 			requestBody["temperature"] = 0.5      // Qwen支持temperature参数
@@ -328,7 +328,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 				requestBody["prompt_cache_retention"] = "24h"
 			}
 		}
-		
+
 		log.Printf("📤 [MCP] 使用OpenAI兼容API格式")
 	}
 
@@ -477,26 +477,26 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 				Text string `json:"text"`
 			} `json:"content"`
 		}
-		
+
 		if err := json.Unmarshal(body, &anthropicResult); err != nil {
 			return "", fmt.Errorf("解析Anthropic响应失败: %w", err)
 		}
-		
+
 		if len(anthropicResult.Content) == 0 {
 			return "", fmt.Errorf("Anthropic API返回空内容")
 		}
-		
+
 		// 拼接所有文本内容
 		for _, content := range anthropicResult.Content {
 			if content.Type == "text" {
 				responseContent += content.Text
 			}
 		}
-		
+
 		if responseContent == "" {
 			return "", fmt.Errorf("Anthropic API未返回文本内容")
 		}
-		
+
 		log.Printf("📥 [MCP] Anthropic响应解析成功: %d个内容块", len(anthropicResult.Content))
 	} else {
 		// OpenAI兼容API响应格式（默认）

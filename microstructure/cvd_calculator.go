@@ -7,21 +7,54 @@ import (
 	"time"
 )
 
+// ===== 🔧 修复: 数值计算稳定性工具函数 =====
+
+// safeFloat64 确保浮点数在有效范围内，处理NaN和Inf
+func safeFloat64(value float64, defaultValue float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return defaultValue
+	}
+	return value
+}
+
+// safeDivision 安全除法，避免除零和产生无效值
+func safeDivision(numerator, denominator float64) float64 {
+	if denominator == 0 || math.IsNaN(denominator) || math.IsInf(denominator, 0) {
+		return 0
+	}
+	if math.IsNaN(numerator) || math.IsInf(numerator, 0) {
+		return 0
+	}
+	
+	result := numerator / denominator
+	return safeFloat64(result, 0)
+}
+
+// validateFinancialData 验证金融数据的有效性
+func validateFinancialData(price, quantity float64) bool {
+	return price > 0 && quantity > 0 && 
+		   !math.IsNaN(price) && !math.IsInf(price, 0) &&
+		   !math.IsNaN(quantity) && !math.IsInf(quantity, 0)
+}
+
 // NewCVDCalculator 创建CVD计算器
 func NewCVDCalculator(symbol string, windowDuration time.Duration) *CVDCalculator {
+	now := time.Now()
 	return &CVDCalculator{
 		symbol:           symbol,
 		spotDeltas:       make([]CVDDelta, 0, 3600), // 预分配1小时的容量（假设每秒1笔交易）
 		futuresDeltas:    make([]CVDDelta, 0, 3600),
 		windowDuration:   windowDuration,
-		lastCleanup:      time.Now(),
+		lastCleanup:      now,
 		currentSpotCVD:   0,
 		currentFuturesCVD: 0,
 		last5mSpotCVD:     0,
 		last5mFuturesCVD:  0,
-		last5mSnapshot:    time.Now(),
+		last5mSnapshot:    now,
+		lastDataUpdate:    now, // 🔧 修复: 初始化最后数据更新时间
 		fiveMinuteCache:   make(map[string]*CVDDelta5m),
 		priceHistory:      make([]PriceSnapshot, 0, 360), // 6小时价格历史
+		volumeHistory:     make([]VolumeSnapshot, 0, 360), // 🔧 修复: 6小时成交量历史
 	}
 }
 
@@ -30,10 +63,23 @@ func (calc *CVDCalculator) ProcessTrade(trade *TradeData) {
 	calc.mu.Lock()
 	defer calc.mu.Unlock()
 
+	// 🔧 修复: 验证交易数据的有效性
+	if !validateFinancialData(trade.Price, trade.Quantity) {
+		log.Printf("❌ [%s] 交易数据无效: 价格=%.8f, 数量=%.8f", 
+			calc.symbol, trade.Price, trade.Quantity)
+		return
+	}
+
 	// 计算交易的USD价值增量
 	volumeUSD := trade.Price * trade.Quantity
-	var deltaUSD float64
+	volumeUSD = safeFloat64(volumeUSD, 0) // 🔧 修复: 确保计算结果有效
+	
+	if volumeUSD <= 0 {
+		log.Printf("❌ [%s] 计算出的成交量无效: %.8f", calc.symbol, volumeUSD)
+		return
+	}
 
+	var deltaUSD float64
 	if trade.IsBuyerMaker {
 		// 买方是挂单方 = 主动卖单 (Taker是卖方)
 		deltaUSD = -volumeUSD
@@ -52,11 +98,17 @@ func (calc *CVDCalculator) ProcessTrade(trade *TradeData) {
 	switch trade.MarketType {
 	case "spot":
 		calc.spotDeltas = append(calc.spotDeltas, delta)
-		calc.currentSpotCVD += deltaUSD
+		calc.currentSpotCVD = safeFloat64(calc.currentSpotCVD+deltaUSD, calc.currentSpotCVD) // 🔧 修复: 安全累加
 	case "futures":
 		calc.futuresDeltas = append(calc.futuresDeltas, delta)
-		calc.currentFuturesCVD += deltaUSD
+		calc.currentFuturesCVD = safeFloat64(calc.currentFuturesCVD+deltaUSD, calc.currentFuturesCVD) // 🔧 修复: 安全累加
 	}
+	
+	// 🔧 修复: 更新最后数据更新时间
+	calc.lastDataUpdate = trade.Timestamp
+	
+	// 🔧 修复: 记录成交量历史用于Volume Ratio计算
+	calc.updateVolumeHistory(volumeUSD, trade.Timestamp)
 
 	// 🔧 修复: 优化清理时机，避免在增量计算期间清理
 	// 定期清理过期数据（每5分钟清理一次，但要避免清理时机冲突）
@@ -107,13 +159,17 @@ func (calc *CVDCalculator) GetCurrentCVD() *CVDData {
 	signal := calc.generateSignal()
 	divergence := calc.detectDivergence()
 
+	// 🔧 修复：CVD数据过期判断 - 基于最后收到交易数据的时间
+	// CVD数据是基于交易流计算的，如果5分钟没有新交易数据，标记为过期
+	isStale := time.Since(calc.lastDataUpdate) > 5*time.Minute
+
 	return &CVDData{
 		SpotCVD1H:     calc.currentSpotCVD,
 		FuturesCVD1H:  calc.currentFuturesCVD,
 		CVDDivergence: divergence,
 		Signal:        signal,
 		LastUpdate:    time.Now(),
-		IsStale:       false,
+		IsStale:       isStale, // 🔧 修复：使用实际的过期判断而非硬编码false
 	}
 }
 
@@ -366,6 +422,28 @@ func (manager *CVDManager) ForceUpdateAllCVDDeltas() {
 	log.Printf("✅ 所有CVD增量数据更新完成")
 }
 
+// ForceUpdateAllCVDDeltasWithKLineTime 使用精确K线收盘时间强制更新所有币种（🔧 新增：精确时序版本）
+func (manager *CVDManager) ForceUpdateAllCVDDeltasWithKLineTime(klineCloseTime time.Time) {
+	manager.mu.RLock()
+	symbols := make([]string, 0, len(manager.calculators))
+	for symbol := range manager.calculators {
+		symbols = append(symbols, symbol)
+	}
+	manager.mu.RUnlock()
+	
+	log.Printf("🔧 基于K线收盘时间强制更新所有CVD增量数据: %s, 共%d个币种", 
+		klineCloseTime.Format("15:04:05"), len(symbols))
+	
+	for _, symbol := range symbols {
+		calc := manager.calculators[symbol]
+		if calc != nil {
+			calc.ForceUpdate5MinuteDeltaWithKLineTime(klineCloseTime)
+		}
+	}
+	
+	log.Printf("✅ 所有CVD精确时序增量数据更新完成")
+}
+
 // GetAllCVDData 获取所有币种的CVD数据
 func (manager *CVDManager) GetAllCVDData() map[string]*CVDData {
 	manager.mu.RLock()
@@ -458,9 +536,9 @@ func (calc *CVDCalculator) update5MinuteDelta(currentTime time.Time) {
 	// 推断K线意图（基于价格和CVD的组合）
 	candleIntent := calc.inferCandleIntent(priceDeltaPct, spotDelta, futuresDelta)
 	
-	// 计算成交量变化（简化实现）
+	// 计算成交量变化（修复硬编码问题）
 	volumeDelta := math.Abs(spotDelta) + math.Abs(futuresDelta)
-	volumeRatio := 1.0 // 需要历史平均成交量数据来计算真实比例
+	volumeRatio := calc.calculateVolumeRatio(volumeDelta) // 🔧 修复：实现真实的成交量比率计算
 	
 	// 创建5分钟增量数据
 	delta5m := &CVDDelta5m{
@@ -563,58 +641,81 @@ func (calc *CVDCalculator) analyzeCandleIntentWithConfidence(priceDelta, spotDel
 	return analysis
 }
 
-// determineIntentWithLogic 核心意图判断逻辑
+// determineIntentWithLogic 核心意图判断逻辑（🔧 修复：重新校准置信度算法）
 func (calc *CVDCalculator) determineIntentWithLogic(
 	priceDelta, spotDelta, futuresDelta float64,
 	priceStr, spotStr, futuresStr float64,
 	bullishForce, bearishForce float64,
 ) (string, float64, float64) {
 	
+	// 🔧 修复：计算数据质量因子，影响置信度
+	dataQuality := calc.calculateCurrentDataQuality()
+	
+	// 🔧 修复：计算市场波动性，高波动时降低置信度
+	volatilityPenalty := calc.calculateVolatilityPenalty()
+	
+	// 🔧 修复：基础置信度计算，更加保守
+	baseConfidence := (priceStr + spotStr + futuresStr) / 3.0
+	
 	// 1. 多头确认：价格上涨 + 现货和期货都净买入
 	if priceDelta > 0.1 && spotDelta > 50000 && futuresDelta > 50000 {
-		confidence := math.Min(0.95, (priceStr + spotStr + futuresStr) / 3.0 + 0.2)
+		// 🔧 修复：更保守的置信度计算，考虑数据质量和波动性
+		confidence := baseConfidence * dataQuality * (1.0 - volatilityPenalty)
+		confidence = math.Max(0.1, math.Min(0.85, confidence)) // 降低最大置信度至0.85
 		strength := bullishForce
 		return CandleIntentBullishConfirm, confidence, strength
 	}
 	
 	// 2. 空头确认：价格下跌 + 现货和期货都净卖出
 	if priceDelta < -0.1 && spotDelta < -50000 && futuresDelta < -50000 {
-		confidence := math.Min(0.95, (priceStr + spotStr + futuresStr) / 3.0 + 0.2)
+		// 🔧 修复：更保守的置信度计算
+		confidence := baseConfidence * dataQuality * (1.0 - volatilityPenalty)
+		confidence = math.Max(0.1, math.Min(0.85, confidence))
 		strength := bearishForce
 		return CandleIntentBearishConfirm, confidence, strength
 	}
 	
 	// 3. 散户推动假突破：价格大涨但现货卖出（机构套现）
 	if priceDelta > 0.3 && spotDelta < -100000 {
-		confidence := math.Min(0.9, priceStr + spotStr/2.0 + 0.1)
+		// 🔧 修复：假突破信号置信度应该更低，因为难以确认
+		confidence := (priceStr + spotStr/2.0) * dataQuality * 0.8 // 增加折扣因子
+		confidence = math.Max(0.1, math.Min(0.75, confidence)) // 降低最大置信度
 		strength := priceStr + spotStr/2.0
 		return CandleIntentFakePumpRetail, confidence, strength
 	}
 	
 	// 4. 散户推动假跌破：价格大跌但现货买入（机构抄底）
 	if priceDelta < -0.3 && spotDelta > 100000 {
-		confidence := math.Min(0.9, priceStr + spotStr/2.0 + 0.1)
+		// 🔧 修复：假跌破信号置信度应该更低
+		confidence := (priceStr + spotStr/2.0) * dataQuality * 0.8
+		confidence = math.Max(0.1, math.Min(0.75, confidence))
 		strength := priceStr + spotStr/2.0
 		return CandleIntentFakeDumpRetail, confidence, strength
 	}
 	
 	// 5. 主力吸筹：价格平稳但现货大量净买入
 	if math.Abs(priceDelta) < 0.3 && spotDelta > 200000 {
-		confidence := math.Min(0.85, spotStr + 0.3)
+		// 🔧 修复：主力操作信号，中等置信度
+		confidence := spotStr * dataQuality * 0.9
+		confidence = math.Max(0.1, math.Min(0.70, confidence))
 		strength := spotStr
 		return CandleIntentSmartMoneyAccum, confidence, strength
 	}
 	
 	// 6. 主力派发：价格平稳但现货大量净卖出
 	if math.Abs(priceDelta) < 0.3 && spotDelta < -200000 {
-		confidence := math.Min(0.85, spotStr + 0.3)
+		// 🔧 修复：主力操作信号，中等置信度
+		confidence := spotStr * dataQuality * 0.9
+		confidence = math.Max(0.1, math.Min(0.70, confidence))
 		strength := spotStr
 		return CandleIntentSmartMoneyDistrib, confidence, strength
 	}
 	
 	// 7. 期货领先：期货强势但现货跟随较弱
 	if math.Abs(futuresDelta) > 200000 && math.Abs(spotDelta) < math.Abs(futuresDelta)/3 {
-		confidence := math.Min(0.75, futuresStr + 0.2)
+		// 🔧 修复：期货领先信号，中低置信度
+		confidence := futuresStr * dataQuality * 0.7
+		confidence = math.Max(0.1, math.Min(0.65, confidence))
 		strength := futuresStr
 		if futuresDelta > 0 {
 			return "futures_leading_bullish", confidence, strength
@@ -625,7 +726,9 @@ func (calc *CVDCalculator) determineIntentWithLogic(
 	
 	// 8. 现货领先：现货强势但期货跟随较弱
 	if math.Abs(spotDelta) > 200000 && math.Abs(futuresDelta) < math.Abs(spotDelta)/3 {
-		confidence := math.Min(0.75, spotStr + 0.2)
+		// 🔧 修复：现货领先信号，中低置信度
+		confidence := spotStr * dataQuality * 0.7
+		confidence = math.Max(0.1, math.Min(0.65, confidence))
 		strength := spotStr
 		if spotDelta > 0 {
 			return "spot_leading_bullish", confidence, strength
@@ -636,25 +739,29 @@ func (calc *CVDCalculator) determineIntentWithLogic(
 	
 	// 9. 整理状态：价格和成交量都较小
 	if math.Abs(priceDelta) < 0.15 && math.Abs(spotDelta) < 80000 && math.Abs(futuresDelta) < 80000 {
-		confidence := 0.7
+		confidence := 0.6 * dataQuality // 🔧 修复：整理状态也受数据质量影响
 		strength := 0.2
 		return CandleIntentConsolidation, confidence, strength
 	}
 	
 	// 10. 混合信号：现货期货方向相反
 	if (spotDelta > 100000 && futuresDelta < -100000) || (spotDelta < -100000 && futuresDelta > 100000) {
-		confidence := math.Min(0.8, (spotStr + futuresStr) / 2.0 + 0.2)
+		// 🔧 修复：混合信号置信度应该较低，因为市场分歧大
+		confidence := (spotStr + futuresStr) / 2.0 * dataQuality * 0.6
+		confidence = math.Max(0.1, math.Min(0.60, confidence))
 		strength := (spotStr + futuresStr) / 2.0
 		return CandleIntentMixedSignals, confidence, strength
 	}
 	
 	// 11. 数据不足或信号微弱
 	if priceStr < 0.1 && spotStr < 0.1 && futuresStr < 0.1 {
-		return CandleIntentDataInsufficient, 0.3, 0.1
+		return CandleIntentDataInsufficient, 0.2, 0.1
 	}
 	
 	// 默认：低确信度的整理状态
-	return CandleIntentConsolidation, 0.5, (priceStr + spotStr + futuresStr) / 3.0
+	defaultConfidence := (priceStr + spotStr + futuresStr) / 3.0 * dataQuality * 0.5
+	defaultConfidence = math.Max(0.2, math.Min(0.5, defaultConfidence))
+	return CandleIntentConsolidation, defaultConfidence, (priceStr + spotStr + futuresStr) / 3.0
 }
 
 // detectSecondaryIntent 检测次要意图
@@ -784,7 +891,168 @@ func (calc *CVDCalculator) ForceUpdate5MinuteDelta() {
 	calc.update5MinuteDelta(currentTime)
 }
 
-// ===== 🔧 修复: 数据清理和增量计算安全方法 =====
+// ForceUpdate5MinuteDeltaWithKLineTime 使用精确K线收盘时间更新5分钟增量（🔧 新增：解决时序对齐问题）
+func (calc *CVDCalculator) ForceUpdate5MinuteDeltaWithKLineTime(klineCloseTime time.Time) {
+	calc.mu.Lock()
+	defer calc.mu.Unlock()
+	
+	log.Printf("🔧 [%s] 基于K线收盘时间更新5分钟增量: %s", 
+		calc.symbol, klineCloseTime.Format("15:04:05"))
+	calc.update5MinuteDeltaWithExactTiming(klineCloseTime)
+}
+
+// update5MinuteDeltaWithExactTiming 使用精确K线时序计算5分钟增量（🔧 新增：解决时序对齐问题）
+func (calc *CVDCalculator) update5MinuteDeltaWithExactTiming(klineCloseTime time.Time) {
+	// 🔧 修复: K线时间边界精确对齐
+	// K线收盘时间例如09:35:00，对应的5分钟窗口是[09:30:00, 09:35:00)
+	periodEndTime := klineCloseTime
+	periodStartTime := klineCloseTime.Add(-5 * time.Minute)
+	
+	log.Printf("🕐 [%s] 精确K线时序计算: %s -> %s", calc.symbol, 
+		periodStartTime.Format("15:04:05"), periodEndTime.Format("15:04:05"))
+	
+	// 使用精确时间窗口计算CVD增量
+	spotDelta, futuresDelta := calc.calculateCVDDeltaForPeriod(periodStartTime, periodEndTime)
+	
+	// 计算价格变化（使用K线时序）
+	var priceDeltaPct float64
+	if len(calc.priceHistory) >= 2 {
+		latestPrice := calc.findPriceAtTime(periodEndTime)
+		oldPrice := calc.findPriceAtTime(periodStartTime)
+		if oldPrice > 0 && latestPrice > 0 {
+			priceDeltaPct = ((latestPrice - oldPrice) / oldPrice) * 100
+		}
+	}
+	
+	// 推断K线意图（基于精确时间窗口）
+	candleIntent := calc.inferCandleIntent(priceDeltaPct, spotDelta, futuresDelta)
+	
+	// 计算成交量变化（基于精确时间窗口）
+	volumeDelta := math.Abs(spotDelta) + math.Abs(futuresDelta)
+	volumeRatio := calc.calculateVolumeRatioForPeriod(periodStartTime, periodEndTime)
+	
+	// 创建精确时序的5分钟增量数据
+	delta5m := &CVDDelta5m{
+		PriceDeltaPct:       priceDeltaPct,
+		SpotCVDDeltaUSD:     spotDelta,
+		FuturesCVDDeltaUSD:  futuresDelta,
+		OIDeltaPct:          0, // 需要OI数据
+		CandleIntent:        candleIntent,
+		VolumeDelta:         volumeDelta,
+		VolumeRatio:         volumeRatio,
+		PeriodStartTime:     periodStartTime,
+		PeriodEndTime:       periodEndTime,
+		DataQuality:         calc.calculateDataQuality(),
+	}
+	
+	// 缓存数据到内存映射
+	cacheKey := periodEndTime.Format("15:04")
+	calc.fiveMinuteCache[cacheKey] = delta5m
+	
+	// V2.0: 同时缓存到全局缓存系统
+	globalCache := GetGlobalCache()
+	globalCache.SetCVDDelta5m(calc.symbol, delta5m)
+	
+	// 获取完整的意图分析并缓存
+	intentAnalysis := calc.analyzeCandleIntentWithConfidence(priceDeltaPct, spotDelta, futuresDelta)
+	globalCache.SetCandleIntentAnalysis(calc.symbol, intentAnalysis)
+	
+	// 缓存价格历史
+	globalCache.SetPriceHistory(calc.symbol, calc.priceHistory)
+	
+	// 🔧 修复: 更安全的基准值更新时机（使用K线时序）
+	calc.updateBaselinesWithKLineTiming(periodEndTime, spotDelta, futuresDelta)
+	
+	log.Printf("📊 [%s] 精确K线增量更新: 现货%.0f, 合约%.0f, 价格变化%.2f%%, 意图:%s [%s-%s]",
+		calc.symbol, spotDelta, futuresDelta, priceDeltaPct, candleIntent,
+		periodStartTime.Format("15:04"), periodEndTime.Format("15:04"))
+}
+
+// calculateCVDDeltaForPeriod 计算指定时间段的CVD增量（🔧 新增：精确时序计算）
+func (calc *CVDCalculator) calculateCVDDeltaForPeriod(startTime, endTime time.Time) (spotDelta, futuresDelta float64) {
+	// 🔧 精确时间窗口：Sum(交易 where startTime <= 时间 < endTime)
+	// 这确保了与K线时间边界的精确对齐
+	
+	spotDelta = 0
+	for _, delta := range calc.spotDeltas {
+		if (delta.Timestamp.Equal(startTime) || delta.Timestamp.After(startTime)) && 
+		   delta.Timestamp.Before(endTime) {
+			spotDelta += delta.DeltaUSD
+		}
+	}
+	
+	futuresDelta = 0
+	for _, delta := range calc.futuresDeltas {
+		if (delta.Timestamp.Equal(startTime) || delta.Timestamp.After(startTime)) && 
+		   delta.Timestamp.Before(endTime) {
+			futuresDelta += delta.DeltaUSD
+		}
+	}
+	
+	log.Printf("🔧 [%s] 精确时间窗口CVD计算: 现货增量=%.0f, 合约增量=%.0f [%s-%s]",
+		calc.symbol, spotDelta, futuresDelta, 
+		startTime.Format("15:04:05"), endTime.Format("15:04:05"))
+	
+	return spotDelta, futuresDelta
+}
+
+// calculateVolumeRatioForPeriod 计算指定时间段的成交量比率（🔧 新增：精确时序计算）
+func (calc *CVDCalculator) calculateVolumeRatioForPeriod(startTime, endTime time.Time) float64 {
+	// 计算当前时间段的总成交量
+	var currentPeriodVolume float64
+	for _, snapshot := range calc.volumeHistory {
+		if (snapshot.Timestamp.Equal(startTime) || snapshot.Timestamp.After(startTime)) && 
+		   snapshot.Timestamp.Before(endTime) {
+			volumeUSD := safeFloat64(snapshot.VolumeUSD, 0)
+			if volumeUSD > 0 {
+				currentPeriodVolume += volumeUSD
+			}
+		}
+	}
+	
+	// 计算历史平均（最近1小时，排除当前周期）
+	oneHourAgo := endTime.Add(-1 * time.Hour)
+	var totalHistoricalVolume float64
+	var historicalPeriods int
+	
+	for _, snapshot := range calc.volumeHistory {
+		if snapshot.Timestamp.After(oneHourAgo) && snapshot.Timestamp.Before(startTime) {
+			volumeUSD := safeFloat64(snapshot.VolumeUSD, 0)
+			if volumeUSD > 0 {
+				totalHistoricalVolume += volumeUSD
+				historicalPeriods++
+			}
+		}
+	}
+	
+	if historicalPeriods == 0 || totalHistoricalVolume <= 0 {
+		return 1.0 // 历史数据不足，返回默认值
+	}
+	
+	avgHistoricalVolume := totalHistoricalVolume / float64(historicalPeriods)
+	ratio := safeDivision(currentPeriodVolume, avgHistoricalVolume)
+	
+	// 限制比率在合理范围内
+	if ratio > 50.0 {
+		ratio = 50.0
+	} else if ratio < 0.01 {
+		ratio = 0.01
+	}
+	
+	return safeFloat64(ratio, 1.0)
+}
+
+// updateBaselinesWithKLineTiming 使用K线时序更新基准值（🔧 新增：精确时序更新）
+func (calc *CVDCalculator) updateBaselinesWithKLineTiming(klineCloseTime time.Time, spotDelta, futuresDelta float64) {
+	// 更新快照基准值，使其与K线收盘时间精确对齐
+	calc.last5mSpotCVD = calc.currentSpotCVD
+	calc.last5mFuturesCVD = calc.currentFuturesCVD
+	calc.last5mSnapshot = klineCloseTime
+	
+	log.Printf("🔧 [%s] K线时序基准值更新: 现货基准=%.0f, 合约基准=%.0f, K线收盘=%s", 
+		calc.symbol, calc.last5mSpotCVD, calc.last5mFuturesCVD, 
+		klineCloseTime.Format("15:04:05"))
+}
 
 // preserveCurrentBaselines 在清理前保存当前基准值
 func (calc *CVDCalculator) preserveCurrentBaselines() {
@@ -821,34 +1089,46 @@ func (calc *CVDCalculator) cleanupExpiredDataSafely() {
 	}
 	calc.futuresDeltas = validFuturesDeltas
 
-	log.Printf("🧹 [%s] 安全CVD数据清理完成 - 现货记录:%d (CVD %.0f→%.0f), 合约记录:%d (CVD %.0f→%.0f)", 
+	// 🔧 修复: 清理成交量历史数据（保持6小时数据）
+	volumeCutoffTime := time.Now().Add(-6 * time.Hour)
+	validVolumeHistory := make([]VolumeSnapshot, 0, len(calc.volumeHistory))
+	for _, snapshot := range calc.volumeHistory {
+		if snapshot.Timestamp.After(volumeCutoffTime) {
+			validVolumeHistory = append(validVolumeHistory, snapshot)
+		}
+	}
+	oldVolumeCount := len(calc.volumeHistory)
+	calc.volumeHistory = validVolumeHistory
+
+	log.Printf("🧹 [%s] 安全CVD数据清理完成 - 现货记录:%d (CVD %.0f→%.0f), 合约记录:%d (CVD %.0f→%.0f), 成交量记录:%d→%d", 
 		calc.symbol, len(calc.spotDeltas), oldSpotCVD, calc.currentSpotCVD, 
-		len(calc.futuresDeltas), oldFuturesCVD, calc.currentFuturesCVD)
+		len(calc.futuresDeltas), oldFuturesCVD, calc.currentFuturesCVD, oldVolumeCount, len(calc.volumeHistory))
 }
 
 // calculateSafeCVDDelta 安全计算CVD增量（基于实际数据而非易失变量）
+// 🔧 修复"漏桶效应"：使用实时切片求和而非基于总量的减法
 func (calc *CVDCalculator) calculateSafeCVDDelta(currentTime time.Time) (spotDelta, futuresDelta float64) {
 	fiveMinutesAgo := currentTime.Add(-5 * time.Minute)
 	
-	// 计算现货5分钟增量
-	var spotCVD5mAgo float64
+	// 🔧 修复：直接计算最近5分钟的交易增量，避免滑动窗口导致的漏桶效应
+	// 现货5分钟增量：Sum(现货交易 where 时间 > 现在-5分钟)
+	spotDelta = 0
 	for _, delta := range calc.spotDeltas {
 		if delta.Timestamp.After(fiveMinutesAgo) {
-			break
+			spotDelta += delta.DeltaUSD
 		}
-		spotCVD5mAgo += delta.DeltaUSD
 	}
-	spotDelta = calc.currentSpotCVD - spotCVD5mAgo
 	
-	// 计算合约5分钟增量
-	var futuresCVD5mAgo float64
+	// 合约5分钟增量：Sum(合约交易 where 时间 > 现在-5分钟)
+	futuresDelta = 0
 	for _, delta := range calc.futuresDeltas {
 		if delta.Timestamp.After(fiveMinutesAgo) {
-			break
+			futuresDelta += delta.DeltaUSD
 		}
-		futuresCVD5mAgo += delta.DeltaUSD
 	}
-	futuresDelta = calc.currentFuturesCVD - futuresCVD5mAgo
+	
+	log.Printf("🔧 [%s] CVD增量计算修复：现货5m增量=%.0f, 合约5m增量=%.0f (基于%s后的交易)",
+		calc.symbol, spotDelta, futuresDelta, fiveMinutesAgo.Format("15:04:05"))
 	
 	return spotDelta, futuresDelta
 }
@@ -890,4 +1170,142 @@ func (calc *CVDCalculator) updateBaselinesSafely(currentTime time.Time, spotDelt
 	
 	log.Printf("🔧 [%s] 基准值安全更新: 现货基准=%.0f, 合约基准=%.0f", 
 		calc.symbol, calc.last5mSpotCVD, calc.last5mFuturesCVD)
+}
+
+// ===== 🔧 修复: Volume Ratio 计算方法 =====
+
+// updateVolumeHistory 更新成交量历史
+func (calc *CVDCalculator) updateVolumeHistory(volumeUSD float64, timestamp time.Time) {
+	// 添加成交量快照
+	volumeSnapshot := VolumeSnapshot{
+		Timestamp: timestamp,
+		VolumeUSD: volumeUSD,
+	}
+	calc.volumeHistory = append(calc.volumeHistory, volumeSnapshot)
+	
+	// 保持6小时的成交量历史
+	cutoffTime := timestamp.Add(-6 * time.Hour)
+	validHistory := make([]VolumeSnapshot, 0, len(calc.volumeHistory))
+	for _, snapshot := range calc.volumeHistory {
+		if snapshot.Timestamp.After(cutoffTime) {
+			validHistory = append(validHistory, snapshot)
+		}
+	}
+	calc.volumeHistory = validHistory
+}
+
+// calculateVolumeRatio 计算当前成交量相对于历史平均值的倍数（修复硬编码问题）
+func (calc *CVDCalculator) calculateVolumeRatio(currentVolumeUSD float64) float64 {
+	// 🔧 修复: 验证输入数据的有效性
+	currentVolumeUSD = safeFloat64(currentVolumeUSD, 0)
+	
+	if len(calc.volumeHistory) < 30 { // 至少需要30个历史数据点
+		return 1.0 // 数据不足时返回默认值
+	}
+	
+	// 计算最近1小时的平均成交量
+	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	var totalVolume float64
+	var count int
+	
+	for _, snapshot := range calc.volumeHistory {
+		if snapshot.Timestamp.After(oneHourAgo) {
+			// 🔧 修复: 验证历史数据有效性
+			volumeUSD := safeFloat64(snapshot.VolumeUSD, 0)
+			if volumeUSD > 0 {
+				totalVolume += volumeUSD
+				count++
+			}
+		}
+	}
+	
+	if count == 0 || totalVolume <= 0 {
+		return 1.0 // 避免除零
+	}
+	
+	// 🔧 修复: 使用安全除法计算比率
+	ratio := safeDivision(currentVolumeUSD, totalVolume/float64(count))
+	
+	// 限制比率在合理范围内，避免极端值
+	if ratio > 50.0 {
+		ratio = 50.0
+	} else if ratio < 0.01 {
+		ratio = 0.01
+	}
+	
+	return safeFloat64(ratio, 1.0) // 🔧 修复: 确保返回值有效
+}
+
+// ===== 🔧 修复: K线意图置信度校准工具函数 =====
+
+// calculateCurrentDataQuality 计算当前数据质量评分（影响置信度）
+func (calc *CVDCalculator) calculateCurrentDataQuality() float64 {
+	quality := 1.0
+	
+	// 基于数据新鲜度评估
+	dataAge := time.Since(calc.lastDataUpdate).Minutes()
+	if dataAge > 5 {
+		quality *= 0.5 // 数据超过5分钟，质量大幅下降
+	} else if dataAge > 2 {
+		quality *= 0.8 // 数据超过2分钟，适度降低质量
+	}
+	
+	// 基于数据量评估
+	totalTrades := len(calc.spotDeltas) + len(calc.futuresDeltas)
+	if totalTrades < 10 {
+		quality *= 0.6 // 交易数据不足，降低质量
+	} else if totalTrades < 50 {
+		quality *= 0.9 // 交易数据较少，轻微降低质量
+	}
+	
+	// 基于价格历史完整性
+	if len(calc.priceHistory) < 10 {
+		quality *= 0.7 // 价格历史不足，降低质量
+	}
+	
+	return math.Max(0.1, math.Min(1.0, quality))
+}
+
+// calculateVolatilityPenalty 计算波动性惩罚因子（高波动时降低置信度）
+func (calc *CVDCalculator) calculateVolatilityPenalty() float64 {
+	if len(calc.priceHistory) < 10 {
+		return 0.2 // 数据不足时给予默认惩罚
+	}
+	
+	// 计算最近1小时的价格波动率
+	oneHourAgo := time.Now().Add(-1 * time.Hour)
+	var prices []float64
+	
+	for _, snapshot := range calc.priceHistory {
+		if snapshot.Timestamp.After(oneHourAgo) {
+			prices = append(prices, snapshot.Price)
+		}
+	}
+	
+	if len(prices) < 5 {
+		return 0.2 // 价格数据不足
+	}
+	
+	// 计算价格标准差
+	var sum, mean, variance float64
+	for _, price := range prices {
+		sum += price
+	}
+	mean = sum / float64(len(prices))
+	
+	for _, price := range prices {
+		diff := price - mean
+		variance += diff * diff
+	}
+	variance /= float64(len(prices))
+	stdDev := math.Sqrt(variance)
+	
+	// 计算变异系数（标准差/均值）
+	volatilityRatio := safeDivision(stdDev, mean)
+	
+	// 波动性惩罚：变异系数越高，惩罚越大
+	penalty := volatilityRatio * 100 // 转换为百分比
+	
+	// 限制惩罚范围 0-0.5
+	return math.Max(0, math.Min(0.5, penalty/10))
 }

@@ -82,6 +82,10 @@ func (ofm *OrderFlowManager) initializeComponents() {
 	// 创建市场上下文分析器
 	ofm.marketContextAnalyzer = NewMarketContextAnalyzer()
 	
+	// 🔧 修复：启动哨兵监控系统
+	sentinelMonitor := GetGlobalSentinelMonitor()
+	sentinelMonitor.Start()
+	
 	// 设置WebSocket数据处理器
 	ofm.setupWebSocketHandlers()
 	
@@ -231,6 +235,10 @@ func (ofm *OrderFlowManager) Stop() {
 		ofm.goroutineCheckTicker.Stop()
 	}
 	
+	// 🔧 修复：停止哨兵监控系统
+	sentinelMonitor := GetGlobalSentinelMonitor()
+	sentinelMonitor.Stop()
+	
 	fmt.Printf("🚨🚨🚨 [CRITICAL] 即将设置isRunning=false！调用栈:\n%s\n", string(debug.Stack()))
 	log.Printf("🚨🚨🚨 [CRITICAL] 即将设置isRunning=false！调用栈:\n%s", string(debug.Stack()))
 	ofm.isRunning = false
@@ -274,7 +282,7 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 	// 启动定期获取OI数据的协程
 	go func() {
 		log.Printf("🔄 [%s] OI更新协程启动", symbol)
-		ticker := time.NewTicker(5 * time.Minute) // 每5分钟获取一次OI数据
+		ticker := time.NewTicker(30 * time.Second) // 🔧 修复：提升OI数据更新频率至30秒
 		defer ticker.Stop()
 		
 		// 🆕 增强的协程退出检测和日志
@@ -618,6 +626,18 @@ func (ofm *OrderFlowManager) ForceUpdateAllCVDDeltas() {
 		ofm.cvdManager.ForceUpdateAllCVDDeltas()
 	} else {
 		log.Printf("⚠️ CVDManager为空，无法强制更新CVD增量数据")
+	}
+}
+
+// ForceUpdateAllCVDDeltasWithKLineTime 使用精确K线收盘时间强制更新（🔧 新增：精确时序版本）
+func (ofm *OrderFlowManager) ForceUpdateAllCVDDeltasWithKLineTime(klineCloseTime time.Time) {
+	ofm.mu.RLock()
+	defer ofm.mu.RUnlock()
+	
+	if ofm.cvdManager != nil {
+		ofm.cvdManager.ForceUpdateAllCVDDeltasWithKLineTime(klineCloseTime)
+	} else {
+		log.Printf("⚠️ CVDManager为空，无法执行精确时序CVD增量数据更新")
 	}
 }
 

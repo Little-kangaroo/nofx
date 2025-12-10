@@ -157,7 +157,7 @@ func (calc *OICalculator) GetOIAnalysis() *OIAnalysis {
 
 	if len(calc.changes) == 0 {
 		// 检查数据是否过期 - 即使没有历史变化数据，也要基于lastUpdate判断
-		isStale := time.Since(calc.lastUpdate) > 30*time.Minute
+		isStale := time.Since(calc.lastUpdate) > 5*time.Minute // 🔧 修复：OI数据每30秒更新，5分钟无更新标记过期
 		return &OIAnalysis{
 			Current:     calc.current,
 			Change1H:    0,
@@ -178,7 +178,7 @@ func (calc *OICalculator) GetOIAnalysis() *OIAnalysis {
 	trend := calc.determineTrend(changeRate1H)
 
 	// 检查数据是否过期 - 调整为30分钟阈值，给数据更新留足时间
-	isStale := time.Since(calc.lastUpdate) > 30*time.Minute
+	isStale := time.Since(calc.lastUpdate) > 5*time.Minute // 🔧 修复：OI数据每30秒更新，5分钟无更新标记过期
 
 	return &OIAnalysis{
 		Current:      calc.current,
@@ -427,19 +427,70 @@ func (calc *OICalculator) validateOIData(oiData *OIData) error {
 	return nil
 }
 
-// detectAnomalousChange 检测异常的OI变化
+// detectAnomalousChange 检测异常的OI变化（🔧 修复：优化异常检测阈值）
 func (calc *OICalculator) detectAnomalousChange(change, changeRate float64) error {
-	// 检测异常大的变化率
-	if math.Abs(changeRate) > 50 { // 50%以上的变化认为异常
-		return fmt.Errorf("变化率异常: %.2f%%", changeRate)
+	// 🔧 修复：使用动态阈值，基于历史波动性调整
+	dynamicThreshold := calc.calculateDynamicThreshold()
+	
+	// 🔧 修复：检测异常大的变化率，使用动态阈值
+	if math.Abs(changeRate) > dynamicThreshold {
+		// 如果变化率极端高（超过100%），直接认为异常
+		if math.Abs(changeRate) > 100 {
+			return fmt.Errorf("变化率极度异常: %.2f%% (阈值: %.1f%%)", changeRate, dynamicThreshold)
+		}
+		
+		// 中等异常（50%-100%），记录警告但不拒绝数据
+		log.Printf("⚠️ [OI异常检测] 变化率较高但可接受: %.2f%% (动态阈值: %.1f%%)", 
+			changeRate, dynamicThreshold)
 	}
 	
-	// 检测异常大的绝对变化
-	if math.Abs(change) > calc.current*0.3 { // 30%以上的绝对变化
-		return fmt.Errorf("绝对变化异常: %.2f (当前持仓: %.2f)", change, calc.current)
+	// 🔧 修复：检测异常大的绝对变化，使用更宽松的阈值
+	// 只有在持仓量变化超过50%且绝对值很大时才认为异常
+	absoluteThreshold := math.Max(calc.current*0.5, 1000000) // 50%或100万，取较大值
+	if math.Abs(change) > absoluteThreshold {
+		return fmt.Errorf("绝对变化异常: %.2f (当前持仓: %.2f, 阈值: %.2f)", 
+			change, calc.current, absoluteThreshold)
 	}
 	
 	return nil
+}
+
+// 🔧 修复：计算动态异常检测阈值
+func (calc *OICalculator) calculateDynamicThreshold() float64 {
+	if len(calc.changes) < 5 {
+		return 80.0 // 数据不足时使用较宽松的80%阈值
+	}
+	
+	// 计算历史变化率的标准差
+	var changeRates []float64
+	for _, change := range calc.changes {
+		// 🔧 修复：使用OIChange结构的实际字段
+		changeRates = append(changeRates, math.Abs(change.ChangeRate))
+	}
+	
+	if len(changeRates) < 3 {
+		return 80.0 // 数据不足
+	}
+	
+	// 计算变化率的平均值和标准差
+	var sum, mean, variance float64
+	for _, rate := range changeRates {
+		sum += rate
+	}
+	mean = sum / float64(len(changeRates))
+	
+	for _, rate := range changeRates {
+		diff := rate - mean
+		variance += diff * diff
+	}
+	variance /= float64(len(changeRates))
+	stdDev := math.Sqrt(variance)
+	
+	// 动态阈值 = 平均值 + 3倍标准差，但限制在合理范围内
+	dynamicThreshold := mean + 3*stdDev
+	
+	// 限制阈值范围：最小60%，最大150%
+	return math.Max(60.0, math.Min(150.0, dynamicThreshold))
 }
 
 // validateOIDataGlobal OI管理器全局数据验证

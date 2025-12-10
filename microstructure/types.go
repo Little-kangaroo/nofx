@@ -79,6 +79,12 @@ type PriceSnapshot struct {
 	Price     float64
 }
 
+// VolumeSnapshot 成交量快照（用于Volume Ratio计算）
+type VolumeSnapshot struct {
+	Timestamp   time.Time
+	VolumeUSD   float64  // USD成交量
+}
+
 // CVDCalculator CVD计算器（滑动窗口）
 type CVDCalculator struct {
 	mu               sync.RWMutex
@@ -94,8 +100,10 @@ type CVDCalculator struct {
 	last5mSpotCVD     float64       // 5分钟前的现货CVD
 	last5mFuturesCVD  float64       // 5分钟前的合约CVD
 	last5mSnapshot    time.Time     // 最后5分钟快照时间
+	lastDataUpdate    time.Time     // 🔧 修复: 最后收到交易数据的时间
 	fiveMinuteCache   map[string]*CVDDelta5m // 5分钟增量数据缓存
 	priceHistory      []PriceSnapshot        // 价格历史用于计算增量
+	volumeHistory     []VolumeSnapshot       // 🔧 修复: 成交量历史用于Volume Ratio计算
 }
 
 // ===== 盘口分析相关结构 =====
