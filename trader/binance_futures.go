@@ -1,10 +1,18 @@
 package trader
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,7 +21,9 @@ import (
 
 // FuturesTrader 币安合约交易器
 type FuturesTrader struct {
-	client *futures.Client
+	client    *futures.Client
+	apiKey    string // 新增：API密钥
+	secretKey string // 新增：私钥
 
 	// 余额缓存
 	cachedBalance     map[string]interface{}
@@ -49,6 +59,8 @@ func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
 	client := futures.NewClient(apiKey, secretKey)
 	return &FuturesTrader{
 		client:        client,
+		apiKey:        apiKey,    // 新增：保存API密钥
+		secretKey:     secretKey, // 新增：保存私钥
 		cacheDuration: 15 * time.Second, // 15秒缓存
 	}
 }
@@ -549,17 +561,17 @@ func (t *FuturesTrader) CalculatePositionSize(balance, riskPercent, price float6
 	return quantity
 }
 
-// SetStopLoss 设置止损单
+// SetStopLoss 设置止损单 - 使用新的算法订单API (2025-12-09后币安要求)
 func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) (int64, error) {
-	var side futures.SideType
-	var posSide futures.PositionSideType
+	var side string
+	var binancePosSide string
 
 	if positionSide == "LONG" {
-		side = futures.SideTypeSell
-		posSide = futures.PositionSideTypeLong
+		side = "SELL"
+		binancePosSide = "LONG"
 	} else {
-		side = futures.SideTypeBuy
-		posSide = futures.PositionSideTypeShort
+		side = "BUY" 
+		binancePosSide = "SHORT"
 	}
 
 	// 🔧 修复精度问题：使用正确的价格精度格式化止损价格
@@ -569,29 +581,97 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		formattedStopPrice = fmt.Sprintf("%.2f", stopPrice)
 	}
 	
-	log.Printf("🔧 止损价格格式化: 原始=%.8f, 格式化=%s", stopPrice, formattedStopPrice)
+	log.Printf("🔧 [新算法API] 止损价格格式化: 原始=%.8f, 格式化=%s", stopPrice, formattedStopPrice)
 
-	// 🔧 修复止损订单：使用ClosePosition时不需要设置Quantity
-	// ClosePosition(true) 会自动平掉整个仓位，quantity参数会被忽略
-	response, err := t.client.NewCreateOrderService().
-		Symbol(symbol).
-		Side(side).
-		PositionSide(posSide).
-		Type(futures.OrderTypeStopMarket).
-		StopPrice(formattedStopPrice).
-		WorkingType(futures.WorkingTypeContractPrice).
-		ClosePosition(true).
-		Do(context.Background())
-
+	// 🔥 关键修复：使用新的算法订单API (POST /fapi/v1/algoOrder)
+	// 币安从2025-12-09起要求所有条件单使用算法订单接口
+	response, err := t.createAlgoStopOrder(symbol, side, binancePosSide, formattedStopPrice)
 	if err != nil {
 		return 0, fmt.Errorf("设置止损失败: %w", err)
 	}
 
-	log.Printf("  ✅ 止损价设置成功: %s", formattedStopPrice)
-	return response.OrderID, nil
+	log.Printf("  ✅ [算法API] 止损单设置成功: %s, AlgoID: %v", formattedStopPrice, response["algoId"])
+	
+	// 返回AlgoID作为OrderID（用于跟踪）
+	if algoId, ok := response["algoId"].(float64); ok {
+		return int64(algoId), nil
+	}
+	return 0, nil
 }
 
-// SetTakeProfit 设置止盈单
+// createAlgoStopOrder 创建算法止损订单 - 直接调用币安新的算法订单API
+func (t *FuturesTrader) createAlgoStopOrder(symbol, side, positionSide, triggerPrice string) (map[string]interface{}, error) {
+	// 构建请求参数
+	params := map[string]interface{}{
+		"algoType":     "CONDITIONAL",
+		"symbol":       symbol,
+		"side":         side,
+		"positionSide": positionSide,
+		"type":         "STOP_MARKET",
+		"triggerPrice": triggerPrice,
+		"workingType":  "CONTRACT_PRICE",
+		"closePosition": "true", // 触发后全部平仓
+		"timeInForce":  "GTC",
+		"timestamp":    time.Now().UnixMilli(),
+	}
+
+	// 构建查询字符串用于签名
+	var queryParts []string
+	for key, value := range params {
+		queryParts = append(queryParts, fmt.Sprintf("%s=%v", key, value))
+	}
+	queryString := strings.Join(queryParts, "&")
+
+	// 生成签名
+	signature := t.generateSignature(queryString)
+	params["signature"] = signature
+
+	// 转换为JSON
+	jsonData, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("JSON编码失败: %w", err)
+	}
+
+	// 发送HTTP请求
+	url := "https://fapi.binance.com/fapi/v1/algoOrder"
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-MBX-APIKEY", t.apiKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API错误 [%d]: %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	return result, nil
+}
+
+// generateSignature 生成币安API签名
+func (t *FuturesTrader) generateSignature(queryString string) string {
+	mac := hmac.New(sha256.New, []byte(t.secretKey))
+	mac.Write([]byte(queryString))
+	return hex.EncodeToString(mac.Sum(nil))
+}
 func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error {
 	var side futures.SideType
 	var posSide futures.PositionSideType
