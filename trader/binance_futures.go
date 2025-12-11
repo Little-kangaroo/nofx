@@ -1,7 +1,6 @@
 package trader
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -603,16 +602,16 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 func (t *FuturesTrader) createAlgoStopOrder(symbol, side, positionSide, triggerPrice string) (map[string]interface{}, error) {
 	// 构建请求参数
 	params := map[string]interface{}{
-		"algoType":     "CONDITIONAL",
-		"symbol":       symbol,
-		"side":         side,
-		"positionSide": positionSide,
-		"type":         "STOP_MARKET",
-		"triggerPrice": triggerPrice,
-		"workingType":  "CONTRACT_PRICE",
+		"algoType":      "CONDITIONAL",
+		"symbol":        symbol,
+		"side":          side,
+		"positionSide":  positionSide,
+		"type":          "STOP_MARKET",
+		"triggerPrice":  triggerPrice,
+		"workingType":   "CONTRACT_PRICE",
 		"closePosition": "true", // 触发后全部平仓
-		"timeInForce":  "GTC",
-		"timestamp":    time.Now().UnixMilli(),
+		"timeInForce":   "GTC",
+		"timestamp":     time.Now().UnixMilli(),
 	}
 
 	// 构建查询字符串用于签名
@@ -624,22 +623,16 @@ func (t *FuturesTrader) createAlgoStopOrder(symbol, side, positionSide, triggerP
 
 	// 生成签名
 	signature := t.generateSignature(queryString)
-	params["signature"] = signature
+	queryString += "&signature=" + signature
 
-	// 转换为JSON
-	jsonData, err := json.Marshal(params)
-	if err != nil {
-		return nil, fmt.Errorf("JSON编码失败: %w", err)
-	}
-
-	// 发送HTTP请求
+	// 🔥 修复：币安API使用POST + URL编码表单，不是JSON
 	url := "https://fapi.binance.com/fapi/v1/algoOrder"
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", url, strings.NewReader(queryString))
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("X-MBX-APIKEY", t.apiKey)
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -654,6 +647,10 @@ func (t *FuturesTrader) createAlgoStopOrder(symbol, side, positionSide, triggerP
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 
+	log.Printf("🔧 [算法API] 请求参数: %s", queryString)
+	log.Printf("🔧 [算法API] 响应状态: %d", resp.StatusCode)
+	log.Printf("🔧 [算法API] 响应内容: %s", string(body))
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API错误 [%d]: %s", resp.StatusCode, string(body))
 	}
@@ -664,6 +661,11 @@ func (t *FuturesTrader) createAlgoStopOrder(symbol, side, positionSide, triggerP
 	}
 
 	return result, nil
+}
+
+// GenerateSignature 生成币安API签名 (导出方法用于测试)
+func (t *FuturesTrader) GenerateSignature(queryString string) string {
+	return t.generateSignature(queryString)
 }
 
 // generateSignature 生成币安API签名
