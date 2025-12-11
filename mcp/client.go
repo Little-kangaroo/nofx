@@ -336,53 +336,57 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		log.Printf("📤 [MCP] 使用OpenAI兼容API格式")
 	}
 
-	// 打印请求参数（脱敏）
-	log.Printf("📤 [MCP] AI请求参数:")
-	log.Printf("   Provider: %s", client.Provider)
-	log.Printf("   Model: %s", client.Model)
+	// 减少详细参数日志输出
+	if os.Getenv("NOFX_DEBUG") == "true" {
+		log.Printf("📤 [MCP] AI请求参数:")
+		log.Printf("   Provider: %s", client.Provider)
+		log.Printf("   Model: %s", client.Model)
 
-	// 显示实际使用的参数
-	if temp, hasTemp := requestBody["temperature"]; hasTemp {
-		log.Printf("   Temperature: %v", temp)
-	} else {
-		log.Printf("   Temperature: 默认值 (兼容ChatGPT-5)")
-	}
+		// 显示实际使用的参数
+		if temp, hasTemp := requestBody["temperature"]; hasTemp {
+			log.Printf("   Temperature: %v", temp)
+		} else {
+			log.Printf("   Temperature: 默认值 (兼容ChatGPT-5)")
+		}
 
-	// 显示实际使用的token参数名
-	if _, hasMaxTokens := requestBody["max_tokens"]; hasMaxTokens {
-		log.Printf("   Max Tokens (max_tokens): %d", maxTokens)
-	} else {
-		log.Printf("   Max Completion Tokens (max_completion_tokens): %d", maxTokens)
-	}
+		// 显示实际使用的token参数名
+		if _, hasMaxTokens := requestBody["max_tokens"]; hasMaxTokens {
+			log.Printf("   Max Tokens (max_tokens): %d", maxTokens)
+		} else {
+			log.Printf("   Max Completion Tokens (max_completion_tokens): %d", maxTokens)
+		}
 
-	// 显示JSON格式输出设置
-	if responseFormat, hasResponseFormat := requestBody["response_format"]; hasResponseFormat {
-		if rf, ok := responseFormat.(map[string]interface{}); ok {
-			if rfType, ok := rf["type"].(string); ok {
-				log.Printf("   Response Format: %s (强制JSON输出)", rfType)
+		// 显示JSON格式输出设置
+		if responseFormat, hasResponseFormat := requestBody["response_format"]; hasResponseFormat {
+			if rf, ok := responseFormat.(map[string]interface{}); ok {
+				if rfType, ok := rf["type"].(string); ok {
+					log.Printf("   Response Format: %s (强制JSON输出)", rfType)
+				}
 			}
 		}
-	}
 
-	// 显示GPT-5.1专用参数
-	if reasoningEffort, hasReasoning := requestBody["reasoning_effort"]; hasReasoning {
-		log.Printf("   Reasoning Effort: %v", reasoningEffort)
-	}
-	if cacheRetention, hasCache := requestBody["prompt_cache_retention"]; hasCache {
-		log.Printf("   Prompt Cache Retention: %v", cacheRetention)
-	}
+		// 显示GPT-5.1专用参数
+		if reasoningEffort, hasReasoning := requestBody["reasoning_effort"]; hasReasoning {
+			log.Printf("   Reasoning Effort: %v", reasoningEffort)
+		}
+		if cacheRetention, hasCache := requestBody["prompt_cache_retention"]; hasCache {
+			log.Printf("   Prompt Cache Retention: %v", cacheRetention)
+		}
 
-	log.Printf("   Messages Count: %d", len(messages))
-	if systemPrompt != "" {
-		log.Printf("   System Prompt Length: %d chars", len(systemPrompt))
+		log.Printf("   Messages Count: %d", len(messages))
+		if systemPrompt != "" {
+			log.Printf("   System Prompt Length: %d chars", len(systemPrompt))
+		}
+		log.Printf("   User Prompt Length: %d chars", len(userPrompt))
 	}
-	log.Printf("   User Prompt Length: %d chars", len(userPrompt))
 
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
 		return "", fmt.Errorf("序列化请求失败: %w", err)
 	}
-	log.Printf("📤 [MCP] JSON请求体大小: %d bytes", len(jsonData))
+	if os.Getenv("NOFX_DEBUG") == "true" {
+		log.Printf("📤 [MCP] JSON请求体大小: %d bytes", len(jsonData))
+	}
 
 	// 创建HTTP请求
 	var url string
@@ -455,7 +459,10 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	log.Printf("📡 [MCP] 开始发送AI请求: %v", requestStart.Format("15:04:05"))
 	resp, err := httpClient.Do(req)
 	requestDuration := time.Since(requestStart)
-	log.Printf("📊 [AI请求耗时] HTTP请求耗时: %v", requestDuration)
+	// 减少生产环境日志输出
+	if os.Getenv("NOFX_DEBUG") == "true" {
+		log.Printf("📊 [AI请求耗时] HTTP请求耗时: %v", requestDuration)
+	}
 
 	if err != nil {
 		log.Printf("❌ [MCP] 请求失败，耗时: %v, 错误: %v", requestDuration, err)
@@ -538,10 +545,13 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 	writeSimpleAPILog(jsonData, responseContent, client)
 
 	// AI请求完整耗时统计
-	log.Printf("📊 [AI请求耗时统计] 总耗时: %v | HTTP请求: %v (%.1f%%) | 响应处理: %v (%.1f%%)",
-		totalRequestDuration,
-		requestDuration, float64(requestDuration.Nanoseconds())/float64(totalRequestDuration.Nanoseconds())*100,
-		responseProcessDuration, float64(responseProcessDuration.Nanoseconds())/float64(totalRequestDuration.Nanoseconds())*100)
+	// 减少详细耗时统计日志
+	if os.Getenv("NOFX_DEBUG") == "true" {
+		log.Printf("📊 [AI请求耗时统计] 总耗时: %v | HTTP请求: %v (%.1f%%) | 响应处理: %v (%.1f%%)",
+			totalRequestDuration,
+			requestDuration, float64(requestDuration.Nanoseconds())/float64(totalRequestDuration.Nanoseconds())*100,
+			responseProcessDuration, float64(responseProcessDuration.Nanoseconds())/float64(totalRequestDuration.Nanoseconds())*100)
+	}
 
 	// 记录响应信息和潜在的截断警告
 	log.Printf("📥 [MCP] AI响应接收: %d 字符", len(responseContent))

@@ -3,6 +3,7 @@ package microstructure
 import (
 	"log"
 	"math"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -1199,8 +1200,11 @@ func (calc *CVDCalculator) calculateSafeCVDDelta(currentTime time.Time) (spotDel
 		}
 	}
 	
-	log.Printf("🔧 [%s] CVD增量计算修复：现货5m增量=%.0f, 合约5m增量=%.0f (基于%s后的交易)",
-		calc.symbol, spotDelta, futuresDelta, fiveMinutesAgo.Format("15:04:05"))
+	// 🔧 减少生产环境日志输出 - 仅在必要时记录
+	if os.Getenv("NOFX_DEBUG") == "true" {
+		log.Printf("🔧 [%s] CVD增量计算：现货5m增量=%.0f, 合约5m增量=%.0f", 
+			calc.symbol, spotDelta, futuresDelta)
+	}
 	
 	return spotDelta, futuresDelta
 }
@@ -1316,8 +1320,11 @@ func (calc *CVDCalculator) calculateVolumeRatio(currentVolumeUSD float64) float6
 		ratio = 0.001  // 降低下限，让AI看到真实的死寂
 	}
 	
-	log.Printf("🔧 [%s] P0-1修复后vR: 当前/分钟=%.0f, 基准/分钟=%.0f, vR=%.3f (修复前可能虚高5倍)", 
-		calc.symbol, currentRatePerMin, medianRatePerMin, ratio)
+	// 🔧 减少生产环境日志输出 - 仅在必要时记录详细计算过程
+	if os.Getenv("NOFX_DEBUG") == "true" {
+		log.Printf("🔧 [%s] P0-1修复后vR: 当前/分钟=%.0f, 基准/分钟=%.0f, vR=%.3f", 
+			calc.symbol, currentRatePerMin, medianRatePerMin, ratio)
+	}
 	
 	return safeFloat64(ratio, 1.0)
 }

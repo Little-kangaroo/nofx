@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -1035,7 +1036,7 @@ func (ofm *OrderFlowManager) detectCVDDivergence4H(cvdData *CVDData) bool {
 	isDirectionOpposite := (spotDirection > 0 && futuresDirection < 0) || 
 	                      (spotDirection < 0 && futuresDirection > 0)
 	
-	if isDirectionOpposite {
+	if isDirectionOpposite && os.Getenv("NOFX_DEBUG") == "true" {
 		log.Printf("🔧 [P1-1] CVD背离检测: 现货方向%d, 期货方向%d (统计显著)", 
 			spotDirection, futuresDirection)
 	}
