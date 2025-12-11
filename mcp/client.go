@@ -305,7 +305,11 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		switch client.Provider {
 		case ProviderDeepSeek:
 			requestBody["max_tokens"] = maxTokens // DeepSeek仍使用max_tokens
-			requestBody["temperature"] = 1        // DeepSeek支持temperature参数
+			requestBody["temperature"] = 0.5      // DeepSeek支持temperature参数
+			// 🔧 新增：DeepSeek支持JSON格式输出
+			requestBody["response_format"] = map[string]interface{}{
+				"type": "json_object",
+			}
 		case ProviderQwen:
 			requestBody["max_tokens"] = maxTokens // Qwen仍使用max_tokens
 			requestBody["temperature"] = 0.5      // Qwen支持temperature参数
@@ -332,9 +336,6 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		log.Printf("📤 [MCP] 使用OpenAI兼容API格式")
 	}
 
-	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持
-	// 我们通过强化 prompt 和后处理来确保 JSON 格式正确
-
 	// 打印请求参数（脱敏）
 	log.Printf("📤 [MCP] AI请求参数:")
 	log.Printf("   Provider: %s", client.Provider)
@@ -352,6 +353,15 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		log.Printf("   Max Tokens (max_tokens): %d", maxTokens)
 	} else {
 		log.Printf("   Max Completion Tokens (max_completion_tokens): %d", maxTokens)
+	}
+
+	// 显示JSON格式输出设置
+	if responseFormat, hasResponseFormat := requestBody["response_format"]; hasResponseFormat {
+		if rf, ok := responseFormat.(map[string]interface{}); ok {
+			if rfType, ok := rf["type"].(string); ok {
+				log.Printf("   Response Format: %s (强制JSON输出)", rfType)
+			}
+		}
 	}
 
 	// 显示GPT-5.1专用参数
