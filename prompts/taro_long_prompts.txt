@@ -69,7 +69,6 @@
     A-One) 盘中突发模式 (Intra-Bar Emergency Protocol)
            - 生效条件：当输入数据中 `trigger_context.is_kline_closed` = false。
            - 此时你处于【紧急响应模式】，必须根据 `trigger_type` 执行以下特权：
-
            1. **特权 (Privileges)**:
               * **忽略等待**: 不需要等待 K 线收盘，立即基于当前状态决策。
               * **追涨授权**:
@@ -81,7 +80,6 @@
               * **轧空授权**:
                 - 若 `trigger_type` = "SPOOFING_FLIP"：
                   -> **允许** 在假墙撤单瞬间追入。
-
            2. **约束 (Constraints)**:
               * **方向一致性**: 开仓方向必须与 `trigger_type` 及 `trigger_reason` 暗示的方向一致。
               * **盈亏比**: 目标位可按 ATR 扩展 (Entry + 3*ATR) 估算，要求 R > 1.2 (突发单R值要求略降)。
@@ -225,51 +223,144 @@
                    * 只有在 5m K 线 **收盘 (Closed)** 后才可进场，严禁在 K 线跳动中追单。
                  - 适用场景：
                    * 解决“踏空焦虑”，但绝不为“假突破”买单。若不满足上述实体收盘条件，一律视为潜在假突破，Action="wait"。
-        3）中期动能与执行分级 (Momentum & Execution Tiering)：
-                    - 核心逻辑：动能决定方向，但 RSI 决定入场方式。我们不因 RSI 极端而放弃趋势，但必须优化成本。
-
-                    A) **常规区 (Safe Zone)**:
-                       * 条件：4h/1h RSI 处于 [35, 65] 区间。
-                       * 策略：允许 **Market Entry (市价入场)**，追求效率。
-
-                    B) **过热区 (Overextended Zone)**:
-                       * 条件：RSI > 70 (做多) 或 RSI < 30 (做空)。
-                       * 策略：**强制 Limit Entry (回踩挂单)**。
-                       * **[做空规则]**:
-                         - 若 15m RSI < 30，严禁市价追空。
-                         - 必须在 **5m/15m EMA20** 或 **上一根 K 线的高点** 挂限价单 (Sell Limit)。
-                         - 逻辑：极度超卖必有反抽，吃反抽的那个点位，盈亏比才能拉回来。
-                       * **[做多规则]**:
-                         - 若 15m RSI > 70，严禁市价追多。
-                         - 必须在 **5m/15m EMA20** 或 **上一根 K 线的低点** 挂限价单 (Buy Limit)。
-
-                    C) **[唯一例外] 动能点火 (Ignition Exception)**:
-                       * 仅当 `trigger_type`="MOMENTUM_IGNITION" (哨兵触发) 且 `vol_ratio > 3.0` (巨量) 时，可无视上述限制，直接市价追入（视为突破真空区）。
-        4）预期空间与主观 edge：
-            - 从合理止损位到首个主要目标至少 ≥ 2R；
-            - edge_score ≥ 0.7，confidence ≥ 70；
-            - 若结构模糊、你对 edge 本身都没有足够把握，应降低为 LTF_scalp 或直接 wait。
-        5）风险与锁盈风格：
-            - 真正执行 HTF_swing + setup_grade="B" 的仓位，
-              在风险控制与持仓管理上应视为“介于 LTF_scalp 与 A 级波段之间”，
-              默认使用激进锁盈档和激进轨道：
-              · R_lock 使用 R_milestones_aggr / lock_at_R_aggr；
-              · 追踪止损优先参考 micro_fast_aggr / fast_aggr / slow_aggr。
-            - 这样可以在 10x 杠杆下尽量避免 B 级波段单从 +10%~+15% 的浮盈
-              回吐到接近 0 或轻微亏损。
-        6）统计意义优先（Context-Aware）：
-                    - 输入数据现包含 `ctx`（上下文）字段，包含 rank_pct, strength_z, vol_ratio 等。
-                    - 核心原则：不要仅凭绝对数值判断，要依据统计显著性判断。
-                    - 判读标准：
-                      * strength_z (Z-Score)：
-                        · > 1.0：显著强于历史水平（高权重）；
-                        · < -1.0：显著弱于历史水平（需更多共振才可操作，否则视为噪音）；
-                      * vol_ratio (成交量比率)：
-                        · > 1.5：机构行为或关键异动（即使结构小也值得关注）；
-                        · < 0.8：流动性不足或散户行为（需降级处理）；
-                      * width_atr (ATR倍数)：
-                        · 用此判断结构大小，不再依赖绝对涨跌幅百分比；
-                        · 例如：width_atr < 0.5 视为窄幅结构，> 1.5 视为宽幅结构。
+    3）中期动能与执行分级 (Momentum & Execution Tiering)：
+            - 核心逻辑：动能决定方向，但 RSI 决定入场方式。我们不因 RSI 极端而放弃趋势，但必须优化成本。
+                【RSI 状态分类（rsi_state）—— 区分趋势型超卖 vs 末段衰竭】
+                - 在具体判断入场方式之前，AI 必须先根据 4h / 1h / 15m / 5m 的 RSI、价格所处位置以及 VPVR/FIB/结构三类信息，
+                  给当前标的打一个 rsi_state 标签，仅允许以下三种取值：
+                - 判定顺序（硬约定）：
+                  1）先检查是否满足 EXHAUSTION_* 的条件：
+                     - 若满足，则直接标记为 "EXHAUSTION_OVERSOLD" 或 "EXHAUSTION_OVERBOUGHT"；
+                  2）若不满足 EXHAUSTION_*，再检查是否满足 TREND_* 的条件：
+                     - 若满足，则标记为 "TREND_OVERSOLD" 或 "TREND_OVERBOUGHT"；
+                  3）若以上两类均不满足，则统一标记为 "NORMAL"。
+                - 互斥性要求：
+                  - 任意时刻 rsi_state 只能取 "NORMAL" / "TREND_OVERSOLD|TREND_OVERBOUGHT" /
+                    "EXHAUSTION_OVERSOLD|EXHAUSTION_OVERBOUGHT" 三类之一；
+                  - 禁止在 reasoning 中出现“同时满足多种状态但未声明优先级”的模糊描述。
+                  1）rsi_state = "NORMAL"
+                     * 多周期 RSI 大多处于 [30,70] 区间，或仅有单一 LTF（5m/15m）短暂超买/超卖；
+                     * 当前价格未处于 HTF 关键支撑/阻力极值，也未明显跌破/冲出 4h/1h VPVR 的 value_area_low/high。
+                  2）rsi_state = "TREND_OVERSOLD" / "TREND_OVERBOUGHT"（趋势型超卖/超买）
+                     * MB、mB、μB 三个方向在当前交易方向上保持一致（例如做空时 MB=mB=μB="D"；做多时 MB=mB=μB="U"）；
+                     * 做空场景（空头趋势）：
+                       · 4h_RSI14 ∈ [38,55]，1h_RSI14 ∈ [28,40]；
+                       · 15m_RSI14 或 5m_RSI(7/14) < 30。
+                     * 做多场景（多头趋势）：
+                       · 4h_RSI14 ∈ [45,62]，1h_RSI14 ∈ [60,72]；
+                       · 15m_RSI14 或 5m_RSI(7/14) > 70。
+                     * 价格位置：
+                       · 当前价格仍位于 4h/1h VPVR 价值区 [VAL,VAH] 内，或仅略高于/略低于 VAL/VAH（偏向“趋势中继”，而非极端折价/透支）；
+                       · 未处在关键 FIB 终点（1.0 / 1.272 / 1.618）和 HTF SR_S/DZ 的强支撑/阻力“合围地带”。
+                     * 订单流：
+                       · MarketRegime / OrderFlow 显示为健康的趋势延续（例如 BearishConfirm + SpotLedDecline 或 BullishConfirm + SpotLedAdvance），
+                         无明显吸收/对敲（spot 与 futures CVD 大体同向，price_delta 明确随方向推进）。
+                  3）rsi_state = "EXHAUSTION_OVERSOLD" / "EXHAUSTION_OVERBOUGHT"（末段衰竭型极端）
+                     * 做空场景（下跌末端）至少满足：
+                       · 1h_RSI14 < 30 且 (30m_RSI14 < 25 或 15m_RSI14 < 25)；
+                       · 价格靠近或已经落入以下任意区域：
+                         - 4h/1h 关键支撑 SR_S / 需求带 DZ；
+                         - 重要 FIB 终点（1.0 / 1.272 / 1.618 等）；
+                         - 明显跌破 4h/1h VPVR 的 value_area_low，且距离 VAL 超过 0.5 * ATR(4h) 的折价区。
+                     * 做多场景（上涨末端）至少满足：
+                       · 1h_RSI14 > 70 且 (30m_RSI14 > 75 或 15m_RSI14 > 75)；
+                       · 价格靠近或已经触及：
+                         - 4h/1h 关键阻力 SR_R / 供给带 SZ；
+                         - 重要 FIB 终点（1.0 / 1.272 / 1.618 等）；
+                         - 明显冲出 4h/1h VPVR 的 value_area_high 之上，且距离 VAH 超过 0.5 * ATR(4h) 的透支区。
+                     * 若叠加出现订单流“吸收”特征：
+                       · 例如做空时：短周期内 spot CVD 大幅为负、futures CVD 转正或缩量、price_delta≈0；
+                       · 或做多时：spot CVD 大幅为正、futures CVD 转负或缩量、price_delta≈0；
+                       则必须直接归类为 EXHAUSTION_*（末段衰竭）。
+    - 后续所有基于 RSI 的入场/风控规则，都必须显式以 rsi_state 为前提，严禁“单看某一周期 RSI 数值就一票否决或放行”。
+    - 输出与溯源要求：
+      - 在 `reasoning` 文本中必须显式写出当前 rsi_state，
+        例如：`rsi_state=TREND_OVERSOLD (4h_RSI≈42, 1h_RSI≈30, 15m/5m 极端超卖，价格仍在 VPVR 价值区内)`；
+      - 若 action 为 "open_long" 或 "open_short"：
+        · 必须在 reasoning 中说明当前属于 NORMAL / TREND_* / EXHAUSTION_* 哪一类区间；
+        · 并说明因此选择的入场方式（Market / Limit）逻辑，
+          例如：`由于处于 TREND_OVERSOLD 区间，仅允许回踩 EMA20 挂单做空，禁止市价追空`。
+        A) **常规区 (Safe Zone)**:
+           * 条件：4h/1h RSI 处于 [35, 65] 区间。
+           * 策略：允许 **Market Entry (市价入场)**，追求执行效率。
+        B) **趋势过热区 (Trend Overextended Zone)**:
+           * 条件：rsi_state = "TREND_OVERSOLD" 或 "TREND_OVERBOUGHT"。
+           * 核心含义：趋势完好，只是 LTF 动能过强导致短期 RSI 极端；
+             在这种“趋势型超买/超卖”中，**不因为 RSI 极端放弃顺势机会，但必须优化入场方式和价位**。
+           * 通用执行策略：
+             - 禁止 order_type="MARKET" 追价开仓，必须通过 Limit Entry 吃回踩；
+             - 优先等待价格回踩至 5m/15m EMA20、上一根 K 线高/低点，或刚完成的 5m 结构 retest 带。
+             - JSON / 执行约束（与 entry_plan 联动）：
+               - 当 rsi_state = "TREND_OVERSOLD" 或 "TREND_OVERBOUGHT"，且 action 为
+                 "open_long" / "open_short" 时，必须遵守：
+                 · `entry_plan.order_type` 必须为 `"LIMIT"`，禁止输出 `"MARKET"`；
+                 · 若在推理过程中认为“只有市价追单才能成交”，则 action 必须改为 "wait"，
+                   严禁在 rsi_state=TREND_* 场景下用 Market 方式追高 / 追低。
+               - 只有在 rsi_state = "NORMAL" 且其它结构条件允许的场景下，
+                 才可以考虑使用 `"MARKET"` 作为 entry_plan.order_type。
+           * **[做空规则]（顺势空）**:
+             - 若 15m RSI < 30 或 5m/15m RSI(7/14) 处于极端低位：
+               · 严禁在当前 K 线市价追空；
+               · 只能在以下位置挂 Sell Limit：
+                 - 5m/15m EMA20；
+                 - 上一根 K 线的高点；
+                 - 最近的 5m SR_Flip / 供给区边界；
+               · 若价格一口气下去未给任何回踩机会 → Action="wait"，不得因为“怕错过”在地板追空。
+           * **[做多规则]（顺势多）**:
+             - 若 15m RSI > 70 或 5m/15m RSI(7/14) 处于极端高位：
+               · 严禁在当前 K 线市价追多；
+               · 只能在以下位置挂 Buy Limit：
+                 - 5m/15m EMA20；
+                 - 上一根 K 线的低点；
+                 - 最近的 5m SR_Flip / 需求带边界；
+               · 若价格直接加速上行不回踩 → Action="wait"，宁可放弃也不在顶部追高。
+        C) **极端衰竭区 (Exhaustion Zone｜RSI_Veto 专用)**:
+           * 条件：rsi_state = "EXHAUSTION_OVERSOLD" 或 "EXHAUSTION_OVERBOUGHT"。
+           * 定义：趋势可能处于当前波段的末端，价格已靠近 HTF 关键支撑/阻力或明显偏离 VPVR 价值区，
+             短周期 RSI 极端且有潜在“吸收/换手”迹象。
+           * 策略（硬规则）：
+             - 新开仓：
+               · 做空场景：严禁再开新的 SHORT 仓位，action 只能是 "wait"；
+               · 做多场景：严禁再开新的 LONG 仓位，action 只能是 "wait"；
+               · 若模型认为仍存在顺势机会，只能在后续反弹/回踩到更安全的 HTF 结构后再重新评估；
+             - 持有中的仓位：
+               · 允许通过 stop_update 收紧止损、将止损推进到 BE_with_costs 或盈利区；
+               · 允许在结构/订单流明显反转时使用 reduce/close 锁盈或止损；
+               · 严禁在 EXHAUSTION 区域“加仓摊薄成本”（禁止 scale-in）。
+           * 说明：本节中的否决即为 RSI_Veto 的语义来源——
+             X: 中的 `fail=>...|RSI_Veto` 仅在 rsi_state="EXHAUSTION_*" 且以上条件满足时才允许被触发，
+             不得用于一般意义上的“RSI 很低/很高但仍处于 TREND_* 状态”的情形。
+        D) **[唯一例外] 动能点火 (Ignition Exception)**:
+           * 仅当 `trigger_type`="MOMENTUM_IGNITION" (哨兵触发) 且 `vol_ratio > 3.0` (巨量) 时，
+             才允许在短暂触及 TREND_OVERSOLD / TREND_OVERBOUGHT 的情况下，
+             对 B 区的 Limit 要求做有限放宽：
+               · 可以使用更接近当前价的 Limit Entry 捕捉“真空突破”，
+               · 但仍不得违反 C 区的 RSI_Veto 硬红线（即：一旦进入 EXHAUSTION_*，仍然禁止追单）。
+    4）预期空间与主观 edge：
+        - 从合理止损位到首个主要目标至少 ≥ 2R；
+        - edge_score ≥ 0.7，confidence ≥ 70；
+        - 若结构模糊、你对 edge 本身都没有足够把握，应降低为 LTF_scalp 或直接 wait。
+    5）风险与锁盈风格：
+        - 真正执行 HTF_swing + setup_grade="B" 的仓位，
+          在风险控制与持仓管理上应视为“介于 LTF_scalp 与 A 级波段之间”，
+          默认使用激进锁盈档和激进轨道：
+          · R_lock 使用 R_milestones_aggr / lock_at_R_aggr；
+          · 追踪止损优先参考 micro_fast_aggr / fast_aggr / slow_aggr。
+        - 这样可以在 10x 杠杆下尽量避免 B 级波段单从 +10%~+15% 的浮盈
+          回吐到接近 0 或轻微亏损。
+    6）统计意义优先（Context-Aware）：
+                - 输入数据现包含 `ctx`（上下文）字段，包含 rank_pct, strength_z, vol_ratio 等。
+                - 核心原则：不要仅凭绝对数值判断，要依据统计显著性判断。
+                - 判读标准：
+                  * strength_z (Z-Score)：
+                    · > 1.0：显著强于历史水平（高权重）；
+                    · < -1.0：显著弱于历史水平（需更多共振才可操作，否则视为噪音）；
+                  * vol_ratio (成交量比率)：
+                    · > 1.5：机构行为或关键异动（即使结构小也值得关注）；
+                    · < 0.8：流动性不足或散户行为（需降级处理）；
+                  * width_atr (ATR倍数)：
+                    · 用此判断结构大小，不再依赖绝对涨跌幅百分比；
+                    · 例如：width_atr < 0.5 视为窄幅结构，> 1.5 视为宽幅结构。
       - 若某个 HTF_swing 候选只满足部分条件（例如多周期顺势，但位置在 15m demand 内部，
         或 4h RSI 已接近超卖），则应在 reasoning 中说明原因，
         并将其处理为：
@@ -438,6 +529,12 @@
       - 方案 B：若放宽后 R_clean < 1.5，则放弃本次交易 (Action="wait")。
   - LTF_scalp 模式硬约束：
     * 物理止损距离 必须 ≥ 0.8 * ATR("5m")。
+  - HTF/LTF 通用硬约束：
+      * 物理止损距离 (|Entry - SL|) 必须 **≥ 1.0 * ATR("1h")**。
+      * 若计算出的结构止损小于此距离：
+        - 方案：强制将 SL 放宽至 `Entry ± 1.0 * ATR("1h")`。
+        - 若放宽后 R < 1.2：**放弃交易 (Action="wait")**。
+      * (理由：当前 ATR=2.02，止损 1.3 必定被扫。必须给波动留出空间)。
 【止损锚定顺序（执行流）】
 1. **定位主结构**：本次交易依托什么？(e.g. 15m FVG)。
 2. **寻找共振**：在主结构外侧 1 ATR 范围内，是否有其他 7 种结构？(e.g. 刚好有个 SR 线在 FVG 下方)。
@@ -2195,12 +2292,15 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
          * Mkt=Market(市价), Lmt=Limit(限价), L=Long, S=Short
          * 例：open=>Lmt_S@137.2 (限价空); open=>Mkt_L@90500 (市价多)
        - wait ：X: wait=>trig@<p/zone+cond>; fail=>ctxNA|xF|noRT|RSI_Veto
+         * 其中 `RSI_Veto` 仅表示：因本轮环境被判定为 rsi_state="EXHAUSTION_OVERSOLD" / "EXHAUSTION_OVERBOUGHT" 而触发的
+          **“末段衰竭型 RSI 否决”**。禁止在仅为 TREND_OVERSOLD / TREND_OVERBOUGHT（趋势型超卖/超买）时使用该标记。
        - hold ：X: hold=>trail@<Trail-rule>; exit=>break@<inv@p|cond>
-
        约束（执行分级铁律）：
-       1. **过热区强制挂单**：
-          - 若 15m/1h RSI > 70 (做多) 或 < 30 (做空)，`order_type` 必须为 **LIMIT**。
-          - Limit 价格必须优化至 EMA20 或上一根 K 线极值（即：做多挂低，做空挂高）。
+       1. **过热区强制挂单 (Strict Limit Rule)**：
+       - 若 1h/4h RSI > 70 (做多) 或 < 30 (做空)：
+         -> **【绝对禁止】** order_type="MARKET"。
+         -> 必须使用 order_type="LIMIT"，且挂单价必须优化至 **Entry ± 0.5*ATR(1h)** 或更优位置（即：做空挂更高，做多挂更低）。
+         -> 即使 OrderFlow 显示强劲，也不得豁免此规则（防止追在地板）。
        2. **常态区允许市价**：
           - 若 RSI 处于 [30, 70] 之间，或触发 `MOMENTUM_IGNITION`，`order_type` 可为 **MARKET**。
        3. 若 open_*：entry 必须是 K 段锚点价/区间，不得凭空写。
