@@ -582,6 +582,12 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 	
 	log.Printf("🔧 [新算法API] 止损价格格式化: 原始=%.8f, 格式化=%s", stopPrice, formattedStopPrice)
 
+	// 🔥 关键修复：先撤销该交易对所有算法订单，避免重复创建
+	log.Printf("🔄 [算法API] 撤销 %s 的所有算法订单...", symbol)
+	if err := t.cancelAllAlgoOrders(symbol); err != nil {
+		log.Printf("⚠️ [算法API] 撤销所有算法订单失败，继续创建: %v", err)
+	}
+
 	// 🔥 关键修复：使用新的算法订单API (POST /fapi/v1/algoOrder)
 	// 币安从2025-12-09起要求所有条件单使用算法订单接口
 	response, err := t.createAlgoStopOrder(symbol, side, binancePosSide, formattedStopPrice)
@@ -661,6 +667,58 @@ func (t *FuturesTrader) createAlgoStopOrder(symbol, side, positionSide, triggerP
 	}
 
 	return result, nil
+}
+
+// cancelAllAlgoOrders 撤销指定交易对的所有算法订单
+func (t *FuturesTrader) cancelAllAlgoOrders(symbol string) error {
+	// 构建请求参数
+	params := map[string]interface{}{
+		"symbol":    symbol,
+		"timestamp": time.Now().UnixMilli(),
+	}
+
+	// 构建查询字符串用于签名
+	var queryParts []string
+	for key, value := range params {
+		queryParts = append(queryParts, fmt.Sprintf("%s=%v", key, value))
+	}
+	queryString := strings.Join(queryParts, "&")
+
+	// 生成签名
+	signature := t.generateSignature(queryString)
+	queryString += "&signature=" + signature
+
+	// 发送DELETE请求到 /fapi/v1/algoOpenOrders
+	url := "https://fapi.binance.com/fapi/v1/algoOpenOrders"
+	req, err := http.NewRequest("DELETE", url, strings.NewReader(queryString))
+	if err != nil {
+		return fmt.Errorf("创建撤销请求失败: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-MBX-APIKEY", t.apiKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("撤销请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取撤销响应失败: %w", err)
+	}
+
+	log.Printf("🔧 [算法API] 撤销所有订单响应状态: %d", resp.StatusCode)
+	log.Printf("🔧 [算法API] 撤销所有订单响应内容: %s", string(body))
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("撤销所有算法订单API错误 [%d]: %s", resp.StatusCode, string(body))
+	}
+
+	log.Printf("✅ [算法API] 已撤销 %s 的所有算法订单", symbol)
+	return nil
 }
 
 // GenerateSignature 生成币安API签名 (导出方法用于测试)
