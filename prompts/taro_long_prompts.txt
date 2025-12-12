@@ -1514,8 +1514,7 @@ A) 仓位 sizing（基于R的风险等额）
      - 若 notional_R < notional_min：
        - 若 notional_min > notional_max_margin：说明资金体量太小，既无法满足最小名义，也无法在可接受的保证金占用下开仓 本次 symbol 直接放弃交易：
        - 若该 symbol 当前存在持仓（Account.positions 里能找到）→ 输出 action="hold"
-       - 若该 symbol 当前不存在持仓 → 输出 action="wait"
-       并在 notes 中说明：“equity 太小，无法满足最小名义要求（notional_min > notional_max_margin）”；
+       - 若该 symbol 当前不存在持仓 输出 action="wait" 并在 reasoning 的 R 段用电报体键值写：Cap: notMin>maxM; act=reject; reason=equity_small；
        - 否则，将目标合约名义提升到 notional_min。
      - 若 notional_R > notional_max_margin：
        - 将目标合约名义压缩到 notional_max_margin。
@@ -1581,7 +1580,7 @@ B) 候选止损价（对称写法）
   - new_stop 必须单调不升高（不得把止损价再往上放宽），且始终高于当前市价。
 - 在 reasoning 的 R 段中，你必须用“单行电报体键值”写出：R_unrealized≈几R、命中的 R_lock 档位、new_stop≈价位、以及该设置如何同时满足“继续吃趋势/防止利润大幅回吐”（禁止长句与推导过程）。
 -【止损更新输出要求】
-- 对每个有持仓的 symbol，你在思维链中算出 new_stop 之后，必须执行以下检查：
+- 对每个有持仓的 symbol，你在内部推导中（不得输出推导过程）算出 new_stop 之后，必须执行以下检查：
   1) 先按 C) 中的规则判断是否满足更新门槛；
   2) 若不满足门槛 ⇒ 在最终 JSON 中对该 symbol 输出 "stop_update": null；
   3) 若满足门槛 ⇒ 在最终 JSON 中对该 symbol 输出
@@ -2659,7 +2658,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
      约束：
      - MB/mB/μB 必须来自「多时间框架分析」的结论（禁止凭空判断/只看价格脑补）。
      - sn 中所有值必须来自 MarketSnapshot 各 tf：
-       * <emaSig> 仅用 "p>e20>e50" 或 "p<e20<e50"（p=MarketSnapshot.last_price；e20/e50=对应 tf 的 ema20/ema50；；输入必须提供 MarketSnapshot.last_price（禁止提供/引用 MarketSnapshot.price；发现 price 字段视为废弃字段并忽略），但 reasoning/计算不得再引用 MarketSnapshot.price）
+       * <emaSig> 仅用 "p>e20>e50" 或 "p<e20<e50"（p=MarketSnapshot.last_price；e20/e50=对应 tf 的 ema20/ema50，输入必须提供 MarketSnapshot.last_price（禁止提供/引用 MarketSnapshot.price；发现 price 字段视为废弃字段并忽略），但 reasoning/计算不得再引用 MarketSnapshot.price）
        * m=macd 直方图符号（+ 正；- 负；0 近零）；r14=rsi14；r7=rsi7；vR=volume/avg_volume（保留1位小数）
        * x 必须引用 MarketSnapshot.5m 的“最新已收盘”标志（x=true 才写 xT；否则写 xF）
      - 若 5m 缺少 open/high/low/close/close_time 或 x!=true：action 必须为 "wait"（禁止 open_long/open_short），且 B 段必须写 xF。
