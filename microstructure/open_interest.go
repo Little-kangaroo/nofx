@@ -13,11 +13,12 @@ import (
 
 // ===== Open Interest 相关结构 =====
 
-// OIData Open Interest数据
+// OIData Open Interest数据（V-12.3 P0-05修复版本 - 双时间戳支持）
 type OIData struct {
 	Symbol           string    `json:"symbol"`
 	OpenInterest     float64   `json:"open_interest"`     // 当前持仓量
-	Timestamp        time.Time `json:"timestamp"`         // 更新时间
+	Timestamp        time.Time `json:"timestamp"`         // 🔥 P0-05修复：接收/处理时间（用于健康度检查）
+	ExchangeTime     time.Time `json:"exchange_time"`     // 🔥 P0-05修复：交易所原始时间（用于事件对齐）
 }
 
 // OIChange 持仓量变化记录

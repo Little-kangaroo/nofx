@@ -3,6 +3,8 @@ package microstructure
 import (
 	"log"
 	"math"
+	"os"
+	"sort"
 	"sync"
 	"time"
 )
@@ -144,7 +146,7 @@ func (calc *OrderBookCalculator) bucketToPrice(bucketKey int64, tickSize float64
 	return minPrice, maxPrice
 }
 
-// ProcessDepthData 处理盘口数据更新
+// ProcessDepthData 处理盘口数据更新（V-12.3 P0-03修复版本）
 func (calc *OrderBookCalculator) ProcessDepthData(symbol string, depthData *DepthData) {
 	calc.mu.Lock()
 	defer calc.mu.Unlock()
@@ -152,20 +154,31 @@ func (calc *OrderBookCalculator) ProcessDepthData(symbol string, depthData *Dept
 	// 获取或创建交易对数据
 	symbolData := calc.getOrCreateSymbolData(symbol)
 
-	// 更新盘口数据
-	symbolData.currentBids = make([]OrderBookLevel, len(depthData.Bids))
-	copy(symbolData.currentBids, depthData.Bids)
+	// 🔥 P0-03修复：强制排序和同价位合并，确保数据正确性
+	processedBids := calc.processAndSortOrderBookLevels(depthData.Bids, "bids")
+	processedAsks := calc.processAndSortOrderBookLevels(depthData.Asks, "asks")
 
-	symbolData.currentAsks = make([]OrderBookLevel, len(depthData.Asks))
-	copy(symbolData.currentAsks, depthData.Asks)
-
+	// 更新盘口数据（使用处理后的数据）
+	symbolData.currentBids = processedBids
+	symbolData.currentAsks = processedAsks
 	symbolData.lastUpdate = depthData.Timestamp
 
-	// 更新当前价格（使用盘口中间价）
+	// 🔥 P0-03修复：重新验证最优价位，确保数据一致性
 	if len(symbolData.currentBids) > 0 && len(symbolData.currentAsks) > 0 {
 		bestBid := symbolData.currentBids[0].Price
 		bestAsk := symbolData.currentAsks[0].Price
+		
+		// 双重检查：确保没有盘口交叉
+		if bestBid >= bestAsk {
+			log.Printf("🚨 [%s] 处理后仍然盘口交叉: bestBid=%.8f >= bestAsk=%.8f, 跳过此次更新", 
+				symbol, bestBid, bestAsk)
+			return
+		}
+		
 		symbolData.currentPrice = (bestBid + bestAsk) / 2
+		
+		// 🔥 P0-03修复：记录盘口健康度数据
+		calc.recordOrderBookHealth(symbol, bestBid, bestAsk, len(processedBids), len(processedAsks))
 	}
 
 	// V2.0: 检查5分钟周期重置
@@ -183,6 +196,71 @@ func (calc *OrderBookCalculator) ProcessDepthData(symbol string, depthData *Dept
 		Timestamp: depthData.Timestamp,
 		Ratio:     imbalanceRatio,
 	})
+}
+
+// processAndSortOrderBookLevels 处理和排序订单簿档位（V-12.3 P0-03修复版本）
+// 🔥 P0-03修复：强制排序、同价位合并、确保数据正确性
+func (calc *OrderBookCalculator) processAndSortOrderBookLevels(levels []OrderBookLevel, side string) []OrderBookLevel {
+	if len(levels) == 0 {
+		return levels
+	}
+	
+	// 第一步：使用map合并同价位数量
+	priceMap := make(map[float64]float64)
+	
+	for _, level := range levels {
+		// 跳过无效数据
+		if level.Price <= 0 || level.Quantity <= 0 {
+			continue
+		}
+		
+		// 同价位累加数量
+		priceMap[level.Price] += level.Quantity
+	}
+	
+	// 第二步：转换回slice
+	result := make([]OrderBookLevel, 0, len(priceMap))
+	for price, totalQty := range priceMap {
+		if totalQty > 0 { // 确保合并后数量仍为正
+			result = append(result, OrderBookLevel{
+				Price:    price,
+				Quantity: totalQty,
+			})
+		}
+	}
+	
+	// 第三步：强制排序
+	if side == "bids" {
+		// 买单按价格降序排列（最高价在前）
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].Price > result[j].Price
+		})
+	} else {
+		// 卖单按价格升序排列（最低价在前）
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].Price < result[j].Price
+		})
+	}
+	
+	return result
+}
+
+// recordOrderBookHealth 记录订单簿健康度（V-12.3 P0-03修复版本）
+// 🔥 P0-03修复：新增盘口质量监控
+func (calc *OrderBookCalculator) recordOrderBookHealth(symbol string, bestBid, bestAsk float64, bidLevels, askLevels int) {
+	spread := bestAsk - bestBid
+	spreadPct := (spread / bestBid) * 100
+	
+	// 记录关键指标用于后续分析
+	if spreadPct > 1.0 { // 价差超过1%时记录
+		log.Printf("⚠️ [%s] 价差较宽: %.6f%% (%.8f), 档位数: bid=%d, ask=%d", 
+			symbol, spreadPct, spread, bidLevels, askLevels)
+	}
+	
+	// 检查档位深度是否足够
+	if bidLevels < 5 || askLevels < 5 {
+		log.Printf("⚠️ [%s] 盘口深度不足: 买单%d档, 卖单%d档", symbol, bidLevels, askLevels)
+	}
 }
 
 // calculateImbalance 计算买卖失衡比例
@@ -513,7 +591,8 @@ func (calc *OrderBookCalculator) GetCurrentOrderBookData(symbol string, smoothPe
 
 	// V2.0: 计算额外的市场微观结构指标
 	imbalanceTrend := calc.calculateImbalanceTrend(symbol)
-	pressureDelta5m := calc.calculatePressureDelta5m(symbol, bidPressure, askPressure)
+	// 🔥 P0-04修复：使用symbolData.lastUpdate而非time.Now()
+	pressureDelta5m := calc.calculatePressureDelta5mFixed(symbol, bidPressure, askPressure, symbolData.lastUpdate)
 	spoofingRisk := calc.calculateSpoofingRisk(symbol)
 	liquidityScore := calc.calculateLiquidityScore(symbol)
 
@@ -1002,7 +1081,8 @@ func (calc *OrderBookCalculator) calculateImbalanceTrend(symbol string) string {
 	}
 }
 
-// calculatePressureDelta5m 计算5分钟压力变化（V2.0）
+// calculatePressureDelta5m 计算5分钟压力变化（V2.0）- 🚨 已弃用，请使用calculatePressureDelta5mFixed
+// 🔥 P0-04风险：此方法使用time.Now()和baseline=0会产生虚假信号
 func (calc *OrderBookCalculator) calculatePressureDelta5m(symbol string, currentBidPressure, currentAskPressure float64) float64 {
 	symbolData := calc.symbolData[symbol]
 	if symbolData == nil {
@@ -1016,9 +1096,9 @@ func (calc *OrderBookCalculator) calculatePressureDelta5m(symbol string, current
 		return 0
 	}
 	
-	// 计算与5分钟前的压力差异
+	// 🚨 P0-04风险：使用time.Now()而非数据时间戳
 	fiveMinuteAgo := time.Now().Add(-5 * time.Minute)
-	var baseline float64
+	var baseline float64 // 🚨 P0-04风险：找不到基准点时保持0，产生虚假巨大变化
 	
 	for i := len(symbolData.imbalanceHistory) - 1; i >= 0; i-- {
 		if symbolData.imbalanceHistory[i].Timestamp.Before(fiveMinuteAgo) {
@@ -1028,6 +1108,95 @@ func (calc *OrderBookCalculator) calculatePressureDelta5m(symbol string, current
 	}
 	
 	return currentImbalance - baseline
+}
+
+// calculatePressureDelta5mFixed 计算5分钟压力变化（V-12.3 P0-04修复版本）
+// 🔥 P0-04修复：解决基准点缺失时的虚假巨大变化问题
+func (calc *OrderBookCalculator) calculatePressureDelta5mFixed(symbol string, currentBidPressure, currentAskPressure float64, currentTime time.Time) float64 {
+	symbolData := calc.symbolData[symbol]
+	if symbolData == nil {
+		return 0
+	}
+	
+	// 基于当前失衡比例计算压力差异
+	currentImbalance := calc.calculateImbalance(symbol)
+	
+	if len(symbolData.imbalanceHistory) < 2 {
+		return 0 // 数据不足，返回0而非虚假变化
+	}
+	
+	// 🔥 P0-04修复：使用传入的数据时间戳，而非time.Now()
+	fiveMinuteAgo := currentTime.Add(-5 * time.Minute)
+	
+	// 🔥 P0-04修复：寻找最接近5分钟前的基准点
+	var baseline float64
+	var baselineTime time.Time
+	var foundBaseline bool
+	
+	// 从最新数据向前寻找最接近5分钟前的点
+	for i := len(symbolData.imbalanceHistory) - 1; i >= 0; i-- {
+		historyPoint := symbolData.imbalanceHistory[i]
+		
+		// 🔥 P0-04修复：寻找 <= fiveMinuteAgo 的最近点
+		if historyPoint.Timestamp.Before(fiveMinuteAgo) || historyPoint.Timestamp.Equal(fiveMinuteAgo) {
+			baseline = historyPoint.Ratio
+			baselineTime = historyPoint.Timestamp
+			foundBaseline = true
+			break
+		}
+	}
+	
+	// 🔥 P0-04修复：找不到基准点时的安全兜底
+	if !foundBaseline {
+		// 获取最早的数据点作为兜底基准
+		if len(symbolData.imbalanceHistory) > 0 {
+			oldestPoint := symbolData.imbalanceHistory[0]
+			coverageDuration := currentTime.Sub(oldestPoint.Timestamp)
+			
+			// 如果数据覆盖不足2分钟，认为变化不可信
+			if coverageDuration < 2*time.Minute {
+				return 0 // insufficient_data
+			}
+			
+			// 使用最早点作为基准，但应用置信度衰减
+			baseline = oldestPoint.Ratio
+			baselineTime = oldestPoint.Timestamp
+			
+			// 🔥 P0-04修复：置信度衰减机制
+			// 覆盖时长比例：实际覆盖时长 / 期望的5分钟
+			coverageRatio := coverageDuration.Minutes() / 5.0
+			confidenceDecay := math.Min(1.0, coverageRatio) // 最大衰减到原值
+			
+			rawDelta := currentImbalance - baseline
+			
+			if os.Getenv("NOFX_DEBUG") == "true" {
+				log.Printf("🔧 [%s] P0-04兜底：覆盖时长=%.1fm, 置信度衰减=%.3f, 原始差异=%.6f, 衰减后=%.6f", 
+					symbol, coverageDuration.Minutes(), confidenceDecay, rawDelta, rawDelta*confidenceDecay)
+			}
+			
+			return rawDelta * confidenceDecay
+		}
+		
+		// 完全没有历史数据
+		return 0
+	}
+	
+	// 🔥 P0-04修复：正常情况，计算时间加权的压力差异
+	timeDiff := currentTime.Sub(baselineTime)
+	rawDelta := currentImbalance - baseline
+	
+	// 如果时间差异过大（>10分钟），应用时间衰减
+	if timeDiff > 10*time.Minute {
+		timeDecay := 10.0 / timeDiff.Minutes() // 10分钟后开始衰减
+		rawDelta *= timeDecay
+		
+		if os.Getenv("NOFX_DEBUG") == "true" {
+			log.Printf("🔧 [%s] P0-04时间衰减：基准点距离=%.1fm, 衰减系数=%.3f", 
+				symbol, timeDiff.Minutes(), timeDecay)
+		}
+	}
+	
+	return rawDelta
 }
 
 // calculateSpoofingRisk 计算虚假挂单风险评分（V2.0修复版）

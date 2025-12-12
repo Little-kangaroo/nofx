@@ -440,12 +440,27 @@ func (ofm *OrderFlowManager) getOpenInterestFromAPI(symbol string) (*OIData, err
 	return &OIData{
 		Symbol:       symbol,
 		OpenInterest: openInterest,
-		Timestamp:    time.Now(),
+		// 🔥 P0-05修复：双时间戳支持
+		Timestamp:    time.Now(),                              // 接收/处理时间
+		ExchangeTime: time.UnixMilli(result.Time),            // 交易所原始时间
 	}, nil
 }
 
-// GetMarketSnapshot 获取市场快照（供AI使用）
+// GetMarketSnapshot 获取市场快照（供AI使用）- 🚨 已弃用，请使用GetMarketSnapshotAt
+// 🔥 P0-05风险：此方法使用time.Now()破坏5m K线收盘事件的时序对齐
 func (ofm *OrderFlowManager) GetMarketSnapshot(symbol string) *MarketSnapshot {
+	symbol = strings.ToUpper(symbol)
+	if !strings.HasSuffix(symbol, "USDT") {
+		symbol += "USDT"
+	}
+	
+	// 🔥 P0-05风险：使用time.Now()而非事件时间
+	return ofm.GetMarketSnapshotAt(symbol, time.Now())
+}
+
+// GetMarketSnapshotAt 获取指定事件时间的市场快照（V-12.3 P0-05修复版本）
+// 🔥 P0-05修复：支持事件时间对齐，确保5m K线收盘事件的数据一致性
+func (ofm *OrderFlowManager) GetMarketSnapshotAt(symbol string, eventTime time.Time) *MarketSnapshot {
 	symbol = strings.ToUpper(symbol)
 	if !strings.HasSuffix(symbol, "USDT") {
 		symbol += "USDT"
@@ -475,9 +490,8 @@ func (ofm *OrderFlowManager) GetMarketSnapshot(symbol string) *MarketSnapshot {
 		symbol, cvdData, oiAnalysis, priceContext,
 	)
 	
-	// 🔧 修复致命断层1: 强制实时计算CVD数据，绕过缓存陷阱
-	// 原问题：缓存的CVD数据是几分钟前的"尸体"，导致AI看到失真数据
-	cvdDelta5m := ofm.cvdManager.CalculateRealtimeCVDDelta5m(symbol, time.Now())
+	// 🔥 P0-05修复：使用事件时间而非time.Now()进行CVD增量计算
+	cvdDelta5m := ofm.cvdManager.CalculateRealtimeCVDDelta5m(symbol, eventTime)
 	
 	// 生成宏观趋势数据
 	macroTrend := ofm.generateMacroTrendData(symbol, cvdData, oiAnalysis)
@@ -487,21 +501,30 @@ func (ofm *OrderFlowManager) GetMarketSnapshot(symbol string) *MarketSnapshot {
 	
 	return &MarketSnapshot{
 		Symbol:         symbol,
-		Timestamp:      time.Now(),
+		// 🔥 P0-05修复：使用事件时间而非time.Now()
+		Timestamp:      eventTime,
 		CVDData:        cvdData,
 		OIAnalysis:     oiAnalysis,
 		OrderBookData:  orderBookData,
 		MarketContext:  marketContext,
 		PriceContext:   priceContext,
-		// V2.0 新增字段 - 现在填充实际数据
+		// V2.0 新增字段 - 现在使用事件时间对齐
 		CVDDelta5m:     cvdDelta5m,
 		MacroTrend:     macroTrend,
 		DataQuality:    dataQuality,
 	}
 }
 
-// GetAllMarketSnapshots 获取所有订阅币种的市场快照
+// GetAllMarketSnapshots 获取所有订阅币种的市场快照 - 🚨 已弃用，请使用GetAllMarketSnapshotsAt
+// 🔥 P0-05风险：此方法使用time.Now()破坏5m K线收盘事件的时序对齐
 func (ofm *OrderFlowManager) GetAllMarketSnapshots() map[string]*MarketSnapshot {
+	// 🔥 P0-05风险：使用time.Now()而非事件时间
+	return ofm.GetAllMarketSnapshotsAt(time.Now())
+}
+
+// GetAllMarketSnapshotsAt 获取所有订阅币种在指定事件时间的市场快照（V-12.3 P0-05修复版本）
+// 🔥 P0-05修复：支持事件时间对齐，确保5m K线收盘事件的数据一致性
+func (ofm *OrderFlowManager) GetAllMarketSnapshotsAt(eventTime time.Time) map[string]*MarketSnapshot {
 	ofm.mu.RLock()
 	symbols := make([]string, 0, len(ofm.subscribedSymbols))
 	for symbol := range ofm.subscribedSymbols {
@@ -511,7 +534,8 @@ func (ofm *OrderFlowManager) GetAllMarketSnapshots() map[string]*MarketSnapshot 
 	
 	snapshots := make(map[string]*MarketSnapshot)
 	for _, symbol := range symbols {
-		snapshots[symbol] = ofm.GetMarketSnapshot(symbol)
+		// 🔥 P0-05修复：使用事件时间而非time.Now()
+		snapshots[symbol] = ofm.GetMarketSnapshotAt(symbol, eventTime)
 	}
 	
 	return snapshots
@@ -868,7 +892,7 @@ func (ofm *OrderFlowManager) validateTradeData(tradeData *TradeData) error {
 	return nil
 }
 
-// validateDepthData 验证盘口数据完整性
+// validateDepthData 验证盘口数据完整性（V-12.3 P0-03修复版本）
 func (ofm *OrderFlowManager) validateDepthData(depthData *DepthData) error {
 	if depthData == nil {
 		return fmt.Errorf("盘口数据为nil")
@@ -880,17 +904,55 @@ func (ofm *OrderFlowManager) validateDepthData(depthData *DepthData) error {
 		return fmt.Errorf("买卖盘均为空")
 	}
 	
-	// 验证买盘数据
-	for i, bid := range depthData.Bids {
-		if bid.Price <= 0 || bid.Quantity <= 0 {
-			return fmt.Errorf("买单第%d档数据无效: 价格=%.8f, 数量=%.8f", i, bid.Price, bid.Quantity)
+	// 🔥 P0-03修复：验证买盘数据并检查排序
+	if len(depthData.Bids) > 0 {
+		for i, bid := range depthData.Bids {
+			if bid.Price <= 0 || bid.Quantity <= 0 {
+				return fmt.Errorf("买单第%d档数据无效: 价格=%.8f, 数量=%.8f", i, bid.Price, bid.Quantity)
+			}
+			
+			// 🔥 P0-03修复：检查买单价格是否按降序排列
+			if i > 0 && bid.Price > depthData.Bids[i-1].Price {
+				return fmt.Errorf("买单排序错误: 第%d档价格%.8f > 第%d档价格%.8f (应按降序)", 
+					i, bid.Price, i-1, depthData.Bids[i-1].Price)
+			}
 		}
 	}
 	
-	// 验证卖盘数据
-	for i, ask := range depthData.Asks {
-		if ask.Price <= 0 || ask.Quantity <= 0 {
-			return fmt.Errorf("卖单第%d档数据无效: 价格=%.8f, 数量=%.8f", i, ask.Price, ask.Quantity)
+	// 🔥 P0-03修复：验证卖盘数据并检查排序
+	if len(depthData.Asks) > 0 {
+		for i, ask := range depthData.Asks {
+			if ask.Price <= 0 || ask.Quantity <= 0 {
+				return fmt.Errorf("卖单第%d档数据无效: 价格=%.8f, 数量=%.8f", i, ask.Price, ask.Quantity)
+			}
+			
+			// 🔥 P0-03修复：检查卖单价格是否按升序排列
+			if i > 0 && ask.Price < depthData.Asks[i-1].Price {
+				return fmt.Errorf("卖单排序错误: 第%d档价格%.8f < 第%d档价格%.8f (应按升序)", 
+					i, ask.Price, i-1, depthData.Asks[i-1].Price)
+			}
+		}
+	}
+	
+	// 🔥 P0-03修复：检查盘口交叉（bestBid >= bestAsk是异常情况）
+	if len(depthData.Bids) > 0 && len(depthData.Asks) > 0 {
+		bestBid := depthData.Bids[0].Price
+		bestAsk := depthData.Asks[0].Price
+		
+		if bestBid >= bestAsk {
+			return fmt.Errorf("盘口交叉异常: bestBid=%.8f >= bestAsk=%.8f", bestBid, bestAsk)
+		}
+		
+		// 🔥 P0-03修复：检查价差是否合理（避免极端窄价差）
+		spread := bestAsk - bestBid
+		spreadPct := (spread / bestBid) * 100
+		
+		if spreadPct < 0.0001 { // 0.01bp以下可能是数据错误
+			return fmt.Errorf("价差过窄可能异常: spread=%.8f (%.6f%%)", spread, spreadPct)
+		}
+		
+		if spreadPct > 10.0 { // 超过10%价差可能是数据异常
+			return fmt.Errorf("价差过宽可能异常: spread=%.8f (%.2f%%)", spread, spreadPct)
 		}
 	}
 	
@@ -971,7 +1033,7 @@ func (ofm *OrderFlowManager) generateMacroTrendData(symbol string, cvdData *CVDD
 	}
 }
 
-// calculateDataQuality 计算数据质量评估
+// calculateDataQuality 计算数据质量评估（V-12.3 P0-06修复版本 - 真实组件更新时间）
 func (ofm *OrderFlowManager) calculateDataQuality(symbol string, cvdData *CVDData, oiAnalysis *OIAnalysis, orderBookData *OrderBookData) *DataQualityInfo {
 	// CVD数据可靠性
 	cvdReliability := ofm.calculateCVDReliability(cvdData)
@@ -985,8 +1047,54 @@ func (ofm *OrderFlowManager) calculateDataQuality(symbol string, cvdData *CVDDat
 	// 总体评分（加权平均）
 	overallScore := (cvdReliability*0.4 + oiReliability*0.3 + orderBookReliability*0.3)
 	
-	// 计算数据延迟
-	dataLagMs := ofm.calculateDataLag(cvdData, oiAnalysis, orderBookData)
+	// 🔥 P0-06修复：提取真实的组件更新时间
+	var cvdLastUpdate, oiLastUpdate, orderBookLastUpdate time.Time
+	var componentTimes []time.Time
+	
+	if cvdData != nil && !cvdData.LastUpdate.IsZero() {
+		cvdLastUpdate = cvdData.LastUpdate
+		componentTimes = append(componentTimes, cvdLastUpdate)
+	}
+	
+	if oiAnalysis != nil && !oiAnalysis.LastUpdate.IsZero() {
+		oiLastUpdate = oiAnalysis.LastUpdate
+		componentTimes = append(componentTimes, oiLastUpdate)
+	}
+	
+	if orderBookData != nil && !orderBookData.LastUpdate.IsZero() {
+		orderBookLastUpdate = orderBookData.LastUpdate
+		componentTimes = append(componentTimes, orderBookLastUpdate)
+	}
+	
+	// 🔥 P0-06修复：LastDataUpdate = max(组件时间) 而非 time.Now()
+	var lastDataUpdate time.Time
+	if len(componentTimes) > 0 {
+		lastDataUpdate = componentTimes[0]
+		for _, t := range componentTimes[1:] {
+			if t.After(lastDataUpdate) {
+				lastDataUpdate = t
+			}
+		}
+	} else {
+		// 兜底：如果所有组件都无效，使用当前时间
+		lastDataUpdate = time.Now()
+	}
+	
+	// 🔥 P0-06修复：DataLagMs = now - min(组件时间) 衡量"最老组件落后多少"
+	var dataLagMs int64
+	if len(componentTimes) > 0 {
+		now := time.Now()
+		oldestComponentTime := componentTimes[0]
+		for _, t := range componentTimes[1:] {
+			if t.Before(oldestComponentTime) {
+				oldestComponentTime = t
+			}
+		}
+		dataLagMs = now.Sub(oldestComponentTime).Milliseconds()
+	} else {
+		// 兜底：如果没有有效组件，延迟设为最大值
+		dataLagMs = 60000 // 1分钟
+	}
 	
 	// 确定状态
 	status := "正常"
@@ -1001,9 +1109,14 @@ func (ofm *OrderFlowManager) calculateDataQuality(symbol string, cvdData *CVDDat
 		OrderBookReliability: orderBookReliability,
 		OIReliability:        oiReliability,
 		OverallScore:         overallScore,
-		LastDataUpdate:       time.Now(),
+		// 🔥 P0-06修复：使用真实的组件最新时间而非time.Now()
+		LastDataUpdate:       lastDataUpdate,
 		DataLagMs:            dataLagMs,
 		Status:               status,
+		// 🔥 P0-06修复：单独跟踪每个组件的更新时间
+		CVDLastUpdate:        cvdLastUpdate,
+		OILastUpdate:         oiLastUpdate,
+		OrderBookLastUpdate:  orderBookLastUpdate,
 	}
 }
 
@@ -1291,31 +1404,3 @@ func (ofm *OrderFlowManager) calculateOrderBookReliability(orderBookData *OrderB
 	return reliability
 }
 
-// calculateDataLag 计算数据延迟
-func (ofm *OrderFlowManager) calculateDataLag(cvdData *CVDData, oiAnalysis *OIAnalysis, orderBookData *OrderBookData) int64 {
-	now := time.Now()
-	maxLag := int64(0)
-
-	if cvdData != nil {
-		lag := now.Sub(cvdData.LastUpdate).Milliseconds()
-		if lag > maxLag {
-			maxLag = lag
-		}
-	}
-
-	if oiAnalysis != nil {
-		lag := now.Sub(oiAnalysis.LastUpdate).Milliseconds()
-		if lag > maxLag {
-			maxLag = lag
-		}
-	}
-
-	if orderBookData != nil {
-		lag := now.Sub(orderBookData.LastUpdate).Milliseconds()
-		if lag > maxLag {
-			maxLag = lag
-		}
-	}
-
-	return maxLag
-}

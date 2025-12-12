@@ -159,15 +159,20 @@ type MicrostructureData struct {
 	LastUpdate  time.Time       `json:"last_update"`
 }
 
-// DataQualityInfo 数据质量信息（V2.0新增）
+// DataQualityInfo 数据质量信息（V-12.3 P0-06修复版本 - 真实组件更新时间）
 type DataQualityInfo struct {
 	CVDReliability       float64   `json:"cvd_reliability"`        // CVD数据可靠性(0-1)
 	OrderBookReliability float64   `json:"orderbook_reliability"`  // 盘口数据可靠性(0-1)
 	OIReliability        float64   `json:"oi_reliability"`         // OI数据可靠性(0-1)
 	OverallScore         float64   `json:"overall_score"`          // 总体质量评分(0-1)
-	LastDataUpdate       time.Time `json:"last_data_update"`       // 最后数据更新时间
-	DataLagMs            int64     `json:"data_lag_ms"`            // 数据延迟(毫秒)
+	// 🔥 P0-06修复：真实数据更新时间，而非固定time.Now()
+	LastDataUpdate       time.Time `json:"last_data_update"`       // 最新组件数据更新时间（max）
+	DataLagMs            int64     `json:"data_lag_ms"`            // 最老组件落后时间（毫秒）
 	Status               string    `json:"status"`                 // 数据状态: "正常", "延迟", "异常"
+	// 🔥 P0-06修复：新增单独组件更新时间跟踪
+	CVDLastUpdate        time.Time `json:"cvd_last_update"`        // CVD最后更新时间
+	OILastUpdate         time.Time `json:"oi_last_update"`         // OI最后更新时间  
+	OrderBookLastUpdate  time.Time `json:"orderbook_last_update"`  // OrderBook最后更新时间
 }
 
 // ===== 配置结构 =====
