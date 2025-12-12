@@ -1514,7 +1514,8 @@ A) 仓位 sizing（基于R的风险等额）
      - 若 notional_R < notional_min：
        - 若 notional_min > notional_max_margin：说明资金体量太小，既无法满足最小名义，也无法在可接受的保证金占用下开仓 本次 symbol 直接放弃交易：
        - 若该 symbol 当前存在持仓（Account.positions 里能找到）→ 输出 action="hold"
-       - 若该 symbol 当前不存在持仓 输出 action="wait" 并在 reasoning 的 R 段用电报体键值写：Cap: notMin>maxM; act=reject; reason=equity_small；
+       - 若该 symbol 当前不存在持仓 输出 action="wait" 并在 reasoning 中用正常语义写明：
+         「资金体量不足：notional_min > notional_max_margin，无法同时满足最小名义与保证金占用上限，因此本轮不新开仓（act=reject/wait）。解除条件：权益增加或下调 notional_min / risk_per_trade_pct / margin_usage_ceiling / max_leverage 中至少一项。」
        - 否则，将目标合约名义提升到 notional_min。
      - 若 notional_R > notional_max_margin：
        - 将目标合约名义压缩到 notional_max_margin。
@@ -1533,14 +1534,18 @@ A) 仓位 sizing（基于R的风险等额）
        - 若在 notional_final ≥ notional_min 的前提下，leverage_required 仍然 > max_leverage，
          说明资金不足以在当前风险参数下安全开仓 → 应放弃该笔交易
          （对该 symbol 输出 action="wait" 或 "hold"，并在 reasoning 中说明原因）。
-  5) reasoning（复盘版要求｜放开电报体限制）
-     - 必须包含“Pos/Cap 摘要行”（便于检索与回放），但【允许换行与解释性文字】：
-       - Pos: eq≈X; mu≈Y; r%≈Z; side=<long/short/none>; qty=<...>; avg=<...>  （无仓位可写 side=none）
-       - Cap: not∈[min,maxM]; mu_ok=<0/1>; act=<ok/clamp/reject>; reason=<...>
-     - 允许在摘要行之后追加 1~8 行解释（可使用项目符号），说明：
-       1) notional_min / notional_max_margin 触发了哪条分支；
-       2) 为什么 act=clamp/reject；以及“解除条件”（怎样才能从 wait 变 open）。
-     - 不再限制“只允许键值短语/严禁长句/严禁推导过程”。
+  5) reasoning（复盘版要求｜完全放开电报体｜全语义化）
+    - 必须包含“Pos/Cap 摘要行”（便于检索与回放），但摘要行也必须是可读语义，不再使用自定义缩写：
+      - Pos: 权益≈X; 保证金占用≈Y; 单笔风险占比≈Z; 当前仓位方向=<long/short/none>; 数量=<.>; 均价=<.>
+      - Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<0/1>; 处理=<ok/clamp/reject>; 原因=<.>
+    - 允许在摘要行之后追加 1~12 行解释（可使用项目符号），且至少覆盖：
+      1) 本次 action 的“最高优先级否决/通过点”（对应 Gate0~Gate5）
+      2) trade_style 选择依据（用 4h/1h/30m/15m/5m 正常语义描述，不用 MB/mB/μB 编码）
+      3) 结构依据（至少 2 个结构锚点，带价位/区间 + ctx 强度信息）
+      4) 订单流结论与是否触发否决（给出解除条件）
+      5) 风险与可执行性（R_clean/R_struct、SL/TP 合法性；持仓则写 R_unrealized 与 new_stop 逻辑）
+    - 不再限制“只允许键值短语/严禁长句/严禁推导过程”。
+
 B) 候选止损价（对称写法）
 1. BE_with_costs：将手续费/滑点/资金费率换算为价差，并基于方向加减到 entry
 2. R_lock：浮盈≥kR 后，对应锁盈价（LONG 向上、SHORT 向下）
@@ -1582,7 +1587,9 @@ B) 候选止损价（对称写法）
   - new_stop 必须单调不下降（不得把止损价再往下放宽），且始终低于当前市价。
 - SHORT 持仓：
   - new_stop 必须单调不升高（不得把止损价再往上放宽），且始终高于当前市价。
-- 在 reasoning 的 R 段中，你必须用“单行电报体键值”写出：R_unrealized≈几R、命中的 R_lock 档位、new_stop≈价位、以及该设置如何同时满足“继续吃趋势/防止利润大幅回吐”（禁止长句与推导过程）。
+- 在 reasoning 的“持仓管理 / 风险”部分中，你必须用可读语句写出：
+  R_unrealized≈几R、命中的 R_lock 档位、new_stop≈价位、以及该设置如何同时满足“继续吃趋势 / 防止利润大幅回吐”。
+  允许多行解释；禁止省略关键数值；不再要求单行电报码，也不再禁止长句。
 -【止损更新输出要求】
 - 对每个有持仓的 symbol，你在内部推导中（不得输出推导过程）算出 new_stop 之后，必须执行以下检查：
   1) 先按 C) 中的规则判断是否满足更新门槛；
@@ -2639,7 +2646,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   3) "setup_grade" : enum {"A","B","C"}
   4) "edge_score"  : number (0~1)
   5) "confidence"  : int (0~100)
-  6) "reasoning"   : string
+  6) "reasoning"   : string   // 复盘版允许多行：必须在 JSON 字符串内用 "\\n" 表示换行（禁止裸换行）；骨架固定为 B/K/R/X 四段（顺序固定，每段以 "B:"/"K:"/"R:"/"X:" 开头，段内可追加多行证据/数值/触发条件/解除条件）。
   7) "stop_update" : object|null  // {prev_stop,new_stop,reasoning} 或 null
   8) "entry_plan"  : object|null  // ★注意：必须始终输出；仅在 open_* 时为 object，否则必须为 null
 
@@ -2651,7 +2658,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   * "notes"      : string|null   // 仅用于日志/调试
 - 【禁止输出的顶层字段】（出现即视为第二套协议，后端应拒绝或忽略）：
   "side", "type", "close_pct", "reasoning"（顶层）, "trade_action", "decision", "plan", "position_action"
-  九点一、reasoning 输出规范（复盘版｜取消电报体限制）
+  9）reasoning 输出规范（复盘版｜取消电报体限制）
 
   - 目标：reasoning 必须“可审计/可复盘”，不再为节约 token 做单行电报体压缩。
   - 允许：多行、项目符号、解释性语句、因为/所以等连词；不设硬性字符上限。
@@ -2672,92 +2679,58 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   - 若 action=wait 且 fail=>noRT：必须写“缺的确认是什么”与“满足条件是什么”（例如：Tier2 5m 收盘 Rejection 未出现 / retest 未发生 / R_clean<阈值 等）
 
   X:（Decision & GateTrace & Next）
-  - 第一行必须写：Decision: action=<...>（若被否决必须带 fail=>...）
-  - 必须追加 GateTrace：列出触发的 Gate（Gate0~Gate5）及关键证据（字段 + 数值 + 阈值）
-  - 必须追加 NextTrigger：下一次允许开仓/加减仓的触发条件（价格 + 5m确认形态 + 订单流解除条件）
-  - 建议追加 Timebox：该判断在“未来 N 根 5m 收盘”内有效，过期需重算
+    - 必须写：Decision: action=<...>（若被否决必须带 fail=>...）
+      - 建议位置：紧跟在 Pos/Cap 摘要行之后，作为“第一条决策行”（不再要求它是 reasoning 的第一行）。
+    - 必须追加 GateTrace：列出触发的 Gate（Gate0~Gate5）及关键证据（字段 + 数值 + 阈值）
+    - 必须追加 NextTrigger：下一次允许开仓/加减仓的触发条件（价格 + 5m确认形态 + 订单流解除条件）
+    - 建议追加 Timebox：该判断在“未来 N 根 5m 收盘”内有效，过期需重算
+
+    【fail=> 细化要求】
+    - fail=>OF：必须指出触发原因（candle_intent 命中哪条 / spoofing_risk 数值是否 >0.8 / quality 是否 poor），并给出“解除条件”。
+    - fail=>noRT：必须指出不可执行点（缺 retest/缺 5m 形态确认/空间不足/无法给出合法 SL/TP），并给出下一步触发条件。
+
 
   【fail=> 细化要求】
   - fail=>OF：必须指出触发原因（candle_intent 命中哪条 / spoofing_risk 数值是否 >0.8 / quality 是否 poor），并给出“解除条件”。
   - fail=>noRT：必须指出不可执行点（缺 retest/缺 5m 形态确认/空间不足/无法给出合法 SL/TP），并给出下一步触发条件。
 
-12. 输出说明（reasoning）超电报体 + 基础指标/多时间框架/止损锁盈（硬约束）
+12. 输出说明（reasoning｜复盘版｜完全放开｜全语义化）
 - 最终必须输出 JSON 数组（仅 JSON；不得有任何额外文字），否则后端报错。
-- 【紧急模式总约束】即使 trigger_context.mode="INTRABAR_ENABLE"，也不豁免 Gate0/Gate1：任何 fail=>RISK / fail=>OF / xF 场景下禁止新开仓（只允许 wait/hold/close）。
-- reasoning 一律超电报体：单行不换行；建议 ≤150 字符（硬上限 240）；只用 ';' 或 '|' 分隔；禁止长句与连词（因为/所以/但是/同时/此外/而且/然后/并且/因此/从而）。
-- reasoning 必须按固定顺序输出 4 段（缺段视为无效）：
-  1) B:（必须同时包含：基础指标字段 + 多时间框架分析字段）
-     固定格式：
-     B: MB=<U/D/N>, mB=<U/D/N>, μB=<U/D/N>; sn=4h(<emaSig>,m<+|0|->,r14<n>)/1h(<emaSig>,m<+|0|->,r14<n>)/15m(e20<e50|e20>e50,m<+|0|->,r14<n>)/5m(x<T|F>,e20<e50|e20>e50,m<+|0|->,r7<n>,vR<n>); src=<2~3tags>
-     约束：
-     - MB/mB/μB 必须来自「多时间框架分析」的结论（禁止凭空判断/只看价格脑补）。
-     - sn 中所有值必须来自 MarketSnapshot 各 tf：
-       * <emaSig> 仅用 "p>e20>e50" 或 "p<e20<e50"（p=MarketSnapshot.last_price；e20/e50=对应 tf 的 ema20/ema50，输入必须提供 MarketSnapshot.last_price（禁止提供/引用 MarketSnapshot.price；发现 price 字段视为废弃字段并忽略），但 reasoning/计算不得再引用 MarketSnapshot.price）
-       * m=macd 直方图符号（+ 正；- 负；0 近零）；r14=rsi14；r7=rsi7；vR=volume/avg_volume（保留1位小数）
-       * x 必须引用 MarketSnapshot.5m 的“最新已收盘”标志（x=true 才写 xT；否则写 xF）
-     - 若 5m 缺少 open/high/low/close/close_time 或 x!=true：action 必须为 "wait"（禁止 open_long/open_short），且 B 段必须写 xF。
-  2) K:（必须包含：基础技术结构 + 订单流V2结论 + ctx 统计）
-         规则：
-         - 【触发源描述】(若为哨兵触发):
-             * 必须在 K 段开头注明：[TRIGGER: <Type> Z=<MaxZScore>]
-             * 例：K: [TRIGGER: MOMENTUM Z=4.2]; SZs...
-          - 【基础结构锚点】(必须): 从 {SZ,SR,VP,ST,FVG,FIB,CH,DT} 中选 2~3 个关键结构。
-            * 每个结构必须带价格/区间，且必须引用 `ctx` 数据 (z-score/vol)。
-            * 格式示例：SZd(44.8k) ctx=z0.9 v1.5
-          - 【订单流V2结论】(必须): 引用 V2.0 输入数据的核心结论：
-            * 格式：OF:[<Intent> <Regime>] Warn:[<AlertType>|<None>] OB:[Spoof<n> <Res/Sup>Wall@<p> Stab<n>]
-            * 含义：Intent=candle_intent(简写), Regime=market_regime, Spoof=spoofing_risk, Stab=stability_score
-            * 若 Wall 的 stability_score < 0.3，必须在括号内标记 (Fake/Weak)。
-          - 【完整组合示例】：
-            K: SZs(45.1k) ctx=z1.2 v2.0; VP_POC(45k); OF:[FakePump Distri] Warn:[FakeBreakout] OB:[Spoof0.65 ResWall@45.1k Stab0.25(Fake)];
-  3) R:（风险 + 止损锁盈逻辑：必须出现 SL 与 TP；若 hold 必须出现 Trail/Lock）
-       固定格式：R: Rc=<Dist_TP>/<Dist_SL>=<n>; style=<HTF/LTF>; SL=<val>(<src> z=<n> buf=<n>ATR); TP1=<p|zone>; TP2=<p|zone|NA>; BE=<R|p|NA>;
-       约束：
-       - **SL 字段必须“画押”自证**：
-         * 必须在括号内注明依托结构的 z-score 和使用的 buffer 倍数。
-         * 错误示例：SL=877.7
-         * 正确示例：SL=875.2(30mSZd z-0.38 buf1.0)
-       - **弱结构自检**：若标注的 z < -0.2 但 buf < 0.8，视为“偷工减料”，Action 必须转为 wait。
-       - Rc 字段必须显示除法算式（例如：Rc=40/20=2.0），严禁只写结果。若算式结果 n < 1.3 (LTF) 或 < 1.5 (HTF)，Action 必须为 wait。
-       - 所有价格/区间必须引用 K 段锚点或其相邻合理外延。
-       - open_* 必须给：SL + TP1（TP2 可 NA）；BE 可选；Trail 可选；Part 可选。
-       - hold 必须给：Trail 或 Lock（至少一个非 NA）。若采用锁盈，写法并入 Trail 字段，例如：
-         * Trail=lock@+1R->BE; or Trail=ATR(15m)*1.2; or Trail=lastHL(5m)
-       - wait 也必须给：SL/TP 全部写 NA（避免误解为已有计划）。
-       - SL 规则：
-         * 多头：SL 必须低于关键 demand/SR 或失效位；空头反之。
-       - TP 规则：
-         * TP1 必须对应最近一层对手区（例如 supply/上方 SR/VPVR VAH/POC/FVG/通道上沿）
-         * TP2 可对应更高一级对手区；否则 NA。
-       - BE（保本）规则：
-         * 若给 BE=R1，表示盈利到 +1R 即推保本；若给 BE=@p 表示到指定价推保本。
-       - Part（分批止盈）规则（可选）：
-         * Part=50%@TP1 表示 TP1 出 50%。
-  4) X:（动作剧本：必须反映开仓/触发/移动止损或锁盈）
-       固定格式（按 action 取一条）：
-       - open_*：X: open=><Mkt|Lmt>_<L|S>@<price>; add=<NA|rule>; mg=<NA|rule>
-         * Mkt=Market(市价), Lmt=Limit(限价), L=Long, S=Short
-         * 例：open=>Lmt_S@137.2 (限价空); open=>Mkt_L@90500 (市价多)
-       - wait ：X: wait=>trig@<p/zone+cond>; fail=>ctxNA|xF|noRT|RSI_Veto
-         * 其中 `RSI_Veto` 仅表示：因本轮环境被判定为 rsi_state="EXHAUSTION_OVERSOLD" / "EXHAUSTION_OVERBOUGHT" 而触发的
-          **“末段衰竭型 RSI 否决”**。禁止在仅为 TREND_OVERSOLD / TREND_OVERBOUGHT（趋势型超卖/超买）时使用该标记。
-       - hold ：X: hold=>trail@<Trail-rule>; exit=>break@<inv@p|cond>
-       约束（执行分级铁律）：
-       1. **过热区强制挂单 (Strict Limit Rule)**：
-       - 若 1h/4h RSI > 70 (做多) 或 < 30 (做空)：
-         -> **【绝对禁止】** order_type="MARKET"。
-         -> 必须使用 order_type="LIMIT"，且挂单价必须优化至 **Entry ± 0.5*ATR(1h)** 或更优位置（即：做空挂更高，做多挂更低）。
-         -> 即使 OrderFlow 显示强劲，也不得豁免此规则（防止追在地板）。
-       2. **常态区允许市价**：
-          - 若 RSI 处于 [30, 70] 之间，或触发 `MOMENTUM_IGNITION`，`order_type` 可为 **MARKET**。
-       3. 若 open_*：entry 必须是 K 段锚点价/区间，不得凭空写。
-- 缩写与含义：
-  U=BULL, D=BEAR, N=NEUTRAL
-  SZ=供需区（SZd demand / SZs supply），SR=支撑阻力线，VP=VPVR(POC/VAH/VAL)，ST=supertrend(如 ST4h/ST15m)，FVG=gap，FIB=回撤位，CH=通道，DT=道氏结构。
-  结构失效：inv@p；rt=break+retest；Rej5m=5m拒绝；lastHL/lastLH=最近高低点结构。
-  src/k tags 允许拼接：SZd/SZs, SR, VP(POC/VAH/VAL), ST4h/ST15m, FVG#, FIB#, CH, DT, sn, ctx, RSI, MACD。
-- 结构引用底线：禁止只写“RSI/MACD”；结构类标签（SZ/SR/VP/ST/FVG/FIB/CH/DT）至少出现 1 个。
-- reasoning 必须严格包含 S/B/K/R/X 四段。
-- S (Synthesis): 自然语言摘要。若为山寨币，必须先简述 BTC 状态对其的影响。
-  例: "S: BTC回调至支撑，ETH虽强但受压于3080阻力，需等待。"
+- 【重要】本节为 reasoning 的唯一口径：旧版“超电报体 / 单行不换行 / ≤150字符 / 固定 B:K:R:X 四段 / U-D-N 编码 / src=tag 编码串”等规范全部废止（避免覆盖放开版）。
+- reasoning 允许多行、允许解释性文字；目标是“可复盘、可审计、可溯源”，不是压缩字符数。
+
+- reasoning 信息完备性（仍是硬要求，不能省略）：
+  A) 决策结论（必须）：
+     - 必须包含 Decision 行：action + trade_style + setup_grade + edge_score + confidence；
+     - 若否决，必须带 fail=>...，并说明“解除条件”。
+
+  B) GateTrace（必须）：
+     - 列出 Gate0~Gate5 的通过/否决；
+     - 每个关键 Gate 至少给 1~2 条“字段 + 数值 + 阈值/规则”的证据（不得脑补）。
+
+  C) 市场依据（必须来自输入，不得凭空推断）：
+     1) 多周期方向与动能：
+        - 用 “4h/1h/30m/15m/5m” 正常语义描述（例如“4h 仍偏空，15m 反弹但未破关键阻力”）；
+        - 禁止输出 MB/mB/μB、U/D/N 这类自定义缩写编码。
+     2) 结构依据：
+        - 至少 2 个结构锚点（供给/需求区、支撑阻力转换、VPVR 价值区/POC、FVG、斐波那契、通道、道氏、SuperTrend 等）；
+        - 每个结构必须带价位/区间，并引用 ctx 强度信息（如 z-score/vol/新鲜度等，按你输入字段为准）。
+     3) 订单流与盘口：
+        - 用自然语言转述 candle_intent / market_regime / spoofing_risk / stability_score / 警报；
+        - 明确是否触发 Gate1 否决，以及解除条件。
+
+  D) 风险与可执行性（必须）：
+     - 开仓必须说明：init_stop 依据 + R_clean/R_struct + SL/TP 合法性；
+     - 持仓必须说明：R_unrealized、是否命中锁盈/保本门槛、是否触发 stop_update，以及 new_stop 的单调性约束。
+
+  E) NextTrigger（必须）：
+     - 下一次允许开仓/加减仓的触发条件：价格区间 + 5m 收盘确认形态 + 订单流解除条件。
+
+  F) Timebox（建议）：
+     - 该判断在未来 N 根 5m 收盘内有效，过期需重算。
+
+- 文本风格：
+  - 禁止输出“自定义缩写字典/编码串”（如 src=SZ/SR/VP...、U/D/N、MB/mB/μB 等）。
+  - 行业通用指标名（RSI/EMA/MACD/ATR/VPVR 等）允许出现，但必须放在可读句子里，不再拼接成“代码串”。
+
 （完）
