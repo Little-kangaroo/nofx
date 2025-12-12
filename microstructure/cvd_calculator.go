@@ -908,7 +908,7 @@ func (calc *CVDCalculator) CalculateRealtimeCVDDelta5m(currentTime time.Time) *C
 	calc.mu.RLock()
 	defer calc.mu.RUnlock()
 	
-	log.Printf("🔥 [%s] 强制实时计算CVD增量 - 绕过缓存陷阱", calc.symbol)
+	// log.Printf("🔥 [%s] 强制实时计算CVD增量 - 绕过缓存陷阱", calc.symbol) // 注释掉频繁日志
 	
 	// 使用安全的增量计算方法，基于实际交易数据
 	spotDelta, futuresDelta := calc.calculateSafeCVDDelta(currentTime)
@@ -947,8 +947,8 @@ func (calc *CVDCalculator) CalculateRealtimeCVDDelta5m(currentTime time.Time) *C
 		DataQuality:         calc.calculateDataQuality(),
 	}
 	
-	log.Printf("🔥 [%s] 实时CVD计算完成: 现货=%.0f, 合约=%.0f, vR=%.3f, 价格变化=%.2f%%", 
-		calc.symbol, spotDelta, futuresDelta, volumeRatio, priceDeltaPct)
+	// log.Printf("🔥 [%s] 实时CVD计算完成: 现货=%.0f, 合约=%.0f, vR=%.3f, 价格变化=%.2f%%", 
+	//	calc.symbol, spotDelta, futuresDelta, volumeRatio, priceDeltaPct) // 注释掉频繁日志
 	
 	return realtimeDelta
 }
@@ -1414,7 +1414,7 @@ func (calc *CVDCalculator) calculateRealtime5MinVolume(currentTime time.Time) fl
 		}
 	}
 	
-	log.Printf("🔧 [%s] 实时5分钟成交量计算: %.0f USD (基于deltas而非快照)", calc.symbol, totalVolume)
+	// log.Printf("🔧 [%s] 实时5分钟成交量计算: %.0f USD (基于deltas而非快照)", calc.symbol, totalVolume) // 注释掉频繁日志
 	return safeFloat64(totalVolume, 0)
 }
 

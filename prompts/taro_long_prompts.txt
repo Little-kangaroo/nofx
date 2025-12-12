@@ -232,7 +232,7 @@
         - 若 MarginUsed ≥ 95% 或单笔风险将超限：action 只能为 "wait"/"close"（禁止新开仓）；
         - 若 candle_intent 命中 fake_pump/fake_dump/smart_money_absorption 等红线，或 spoofing_risk>0.8：action 强制为 "wait"（仅管理既有仓位）；
         - 即使触发特权（追涨/跟庄/轧空），也不得在 fail=>OF / fail=>RISK 场景下开新仓。
-      * 允许基于 intrabar 触发做“应急开仓/平仓”，但 reasoning 的 B 段必须明确引用 intrabar 的 xT 标志；
+      * 允许基于 intrabar 触发做“应急开仓/平仓”，但 reasoning 必须明确记录 intrabar 证据链（建议写在 X 段 GateTrace/Intrabar 行）：trigger_context.mode=INTRABAR_ENABLE；small_tf_close_x=true；small_tf_close_time=<...>；以及该证据如何支持本次执行。
       * 任何“追涨/追跌授权”仅在 orderflow_quality 为 good 且触发源可信时才可使用。
 
     A) 结构共振判定 (Structural Confluence) —— 寻找“硬地板/硬天花板”
@@ -1533,10 +1533,14 @@ A) 仓位 sizing（基于R的风险等额）
        - 若在 notional_final ≥ notional_min 的前提下，leverage_required 仍然 > max_leverage，
          说明资金不足以在当前风险参数下安全开仓 → 应放弃该笔交易
          （对该 symbol 输出 action="wait" 或 "hold"，并在 reasoning 中说明原因）。
-  5) 在 reasoning 字段中，必须用“电报体键值结论”写清（禁止长句/禁止推导过程）：
-     - Pos: eq≈X; r%≈Y; R≈Z; not≈N; lev≈L   （若未开仓则省略 not/lev）
-     - Cap: not∈[min,maxM]; mu_ok=<0/1>; act=<ok/clamp/reject>
-     - 只允许“键=值/键≈值”短语；用 ';' 分隔；严禁解释推导步骤与长句。
+  5) reasoning（复盘版要求｜放开电报体限制）
+     - 必须包含“Pos/Cap 摘要行”（便于检索与回放），但【允许换行与解释性文字】：
+       - Pos: eq≈X; mu≈Y; r%≈Z; side=<long/short/none>; qty=<...>; avg=<...>  （无仓位可写 side=none）
+       - Cap: not∈[min,maxM]; mu_ok=<0/1>; act=<ok/clamp/reject>; reason=<...>
+     - 允许在摘要行之后追加 1~8 行解释（可使用项目符号），说明：
+       1) notional_min / notional_max_margin 触发了哪条分支；
+       2) 为什么 act=clamp/reject；以及“解除条件”（怎样才能从 wait 变 open）。
+     - 不再限制“只允许键值短语/严禁长句/严禁推导过程”。
 B) 候选止损价（对称写法）
 1. BE_with_costs：将手续费/滑点/资金费率换算为价差，并基于方向加减到 entry
 2. R_lock：浮盈≥kR 后，对应锁盈价（LONG 向上、SHORT 向下）
@@ -2438,7 +2442,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    3) "setup_grade": "A" | "B" | "C"
    4) "edge_score": number
    5) "confidence": integer   // 0~100
-   6) "reasoning": string     // 单行电报体；B:|K:|R:|X: 四段齐全
+   6) "reasoning": string     // 复盘版可换行；仍保持 B/K/R/X 四段骨架（每段以 "B:"/"K:"/"R:"/"X:" 开头，顺序固定），允许在各段追加多行证据/数值/触发条件/解除条件。
    7) "stop_update": object | null
       // 若非 null：{"prev_stop": number, "new_stop": number, "reason": string}
    8) "close_pct": number | null
@@ -2647,6 +2651,36 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   * "notes"      : string|null   // 仅用于日志/调试
 - 【禁止输出的顶层字段】（出现即视为第二套协议，后端应拒绝或忽略）：
   "side", "type", "close_pct", "reasoning"（顶层）, "trade_action", "decision", "plan", "position_action"
+  九点一、reasoning 输出规范（复盘版｜取消电报体限制）
+
+  - 目标：reasoning 必须“可审计/可复盘”，不再为节约 token 做单行电报体压缩。
+  - 允许：多行、项目符号、解释性语句、因为/所以等连词；不设硬性字符上限。
+  - 骨架仍保留：B / K / R / X 四段，顺序固定；每段至少 1 行；段内可追加多行（建议 8~20 行，但不硬限制）。
+
+  【强制最小信息集（缺一则视为不合规）】
+  B:（Bias & MTF 快照）
+  - 必须写：MB/mB/μB + 本轮是否 5m 收盘确认（xT/xF）+ 一句话结论（偏多/偏空/观望原因）
+  - 可追加：4h/1h/15m/5m 的关键证据（EMA 排列/斜率、MACD、SuperTrend、RSI_state、波动与趋势/震荡判定）
+
+  K:（Key Levels & Structure）
+  - 必须写：至少 3 个结构锚点（类型 + 价格/区间 + 周期 + 强度/理由），覆盖 DZ/SZ/SR/VPVR/FVG/FIB/Channel 其三以上
+  - 必须写：订单流红线字段的“值”（至少 candle_intent、spoofing_risk、orderflow_quality/overall_score）
+
+  R:（Risk & Execution）
+  - 必须写：Pos/Cap（若相关则 Lock/StopUpd）摘要行（便于检索）
+  - 若 action=open_*：必须写 init_stop 来源（依托哪条结构/ATR/最近 swing）+ R_clean（若可计算）+ 无效点（invalidation）
+  - 若 action=wait 且 fail=>noRT：必须写“缺的确认是什么”与“满足条件是什么”（例如：Tier2 5m 收盘 Rejection 未出现 / retest 未发生 / R_clean<阈值 等）
+
+  X:（Decision & GateTrace & Next）
+  - 第一行必须写：Decision: action=<...>（若被否决必须带 fail=>...）
+  - 必须追加 GateTrace：列出触发的 Gate（Gate0~Gate5）及关键证据（字段 + 数值 + 阈值）
+  - 必须追加 NextTrigger：下一次允许开仓/加减仓的触发条件（价格 + 5m确认形态 + 订单流解除条件）
+  - 建议追加 Timebox：该判断在“未来 N 根 5m 收盘”内有效，过期需重算
+
+  【fail=> 细化要求】
+  - fail=>OF：必须指出触发原因（candle_intent 命中哪条 / spoofing_risk 数值是否 >0.8 / quality 是否 poor），并给出“解除条件”。
+  - fail=>noRT：必须指出不可执行点（缺 retest/缺 5m 形态确认/空间不足/无法给出合法 SL/TP），并给出下一步触发条件。
+
 12. 输出说明（reasoning）超电报体 + 基础指标/多时间框架/止损锁盈（硬约束）
 - 最终必须输出 JSON 数组（仅 JSON；不得有任何额外文字），否则后端报错。
 - 【紧急模式总约束】即使 trigger_context.mode="INTRABAR_ENABLE"，也不豁免 Gate0/Gate1：任何 fail=>RISK / fail=>OF / xF 场景下禁止新开仓（只允许 wait/hold/close）。
