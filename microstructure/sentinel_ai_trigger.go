@@ -13,10 +13,10 @@ import (
 
 // SentinelAIRequestTrigger 哨兵AI请求触发器
 type SentinelAIRequestTrigger struct {
-	mu              sync.Mutex                // 🔴 P0修复: 防止并发Map写崩溃
-	aiInterface     *AIInterfaceV12
-	requestHistory  map[string]time.Time      // symbol -> last_request_time
-	cooldownPeriod  time.Duration             // AI请求冷却期
+	mu             sync.Mutex // 🔴 P0修复: 防止并发Map写崩溃
+	aiInterface    *AIInterfaceV12
+	requestHistory map[string]time.Time // symbol -> last_request_time
+	cooldownPeriod time.Duration        // AI请求冷却期
 }
 
 // NewSentinelAIRequestTrigger 创建哨兵AI请求触发器
@@ -35,94 +35,94 @@ func (trigger *SentinelAIRequestTrigger) HandleSentinelAlert(alert *SentinelTrig
 		log.Printf("⏳ [%s] AI请求冷却中，跳过此次触发", alert.Symbol)
 		return
 	}
-	
+
 	// 生成AI请求参数
 	aiParams, err := trigger.buildAIRequestParams(alert)
 	if err != nil {
 		log.Printf("❌ [%s] 构建AI参数失败: %v", alert.Symbol, err)
 		return
 	}
-	
+
 	// 记录触发信息
-	log.Printf("🤖 [%s] 哨兵触发AI分析 - 场景: %s, 置信度: %.1f%%", 
+	log.Printf("🤖 [%s] 哨兵触发AI分析 - 场景: %s, 置信度: %.1f%%",
 		alert.Symbol, alert.Scenario, alert.Confidence*100)
-	
+
 	// 发送AI请求
 	err = trigger.sendAIRequest(alert, aiParams)
 	if err != nil {
 		log.Printf("❌ [%s] AI请求发送失败: %v", alert.Symbol, err)
 		return
 	}
-	
+
 	// 更新请求历史 - 🔴 P0修复: 保护Map写操作
 	trigger.mu.Lock()
 	trigger.requestHistory[alert.Symbol] = time.Now()
 	trigger.mu.Unlock()
-	
+
 	log.Printf("✅ [%s] AI分析请求已发送", alert.Symbol)
 }
 
 // AIRequestParams AI请求参数结构
 type AIRequestParams struct {
 	// 基础信息
-	Symbol          string    `json:"symbol"`
-	RequestID       string    `json:"request_id"`
-	Timestamp       time.Time `json:"timestamp"`
-	TriggerSource   string    `json:"trigger_source"`   // "sentinel_v12"
-	
+	Symbol        string    `json:"symbol"`
+	RequestID     string    `json:"request_id"`
+	Timestamp     time.Time `json:"timestamp"`
+	TriggerSource string    `json:"trigger_source"` // "sentinel_v12"
+
 	// 触发原因
-	TriggerReason   TriggerReason `json:"trigger_reason"`
-	
+	TriggerReason TriggerReason `json:"trigger_reasoning"`
+
 	// V-12.2核心分析上下文
-	AIContext       *AIContextV12 `json:"ai_context"`
-	
+	AIContext *AIContextV12 `json:"ai_context"`
+
 	// 哨兵特定信息
-	SentinelInfo    SentinelRequestInfo `json:"sentinel_info"`
-	
+	SentinelInfo SentinelRequestInfo `json:"sentinel_info"`
+
 	// 紧急程度标识
-	Urgency         UrgencyLevel `json:"urgency"`
-	
+	Urgency UrgencyLevel `json:"urgency"`
+
 	// 预期响应时间
 	ExpectedResponseTime string `json:"expected_response_time"`
 }
 
 // TriggerReason 触发原因结构
 type TriggerReason struct {
-	Scenario        TriggerScenario `json:"scenario"`
-	Confidence      float64         `json:"confidence"`
-	Description     string          `json:"description"`
-	KeyIndicators   []KeyIndicator  `json:"key_indicators"`
-	MarketRegime    string          `json:"market_regime"`
-	ThreatLevel     string          `json:"threat_level"`
+	Scenario      TriggerScenario `json:"scenario"`
+	Confidence    float64         `json:"confidence"`
+	Description   string          `json:"description"`
+	KeyIndicators []KeyIndicator  `json:"key_indicators"`
+	MarketRegime  string          `json:"market_regime"`
+	ThreatLevel   string          `json:"threat_level"`
 }
 
 // SentinelRequestInfo 哨兵请求信息
 type SentinelRequestInfo struct {
-	DetectionTime   time.Time              `json:"detection_time"`
-	ScanMode        string                 `json:"scan_mode"`          // "normal"/"high_freq"/"adaptive"
-	AlertMetadata   map[string]interface{} `json:"alert_metadata"`
-	ZScoreTriggers  map[string]float64     `json:"zscore_triggers"`    // 触发的Z-Score值
-	ThresholdUsed   map[string]float64     `json:"threshold_used"`     // 使用的阈值
-	ConfidenceBreakdown ConfidenceBreakdown `json:"confidence_breakdown"`
+	DetectionTime       time.Time              `json:"detection_time"`
+	ScanMode            string                 `json:"scan_mode"` // "normal"/"high_freq"/"adaptive"
+	AlertMetadata       map[string]interface{} `json:"alert_metadata"`
+	ZScoreTriggers      map[string]float64     `json:"zscore_triggers"` // 触发的Z-Score值
+	ThresholdUsed       map[string]float64     `json:"threshold_used"`  // 使用的阈值
+	ConfidenceBreakdown ConfidenceBreakdown    `json:"confidence_breakdown"`
 }
 
 // KeyIndicator 关键指标
 type KeyIndicator struct {
-	Name        string  `json:"name"`
-	Value       float64 `json:"value"`
-	ZScore      float64 `json:"z_score"`
-	Threshold   float64 `json:"threshold"`
-	Significance string `json:"significance"` // "极高"/"高"/"中等"
+	Name         string  `json:"name"`
+	Value        float64 `json:"value"`
+	ZScore       float64 `json:"z_score"`
+	Threshold    float64 `json:"threshold"`
+	Significance string  `json:"significance"` // "极高"/"高"/"中等"
 }
 
 // ConfidenceBreakdown 置信度分解
 type ConfidenceBreakdown struct {
-	CVDContribution      float64 `json:"cvd_contribution"`      // CVD贡献度
-	VolumeContribution   float64 `json:"volume_contribution"`   // 成交量贡献度
+	CVDContribution       float64 `json:"cvd_contribution"`       // CVD贡献度
+	VolumeContribution    float64 `json:"volume_contribution"`    // 成交量贡献度
 	OrderBookContribution float64 `json:"orderbook_contribution"` // 盘口贡献度
-	PriceContribution    float64 `json:"price_contribution"`    // 价格贡献度
-	RegimeAdjustment     float64 `json:"regime_adjustment"`     // 市场状态调整
-	FinalConfidence      float64 `json:"final_confidence"`      // 最终置信度
+	PriceContribution     float64 `json:"price_contribution"`     // 价格贡献度
+	RegimeAdjustment      float64 `json:"regime_adjustment"`      // 市场状态调整
+	FinalConfidence       float64 `json:"final_confidence"`       // 最终置信度
 }
 
 // UrgencyLevel 紧急程度
@@ -139,34 +139,34 @@ const (
 func (trigger *SentinelAIRequestTrigger) buildAIRequestParams(alert *SentinelTriggerAlert) (*AIRequestParams, error) {
 	// 生成请求ID
 	requestID := fmt.Sprintf("sentinel_%s_%d", alert.Symbol, time.Now().UnixNano())
-	
+
 	// 生成V-12.2 AI上下文
 	aiContext, err := trigger.aiInterface.GenerateAIContext(alert.Symbol)
 	if err != nil {
 		return nil, fmt.Errorf("生成AI上下文失败: %w", err)
 	}
-	
+
 	// 构建触发原因
 	triggerReason := trigger.buildTriggerReason(alert, aiContext)
-	
+
 	// 构建哨兵信息
 	sentinelInfo := trigger.buildSentinelInfo(alert, aiContext)
-	
+
 	// 评估紧急程度
 	urgency := trigger.assessUrgency(alert, aiContext)
-	
+
 	// 确定预期响应时间
 	expectedResponseTime := trigger.getExpectedResponseTime(urgency)
-	
+
 	return &AIRequestParams{
-		Symbol:          alert.Symbol,
-		RequestID:       requestID,
-		Timestamp:       time.Now(),
-		TriggerSource:   "sentinel_v12",
-		TriggerReason:   triggerReason,
-		AIContext:       aiContext,
-		SentinelInfo:    sentinelInfo,
-		Urgency:         urgency,
+		Symbol:               alert.Symbol,
+		RequestID:            requestID,
+		Timestamp:            time.Now(),
+		TriggerSource:        "sentinel_v12",
+		TriggerReason:        triggerReason,
+		AIContext:            aiContext,
+		SentinelInfo:         sentinelInfo,
+		Urgency:              urgency,
 		ExpectedResponseTime: expectedResponseTime,
 	}, nil
 }
@@ -175,19 +175,19 @@ func (trigger *SentinelAIRequestTrigger) buildAIRequestParams(alert *SentinelTri
 func (trigger *SentinelAIRequestTrigger) buildTriggerReason(alert *SentinelTriggerAlert, aiContext *AIContextV12) TriggerReason {
 	// 提取关键指标
 	keyIndicators := trigger.extractKeyIndicators(alert, aiContext)
-	
+
 	// 获取市场状态
 	marketRegime := "unknown"
 	threatLevel := "medium"
-	
+
 	if aiContext.DynamicThresholds != nil {
 		marketRegime = aiContext.DynamicThresholds.MarketRegime
 	}
-	
+
 	if aiContext.SentinelAlerts != nil {
 		threatLevel = aiContext.SentinelAlerts.ThreatLevel
 	}
-	
+
 	return TriggerReason{
 		Scenario:      alert.Scenario,
 		Confidence:    alert.Confidence,
@@ -201,12 +201,12 @@ func (trigger *SentinelAIRequestTrigger) buildTriggerReason(alert *SentinelTrigg
 // extractKeyIndicators 提取关键指标
 func (trigger *SentinelAIRequestTrigger) extractKeyIndicators(alert *SentinelTriggerAlert, aiContext *AIContextV12) []KeyIndicator {
 	var indicators []KeyIndicator
-	
+
 	// 从Z-Score数据提取关键指标
 	if aiContext.StatisticalContext != nil {
 		for name, zScore := range aiContext.StatisticalContext.ZScores {
 			if math.Abs(zScore) > 1.5 { // 只包含显著的指标
-				
+
 				// 获取对应的阈值
 				threshold := 1.5 // 默认阈值
 				if aiContext.DynamicThresholds != nil {
@@ -220,13 +220,13 @@ func (trigger *SentinelAIRequestTrigger) extractKeyIndicators(alert *SentinelTri
 						}
 					}
 				}
-				
+
 				// 确定显著性
 				significance := trigger.getSignificance(zScore)
-				
+
 				// 获取实际值
 				value := trigger.getActualValue(name, aiContext)
-				
+
 				indicators = append(indicators, KeyIndicator{
 					Name:         name,
 					Value:        value,
@@ -237,7 +237,7 @@ func (trigger *SentinelAIRequestTrigger) extractKeyIndicators(alert *SentinelTri
 			}
 		}
 	}
-	
+
 	return indicators
 }
 
@@ -259,7 +259,7 @@ func (trigger *SentinelAIRequestTrigger) getActualValue(indicatorName string, ai
 	// 从AI上下文中提取实际值
 	if aiContext.MarketMicrostructure != nil && aiContext.MarketMicrostructure.CVDDelta5mEnhanced != nil {
 		cvdData := aiContext.MarketMicrostructure.CVDDelta5mEnhanced.CVDDelta5m
-		
+
 		switch indicatorName {
 		case "spot_cvd_1m":
 			return cvdData.SpotCVDDeltaUSD
@@ -271,7 +271,7 @@ func (trigger *SentinelAIRequestTrigger) getActualValue(indicatorName string, ai
 			return cvdData.PriceDeltaPct
 		}
 	}
-	
+
 	return 0.0
 }
 
@@ -280,10 +280,10 @@ func (trigger *SentinelAIRequestTrigger) buildSentinelInfo(alert *SentinelTrigge
 	// 获取哨兵引擎信息
 	sentinelEngine := GetGlobalSentinelTriggerEngine()
 	scanMode := string(sentinelEngine.GetScanMode())
-	
+
 	// 构建置信度分解
 	confidenceBreakdown := trigger.buildConfidenceBreakdown(alert, aiContext)
-	
+
 	// 提取使用的阈值
 	thresholdUsed := make(map[string]float64)
 	if metadata, exists := alert.Metadata["used_cvd_threshold"]; exists {
@@ -296,13 +296,13 @@ func (trigger *SentinelAIRequestTrigger) buildSentinelInfo(alert *SentinelTrigge
 			thresholdUsed["volume_threshold"] = threshold
 		}
 	}
-	
+
 	return SentinelRequestInfo{
 		DetectionTime:       alert.Timestamp,
-		ScanMode:           scanMode,
-		AlertMetadata:      alert.Metadata,
-		ZScoreTriggers:     alert.ZScoreData,
-		ThresholdUsed:      thresholdUsed,
+		ScanMode:            scanMode,
+		AlertMetadata:       alert.Metadata,
+		ZScoreTriggers:      alert.ZScoreData,
+		ThresholdUsed:       thresholdUsed,
 		ConfidenceBreakdown: confidenceBreakdown,
 	}
 }
@@ -313,7 +313,7 @@ func (trigger *SentinelAIRequestTrigger) buildConfidenceBreakdown(alert *Sentine
 	breakdown := ConfidenceBreakdown{
 		FinalConfidence: alert.Confidence,
 	}
-	
+
 	switch alert.Scenario {
 	case ScenarioMomentumIgnition:
 		// 动量点燃: CVD和成交量为主要因子
@@ -321,14 +321,14 @@ func (trigger *SentinelAIRequestTrigger) buildConfidenceBreakdown(alert *Sentine
 		breakdown.VolumeContribution = alert.Confidence * 0.3
 		breakdown.PriceContribution = alert.Confidence * 0.2
 		breakdown.OrderBookContribution = alert.Confidence * 0.1
-		
+
 	case ScenarioSpotRush:
 		// 现货抢跑: CVD比率为主要因子
 		breakdown.CVDContribution = alert.Confidence * 0.6
 		breakdown.VolumeContribution = alert.Confidence * 0.2
 		breakdown.PriceContribution = alert.Confidence * 0.1
 		breakdown.OrderBookContribution = alert.Confidence * 0.1
-		
+
 	case ScenarioSpoofingFlip:
 		// 虚假翻转: 盘口为主要因子
 		breakdown.OrderBookContribution = alert.Confidence * 0.5
@@ -336,7 +336,7 @@ func (trigger *SentinelAIRequestTrigger) buildConfidenceBreakdown(alert *Sentine
 		breakdown.VolumeContribution = alert.Confidence * 0.2
 		breakdown.PriceContribution = alert.Confidence * 0.1
 	}
-	
+
 	// 市场状态调整
 	if aiContext.DynamicThresholds != nil {
 		regimeAdjustment := 1.0
@@ -352,17 +352,17 @@ func (trigger *SentinelAIRequestTrigger) buildConfidenceBreakdown(alert *Sentine
 	} else {
 		breakdown.RegimeAdjustment = 1.0
 	}
-	
+
 	return breakdown
 }
 
 // assessUrgency 评估紧急程度
 func (trigger *SentinelAIRequestTrigger) assessUrgency(alert *SentinelTriggerAlert, aiContext *AIContextV12) UrgencyLevel {
 	urgencyScore := 0.0
-	
+
 	// 置信度贡献 (30%)
 	urgencyScore += alert.Confidence * 0.3
-	
+
 	// 威胁等级贡献 (25%)
 	if aiContext.SentinelAlerts != nil {
 		switch aiContext.SentinelAlerts.ThreatLevel {
@@ -376,7 +376,7 @@ func (trigger *SentinelAIRequestTrigger) assessUrgency(alert *SentinelTriggerAle
 			urgencyScore += 0.2 * 0.25
 		}
 	}
-	
+
 	// 市场状态贡献 (25%)
 	if aiContext.DynamicThresholds != nil {
 		switch aiContext.DynamicThresholds.MarketRegime {
@@ -390,7 +390,7 @@ func (trigger *SentinelAIRequestTrigger) assessUrgency(alert *SentinelTriggerAle
 			urgencyScore += 0.3 * 0.25
 		}
 	}
-	
+
 	// Z-Score极值贡献 (20%)
 	maxZScore := 0.0
 	for _, zScore := range alert.ZScoreData {
@@ -405,7 +405,7 @@ func (trigger *SentinelAIRequestTrigger) assessUrgency(alert *SentinelTriggerAle
 	} else if maxZScore > 2.0 {
 		urgencyScore += 0.5 * 0.2
 	}
-	
+
 	// 根据综合得分确定紧急程度
 	if urgencyScore >= 0.8 {
 		return UrgencyCritical
@@ -440,7 +440,7 @@ func (trigger *SentinelAIRequestTrigger) sendAIRequest(alert *SentinelTriggerAle
 	if err != nil {
 		return fmt.Errorf("参数序列化失败: %w", err)
 	}
-	
+
 	// 记录请求参数（用于调试和监控）
 	log.Printf("🤖 [%s] AI请求参数构建完成:", params.Symbol)
 	log.Printf("   请求ID: %s", params.RequestID)
@@ -448,31 +448,31 @@ func (trigger *SentinelAIRequestTrigger) sendAIRequest(alert *SentinelTriggerAle
 	log.Printf("   触发场景: %s (置信度: %.1f%%)", params.TriggerReason.Scenario, params.TriggerReason.Confidence*100)
 	log.Printf("   关键指标数量: %d", len(params.TriggerReason.KeyIndicators))
 	log.Printf("   市场状态: %s", params.TriggerReason.MarketRegime)
-	
+
 	// 这里应该调用实际的AI服务接口
 	// 目前只记录日志，实际实现时需要：
 	// 1. 调用HTTP API发送到AI服务
 	// 2. 或者发送到消息队列
 	// 3. 或者直接调用本地AI模块
-	
+
 	log.Printf("📤 [%s] AI请求已发送 (参数大小: %d bytes)", params.Symbol, len(jsonData))
-	
+
 	// TODO: 实际的AI请求发送逻辑
 	// return sendToAIService(jsonData, params.Urgency)
-	
+
 	return nil
 }
 
 // checkCooldown 检查冷却期
 func (trigger *SentinelAIRequestTrigger) checkCooldown(symbol string) bool {
-	trigger.mu.Lock()  // 🔴 P0修复: 保护Map读操作
+	trigger.mu.Lock() // 🔴 P0修复: 保护Map读操作
 	defer trigger.mu.Unlock()
-	
+
 	lastRequest, exists := trigger.requestHistory[symbol]
 	if !exists {
 		return true
 	}
-	
+
 	return time.Since(lastRequest) > trigger.cooldownPeriod
 }
 
@@ -488,7 +488,7 @@ func (params *AIRequestParams) ToJSONString() (string, error) {
 // GetRequestSummary 获取请求摘要信息
 func (params *AIRequestParams) GetRequestSummary() map[string]interface{} {
 	return map[string]interface{}{
-		"request_id":        params.RequestID,
+		"request_id":       params.RequestID,
 		"symbol":           params.Symbol,
 		"trigger_scenario": params.TriggerReason.Scenario,
 		"confidence":       fmt.Sprintf("%.1f%%", params.TriggerReason.Confidence*100),

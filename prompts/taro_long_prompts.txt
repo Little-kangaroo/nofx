@@ -664,7 +664,7 @@
      * Entry (ep)      <= 提取 "入场价" 后的数字
      * Stop (sl)       <= 提取 "prev_stop" 后的数字 (★关键：用于计算浮盈 R 以执行锁盈)
 2) 基础指标（MarketSnapshot）——覆盖多时间框架
-    {""last_price":45000,"funding_rate":0.0001,"oi_latest":1500000000,"change_1h":0.5,"change_4h":-1.2,"5m":{"ema20":44995.5,"ema50":44990.2,"ema100":44985.8,"ema200":44980.1,"sma20":44996,"sma50":44991.5,"vwap":44992.3,"ema50_slope_3":0.15,"ema200_slope_3":0.05,"macd":12.5,"rsi7":65.2,"rsi14":58.7,"atr14":125.6,"volume":1250.5,"avg_volume":1100.8,"ohlc_last_closed":{"close":86590.2,"close_time":1764629099999,"high":86663.6,"low":86238.1,"open":86378.3,"open_time":1764628200000,"volume":1088,"x":true}},
+    {"last_price":45000,"funding_rate":0.0001,"oi_latest":1500000000,"change_1h":0.5,"change_4h":-1.2,"5m":{"ema20":44995.5,"ema50":44990.2,"ema100":44985.8,"ema200":44980.1,"sma20":44996,"sma50":44991.5,"vwap":44992.3,"ema50_slope_3":0.15,"ema200_slope_3":0.05,"macd":12.5,"rsi7":65.2,"rsi14":58.7,"atr14":125.6,"volume":1250.5,"avg_volume":1100.8,"ohlc_last_closed":{"close":86590.2,"close_time":1764629099999,"high":86663.6,"low":86238.1,"open":86378.3,"open_time":1764628200000,"volume":1088,"x":true}},
     "15m":"{ /* 同结构 */ }",
     "30m":"{ /* 同结构 */ }",
     "1h":"{ /* 同结构 */ }",
@@ -757,11 +757,10 @@
       - trigger_type="MARK_PRICE"  => last_price 必须是 mark price
       - trigger_type="LAST_PRICE"  => last_price 才是 last traded price
       - trigger_type="INDEX_PRICE" => last_price 必须是 index price
-    - 变量别名（为兼容模板中大量使用的 price 变量）：
-      - 约定：price := last_price
-      - 若上游仍提供 price 字段，则必须保证 price == last_price（禁止两者不一致）
-    - 兼容约定：本系统同时提供 price 与 last_price，且两者恒等（price == last_price）。
-      后续计算若引用任一字段，均视为同一“触发价”（由 ExchangeMeta.trigger_type 决定其来源）。
+    - 变量别名（仅为模板内部表达，不代表输入字段）：
+      - 约定：p := last_price（如模板其他位置出现 price 字样，均视为内部别名，等价于 last_price）
+      - 上游输入字段：只允许提供 MarketSnapshot.last_price
+      - 若上游仍提供 MarketSnapshot.price：视为废弃字段并忽略（强烈建议后端剔除，避免两套契约并存）
 ——————————————————————————————————————
 二、参数（默认稳健，可按需微调）
 ——————————————————————————————————————
@@ -921,13 +920,13 @@
 [微结构翻转触发（MicroFlip）]
 - microflip_enable       = true
 - microflip_rules (LONG):
-    * 5m: price 上穿 ema20 且 macd>0 且 rsi7≥52，且近3根“更高低点”
+    * 5m: last_price 上穿 ema20 且 macd>0 且 rsi7≥52，且近3根“更高低点”
 - microflip_rules (SHORT):
-    * 5m: price 下破 ema20 且 macd<0 且 rsi7≤48，且近3根“更低高点”
+    * 5m: last_price 下破 ema20 且 macd<0 且 rsi7≤48，且近3根“更低高点”
 - microflip_cooldown_sec = 60
 【出场与减仓硬规则（必须遵守）】
 1. 出场类型（输出层面统一用 action="close" 表达）
-   -全平：action="close" 且 close_pct=1.0（或 close_pct 省略默认 1.0）。
+   -全平：action="close" 且 close_pct=1.0（close_pct 必须显式输出，不得省略）。
    -减仓：action="close" 且 0 < close_pct < 1（例如 0.3～0.5），保留剩余仓位继续跟随趋势。
     这些逻辑与保护性止损共存：止损始终存在；全平/减仓是在此基础上的“主动退出”。
    - 出场动作的优先级（从弱到强）必须遵守：
@@ -2412,10 +2411,11 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   - 若某个 symbol **没有出现在 open_positions 中**：
     * 严禁使用 "hold" 作为 action；
     * 此时若不打算开仓，必须使用 "wait"。
-  - 若某个 symbol **出现在 open_positions 中**（说明当前有仓位）：
-    * 可以使用 "hold" / "close" / "reduce" / "open_long" / "open_short"（加仓）；
-    * 若本轮既不平仓、不减仓、也不移动止损，可以使用 "hold" 或 "wait"，
-      但绝不能省略该 symbol 的决策。
+  - 若某个 symbol 出现在 open_positions 中（说明当前有仓位）：
+    - action 只能为 "hold" / "close"
+    - 严禁输出 "wait"（已有仓位不允许用 wait 表达）
+    - 严禁输出 "reduce"（减仓统一用 action="close" + close_pct 表达）
+    - 严禁输出 open_long / open_short（禁止加仓/反手；如需反手，必须先 close，下一根K线再评估开新仓）
 ------------------------------------------------
 九、输出JSON格式要求（必须严格遵守）
 ------------------------------------------------
@@ -2549,8 +2549,11 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                  · 若严格的“最小距离”或其他软约束导致找不到完全完美的价位，
                    应优先牺牲软约束（例如适度放宽与现价距离的下限），也不得返回 stop_update:null。
 3. 对于「已有持仓」的 symbol：
-- 默认只做仓位管理，不允许再输出 open_*：
-  - "action" 必须为 "hold"（除非你要主动平仓/减仓：action="close"；若为部分减仓则 reduce_plan 非空）
+  - action 必须为 "hold"（除非需要离场/减仓）
+  - 若 action="close"：
+    - close_pct 必须显式输出（全平=1.0；部分减仓=(0,1)）
+    - 严禁使用 reduce_plan（减仓只允许通过 close_pct 表达）
+  - 对这种 symbol：entry_plan 必须为 null（禁止在持仓管理动作里夹带开仓参数）
 - "stop_update" 允许为 null，但须遵守：
   - 若本轮不是 TP 触发锁盈事件：
     - 仅当同时满足下列条件时，才输出 stop_update 对象：
