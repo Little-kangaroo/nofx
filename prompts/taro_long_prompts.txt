@@ -334,6 +334,18 @@
                 * entry_price 落在 zone 中部甚至靠近对侧边缘；
                 * 止损落在 zone 内（例如 demand 区内部就止损多单），
                   这些都应视为“被结构噪音扫掉”的高风险行为。
+              【P0-EDGE 执行硬约束（禁止追单版）】
+              - 只要 pattern=EDGE：
+                1) order_type 强制为 "LIMIT"，禁止 "MARKET"（因为 MARKET 会把“贴边试单”变成“追价/打在区外”）。
+                2) SHORT-EDGE 的 entry_price 必须满足以下其一，否则 action="wait"：
+                   - entry_price ∈ [supply_high - 0.25*ATR14_5m, supply_high + 0.05*ATR14_5m]（贴近上沿的可控试空窗口）
+                   - 且必须满足 Rejection-A 或 Rejection-B（仍按原硬要求）
+                3) LONG-EDGE 对称：
+                   - entry_price ∈ [demand_low - 0.05*ATR14_5m, demand_low + 0.25*ATR14_5m]
+                4) 若 entry_price 明显落在 zone 外侧（例如 SHORT 但 entry_price < supply_low）：
+                   - 一律视为“追空/区外开仓”，action="wait"；
+                   - 正确做法只能是：等待回抽到上沿再评估 Rejection，或改走 BO_RETEST 剧本。
+
             2）BO_RETEST（突破-回踩形态｜可执行剧本）
               - 核心思路：先确认“有效突破”，再只在“回踩带”入场；禁止在突破后的第一波延伸追价。
               - 关键定义：
@@ -670,6 +682,37 @@
     "1h":"{ /* 同结构 */ }",
     "4h":"{ /* 同结构 */ }"}
  【硬约束：5m 关键K线字段缺失即禁止开仓】
+ 【P0-Preflight｜数值一致性 Hard-Fail（开仓前总闸门）】
+ - 只要 action ∈ {"open_long","open_short"}，必须先在 reasoning 的开头输出一个 “PreflightCheck” 小节；
+ - 且必须逐条给出可核验的数字对账（禁止只写结论）。
+ - 任意一条无法核验、核验不通过、或出现自相矛盾 => action 强制改为 "wait"（并在 X 段写 fail=>PREFLIGHT）。
+
+ PreflightCheck 必须包含（不少于以下项）：
+ 1) ZoneContainmentCheck（入场与结构边界一致性）
+    - 若本次依托的是 supply_zone 做空：
+      * 必须给出：supply_low / supply_high / entry_price / last_price；
+      * 必须写出判断式与结论：entry_price 是否 ∈ [supply_low, supply_high]（或是否在 supply_high±允许偏差范围内）。
+    - 若本次依托的是 demand_zone 做多：同理对账 demand_low / demand_high。
+
+ 2) PatternValidation（形态硬条件对账）
+    - 若本次 pattern=EDGE：
+      * 必须逐条核验《【EDGE 进场确认（5m Rejection｜硬要求）】》中的 Rejection-A / Rejection-B；
+      * 必须给出用于核验的 5m ohlc_last_closed 数字（open/high/low/close）与 zone 边界；
+      * 任一 Rejection 无法满足 => action="wait"，不得以 EDGE 新开仓。
+
+ 3) RCleanArithmetic（R_clean 算术硬对账）
+    - 必须给出：risk = |init_stop - entry_price|；
+    - 必须给出：reward_clean = |entry_price - nearest_opposite_structure_value|；
+    - 必须给出：R_clean = reward_clean / risk（写出具体数值与结果）；
+    - 若输出的 R_clean 与上述算术不一致 => 视为“不可托管决策”，action="wait"（fail=>RCALC）。
+
+ 4) StructureSourceLabel（反向结构来源标签一致性）
+    - 若 nearest_opposite_structure_type 声称是 demand_zone / supply_zone：
+      * 则对应 timeframe 的 demand_zones / supply_zones 必须存在且不为 null；
+    - 若结构数组为 null 或缺失：
+      * 必须改用并明确标注来源：VPVR_VAL / VPVR_VAH / SR_line / FVG 等；
+      * 禁止把 VPVR 的 VAL 伪装成 demand_zone。
+
  - 若输入未提供 MarketSnapshot.5m.ohlc_last_closed 的 open/high/low/close/close_time/x（且 x 必须为 true，表示“最新已收盘 5m bar”），则：
    * EDGE 与 BO_RETEST 的 Rejection/Confirm/失效校验均不可验证；
    * action 必须为 "wait"（禁止 open_long / open_short）。
@@ -1852,12 +1895,33 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
          * 强区：`strength_z` > 1.0 或 `vol_ratio` > 1.5。
          * 弱区：`strength_z` < 0 或 `vol_ratio` < 0.8 (可忽略或视为易突破)。
        - **吸筹/出货识别**: 若 `touches` > 5 且 `vol_ratio` > 2.0 但价格不反弹 -> 视为**吸收 (Absorption)**，大概率会突破，不作为反转依据。
+       【P0-供需区“老化/被测试”否决（Anti-Whipsaw）】
+       - 若 zone.status ∈ {"testing","spent"} 或 zone.touches ≥ 6：
+         1) 默认将该 zone 视为“已被市场消耗”，更偏向吸收/突破，而非高胜率反转；
+         2) 禁止以该 zone 执行 EDGE-Rejection 型新开仓（open_long/open_short）；
+         3) 仅允许：
+            - 等待突破后按 BO_RETEST（有效突破 + 回踩带）执行；或
+            - action="wait"。
+       - 若你仍想例外开仓（极少数）：
+         - setup_grade 必须降为 "C"，且必须在 X 段写清楚：为何 zone 虽老化仍具备 edge（必须给出数字佐证），否则一律 wait。
+
    (d) VPVR 分析 (Volume Profile) —— 价值共识
        - **趋势延续**: Price 站稳 VAH (Value Area High) -> 看涨延伸；Price 跌破 VAL -> 看跌延伸。
        - **震荡吸筹**: Price 在 VAH 和 VAL 之间游走。
        - **POC (Point of Control)**: 磁铁属性。
          * 若 Price 远离 POC -> POC 是回调目标。
          * 若 Price 紧贴 POC (`POC_chop_zone`) -> **死区，Action=Wait**，禁止开仓。
+       【P0-VPVR 边界追单否决（Value Edge Chase Veto）】
+       - 目的：避免在 VAH/VAL 附近发生均值回归反抽，导致“刚开就被扫止损”。
+
+       1) 若计划 open_short 且价格处于 5m VPVR 的 VAL 附近（定义：last_price ≤ VAL + 0.3*ATR14_5m）：
+          - 默认 action="wait"，除非同时满足：
+            a) 最近连续 2 根已收盘 5m 的 close 都显著低于 VAL（每根至少低于 0.2*ATR14_5m），显示“有效跌破而非贴边”；
+            b) 且订单流 trend_alignment 明确支持做空（非 divergent_mixed）。
+          - 若不满足以上条件：宁可错过，不在 VAL 贴边追空。
+
+       2) 若计划 open_long 且价格处于 VAH 附近：对称处理。
+
    (e) FVG (公允价值缺口) —— 磁力与支撑
        - **目标**: 顺势交易中，未回补的 FVG 是第一止盈目标。
        - **支撑/阻力**:
@@ -2528,6 +2592,17 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                (c) 若 trade_style="HTF_swing"：
                    - 仍按原逻辑：R_clean < 1.0 默认不得开仓；
                    - 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚）。
+         【P0-Gate5｜R_clean 强制算式与自证】
+         - 只要 action ∈ {"open_long","open_short"}：
+           1) 必须在 reasoning 中给出一行“算式展示”，格式如下（必须含数字）：
+              - SHORT: risk=init_stop-entry；reward=entry-nearest_support；R_clean=reward/risk=...
+              - LONG : risk=entry-init_stop；reward=nearest_resistance-entry；R_clean=reward/risk=...
+           2) 若你无法给出可核验算式、或算式与 entry_plan 数字不一致：
+              - 视为“不可执行/不可托管”，action 强制为 "wait"（fail=>RCALC）。
+           3) 若 R_clean < 1.0：
+              - 默认不得开仓；
+              - 仅允许你模板已定义的极少数 LTF_scalp 例外，并必须满足：pattern∈{EDGE,BO_RETEST} + 5m Confirm/Reject 可验证 + edge_score≥0.65 + confidence≥70，否则一律 wait。
+
         6. 若是开仓（open_long/open_short），还需明确说明本次止损 sl_struct 依托的结构：
           - 对多单：例如“sl_struct 设在最近 15m demand 区下沿 2.065，再下方留出 ≈0.2*ATR 作为缓冲”；
           - 对空单：例如“sl_struct 设在最近 30m supply 区上沿 0.1459，上方留出若干 tick 作为缓冲”；

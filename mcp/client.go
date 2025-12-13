@@ -305,7 +305,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		switch client.Provider {
 		case ProviderDeepSeek:
 			requestBody["max_tokens"] = maxTokens // DeepSeek仍使用max_tokens
-			requestBody["temperature"] = 0.5      // DeepSeek支持temperature参数
+			requestBody["temperature"] = 0.3      // DeepSeek支持temperature参数
 			// 🔧 新增：DeepSeek支持JSON格式输出
 			requestBody["response_format"] = map[string]interface{}{
 				"type": "json_object",
