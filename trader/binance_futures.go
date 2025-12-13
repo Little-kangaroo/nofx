@@ -929,39 +929,90 @@ func stringContains(s, substr string) bool {
 	return false
 }
 
-// GetOpenOrders 获取指定币种的所有挂单
+// GetOpenOrders 获取指定币种的所有挂单 (🔥 已更新为使用新的算法订单接口)
 func (t *FuturesTrader) GetOpenOrders(symbol string) ([]map[string]interface{}, error) {
-	log.Printf("🔍 [Binance] 查询 %s 的挂单...", symbol)
+	log.Printf("🔍 [Binance] 查询 %s 的挂单 (使用新算法接口)...", symbol)
 	
-	// 调用币安API获取挂单
-	orders, err := t.client.NewListOpenOrdersService().Symbol(symbol).Do(context.Background())
-	if err != nil {
-		log.Printf("❌ [Binance] 获取挂单失败: %v", err)
-		return nil, fmt.Errorf("获取挂单失败: %w", err)
+	// 🔥 直接使用新的算法订单接口，因为止损单已迁移到算法服务
+	// 从2025-12-09起，STOP_MARKET/TAKE_PROFIT_MARKET等订单类型在旧接口中会被拦截
+	return t.getOpenAlgoOrders(symbol)
+}
+
+// getOpenAlgoOrders 获取指定币种的所有算法挂单 (新接口)
+func (t *FuturesTrader) getOpenAlgoOrders(symbol string) ([]map[string]interface{}, error) {
+	log.Printf("🔍 [Binance] 查询 %s 的算法挂单...", symbol)
+	
+	// 构建请求参数
+	params := map[string]interface{}{
+		"symbol":    symbol,
+		"timestamp": time.Now().UnixMilli(),
 	}
-	
-	log.Printf("📋 [Binance] %s 找到 %d 个挂单", symbol, len(orders))
-	
-	// 转换为统一格式
-	result := make([]map[string]interface{}, len(orders))
-	for i, order := range orders {
+
+	// 构建查询字符串用于签名
+	var queryParts []string
+	for key, value := range params {
+		queryParts = append(queryParts, fmt.Sprintf("%s=%v", key, value))
+	}
+	queryString := strings.Join(queryParts, "&")
+
+	// 生成签名
+	signature := t.generateSignature(queryString)
+	queryString += "&signature=" + signature
+
+	// 发送GET请求到 /fapi/v1/openAlgoOrders
+	url := "https://fapi.binance.com/fapi/v1/openAlgoOrders?" + queryString
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建查询请求失败: %w", err)
+	}
+
+	req.Header.Set("X-MBX-APIKEY", t.apiKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("查询请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("❌ [Binance] 查询算法挂单失败: %s", string(body))
+		return nil, fmt.Errorf("API错误 %d: %s", resp.StatusCode, string(body))
+	}
+
+	// 解析响应
+	var algoOrders []map[string]interface{}
+	if err := json.Unmarshal(body, &algoOrders); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	log.Printf("📋 [Binance] %s 找到 %d 个算法挂单", symbol, len(algoOrders))
+
+	// 转换为统一格式，映射算法订单字段到原格式
+	result := make([]map[string]interface{}, len(algoOrders))
+	for i, order := range algoOrders {
 		result[i] = map[string]interface{}{
-			"symbol":       order.Symbol,
-			"orderId":      order.OrderID,
-			"type":         string(order.Type),
-			"side":         string(order.Side),
-			"quantity":     order.OrigQuantity,
-			"price":        order.Price,
-			"stopPrice":    order.StopPrice,
-			"status":       string(order.Status),
-			"timeInForce":  string(order.TimeInForce),
-			"reduceOnly":   order.ReduceOnly,
-			"positionSide": string(order.PositionSide),
+			"symbol":       order["symbol"],
+			"orderId":      order["algoId"],
+			"type":         order["orderType"],           // STOP_MARKET等
+			"side":         order["side"],
+			"quantity":     order["quantity"],
+			"price":        order["price"],
+			"stopPrice":    order["triggerPrice"],        // 关键：算法订单的触发价格
+			"status":       order["algoStatus"],
+			"timeInForce":  order["timeInForce"],
+			"reduceOnly":   order["reduceOnly"],
+			"positionSide": order["positionSide"],
 		}
 		
-		log.Printf("  📄 订单#%d: %s %s %s 数量:%s 价格:%s 止损价:%s", 
-			order.OrderID, order.Type, order.Side, order.PositionSide, 
-			order.OrigQuantity, order.Price, order.StopPrice)
+		log.Printf("  📄 算法订单#%v: %v %v %v 数量:%v 价格:%v 触发价:%v", 
+			order["algoId"], order["orderType"], order["side"], order["positionSide"], 
+			order["quantity"], order["price"], order["triggerPrice"])
 	}
 	
 	return result, nil
