@@ -167,6 +167,7 @@
     0）订单流数据质量门槛（orderflow_quality_gate）
       - 你会在 `订单流分析` 或相关字段中看到订单流质量评估，例如：
         - overall_score：0~100 区间的质量得分；
+        - 量纲兼容：若 overall_score ≤ 1.0，则视为 0~1 归一化分，内部换算为 (overall_score*100) 再执行阈值比较。
         - quality_status：如 "good" / "ok" / "poor" / "unstable" 等枚举；
         - 其他用来描述「订单流是否可靠」的标记字段。
       - 你必须先基于这些字段判断本轮订单流信号是否允许参与决策：
@@ -312,7 +313,7 @@
                     - LONG：entry_price ∈ [demand_low, demand_low + 0.20*zone_width]
                     - SHORT：entry_price ∈ [supply_high - 0.20*zone_width, supply_high]
                 * 止损价 sl 必须放在该供需区的相反边界外侧若干 tick / ATR，而不是区间内部；
-                * 通过 B5 检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求。
+                * 通过 Gate5（R_clean 空间门槛）检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求（含默认/例外规则）。
                 【EDGE 进场确认（5m Rejection｜硬要求）】：
                 - 若 MarketSnapshot.5m 缺失 open/high/low/close/close_time/x，或 x!=true,本条不可验证 ⇒ action="wait"（禁止开仓）。
                 - 特权情况（SNIPE变体）：...
@@ -824,11 +825,13 @@
   2. 根据开仓方向和 init_stop 计算“每单位持仓的风险点数”：
      - 多单：risk_points = entry_price - init_stop
      - 空单：risk_points = init_stop - entry_price
-  3. 将 risk_points 换算成相对价格跌幅（含约 10x 杠杆）：
-     - risk_rate_raw = risk_points / entry_price
-     - 在约 10x 杠杆下，等效账户权益变动 ≈ risk_rate_raw * 10
-  4. 令 risk_equity_pct = risk_rate_raw * 10 × 100%；
-     要求：risk_equity_pct ≤ 1%。
+  3.将 risk_points 换算为“止损触发的亏损金额”（必须使用 qty）：
+      - loss_usdt = risk_points * qty
+        其中 qty 必须取自 entry_plan.qty（若本轮还未给 qty，则先完成 sizing 再回到本节校验）。
+  4.单笔风险占比（唯一口径）：
+      - risk_equity_pct = (loss_usdt / equity) * 100
+      - 要求：risk_equity_pct ≤ 1.0%
+      - 若超限：必须先缩小 qty（或提高 R_clean / 缩短止损距离），否则 action="wait"。
 - 模型必须在内部推理中显式评估「risk_equity_pct 是否 ≤ 1%」：
   - 若估算结果明显 > 1%，必须在动作选择阶段做出以下之一：
     a. 主动收紧 init_stop（例如向更近的结构/保护性价位内收），
@@ -2288,11 +2291,18 @@ B5) 智能障碍识别与空间计算 (Smart Space Calculation)
       1. 所有 HTF (4h/1h) 级别的结构。
       2. VPVR POC (这是最大的磁铁和阻力)。
       3. `ctx.strength_z` > 1.5 的强结构。
-  * **第二步：硬性空间门槛**
-    - **LTF_scalp**: R_clean ≥ 1.0。
-      (例外：若 `pattern=MOMENTUM_BREAK` 且 `vol>3x`，允许 R ≥ 0.8)
-    - **HTF_swing**: R_clean ≥ 1.5。
-    - **结果**: 若计算出的 R_clean 低于门槛 -> **Action="wait"** (盈亏比不划算，放弃交易)。
+  第二步：空间门槛（默认 + 例外，唯一口径）
+  - 默认门槛：
+    * HTF_swing：R_clean ≥ 2.0
+    * LTF_scalp：R_clean ≥ 1.0
+  - 例外（仅 LTF_scalp 可用，且必须在 X 段 GateTrace 写明“why exception”）：
+    * 允许 R_clean ∈ [0.5, 1.0) 的唯一条件集合与 Gate5 保持一致：
+      - rsi_state ∈ {TREND_OVEREXTENDED, TREND_OVERSOLD/OVERBOUGHT} 且
+      - pattern ∈ {EDGE, BO_RETEST} 且
+      - 5m Confirm-1/2 已满足 且
+      - edge_score ≥ 0.65 且 confidence ≥ 70
+    * 若 R_clean < 0.5：无条件禁止开仓（action="wait"）。
+
 B6) 执行时效与反延迟闸门 (Execution Timeliness & Anti-Latency Guard)
   - 核心目的：确保决策基于“最新、有效、未失效”的市场状态。
   - 问：在生成最终 JSON 的这一刻，以下 3 个子闸门是否全部通过？

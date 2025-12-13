@@ -67,15 +67,15 @@ func syncConfigToDatabase(database *config.Database) error {
 
 	// 同步各配置项到数据库
 	configs := map[string]string{
-		"admin_mode":            fmt.Sprintf("%t", configFile.AdminMode),
-		"beta_mode":             fmt.Sprintf("%t", configFile.BetaMode),
-		"api_server_port":       strconv.Itoa(configFile.APIServerPort),
-		"use_default_coins":     fmt.Sprintf("%t", configFile.UseDefaultCoins),
-		"coin_pool_api_url":     configFile.CoinPoolAPIURL,
-		"oi_top_api_url":        configFile.OITopAPIURL,
-		"max_daily_loss":        fmt.Sprintf("%.1f", configFile.MaxDailyLoss),
-		"max_drawdown":          fmt.Sprintf("%.1f", configFile.MaxDrawdown),
-		"stop_trading_minutes":  strconv.Itoa(configFile.StopTradingMinutes),
+		"admin_mode":           fmt.Sprintf("%t", configFile.AdminMode),
+		"beta_mode":            fmt.Sprintf("%t", configFile.BetaMode),
+		"api_server_port":      strconv.Itoa(configFile.APIServerPort),
+		"use_default_coins":    fmt.Sprintf("%t", configFile.UseDefaultCoins),
+		"coin_pool_api_url":    configFile.CoinPoolAPIURL,
+		"oi_top_api_url":       configFile.OITopAPIURL,
+		"max_daily_loss":       fmt.Sprintf("%.1f", configFile.MaxDailyLoss),
+		"max_drawdown":         fmt.Sprintf("%.1f", configFile.MaxDrawdown),
+		"stop_trading_minutes": strconv.Itoa(configFile.StopTradingMinutes),
 	}
 
 	// 同步default_coins（转换为JSON字符串存储）
@@ -115,7 +115,7 @@ func syncConfigToDatabase(database *config.Database) error {
 // loadBetaCodesToDatabase 加载内测码文件到数据库
 func loadBetaCodesToDatabase(database *config.Database) error {
 	betaCodeFile := "beta_codes.txt"
-	
+
 	// 检查内测码文件是否存在
 	if _, err := os.Stat(betaCodeFile); os.IsNotExist(err) {
 		log.Printf("📄 内测码文件 %s 不存在，跳过加载", betaCodeFile)
@@ -129,7 +129,7 @@ func loadBetaCodesToDatabase(database *config.Database) error {
 	}
 
 	log.Printf("🔄 发现内测码文件 %s (%.1f KB)，开始加载...", betaCodeFile, float64(fileInfo.Size())/1024)
-	
+
 	// 加载内测码到数据库
 	err = database.LoadBetaCodesFromFile(betaCodeFile)
 	if err != nil {
@@ -155,9 +155,9 @@ func main() {
 
 	// 🔥 优先初始化日志系统
 	logManager, err := logger.NewLogManager(logger.LogConfig{
-		LogDir:    "logs",          // 日志目录
-		MaxSizeMB: 100,            // 每个文件最大100MB
-		MaxDays:   30,             // 保留30天
+		LogDir:    "logs", // 日志目录
+		MaxSizeMB: 100,    // 每个文件最大100MB
+		MaxDays:   30,     // 保留30天
 	})
 	if err != nil {
 		log.Fatalf("❌ 日志系统初始化失败: %v", err)
@@ -282,13 +282,13 @@ func main() {
 	}
 
 	log.Printf("✓ 配置数据库初始化成功")
-	
+
 	// 🎯 初始化市场分析模块的强度标准化器
 	// 注意：这里复用配置数据库，生产环境中可以考虑使用独立的分析数据库
 	log.Printf("🎯 初始化AI市场分析强度标准化器...")
 	market.InitGlobalStrengthNormalizer(database.GetDB())
 	log.Printf("✅ 强度标准化器初始化完成")
-	
+
 	// 🚀 初始化订单流分析系统
 	log.Printf("🚀 初始化订单流分析系统...")
 	if err := microstructure.StartOrderFlowSystem(true, true); err != nil {
@@ -296,7 +296,7 @@ func main() {
 	} else {
 		log.Printf("✅ 订单流系统启动成功")
 	}
-	
+
 	fmt.Println()
 
 	// 从数据库读取默认主流币种列表
@@ -349,7 +349,7 @@ func main() {
 	// 显示加载的交易员信息（从TraderManager获取实际加载的交易员）
 	fmt.Println()
 	fmt.Println("🤖 已加载的AI交易员配置:")
-	
+
 	allTraders := traderManager.GetAllTraders()
 	if len(allTraders) == 0 {
 		fmt.Println("  • 暂无配置的交易员，请通过Web界面创建")
@@ -360,13 +360,13 @@ func main() {
 			if running, ok := status["is_running"].(bool); ok && running {
 				runningStatus = "运行中"
 			}
-			
+
 			// 安全获取初始余额
 			initialBalance := 0.0
 			if balance, ok := status["initial_balance"].(float64); ok {
 				initialBalance = balance
 			}
-			
+
 			fmt.Printf("  • %s (%s + %s) - 初始资金: %.0f USDT [%s]\n",
 				at.GetName(), strings.ToUpper(at.GetAIModel()), strings.ToUpper(at.GetExchange()),
 				initialBalance, runningStatus)
@@ -410,14 +410,14 @@ func main() {
 
 	// 启动流行情数据 - 默认使用所有交易员设置的币种 如果没有设置币种 则优先使用系统默认
 	wsMonitor := market.NewWSMonitor(150)
-	
+
 	// 设置BTCUSDT触发器回调：触发所有运行中的trader执行AI分析
 	// 🔧 修复: 使用精确K线时序触发器，确保订单流计算与K线时间边界精确对齐
 	wsMonitor.SetBTCTriggerWithTime(func(klineCloseTime time.Time) {
 		callbackStart := time.Now()
-		log.Printf("🔔 BTCUSDT精确时序触发回调开始: %v (K线收盘: %v)", 
+		log.Printf("🔔 BTCUSDT精确时序触发回调开始: %v (K线收盘: %v)",
 			callbackStart.Format("15:04:05.000"), klineCloseTime.Format("15:04:05"))
-		
+
 		// 🔧 在AI分析前，使用精确K线收盘时间强制更新所有币种的CVD增量数据
 		log.Printf("🔄 基于K线收盘时间强制更新CVD增量数据...")
 		orderflowManager := microstructure.GetGlobalOrderFlowManager()
@@ -427,11 +427,11 @@ func main() {
 		} else {
 			log.Printf("⚠️ 无法获取OrderFlowManager")
 		}
-		
+
 		// 获取所有运行中的traders
 		allTraders := traderManager.GetAllTraders()
 		runningCount := 0
-		
+
 		for traderID, trader := range allTraders {
 			status := trader.GetStatus()
 			if running, ok := status["is_running"].(bool); ok && running {
@@ -441,19 +441,19 @@ func main() {
 				trader.TriggerCycle()
 			}
 		}
-		
+
 		totalDuration := time.Since(callbackStart)
 		log.Printf("🏁 所有精确时序AI分析完成: %d个traders, 总耗时 %v", runningCount, totalDuration)
 	})
-	
+
 	go wsMonitor.Start(database.GetCustomCoins())
 	//go market.NewWSMonitor(150).Start([]string{}) //这里是一个使用方式 传入空的话 则使用market市场的所有币种
 	// 设置优雅退出
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// TODO: 启动数据库中配置为运行状态的交易员
-	// traderManager.StartAll()
+	// 启动数据库中配置为运行状态的交易员
+	traderManager.StartAll()
 
 	// 等待退出信号
 	<-sigChan
@@ -461,7 +461,7 @@ func main() {
 	fmt.Println()
 	log.Println("📛 收到退出信号，正在停止所有trader...")
 	traderManager.StopAll()
-	
+
 	// 停止订单流系统
 	log.Println("🛑 正在停止订单流系统...")
 	microstructure.StopOrderFlowSystem()
