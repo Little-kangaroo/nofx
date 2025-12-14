@@ -27,10 +27,10 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: '300M',
+      max_memory_restart: '4G',
       env: {
         NODE_ENV: 'development',
-        PORT: 3000
+        PORT: 80
       },
       error_file: './logs/frontend-error.log',
       out_file: './logs/frontend-out.log',
