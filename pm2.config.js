@@ -30,7 +30,7 @@ module.exports = {
       max_memory_restart: '4G',
       env: {
         NODE_ENV: 'development',
-        PORT: 80
+        PORT: 3000
       },
       error_file: './logs/frontend-error.log',
       out_file: './logs/frontend-out.log',
