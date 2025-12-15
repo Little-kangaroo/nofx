@@ -437,8 +437,8 @@ func main() {
 			if running, ok := status["is_running"].(bool); ok && running {
 				runningCount++
 				log.Printf("🕐 BTCUSDT精确时序触发AI分析: %s", traderID)
-				// 同步执行，与原来定时器方式一致
-				trader.TriggerCycle()
+				// 🔧 P0-01修复：使用精确K线收盘时间触发AI分析，确保时间锚点一致性
+				trader.TriggerCycleWithTimeAnchor(klineCloseTime)
 			}
 		}
 

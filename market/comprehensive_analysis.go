@@ -208,11 +208,12 @@ var defaultComprehensiveConfig = &ComprehensiveConfig{
 }
 
 // NewComprehensiveAnalyzer 创建综合分析器
+// 🔥 P0-04修复：使用fallback配置，建议通过NewComprehensiveAnalyzerWithExchange创建以支持动态VPVR配置
 func NewComprehensiveAnalyzer() *ComprehensiveAnalyzer {
 	return &ComprehensiveAnalyzer{
 		dowAnalyzer:       NewDowTheoryAnalyzer(),
 		channelAnalyzer:   NewChannelAnalyzer(),
-		vpvrAnalyzer:      NewVPVRAnalyzer(),
+		vpvrAnalyzer:      NewVPVRAnalyzer(), // ⚠️ 使用fallback配置，不推荐
 		sdAnalyzer:        NewSupplyDemandAnalyzer(),
 		fvgAnalyzer:       NewFVGAnalyzer(),
 		fibonacciAnalyzer: NewFibonacciAnalyzer(),
@@ -222,11 +223,40 @@ func NewComprehensiveAnalyzer() *ComprehensiveAnalyzer {
 }
 
 // NewComprehensiveAnalyzerWithConfig 使用自定义配置创建综合分析器
+// 🔥 P0-04修复：使用fallback配置，建议通过NewComprehensiveAnalyzerWithExchange创建以支持动态VPVR配置
 func NewComprehensiveAnalyzerWithConfig(config *ComprehensiveConfig) *ComprehensiveAnalyzer {
 	return &ComprehensiveAnalyzer{
 		dowAnalyzer:       NewDowTheoryAnalyzer(),
 		channelAnalyzer:   NewChannelAnalyzer(),
-		vpvrAnalyzer:      NewVPVRAnalyzer(),
+		vpvrAnalyzer:      NewVPVRAnalyzer(), // ⚠️ 使用fallback配置，不推荐
+		sdAnalyzer:        NewSupplyDemandAnalyzer(),
+		fvgAnalyzer:       NewFVGAnalyzer(),
+		fibonacciAnalyzer: NewFibonacciAnalyzer(),
+		srAnalyzer:        NewSupportResistanceAnalyzer(),
+		config:            config,
+	}
+}
+
+// 🔥 P0-04修复：新增支持ExchangeMeta的构造函数，实现动态VPVR配置
+// NewComprehensiveAnalyzerWithExchange 使用ExchangeMeta创建支持动态VPVR配置的综合分析器
+func NewComprehensiveAnalyzerWithExchange(exchangeMeta *ExchangeMeta, config *ComprehensiveConfig) *ComprehensiveAnalyzer {
+	if config == nil {
+		config = defaultComprehensiveConfig
+	}
+	
+	// 🔥 P0-04核心修复：使用ExchangeMeta创建动态配置的VPVR分析器
+	// 注意：这里使用"4h"作为默认timeframe，在实际分析时会在analyzeSingleTimeframe中使用正确的timeframe
+	var vpvrAnalyzer *VPVRAnalyzer
+	if exchangeMeta != nil {
+		vpvrAnalyzer = NewVPVRAnalyzerWithDynamicConfig(exchangeMeta, "4h") // 默认timeframe，实际使用时动态调整
+	} else {
+		vpvrAnalyzer = NewVPVRAnalyzer() // 降级到fallback配置
+	}
+	
+	return &ComprehensiveAnalyzer{
+		dowAnalyzer:       NewDowTheoryAnalyzer(),
+		channelAnalyzer:   NewChannelAnalyzer(),
+		vpvrAnalyzer:      vpvrAnalyzer, // ✅ 使用动态配置的VPVR分析器
 		sdAnalyzer:        NewSupplyDemandAnalyzer(),
 		fvgAnalyzer:       NewFVGAnalyzer(),
 		fibonacciAnalyzer: NewFibonacciAnalyzer(),
@@ -244,13 +274,16 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 	currentPrice := 0.0
 	timestamp := time.Now().UnixMilli()
 
-	// 确定当前价格
-	if len(klines4h) > 0 {
+	// 🔥 P0-03修复：统一约束currentPrice必须来自5m数据，与V-13.5的vacuum/trigger规则一致
+	// 避免优先使用4h导致取到"未收盘4h close（动态变化）"造成全链路时间锚点错配
+	if len(klines5m) > 0 {
+		currentPrice = klines5m[len(klines5m)-1].Close  // 强制使用5m last closed price
+		timestamp = klines5m[len(klines5m)-1].CloseTime
+	} else if len(klines4h) > 0 {
+		// 仅当5m数据不可用时才降级使用4h（紧急兼容模式）
 		currentPrice = klines4h[len(klines4h)-1].Close
 		timestamp = klines4h[len(klines4h)-1].CloseTime
-	} else if len(klines5m) > 0 {
-		currentPrice = klines5m[len(klines5m)-1].Close
-		timestamp = klines5m[len(klines5m)-1].CloseTime
+		log.Printf("⚠️ [P0-03] 5m数据不可用，降级使用4h价格 - 可能影响时间锚点一致性")
 	}
 
 	result := &ComprehensiveResult{
@@ -310,13 +343,16 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 	currentPrice := 0.0
 	timestamp := time.Now().UnixMilli()
 
-	// 确定当前价格
-	if len(klines4h) > 0 {
+	// 🔥 P0-03修复：统一约束currentPrice必须来自5m数据，与V-13.5的vacuum/trigger规则一致
+	// 避免优先使用4h导致取到"未收盘4h close（动态变化）"造成全链路时间锚点错配
+	if len(klines5m) > 0 {
+		currentPrice = klines5m[len(klines5m)-1].Close  // 强制使用5m last closed price
+		timestamp = klines5m[len(klines5m)-1].CloseTime
+	} else if len(klines4h) > 0 {
+		// 仅当5m数据不可用时才降级使用4h（紧急兼容模式）
 		currentPrice = klines4h[len(klines4h)-1].Close
 		timestamp = klines4h[len(klines4h)-1].CloseTime
-	} else if len(klines5m) > 0 {
-		currentPrice = klines5m[len(klines5m)-1].Close
-		timestamp = klines5m[len(klines5m)-1].CloseTime
+		log.Printf("⚠️ [P0-03] 5m数据不可用，降级使用4h价格 - 可能影响时间锚点一致性")
 	}
 
 	result := &ComprehensiveResult{
@@ -333,8 +369,37 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 	}
 
 	// 执行VPVR分析
+	// 🔥 P0-04修复：使用当前时间框架的动态VPVR配置进行分析
 	if ca.config.EnableVPVR && len(klines4h) > 10 {
-		result.VolumeProfile = ca.vpvrAnalyzer.Analyze(klines4h)
+		// 🔥 P0-04核心修复：为4h时间框架动态创建VPVR分析器
+		var currentVPVRAnalyzer *VPVRAnalyzer
+		
+		// 尝试从现有VPVR分析器获取配置中的ExchangeMeta
+		existingConfig := ca.vpvrAnalyzer.GetConfig()
+		
+		// 创建4h时间框架的动态配置
+		if existingConfig.TickSize > 0 && existingConfig.TickSize != fallbackVPVRConfig.TickSize {
+			// 如果现有分析器使用了动态配置（不是fallback默认值），重建ExchangeMeta
+			exchangeMeta := &ExchangeMeta{
+				TickSize: existingConfig.TickSize,
+				Symbol:   symbol,
+			}
+			currentVPVRAnalyzer = NewVPVRAnalyzerWithDynamicConfig(exchangeMeta, "4h")
+		} else {
+			// 使用现有分析器（可能是fallback配置）
+			currentVPVRAnalyzer = ca.vpvrAnalyzer
+		}
+		
+		result.VolumeProfile = currentVPVRAnalyzer.Analyze(klines4h)
+		
+		// 🔥 P0-04修复：在VolumeProfile输出中明确标注timeframe与tick_size
+		if result.VolumeProfile != nil {
+			// 确保UsedTimeFrame被正确设置为4h
+			if result.VolumeProfile.UsedTimeFrame == "" {
+				result.VolumeProfile.UsedTimeFrame = "4h"
+			}
+			// UsedTickSize已在VPVR分析器中设置
+		}
 	}
 
 	// 执行供需区分析
@@ -1406,8 +1471,38 @@ func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe, symbol string
 	tfAnalysis.ChannelAnalysis = ca.channelAnalyzer.Analyze(klines, currentPrice)
 
 	// VPVR分析
+	// 🔥 P0-04修复：为每个时间框架使用正确的动态VPVR配置
 	if ca.config.EnableVPVR {
-		tfAnalysis.VolumeProfile = ca.vpvrAnalyzer.Analyze(klines)
+		// 🔥 P0-04核心修复：为当前时间框架动态创建VPVR分析器
+		// 这样确保每个时间框架都使用正确的tick_size和timeframe配置
+		var currentVPVRAnalyzer *VPVRAnalyzer
+		
+		// 尝试从现有VPVR分析器获取配置中的ExchangeMeta
+		existingConfig := ca.vpvrAnalyzer.GetConfig()
+		
+		// 创建当前时间框架的动态配置
+		if existingConfig.TickSize > 0 && existingConfig.TickSize != fallbackVPVRConfig.TickSize {
+			// 如果现有分析器使用了动态配置（不是fallback默认值），重建ExchangeMeta
+			exchangeMeta := &ExchangeMeta{
+				TickSize: existingConfig.TickSize,
+				Symbol:   symbol,
+			}
+			currentVPVRAnalyzer = NewVPVRAnalyzerWithDynamicConfig(exchangeMeta, timeframe)
+		} else {
+			// 使用现有分析器（可能是fallback配置）
+			currentVPVRAnalyzer = ca.vpvrAnalyzer
+		}
+		
+		tfAnalysis.VolumeProfile = currentVPVRAnalyzer.Analyze(klines)
+		
+		// 🔥 P0-04修复：在VolumeProfile输出中明确标注timeframe与tick_size
+		if tfAnalysis.VolumeProfile != nil {
+			// 确保UsedTimeFrame被正确设置
+			if tfAnalysis.VolumeProfile.UsedTimeFrame == "" {
+				tfAnalysis.VolumeProfile.UsedTimeFrame = timeframe
+			}
+			// UsedTickSize已在VPVR分析器中设置
+		}
 	}
 
 	// 供需区分析

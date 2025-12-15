@@ -2,22 +2,41 @@ package market
 
 import "time"
 
+// 🔥 P0-04修复：ExchangeMeta 交易所元数据结构（支持动态VPVR配置）
+// 用于存储交易所特定的精度、订单规格等元数据，避免VPVR等技术分析的硬编码扭曲
+type ExchangeMeta struct {
+	Symbol    string  `json:"symbol"`     // 交易对符号
+	TickSize  float64 `json:"tick_size"`  // 价格最小变动单位（从交易所API获取）
+	LotSize   float64 `json:"lot_size"`   // 数量最小变动单位
+	MinPrice  float64 `json:"min_price"`  // 最小价格
+	MaxPrice  float64 `json:"max_price"`  // 最大价格
+	MinQty    float64 `json:"min_qty"`    // 最小数量
+	MaxQty    float64 `json:"max_qty"`    // 最大数量
+}
+
 // Data 市场数据结构
 type Data struct {
 	Symbol            string
-	CurrentPrice      float64
+	// 🔥 P0-05修复：统一价格字段，V-13.5要求只认last_price（值取5m ohlc_last_closed.close）
+	LastPrice         float64 `json:"last_price"`          // 最新价格，来自5m最后已收盘K线
+	CurrentPrice      float64 `json:"current_price,omitempty"` // [DEPRECATED] 保持向后兼容，严格等值于LastPrice
 	PriceChange1h     float64 // 1小时价格变化百分比
 	PriceChange4h     float64 // 4小时价格变化百分比
 	CurrentEMA20      float64
 	CurrentMACD       float64
 	CurrentRSI7       float64
 	
+	// 🔥 P0-04修复：交易所元数据，支持动态VPVR配置
+	ExchangeMeta      *ExchangeMeta `json:"exchange_meta,omitempty"` // 交易所元数据（tick_size等）
+	
 	// OHLC数据 (统一使用上一根已收盘命名)
 	OHLC5mPrevClosed    *OHLCData // 5m上一根已收盘K线OHLC（主要数据）
 	OHLC5mEarlierClosed *OHLCData // 5m更早已收盘K线OHLC（用于对比分析）
 	
 	// OHLC数据 (4h级别)
-	OHLC4hPrevClosed    *OHLCData // 4h上一根已收盘K线OHLC
+	// 🔥 P0-02修复：添加最新已收盘4h，避免HTF结构判断滞后
+	OHLC4hLastClosed    *OHLCData // 4h最新已收盘K线OHLC（主要数据）
+	OHLC4hPrevClosed    *OHLCData // 4h上一根已收盘K线OHLC（用于对比）
 	
 	OpenInterest      *OIData
 	FundingRate       float64
@@ -560,6 +579,10 @@ type VolumeProfile struct {
 	Config    *VPVRConfig     `json:"config"`     // VPVR配置
 	Stats     *VolumeStats    `json:"stats"`      // 成交量统计
 	Context   *ContextMetrics `json:"ctx"`        // 上下文评分
+	
+	// 🔥 P0-04修复：VPVR配置标注，便于复盘和一致性校验
+	UsedTimeFrame string  `json:"used_timeframe"` // 实际使用的时间框架
+	UsedTickSize  float64 `json:"used_tick_size"` // 实际使用的tick_size
 }
 
 // PriceLevel 价格级别
@@ -699,11 +722,54 @@ const (
 	VPVRSignalImbalance    VPVRSignalType = "imbalance"     // 买卖不平衡
 )
 
-var defaultVPVRConfig = VPVRConfig{
-	TickSize:         0.01,   // 默认1分精度
+// 🔥 P0-04修复：移除硬编码的defaultVPVRConfig，替换为动态构建函数
+// 避免硬编码TickSize=0.01、TimeFrame="4h"导致的VPVR结构系统性扭曲
+
+// GetDynamicVPVRConfig 根据ExchangeMeta和timeframe动态构建VPVR配置
+// 避免对不同symbol（BTC/ETH/山寨）和不同周期使用相同硬编码参数导致的价格分桶扭曲
+func GetDynamicVPVRConfig(exchangeMeta *ExchangeMeta, timeframe string) VPVRConfig {
+	config := VPVRConfig{
+		ValueAreaPercent: 0.70,   // 70%价值区域（标准值）
+		MinVolume:        0.001,  // 最小成交量（标准值）
+		ShowBuySell:      true,   // 显示买卖分布（标准值）
+		SmoothingFactor:  1.0,    // 无平滑（标准值）
+		TimeFrame:        timeframe, // 使用传入的实际时间框架
+	}
+	
+	// 🔥 核心修复：根据ExchangeMeta动态设置TickSize
+	if exchangeMeta != nil && exchangeMeta.TickSize > 0 {
+		config.TickSize = exchangeMeta.TickSize // 使用交易所真实tick_size
+	} else {
+		// 🔥 降级方案：根据symbol类型智能推断tick_size，避免0.01一刀切
+		config.TickSize = getSmartTickSizeBySymbol(timeframe)
+	}
+	
+	return config
+}
+
+// getSmartTickSizeBySymbol 根据symbol智能推断tick_size（当ExchangeMeta不可用时的降级方案）
+// 🔥 功能：解决不同币种（BTC高价/山寨低价）使用0.01一刀切导致的分桶问题
+func getSmartTickSizeBySymbol(symbol string) float64 {
+	// 根据symbol类型智能调整tick_size，避免价格分桶过细或过粗
+	switch {
+	case len(symbol) >= 6 && (symbol[:3] == "BTC" || symbol[:3] == "ETH"):
+		// BTC/ETH类：价格较高，可以使用更粗的分桶
+		return 0.1  // 0.1美元精度
+	case len(symbol) >= 8 && symbol[len(symbol)-4:] == "USDT":
+		// 一般USDT交易对：使用中等精度
+		return 0.01 // 0.01美元精度（保持当前默认）
+	default:
+		// 其他情况：使用精细分桶
+		return 0.001 // 0.001美元精度
+	}
+}
+
+// 🔥 P0-04修复：保持向后兼容的默认配置（仅用于无法获取动态配置的场景）
+var fallbackVPVRConfig = VPVRConfig{
+	TickSize:         0.01,   // 降级默认值（建议使用GetDynamicVPVRConfig）
 	ValueAreaPercent: 0.70,   // 70%价值区域
-	MinVolume:        0.001,  // 最小成交量 (已移除硬过滤，仅作参考)
-	TimeFrame:        "4h",   // 4小时时间框架
+	MinVolume:        0.001,  // 最小成交量
+	TimeFrame:        "4h",   // 降级默认时间框架
 	ShowBuySell:      true,   // 显示买卖分布
 	SmoothingFactor:  1.0,    // 无平滑
 }

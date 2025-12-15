@@ -15,8 +15,15 @@ import (
 
 // Get 获取指定代币的市场数据
 func Get(symbol string) (*Data, error) {
+	return GetWithTimeAnchor(symbol, time.Now())
+}
+
+// GetWithTimeAnchor 获取指定代币的市场数据（使用时间锚点）
+// 🔥 P0-01修复：支持精确的5m close时间锚点，确保全链路时间一致性
+func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 	// 技术指标计算总体耗时统计
 	totalStart := time.Now()
+	anchorCloseTimeMs := anchorTime.UnixMilli()
 
 	var klines5m, klines15m, klines30m, klines1h, klines4h []Kline
 	var err error
@@ -55,6 +62,18 @@ func Get(symbol string) (*Data, error) {
 		return nil, fmt.Errorf("获取4小时K线失败: %v", err)
 	}
 
+	log.Printf("📊 [%s-时间锚点] 使用锚点: %v (毫秒: %d)", symbol, anchorTime.Format("15:04:05.000"), anchorCloseTimeMs)
+
+	// 🔥 P0-01修复：统一时间锚点裁剪 - 所有时间框架只使用锚点时间之前的已收盘K线
+	klines5m = filterKlinesByAnchorTime(klines5m, anchorCloseTimeMs)
+	klines15m = filterKlinesByAnchorTime(klines15m, anchorCloseTimeMs)
+	klines30m = filterKlinesByAnchorTime(klines30m, anchorCloseTimeMs)
+	klines1h = filterKlinesByAnchorTime(klines1h, anchorCloseTimeMs)
+	klines4h = filterKlinesByAnchorTime(klines4h, anchorCloseTimeMs)
+
+	log.Printf("📊 [%s-时间锚点] 裁剪后K线数量: 5m=%d, 15m=%d, 30m=%d, 1h=%d, 4h=%d", 
+		symbol, len(klines5m), len(klines15m), len(klines30m), len(klines1h), len(klines4h))
+
 	// K线数据获取阶段耗时统计
 	klinesFetchDuration := time.Since(klinesFetchStart)
 	log.Printf("📊 [%s-K线获取] 耗时: %v (5m+15m+30m+1h+4h)", symbol, klinesFetchDuration)
@@ -62,14 +81,13 @@ func Get(symbol string) (*Data, error) {
 	// 基础技术指标计算阶段耗时统计
 	basicIndicatorsStart := time.Now()
 	
-	// 🔥 P0-01修复：使用统一时间锚点 - 最后一根已收盘K线
-	idx5m := lastClosedIndex(klines5m)
-	if idx5m < 0 {
-		return nil, fmt.Errorf("5分钟K线数据不足，无法获取已收盘数据")
+	// 🔥 P0-01修复：基于锚点时间裁剪后的K线数据计算指标，确保时间一致性
+	if len(klines5m) == 0 {
+		return nil, fmt.Errorf("5分钟K线数据经锚点裁剪后为空")
 	}
 	
-	// 计算当前指标 (基于最后一根已收盘5分钟数据)
-	currentPrice := klines5m[idx5m].Close
+	// 计算当前指标 (基于锚点裁剪后的5分钟数据)
+	currentPrice := klines5m[len(klines5m)-1].Close
 	currentEMA20 := calculateEMA(klines5m, 20)
 	currentMACD := calculateMACD(klines5m)
 	currentRSI7 := calculateRSI(klines5m, 7)
@@ -78,10 +96,10 @@ func Get(symbol string) (*Data, error) {
 	basicIndicatorsDuration := time.Since(basicIndicatorsStart)
 	log.Printf("📊 [%s-基础指标] 耗时: %v (Price+EMA20+MACD+RSI7)", symbol, basicIndicatorsDuration)
 
-	// 🔥 P0-01修复：计算价格变化百分比 - 基于统一时间锚点回看
-	// 1小时价格变化 = 从最后已收盘锚点回看12个5分钟K线
+	// 🔥 P0-01修复：计算价格变化百分比 - 基于裁剪后的数据统一时间锚点
+	// 1小时价格变化 = 从当前锚点回看12个5分钟K线
 	priceChange1h := 0.0
-	lookback1h := idx5m - 12  // 从当前已收盘锚点回看12根
+	lookback1h := len(klines5m) - 12  // 从当前锚点回看12根
 	if lookback1h >= 0 {      // 确保索引有效
 		price1hAgo := klines5m[lookback1h].Close
 		if price1hAgo > 0 {
@@ -89,11 +107,10 @@ func Get(symbol string) (*Data, error) {
 		}
 	}
 
-	// 4小时价格变化 = 使用4小时K线的最后已收盘数据
+	// 4小时价格变化 = 使用4小时K线的锚点裁剪数据
 	priceChange4h := 0.0
-	idx4h := lastClosedIndex(klines4h)
-	if idx4h >= 1 {  // 至少需要2根K线（当前已收盘 + 上一根）
-		price4hAgo := klines4h[idx4h-1].Close
+	if len(klines4h) >= 2 {  // 至少需要2根K线（当前已收盘 + 上一根）
+		price4hAgo := klines4h[len(klines4h)-2].Close
 		if price4hAgo > 0 {
 			priceChange4h = ((currentPrice - price4hAgo) / price4hAgo) * 100
 		}
@@ -123,7 +140,8 @@ func Get(symbol string) (*Data, error) {
 	// 高级分析阶段耗时统计
 	advancedAnalysisStart := time.Now()
 	// 多时间框架综合分析（包括道氏理论、VPVR、供需区、FVG、斐波纳契、通道分析）
-	comprehensiveAnalyzer := NewComprehensiveAnalyzer()
+	// 🔥 P0-04修复：使用支持ExchangeMeta的综合分析器，实现动态VPVR配置
+	comprehensiveAnalyzer := NewComprehensiveAnalyzerWithExchange(exchangeMeta, nil)
 	comprehensiveResult := comprehensiveAnalyzer.AnalyzeMultiTimeframe(symbol, klines5m, klines15m, klines30m, klines1h, klines4h)
 
 	// 执行多时间框架分析
@@ -142,30 +160,44 @@ func Get(symbol string) (*Data, error) {
 	// OHLC数据提取阶段
 	ohlcExtractionStart := time.Now()
 
-	// 🔥 P0-01修复：提取5m级别OHLC数据 (最后已收盘 + 上一根已收盘)
-	// 与currentPrice使用相同时间锚点，确保数据一致性
-	ohlc5mLastClosed, ohlc5mPrevClosed := extract5mOHLCData(klines5m)
+	// 🔥 P0-01修复：提取5m级别OHLC数据 (基于锚点裁剪后的数据)
+	// 确保与currentPrice使用相同时间锚点，避免进行中K线导致的数据错配
+	ohlc5mLastClosed, ohlc5mPrevClosed := extract5mOHLCDataFromFiltered(klines5m)
 
-	// 提取4h级别OHLC数据 (上一根已收盘)
-	ohlc4hPrevClosed := extract4hOHLCData(klines4h)
+	// 提取4h级别OHLC数据 (基于锚点裁剪后的数据) 
+	// 🔥 P0-02修复：获取最新已收盘4h和上一根已收盘4h，避免HTF判断滞后
+	ohlc4hLastClosed, ohlc4hPrevClosed := extract4hOHLCDataFromFiltered(klines4h)
 
 	ohlcExtractionDuration := time.Since(ohlcExtractionStart)
 	log.Printf("📊 [%s-OHLC提取] 耗时: %v (5m+4h级别)", symbol, ohlcExtractionDuration)
 
+	// 🔥 P0-04修复：填充ExchangeMeta字段，支持动态VPVR配置
+	// 根据symbol推断交易所元数据（tick_size、lot_size等）
+	exchangeMeta := &ExchangeMeta{
+		Symbol:   symbol,
+		TickSize: getSmartTickSizeBySymbol(symbol), // 智能推断tick_size
+		LotSize:  1.0, // 默认lot_size为1.0，实际可根据交易所规则调整
+	}
+
 	data := &Data{
 		Symbol:        symbol,
 		CurrentPrice:  currentPrice,
+		LastPrice:     currentPrice, // 🔥 P0-05修复：新增LastPrice字段，与CurrentPrice严格相等
 		PriceChange1h: priceChange1h,
 		PriceChange4h: priceChange4h,
 		CurrentEMA20:  currentEMA20,
 		CurrentMACD:   currentMACD,
 		CurrentRSI7:   currentRSI7,
+		ExchangeMeta:  exchangeMeta, // 🔥 P0-04修复：填充交易所元数据
 
 		// 🔥 P0-01修复：OHLC数据 - 统一时间锚点确保数据一致性
 		// ohlc5mLastClosed现在与currentPrice使用相同时间锚点
 		OHLC5mPrevClosed:    ohlc5mLastClosed,  // 最后已收盘K线（与currentPrice同锚点）
 		OHLC5mEarlierClosed: ohlc5mPrevClosed,  // 上一根已收盘K线（用于对比）
-		OHLC4hPrevClosed:    ohlc4hPrevClosed,
+		
+		// 🔥 P0-02修复：4h OHLC数据 - 修复off-by-one错误，避免HTF判断滞后
+		OHLC4hLastClosed:    ohlc4hLastClosed,  // 最新已收盘4h（主要HTF数据）
+		OHLC4hPrevClosed:    ohlc4hPrevClosed,  // 上一根已收盘4h（用于对比）
 
 		OpenInterest:           oiData,
 		FundingRate:            fundingRate,
@@ -254,16 +286,25 @@ func extract5mOHLCData(klines5m []Kline) (*OHLCData, *OHLCData) {
 	return lastClosed, prevClosed
 }
 
-// 🔥 P0-01修复：extract4hOHLCData 提取4h级别OHLC数据 - 统一时间锚点
-func extract4hOHLCData(klines4h []Kline) *OHLCData {
+// 🔥 P0-02修复：extract4hOHLCData 提取4h级别OHLC数据 - 对齐5m逻辑，修复off-by-one错误
+// 返回最新已收盘4h和上一根已收盘4h，确保HTF结构判断不滞后
+func extract4hOHLCData(klines4h []Kline) (*OHLCData, *OHLCData) {
 	idx := lastClosedIndex(klines4h)
-	if idx < 1 {
+	if idx < 0 {
 		log.Printf("⚠️ [4h OHLC] K线数据不足，无法提取已收盘数据")
-		return nil
+		return nil, nil
 	}
 
-	// 上一根已收盘K线 - 与主要分析逻辑保持一致
-	return extractOHLCData(klines4h[idx-1])
+	// 最后一根已收盘K线 - 与5m逻辑对齐，避免HTF判断滞后
+	lastClosed := extractOHLCData(klines4h[idx])
+	
+	// 上一根已收盘K线 - 用于对比分析
+	var prevClosed *OHLCData
+	if idx >= 1 {
+		prevClosed = extractOHLCData(klines4h[idx-1])
+	}
+
+	return lastClosed, prevClosed
 }
 
 // calculateEMA 计算EMA
@@ -794,8 +835,9 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 	result := make(map[string]interface{})
 
 	// 全局指标（不依赖时间框架）
-	result["price"] = FormatByDataTypeAndSymbol(data.CurrentPrice, "price", data.Symbol)      // 保留原有字段（向后兼容）
-	result["last_price"] = FormatByDataTypeAndSymbol(data.CurrentPrice, "price", data.Symbol) // 新增字段（更清晰的命名）
+	// 🔥 P0-05修复：价格字段契约统一 - V-13.5要求只认last_price
+	result["last_price"] = FormatByDataTypeAndSymbol(data.LastPrice, "price", data.Symbol) // 主要字段，V-13.5标准
+	result["price"] = FormatByDataTypeAndSymbol(data.LastPrice, "price", data.Symbol)      // 向后兼容字段，已废弃，与last_price严格相等
 	result["funding_rate"] = FormatByDataTypeAndSymbol(data.FundingRate, "ratio", data.Symbol)
 	result["oi_latest"] = func() float64 {
 		if data.OpenInterest != nil {
@@ -810,7 +852,8 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		if len(klines5m) >= 13 {
 			price1hAgo := klines5m[len(klines5m)-13].Close
 			if price1hAgo > 0 {
-				result["change_1h"] = FormatByDataTypeAndSymbol(((data.CurrentPrice-price1hAgo)/price1hAgo)*100, "percentage", data.Symbol)
+				// 🔥 P0-05修复：使用统一的LastPrice计算价格变化
+				result["change_1h"] = FormatByDataTypeAndSymbol(((data.LastPrice-price1hAgo)/price1hAgo)*100, "percentage", data.Symbol)
 			}
 		}
 	}
@@ -819,7 +862,8 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 	if klines4h, exists := timeframeKlines["4h"]; exists && len(klines4h) >= 2 {
 		price4hAgo := klines4h[len(klines4h)-2].Close
 		if price4hAgo > 0 {
-			result["change_4h"] = FormatByDataTypeAndSymbol(((data.CurrentPrice-price4hAgo)/price4hAgo)*100, "percentage", data.Symbol)
+			// 🔥 P0-05修复：使用统一的LastPrice计算价格变化
+			result["change_4h"] = FormatByDataTypeAndSymbol(((data.LastPrice-price4hAgo)/price4hAgo)*100, "percentage", data.Symbol)
 		}
 	}
 
@@ -964,8 +1008,9 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 			}
 		case "4h":
 			// 4h级别: ohlc_last_closed only
-			if data.OHLC4hPrevClosed != nil {
-				tfData["ohlc_last_closed"] = formatOHLCData(data.OHLC4hPrevClosed, data.Symbol)
+			// 🔥 P0-02修复：使用OHLC4hLastClosed而不是PrevClosed，修复HTF滞后问题
+			if data.OHLC4hLastClosed != nil {
+				tfData["ohlc_last_closed"] = formatOHLCData(data.OHLC4hLastClosed, data.Symbol)
 			}
 		}
 
@@ -2059,21 +2104,12 @@ func CalculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 }
 
 // calculateMediumTermData 计算中期时间框架数据(15m/30m/1h)
-// 🔥 P0-02修复：calculateMediumTermData 中期数据统一时间锚点
-// 确保OHLCLastClosed、CurrentVolume、EMA/MACD/RSI/ATR使用相同已收盘锚点
+// 🔥 P0-01修复：calculateMediumTermData 使用锚点裁剪后的数据，确保时间一致性
+// 移除lastClosedIndex逻辑，直接使用已经过滤的K线数据
 func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 	if len(klines) == 0 {
 		return &MediumTermData{Timeframe: timeframe}
 	}
-
-	// 🔥 P0-02修复：使用统一时间锚点，只处理已收盘K线
-	idx := lastClosedIndex(klines)
-	if idx < 0 {
-		return &MediumTermData{Timeframe: timeframe}
-	}
-	
-	// 只使用已收盘的K线数据，确保所有指标基于相同时间基准
-	closedKlines := klines[:idx+1]
 
 	data := &MediumTermData{
 		Timeframe:   timeframe,
@@ -2081,59 +2117,61 @@ func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 		RSI14Values: make([]float64, 0, 10),
 	}
 
-	// 🔥 P0-02修复：所有指标计算基于已收盘数据，避免信号抖动
+	// 🔥 P0-01修复：直接使用传入的已裁剪K线数据，所有指标基于相同时间基准
 	// 计算EMA
-	data.EMA20 = calculateEMA(closedKlines, 20)
-	data.EMA50 = calculateEMA(closedKlines, 50)
+	data.EMA20 = calculateEMA(klines, 20)
+	data.EMA50 = calculateEMA(klines, 50)
 
 	// 计算当前指标
-	data.CurrentMACD = calculateMACD(closedKlines)
-	data.CurrentRSI7 = calculateRSI(closedKlines, 7)
-	data.CurrentRSI14 = calculateRSI(closedKlines, 14)
+	data.CurrentMACD = calculateMACD(klines)
+	data.CurrentRSI7 = calculateRSI(klines, 7)
+	data.CurrentRSI14 = calculateRSI(klines, 14)
 
 	// 计算ATR
-	data.ATR14 = calculateATR(closedKlines, 14)
+	data.ATR14 = calculateATR(klines, 14)
 
-	// 🔥 P0-02修复：成交量计算使用统一锚点 - 最后已收盘K线
-	if len(closedKlines) > 0 {
-		data.CurrentVolume = closedKlines[idx].Volume  // 使用最后已收盘K线的成交量
+	// 🔥 P0-01修复：成交量计算使用锚点裁剪后的数据
+	if len(klines) > 0 {
+		data.CurrentVolume = klines[len(klines)-1].Volume  // 使用最后一根K线的成交量
 		// 计算平均成交量
 		sum := 0.0
-		for _, k := range closedKlines {
+		for _, k := range klines {
 			sum += k.Volume
 		}
-		data.AverageVolume = sum / float64(len(closedKlines))
+		data.AverageVolume = sum / float64(len(klines))
 	}
 
-	// 🔥 P0-02修复：OHLC数据提取使用统一锚点逻辑
+	// 🔥 P0-01修复：OHLC数据提取使用锚点裁剪后的数据
 	if timeframe == "15m" || timeframe == "30m" {
 		// 15m/30m级别: 最后已收盘 + 上一根已收盘  
-		if idx >= 0 {
-			data.OHLCLastClosed = extractOHLCData(closedKlines[idx])     // 最后已收盘
-			if idx >= 1 {
-				data.OHLCPrevClosed = extractOHLCData(closedKlines[idx-1]) // 上一根已收盘
+		lastIdx := len(klines) - 1
+		if lastIdx >= 0 {
+			data.OHLCLastClosed = extractOHLCData(klines[lastIdx])     // 最后已收盘
+			if lastIdx >= 1 {
+				data.OHLCPrevClosed = extractOHLCData(klines[lastIdx-1]) // 上一根已收盘
 			}
 		}
 	} else if timeframe == "1h" {
 		// 1h级别: 使用最后已收盘K线
-		if idx >= 0 {
-			data.OHLCLastClosed = extractOHLCData(closedKlines[idx])  // 统一锚点
+		lastIdx := len(klines) - 1
+		if lastIdx >= 0 {
+			data.OHLCLastClosed = extractOHLCData(klines[lastIdx])  // 统一锚点
 		}
 	}
 
-	// 🔥 P0-02修复：MACD和RSI序列计算基于已收盘数据
-	start := len(closedKlines) - 10
+	// 🔥 P0-01修复：MACD和RSI序列计算基于锚点裁剪后的数据
+	start := len(klines) - 10
 	if start < 0 {
 		start = 0
 	}
 
-	for i := start; i < len(closedKlines); i++ {
+	for i := start; i < len(klines); i++ {
 		if i >= 25 {
-			macd := calculateMACD(closedKlines[:i+1])
+			macd := calculateMACD(klines[:i+1])
 			data.MACDValues = append(data.MACDValues, macd)
 		}
 		if i >= 14 {
-			rsi14 := calculateRSI(closedKlines[:i+1], 14)
+			rsi14 := calculateRSI(klines[:i+1], 14)
 			data.RSI14Values = append(data.RSI14Values, rsi14)
 		}
 	}
@@ -3262,4 +3300,74 @@ func buildDataQualityInfoV2(snapshot *microstructure.MarketSnapshot, isStale boo
 		"status":                status,
 		"update_interval_s":     300, // 5分钟更新间隔
 	}
+}
+
+// ===== P0-01修复：时间锚点统一处理函数 =====
+
+// filterKlinesByAnchorTime 根据时间锚点过滤K线数据
+// 🔥 P0-01修复核心函数：确保所有K线数据都在锚点时间之前已收盘
+func filterKlinesByAnchorTime(klines []Kline, anchorCloseTimeMs int64) []Kline {
+	if len(klines) == 0 {
+		return klines
+	}
+	
+	// 找到最大的满足 CloseTime <= anchorCloseTimeMs 的索引
+	maxValidIndex := -1
+	for i := len(klines) - 1; i >= 0; i-- {
+		if klines[i].CloseTime <= anchorCloseTimeMs {
+			maxValidIndex = i
+			break
+		}
+	}
+	
+	if maxValidIndex < 0 {
+		log.Printf("⚠️ [时间锚点] 所有K线都在锚点时间 %d 之后，返回空切片", anchorCloseTimeMs)
+		return []Kline{}
+	}
+	
+	// 返回裁剪后的K线数据 (0到maxValidIndex，包含maxValidIndex)
+	return klines[:maxValidIndex+1]
+}
+
+// extract5mOHLCDataFromFiltered 从经过锚点裁剪的5m K线中提取OHLC数据
+// 🔥 P0-01修复：基于锚点裁剪后的数据提取，确保时间一致性
+func extract5mOHLCDataFromFiltered(filteredKlines []Kline) (*OHLCData, *OHLCData) {
+	if len(filteredKlines) == 0 {
+		log.Printf("⚠️ [5m OHLC] 经锚点裁剪的K线数据为空")
+		return nil, nil
+	}
+
+	// 最后一根K线 (锚点时间内的最后已收盘K线)
+	lastIdx := len(filteredKlines) - 1
+	lastClosed := extractOHLCData(filteredKlines[lastIdx])
+	
+	// 上一根K线 (用于对比分析)
+	var prevClosed *OHLCData
+	if lastIdx >= 1 {
+		prevClosed = extractOHLCData(filteredKlines[lastIdx-1])
+	}
+
+	return lastClosed, prevClosed
+}
+
+// extract4hOHLCDataFromFiltered 从经过锚点裁剪的4h K线中提取OHLC数据
+// 🔥 P0-02修复：对齐5m逻辑，返回最新已收盘和上一根已收盘4h，修复HTF滞后问题
+func extract4hOHLCDataFromFiltered(filteredKlines []Kline) (*OHLCData, *OHLCData) {
+	if len(filteredKlines) < 1 {
+		log.Printf("⚠️ [4h OHLC] 经锚点裁剪的K线数据不足")
+		return nil, nil
+	}
+
+	// 最后一根K线 (最新已收盘K线) - 修复off-by-one错误
+	lastIdx := len(filteredKlines) - 1
+	lastClosed := extractOHLCData(filteredKlines[lastIdx])
+	
+	// 上一根K线 (前一根已收盘K线) - 用于对比分析
+	var prevClosed *OHLCData
+	if len(filteredKlines) >= 2 {
+		prevIdx := len(filteredKlines) - 2
+		prevClosed = extractOHLCData(filteredKlines[prevIdx])
+	}
+
+	return lastClosed, prevClosed
 }

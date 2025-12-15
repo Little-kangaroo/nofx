@@ -69,6 +69,21 @@ type Context struct {
 	Performance     interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
 	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
 	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
+	
+	// 🔥 P0-01修复：时间锚点信息 - V13.5要求的trigger_context
+	TimeAnchor      *time.Time              `json:"-"` // 时间锚点，用于数据获取
+	TriggerContext  *TriggerContextInfo     `json:"trigger_context"` // 触发上下文信息
+}
+
+// TriggerContextInfo 触发上下文信息 - V13.5规范要求
+// 🔥 P0-01修复：补齐AI决策必需的时序信息，支持V13.5的紧急模式门槛
+type TriggerContextInfo struct {
+	IsKlineClosed     bool   `json:"is_kline_closed"`      // K线是否已收盘 (true=收盘触发, false=盘中触发)
+	Mode              string `json:"mode"`                 // 触发模式 ("normal", "emergency")  
+	AnchorCloseTime   int64  `json:"anchor_close_time"`    // 锚点收盘时间戳(毫秒)
+	AnchorTimeStr     string `json:"anchor_time_str"`      // 锚点时间字符串(可读)
+	TriggerType       string `json:"trigger_type"`         // 触发类型 ("5m_close", "manual", "scheduled")
+	DataConsistency   string `json:"data_consistency"`     // 数据一致性状态 ("aligned", "mixed", "uncertain")
 }
 
 // Decision AI的交易决策
@@ -96,6 +111,40 @@ type FullDecision struct {
 // GetFullDecision 获取AI的完整交易决策（批量分析所有币种和持仓）
 func GetFullDecision(ctx *Context, mcpClient *mcp.Client) (*FullDecision, error) {
 	return GetFullDecisionWithCustomPrompt(ctx, mcpClient, "", false, "")
+}
+
+// GetFullDecisionWithTimeAnchor 获取AI的完整交易决策（支持时间锚点）
+// 🔥 P0-01修复：传递时间锚点到市场数据获取，确保全链路时间一致性
+func GetFullDecisionWithTimeAnchor(ctx *Context, mcpClient *mcp.Client, anchorTime time.Time) (*FullDecision, error) {
+	// 设置时间锚点和触发上下文
+	ctx.TimeAnchor = &anchorTime
+	ctx.TriggerContext = &TriggerContextInfo{
+		IsKlineClosed:   true,  // 5m收盘触发
+		Mode:            "normal",
+		AnchorCloseTime: anchorTime.UnixMilli(),
+		AnchorTimeStr:   anchorTime.Format("15:04:05.000"),
+		TriggerType:     "5m_close",
+		DataConsistency: "aligned",  // 使用统一锚点，数据对齐
+	}
+	
+	return GetFullDecisionWithCustomPrompt(ctx, mcpClient, "", false, "")
+}
+
+// GetFullDecisionWithCustomPromptAndAnchor 获取AI的完整交易决策（支持自定义prompt和时间锚点）
+// 🔥 P0-01修复：完整版本，同时支持自定义prompt和时间锚点
+func GetFullDecisionWithCustomPromptAndAnchor(ctx *Context, mcpClient *mcp.Client, customPrompt string, overrideBase bool, templateName string, anchorTime time.Time) (*FullDecision, error) {
+	// 设置时间锚点和触发上下文
+	ctx.TimeAnchor = &anchorTime
+	ctx.TriggerContext = &TriggerContextInfo{
+		IsKlineClosed:   true,  // 5m收盘触发
+		Mode:            "normal",
+		AnchorCloseTime: anchorTime.UnixMilli(),
+		AnchorTimeStr:   anchorTime.Format("15:04:05.000"),
+		TriggerType:     "5m_close",
+		DataConsistency: "aligned",  // 使用统一锚点，数据对齐
+	}
+	
+	return GetFullDecisionWithCustomPrompt(ctx, mcpClient, customPrompt, overrideBase, templateName)
 }
 
 // GetFullDecisionWithCustomPrompt 获取AI的完整交易决策（支持自定义prompt和模板选择）
@@ -190,7 +239,17 @@ func fetchMarketDataForContext(ctx *Context) error {
 		log.Printf("🔍 [DEBUG] 正在获取 %s 的市场数据...", symbol)
 		// 单币种K线数据获取耗时统计
 		symbolDataStart := time.Now()
-		data, err := market.Get(symbol)
+		
+		// 🔥 P0-01修复：使用时间锚点获取市场数据，确保全链路时间一致性
+		var data *market.Data
+		var err error
+		if ctx.TimeAnchor != nil {
+			data, err = market.GetWithTimeAnchor(symbol, *ctx.TimeAnchor)
+			log.Printf("🕐 [%s] 使用时间锚点: %v", symbol, ctx.TimeAnchor.Format("15:04:05.000"))
+		} else {
+			data, err = market.Get(symbol)
+		}
+		
 		if err != nil {
 			log.Printf("❌ [ERROR] 获取 %s 市场数据失败: %v", symbol, err)
 			continue

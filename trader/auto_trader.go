@@ -347,27 +347,43 @@ func (at *AutoTrader) Stop() {
 
 // TriggerCycle 被BTCUSDT事件触发的AI分析周期
 func (at *AutoTrader) TriggerCycle() {
+	// 🔥 P0-01修复：兼容旧版本，使用当前时间作为锚点
+	at.TriggerCycleWithTimeAnchor(time.Now())
+}
+
+// TriggerCycleWithTimeAnchor 被BTCUSDT事件触发的AI分析周期（支持时间锚点）
+// 🔥 P0-01修复：接收精确的K线收盘时间锚点，确保数据时间一致性
+func (at *AutoTrader) TriggerCycleWithTimeAnchor(anchorTime time.Time) {
 	if !at.isRunning {
 		return // 如果trader已停止，忽略触发
 	}
 	
 	triggerStart := time.Now()
-	log.Printf("🚀 [%s] BTCUSDT触发AI分析开始: %v", at.id, triggerStart.Format("15:04:05.000"))
+	log.Printf("🚀 [%s] BTCUSDT精确时序触发AI分析开始: %v (锚点: %v)", 
+		at.id, triggerStart.Format("15:04:05.000"), anchorTime.Format("15:04:05.000"))
 	
-	if err := at.runCycle(); err != nil {
-		log.Printf("❌ [%s] BTCUSDT触发的AI分析执行失败: %v", at.id, err)
+	if err := at.runCycleWithTimeAnchor(anchorTime); err != nil {
+		log.Printf("❌ [%s] BTCUSDT精确时序触发的AI分析执行失败: %v", at.id, err)
 	} else {
 		duration := time.Since(triggerStart)
-		log.Printf("✅ [%s] BTCUSDT触发AI分析完成: 耗时 %v", at.id, duration)
+		log.Printf("✅ [%s] BTCUSDT精确时序触发AI分析完成: 耗时 %v", at.id, duration)
 	}
 }
 
 // runCycle 运行一个交易周期（使用AI全权决策）
 func (at *AutoTrader) runCycle() error {
+	// 🔥 P0-01修复：兼容旧版本，使用当前时间作为锚点
+	return at.runCycleWithTimeAnchor(time.Now())
+}
+
+// runCycleWithTimeAnchor 运行一个交易周期（支持时间锚点，使用AI全权决策）
+// 🔥 P0-01修复：接收精确的K线收盘时间锚点，确保数据时间一致性
+func (at *AutoTrader) runCycleWithTimeAnchor(anchorTime time.Time) error {
 	at.callCount++
 
 	log.Printf("%s", "\n" + strings.Repeat("=", 70))
-	log.Printf("⏰ %s - AI决策周期 #%d", time.Now().Format("2006-01-02 15:04:05"), at.callCount)
+	log.Printf("⏰ %s - AI决策周期 #%d (锚点: %v)", 
+		time.Now().Format("2006-01-02 15:04:05"), at.callCount, anchorTime.Format("15:04:05.000"))
 	log.Printf("%s", strings.Repeat("=", 70))
 
 	// 创建决策记录
@@ -443,7 +459,7 @@ func (at *AutoTrader) runCycle() error {
 	aiStart := time.Now()
 	log.Printf("⏰ AI请求开始时间: %v", aiStart.Format("15:04:05.000"))
 	
-	decision, err := decision.GetFullDecisionWithCustomPrompt(ctx, at.mcpClient, at.customPrompt, at.overrideBasePrompt, at.systemPromptTemplate)
+	decision, err := decision.GetFullDecisionWithCustomPromptAndAnchor(ctx, at.mcpClient, at.customPrompt, at.overrideBasePrompt, at.systemPromptTemplate, anchorTime)
 	
 	aiDuration := time.Since(aiStart)
 	log.Printf("🎯 AI请求完成耗时: %v", aiDuration)

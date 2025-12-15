@@ -24,9 +24,19 @@ type VPVRAnalyzer struct {
 }
 
 // NewVPVRAnalyzer 创建新的VPVR分析器
+// 🔥 P0-04修复：使用fallbackVPVRConfig替代被移除的defaultVPVRConfig
 func NewVPVRAnalyzer() *VPVRAnalyzer {
 	return &VPVRAnalyzer{
-		config: defaultVPVRConfig,
+		config: fallbackVPVRConfig, // 使用降级配置，建议通过NewVPVRAnalyzerWithDynamicConfig创建
+		historicalKlines: []Kline{}, // 空的历史数据
+	}
+}
+
+// 🔥 P0-04修复：新增动态配置构造函数，根据ExchangeMeta和timeframe动态构建VPVR配置
+// NewVPVRAnalyzerWithDynamicConfig 使用动态配置创建VPVR分析器（推荐方式）
+func NewVPVRAnalyzerWithDynamicConfig(exchangeMeta *ExchangeMeta, timeframe string) *VPVRAnalyzer {
+	return &VPVRAnalyzer{
+		config: GetDynamicVPVRConfig(exchangeMeta, timeframe), // 使用动态配置避免硬编码扭曲
 		historicalKlines: []Kline{}, // 空的历史数据
 	}
 }
@@ -88,7 +98,12 @@ func (va *VPVRAnalyzer) Analyze(klines []Kline) *VolumeProfile {
 	// 标记价值区域内的级别
 	va.markValueAreaLevels(levels, val, vah)
 
-	return &VolumeProfile{
+	// 🔧 Task 7: 修复动态TickSize调整导致的数据抖动问题
+	// 使用稳定的TickSize计算策略
+	stabilizedTickSize := va.calculateStabilizedTickSize(minPrice, maxPrice, klines)
+
+	// 🔥 P0-04修复：构建VolumeProfile时添加配置标注，便于复盘和一致性校验
+	volumeProfile := &VolumeProfile{
 		POC:       poc,
 		VAH:       vah,
 		VAL:       val,
@@ -96,7 +111,12 @@ func (va *VPVRAnalyzer) Analyze(klines []Kline) *VolumeProfile {
 		Levels:    levels,
 		Config:    &va.config,
 		Stats:     stats,
+		// 🔥 P0-04修复：明确标注实际使用的配置参数
+		UsedTimeFrame: va.config.TimeFrame,        // 实际使用的时间框架
+		UsedTickSize:  stabilizedTickSize,         // 实际使用的tick_size（可能经过动态调整）
 	}
+
+	return volumeProfile
 }
 
 // calculatePriceLevels 计算每个价格级别的成交量
