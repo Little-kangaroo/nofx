@@ -98,6 +98,9 @@ func (va *VPVRAnalyzer) Analyze(klines []Kline) *VolumeProfile {
 	// 标记价值区域内的级别
 	va.markValueAreaLevels(levels, val, vah)
 
+	// 确定价格范围
+	minPrice, maxPrice := va.findPriceRange(klines)
+
 	// 🔧 Task 7: 修复动态TickSize调整导致的数据抖动问题
 	// 使用稳定的TickSize计算策略
 	stabilizedTickSize := va.calculateStabilizedTickSize(minPrice, maxPrice, klines)

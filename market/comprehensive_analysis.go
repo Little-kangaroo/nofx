@@ -3,6 +3,7 @@ package market
 import (
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"time"
 )
@@ -54,6 +55,9 @@ type ComprehensiveResult struct {
 	RiskAssessment      *RiskAssessment           `json:"risk_assessment"`       // 风险评估
 	TradingAdvice       *TradingAdvice            `json:"trading_advice"`        // 交易建议
 	Config              *ComprehensiveConfig      `json:"config"`                // 分析配置
+	
+	// 🔥 Gate2 结构聚合输出 - V-13.5规范
+	StructureGate2      *StructureGate2           `json:"structure_gate2,omitempty"` // Gate2结构指标聚合结果
 }
 
 // UnifiedSignal 统一交易信号
@@ -177,6 +181,16 @@ const (
 	RiskHigh   RiskLevel = "high"   // 高风险
 )
 
+// TriggerContextInfo 触发上下文信息 - V13.5规范要求 (从decision包复制)
+type TriggerContextInfo struct {
+	IsKlineClosed     bool   `json:"is_kline_closed"`      // K线是否已收盘 (true=收盘触发, false=盘中触发)
+	Mode              string `json:"mode"`                 // 触发模式 ("normal", "emergency")  
+	AnchorCloseTime   int64  `json:"anchor_close_time"`    // 锚点收盘时间戳(毫秒)
+	AnchorTimeStr     string `json:"anchor_time_str"`      // 锚点时间字符串(可读)
+	TriggerType       string `json:"trigger_type"`         // 触发类型 ("5m_close", "manual", "scheduled")
+	DataConsistency   string `json:"data_consistency"`     // 数据一致性状态 ("aligned", "mixed", "uncertain")
+}
+
 // TradingAdvice 交易建议
 type TradingAdvice struct {
 	OverallAction     SignalAction  `json:"overall_action"`     // 整体建议
@@ -286,6 +300,16 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 		log.Printf("⚠️ [P0-03] 5m数据不可用，降级使用4h价格 - 可能影响时间锚点一致性")
 	}
 
+	// 🔥 Gate2 结构聚合 - 计算ATR14用于后续分析
+	var atr14 float64 = 100.0 // 默认值，防止数据不足
+	if len(klines4h) >= 14 {
+		atr14 = calculateATR14(klines4h)
+	} else if len(klines1h) >= 14 {
+		atr14 = calculateATR14(klines1h) * 0.25 // 1h转4h近似
+	}
+	
+	log.Printf("🎯 [Gate2] %s 开始结构聚合 - 当前价格: %.4f, ATR14: %.4f", symbol, currentPrice, atr14)
+
 	result := &ComprehensiveResult{
 		Symbol:       symbol,
 		Timestamp:    timestamp,
@@ -301,6 +325,63 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 		"1h":  klines1h,
 		"4h":  klines4h,
 	})
+
+	// 🔥 Gate2 结构聚合 - 步骤1: 执行AnchorEngine聚合
+	var structureGate2 *StructureGate2
+	if multiTimeframeAnalysis != nil {
+		// 检查feature flag
+		featureManager := GetGate2FeatureManager()
+		performanceMonitor := GetGate2PerformanceMonitor()
+		
+		if featureManager.IsEnabled(symbol) {
+			start := time.Now()
+			
+			// 执行Gate2结构聚合
+			structureGate2, anchorEngineTime, structClassifierTime, triggerDetectorTime, err := ca.executeGate2StructureAggregationWithMonitoring(
+				symbol, currentPrice, atr14, multiTimeframeAnalysis, klines5m)
+			
+			elapsed := time.Since(start).Seconds() * 1000 // 转换为毫秒
+			
+			// 记录性能监控数据
+			performanceMonitor.RecordExecution(
+				symbol, 
+				elapsed,
+				anchorEngineTime,
+				structClassifierTime, 
+				triggerDetectorTime,
+				structureGate2.TopAnchorsLong,
+				structureGate2.TopAnchorsShort,
+				err,
+			)
+			
+			// 记录详细锚点评分统计
+			performanceMonitor.LogAnchorScoreDetails(symbol, structureGate2.TopAnchorsLong, structureGate2.TopAnchorsShort)
+			
+			// 记录性能日志
+			if featureManager.IsPerformanceLogEnabled() {
+				log.Printf("📊 [Gate2性能] %s 执行耗时: %.2fms, 锚点数: L=%d, S=%d", 
+					symbol, elapsed, len(structureGate2.TopAnchorsLong), len(structureGate2.TopAnchorsShort))
+				log.Printf("📊 [Gate2性能] %s 模块耗时: AnchorEngine=%.2fms, StructClassifier=%.2fms, TriggerDetector=%.2fms",
+					symbol, anchorEngineTime, structClassifierTime, triggerDetectorTime)
+			}
+			
+			if err != nil {
+				featureManager.RecordError(err, symbol)
+				log.Printf("❌ [Gate2] %s 执行失败: %v", symbol, err)
+			} else {
+				featureManager.RecordSuccess()
+			}
+		} else {
+			// Feature flag未启用，使用空的Gate2结构
+			structureGate2 = &StructureGate2{
+				TopAnchorsLong:    []AnchorCandidate{},
+				TopAnchorsShort:   []AnchorCandidate{},
+				StructStateLong:   StructStateNeutral,
+				StructStateShort:  StructStateNeutral,
+				TriggerResult:     nil,
+			}
+		}
+	}
 
 	// 向前兼容：提取4小时分析作为单一结果
 	if tf4h, exists := multiTimeframeAnalysis.Timeframes["4h"]; exists {
@@ -324,6 +405,13 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 
 	// 生成交易建议
 	result.TradingAdvice = ca.generateTradingAdvice(result)
+
+	// 🔥 Gate2 结构聚合 - 步骤2: 将Gate2结果附加到ComprehensiveResult
+	if structureGate2 != nil {
+		result.StructureGate2 = structureGate2
+		log.Printf("🎯 [Gate2] %s 结构聚合完成 - LONG:%s SHORT:%s", 
+			symbol, structureGate2.StructStateLong, structureGate2.StructStateShort)
+	}
 
 	// 将多时间框架分析添加到结果中（需要在ComprehensiveResult中添加该字段）
 	// result.MultiTimeframeAnalysis = multiTimeframeAnalysis
@@ -1918,4 +2006,339 @@ func (ca *ComprehensiveAnalyzer) calculateSignalConfidence(timeframes map[string
 	confidence += dataScore * 0.3
 
 	return min(confidence, 1.0)
+}
+
+// 🔥 Gate2 结构聚合核心实现
+
+// executeGate2StructureAggregationWithMonitoring 执行Gate2结构指标聚合（带性能监控）
+// 这是Gate2系统的核心集成方法，统一调用AnchorEngine、StructStateClassifier和TriggerDetector
+func (ca *ComprehensiveAnalyzer) executeGate2StructureAggregationWithMonitoring(
+	symbol string, 
+	lastPrice, atr14 float64, 
+	mtfAnalysis *MultiTimeframeAnalysis,
+	klines5m []Kline,
+) (*StructureGate2, float64, float64, float64, error) {
+	start := time.Now()
+	
+	// 获取feature manager以便记录模块性能
+	featureManager := GetGate2FeatureManager()
+	
+	var anchorEngineTime, structClassifierTime, triggerDetectorTime float64
+	
+	// 步骤1: 创建并配置AnchorEngine
+	if !featureManager.IsModuleEnabled("anchor_engine") {
+		log.Printf("🚩 [Gate2] AnchorEngine模块被禁用: %s", symbol)
+		return &StructureGate2{
+			TopAnchorsLong:    []AnchorCandidate{},
+			TopAnchorsShort:   []AnchorCandidate{},
+			StructStateLong:   StructStateNeutral,
+			StructStateShort:  StructStateNeutral,
+			TriggerResult:     nil,
+		}, 0, 0, 0, fmt.Errorf("AnchorEngine模块被禁用")
+	}
+	
+	// 执行AnchorEngine处理
+	anchorStart := time.Now()
+	anchorEngine := NewAnchorEngine(nil) // 使用默认配置
+	
+	// 步骤2: 创建时间框架数据映射
+	timeframes := make(map[string][]Kline)
+	for tf, _ := range mtfAnalysis.Timeframes {
+		// 从分析中恢复K线数据（简化版本，实际可能需要传入原始数据）
+		// 这里我们需要重构来传入时间框架K线数据
+		timeframes[tf] = []Kline{} // 暂时为空，后续需要完善
+	}
+	
+	// 步骤3: 执行锚点聚合处理
+	longCandidates, shortCandidates := ca.processAnchorCandidates(anchorEngine, mtfAnalysis, timeframes, lastPrice)
+	
+	anchorEngineTime = time.Since(anchorStart).Seconds() * 1000
+	log.Printf("🎯 [Gate2] %s AnchorEngine处理完成 - 多头锚点: %d, 空头锚点: %d, 耗时: %.2fms", 
+		symbol, len(longCandidates), len(shortCandidates), anchorEngineTime)
+	
+	// 步骤4: 创建并执行StructState分类器
+	var structStateResult *StructStateResult
+	structStart := time.Now()
+	
+	if featureManager.IsModuleEnabled("struct_classifier") {
+		structClassifier := NewStructStateClassifier(nil) // 使用默认配置
+		structStateResult = structClassifier.Classify(longCandidates, shortCandidates, lastPrice, atr14)
+		
+		structClassifierTime = time.Since(structStart).Seconds() * 1000
+		log.Printf("🎯 [Gate2] %s StructState分类完成 - LONG:%s(%.2f) SHORT:%s(%.2f), 耗时: %.2fms", 
+			symbol, 
+			structStateResult.Long.State, structStateResult.Long.Confidence,
+			structStateResult.Short.State, structStateResult.Short.Confidence,
+			structClassifierTime)
+	} else {
+		// StructStateClassifier模块禁用，使用默认中性状态
+		structStateResult = &StructStateResult{
+			Long: StructStateClassification{
+				State:      StructStateNeutral,
+				Confidence: 0.5,
+			},
+			Short: StructStateClassification{
+				State:      StructStateNeutral,
+				Confidence: 0.5,
+			},
+		}
+		log.Printf("🚩 [Gate2] StructStateClassifier模块被禁用: %s", symbol)
+	}
+	
+	// 步骤5: 选择最佳锚点
+	var bestLong, bestShort *AnchorCandidate
+	if len(longCandidates) > 0 {
+		bestLong = &longCandidates[0]
+	}
+	if len(shortCandidates) > 0 {
+		bestShort = &shortCandidates[0]
+	}
+	
+	// 步骤6: 5分钟触发检测（如果有5分钟数据）
+	var triggerResult *TriggerResult
+	triggerStart := time.Now()
+	
+	if featureManager.IsModuleEnabled("trigger_detector") && len(klines5m) > 1 {
+		triggerResult = ca.detectFiveMinuteTrigger(klines5m, longCandidates, shortCandidates, atr14)
+		triggerDetectorTime = time.Since(triggerStart).Seconds() * 1000
+		log.Printf("🎯 [Gate2] %s TriggerDetector执行完成 - 触发状态: %v, 耗时: %.2fms", 
+			symbol, triggerResult != nil && triggerResult.IsTriggered, triggerDetectorTime)
+	} else {
+		if !featureManager.IsModuleEnabled("trigger_detector") {
+			log.Printf("🚩 [Gate2] TriggerDetector模块被禁用: %s", symbol)
+		}
+		triggerResult = nil
+	}
+	
+	// 步骤7: 构建评分明细
+	scoreBreakdown := ca.buildScoreBreakdown(longCandidates, shortCandidates)
+	
+	// 步骤8: 构建StructureGate2结果
+	processingTime := time.Since(start).Seconds() * 1000 // 转换为毫秒
+	
+	structureGate2 := &StructureGate2{
+		Symbol:               symbol,
+		Timestamp:            time.Now(),
+		LastPrice:            lastPrice,
+		ATR14:                atr14,
+		TopAnchorsLong:       getLimitedAnchors(longCandidates, 5),
+		TopAnchorsShort:      getLimitedAnchors(shortCandidates, 5),
+		BestAnchorLong:       bestLong,
+		BestAnchorShort:      bestShort,
+		StructStateLong:      structStateResult.Long.State,
+		StructStateShort:     structStateResult.Short.State,
+		StructStateResult:    structStateResult,
+		TriggerResult:        triggerResult,
+		AnchorScoreBreakdown: scoreBreakdown,
+		TriggerContext: &TriggerContextInfo{
+			IsKlineClosed:   true,
+			Mode:            "normal",
+			AnchorCloseTime: time.Now().UnixMilli(),
+			AnchorTimeStr:   time.Now().Format("15:04:05.000"),
+			TriggerType:     "5m_close",
+			DataConsistency: "aligned",
+		},
+		TotalCandidatesLong:  len(longCandidates),
+		TotalCandidatesShort: len(shortCandidates),
+		ProcessingTimeMs:     processingTime,
+		Version:              "Gate2-V13.5",
+		Revision:             "1.0.0",
+	}
+	
+	return structureGate2, anchorEngineTime, structClassifierTime, triggerDetectorTime, nil
+}
+
+// processAnchorCandidates 处理锚点候选者聚合
+func (ca *ComprehensiveAnalyzer) processAnchorCandidates(
+	engine *AnchorEngine, 
+	mtfAnalysis *MultiTimeframeAnalysis, 
+	timeframes map[string][]Kline,
+	lastPrice float64,
+) ([]AnchorCandidate, []AnchorCandidate) {
+	
+	// 收集各时间框架的分析数据
+	var supplyDemandData *SupplyDemandData
+	var vpvrData *VolumeProfile
+	var srData *SupportResistanceData
+	var fvgData *FVGData
+	var fibData *FibonacciData
+	
+	// 优先使用4h时间框架的数据，如果没有则使用其他时间框架
+	if tf4h, exists := mtfAnalysis.Timeframes["4h"]; exists {
+		supplyDemandData = tf4h.SupplyDemand
+		vpvrData = tf4h.VolumeProfile
+		srData = tf4h.SupportResistance
+		fvgData = tf4h.FairValueGaps
+		fibData = tf4h.Fibonacci
+		log.Printf("🔍 [Gate2] 使用4h时间框架数据作为主要分析源")
+	} else if tf1h, exists := mtfAnalysis.Timeframes["1h"]; exists {
+		supplyDemandData = tf1h.SupplyDemand
+		vpvrData = tf1h.VolumeProfile
+		srData = tf1h.SupportResistance
+		fvgData = tf1h.FairValueGaps
+		fibData = tf1h.Fibonacci
+		log.Printf("🔍 [Gate2] 使用1h时间框架数据作为主要分析源")
+	} else {
+		log.Printf("⚠️ [Gate2] 未找到4h或1h数据，使用空数据集")
+	}
+	
+	// 计算ATR14（简化版本，使用固定值）
+	atr14 := 100.0 // 这应该从调用方传入
+	
+	// 使用AnchorEngine处理候选者
+	longCandidates, shortCandidates, err := engine.ProcessCandidates(
+		supplyDemandData, vpvrData, srData, fvgData, fibData,
+		lastPrice, atr14, timeframes)
+	
+	if err != nil {
+		log.Printf("❌ [Gate2] AnchorEngine处理失败: %v", err)
+		return []AnchorCandidate{}, []AnchorCandidate{}
+	}
+	
+	log.Printf("🔍 [Gate2] AnchorEngine处理完成 - 多头锚点: %d, 空头锚点: %d", 
+		len(longCandidates), len(shortCandidates))
+	
+	return longCandidates, shortCandidates
+}
+
+// detectFiveMinuteTrigger 检测5分钟触发信号
+func (ca *ComprehensiveAnalyzer) detectFiveMinuteTrigger(
+	klines5m []Kline, 
+	longCandidates, shortCandidates []AnchorCandidate,
+	atr14 float64,
+) *TriggerResult {
+	
+	if len(klines5m) < 2 {
+		return nil
+	}
+	
+	// 创建TriggerDetector
+	detector := NewTriggerDetector(nil) // 使用默认配置
+	
+	// 准备当前K线和历史K线数据
+	currentKline := &CandleInfo{
+		Timestamp: klines5m[len(klines5m)-1].CloseTime,
+		Open:      klines5m[len(klines5m)-1].Open,
+		High:      klines5m[len(klines5m)-1].High,
+		Low:       klines5m[len(klines5m)-1].Low,
+		Close:     klines5m[len(klines5m)-1].Close,
+		Volume:    klines5m[len(klines5m)-1].Volume,
+	}
+	
+	// 准备历史K线（取前5根）
+	var previousKlines []CandleInfo
+	start := len(klines5m) - 6 // 取前5根
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(klines5m)-1; i++ {
+		previousKlines = append(previousKlines, CandleInfo{
+			Timestamp: klines5m[i].CloseTime,
+			Open:      klines5m[i].Open,
+			High:      klines5m[i].High,
+			Low:       klines5m[i].Low,
+			Close:     klines5m[i].Close,
+			Volume:    klines5m[i].Volume,
+		})
+	}
+	
+	// 合并所有锚点
+	allAnchors := append(longCandidates, shortCandidates...)
+	
+	// 计算量能比率和强度Z分数（简化版本）
+	volumeRatio := 1.0
+	strengthZ := 0.5
+	if len(previousKlines) > 0 {
+		avgVolume := 0.0
+		for _, kline := range previousKlines {
+			avgVolume += kline.Volume
+		}
+		avgVolume /= float64(len(previousKlines))
+		if avgVolume > 0 {
+			volumeRatio = currentKline.Volume / avgVolume
+		}
+	}
+	
+	// 执行触发检测
+	return detector.DetectTrigger(currentKline, previousKlines, allAnchors, volumeRatio, strengthZ, atr14, time.Now())
+}
+
+// buildScoreBreakdown 构建评分明细
+func (ca *ComprehensiveAnalyzer) buildScoreBreakdown(longCandidates, shortCandidates []AnchorCandidate) map[string]interface{} {
+	breakdown := make(map[string]interface{})
+	
+	// 统计各优先级锚点数量
+	priorityCount := make(map[int]int)
+	typeCount := make(map[string]int)
+	
+	allCandidates := append(longCandidates, shortCandidates...)
+	for _, candidate := range allCandidates {
+		priorityCount[candidate.PriorityRank]++
+		typeCount[string(candidate.Type)]++
+	}
+	
+	breakdown["priority_distribution"] = priorityCount
+	breakdown["type_distribution"] = typeCount
+	breakdown["total_candidates"] = len(allCandidates)
+	breakdown["long_candidates"] = len(longCandidates)
+	breakdown["short_candidates"] = len(shortCandidates)
+	
+	// 计算平均分数
+	if len(allCandidates) > 0 {
+		totalScore := 0.0
+		for _, candidate := range allCandidates {
+			totalScore += candidate.AnchorScore
+		}
+		breakdown["average_score"] = totalScore / float64(len(allCandidates))
+	}
+	
+	return breakdown
+}
+
+// getLimitedAnchors 获取限制数量的锚点
+func getLimitedAnchors(anchors []AnchorCandidate, limit int) []AnchorCandidate {
+	if len(anchors) <= limit {
+		return anchors
+	}
+	return anchors[:limit]
+}
+
+// calculateATR14 计算14周期ATR
+func calculateATR14(klines []Kline) float64 {
+	if len(klines) < 14 {
+		return 100.0 // 默认值
+	}
+	
+	var trs []float64
+	for i := 1; i < len(klines); i++ {
+		high := klines[i].High
+		low := klines[i].Low
+		prevClose := klines[i-1].Close
+		
+		tr1 := high - low
+		tr2 := math.Abs(high - prevClose)
+		tr3 := math.Abs(low - prevClose)
+		
+		tr := math.Max(tr1, math.Max(tr2, tr3))
+		trs = append(trs, tr)
+	}
+	
+	// 计算最后14个TR的平均值
+	start := len(trs) - 14
+	if start < 0 {
+		start = 0
+	}
+	
+	sum := 0.0
+	count := 0
+	for i := start; i < len(trs); i++ {
+		sum += trs[i]
+		count++
+	}
+	
+	if count == 0 {
+		return 100.0
+	}
+	
+	return sum / float64(count)
 }

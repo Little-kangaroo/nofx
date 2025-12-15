@@ -141,6 +141,8 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 	advancedAnalysisStart := time.Now()
 	// 多时间框架综合分析（包括道氏理论、VPVR、供需区、FVG、斐波纳契、通道分析）
 	// 🔥 P0-04修复：使用支持ExchangeMeta的综合分析器，实现动态VPVR配置
+	// 这里暂时使用nil，后续可以根据symbol获取ExchangeMeta
+	var exchangeMeta *ExchangeMeta = nil // 默认使用fallback配置
 	comprehensiveAnalyzer := NewComprehensiveAnalyzerWithExchange(exchangeMeta, nil)
 	comprehensiveResult := comprehensiveAnalyzer.AnalyzeMultiTimeframe(symbol, klines5m, klines15m, klines30m, klines1h, klines4h)
 
@@ -173,7 +175,7 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 
 	// 🔥 P0-04修复：填充ExchangeMeta字段，支持动态VPVR配置
 	// 根据symbol推断交易所元数据（tick_size、lot_size等）
-	exchangeMeta := &ExchangeMeta{
+	exchangeMeta = &ExchangeMeta{
 		Symbol:   symbol,
 		TickSize: getSmartTickSizeBySymbol(symbol), // 智能推断tick_size
 		LotSize:  1.0, // 默认lot_size为1.0，实际可根据交易所规则调整
@@ -214,6 +216,9 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 		SupplyDemand:    comprehensiveResult.SupplyDemand,
 		FairValueGaps:   comprehensiveResult.FairValueGaps,
 		Fibonacci:       comprehensiveResult.Fibonacci,
+		
+		// 🔥 Gate2 结构聚合输出 - V-13.5规范
+		StructureGate2:  comprehensiveResult.StructureGate2,
 		
 		// 🔥 P0-03修复：缓存K线数据，避免FormatAsCompactData二次获取导致数据漂移
 		KlineCache: map[string][]Kline{
@@ -819,6 +824,7 @@ func FormatAsCompactData(data *Data) string {
 			"基础指标":       calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
 			"订单流分析":     GetOrderFlowDataForAIV2(data.Symbol),
+			"Gate2结构聚合": buildGate2CompactOutput(data),
 		},
 	}
 
@@ -3370,4 +3376,186 @@ func extract4hOHLCDataFromFiltered(filteredKlines []Kline) (*OHLCData, *OHLCData
 	}
 
 	return lastClosed, prevClosed
+}
+
+// ===== Gate2结构聚合AI输出函数 =====
+
+// buildGate2CompactOutput 构建Gate2结构聚合的AI友好输出
+// 🔥 功能：将Gate2聚合结果格式化为AI易于理解的结构化输出
+func buildGate2CompactOutput(data *Data) map[string]interface{} {
+	if data.StructureGate2 == nil {
+		return map[string]interface{}{
+			"status":                "disabled",
+			"struct_state_long":     "UNKNOWN",
+			"struct_state_short":    "UNKNOWN",
+			"best_anchor_long":      nil,
+			"best_anchor_short":     nil,
+			"top_anchors_long":      []interface{}{},
+			"top_anchors_short":     []interface{}{},
+			"anchor_score_breakdown": map[string]interface{}{},
+			"trigger_context":       map[string]interface{}{
+				"is_triggered": false,
+				"trigger_time": time.Now().Format("15:04:05"),
+				"time_anchor": "5m_close_aligned",
+			},
+		}
+	}
+
+	result := map[string]interface{}{
+		"status": "active",
+		
+		// 🔥 V-13.5统一价格字段 (避免双契约)
+		"last_price": FormatByDataTypeAndSymbol(data.LastPrice, "price", data.Symbol),
+		
+		// 🔥 结构状态输出
+		"struct_state_long":  data.StructureGate2.StructStateLong,
+		"struct_state_short": data.StructureGate2.StructStateShort,
+		
+		// 🔥 最优锚点输出
+		"best_anchor_long":  buildBestAnchorOutput(data.StructureGate2.TopAnchorsLong, data.Symbol),
+		"best_anchor_short": buildBestAnchorOutput(data.StructureGate2.TopAnchorsShort, data.Symbol),
+		
+		// 🔥 前3-5个锚点输出
+		"top_anchors_long":  buildTopAnchorsOutput(data.StructureGate2.TopAnchorsLong, data.Symbol, 3),
+		"top_anchors_short": buildTopAnchorsOutput(data.StructureGate2.TopAnchorsShort, data.Symbol, 3),
+		
+		// 🔥 锚点评分breakdown
+		"anchor_score_breakdown": buildAnchorScoreBreakdown(data.StructureGate2),
+		
+		// 🔥 触发上下文
+		"trigger_context": map[string]interface{}{
+			"is_triggered":    data.StructureGate2.TriggerResult != nil && data.StructureGate2.TriggerResult.IsTriggered,
+			"trigger_time":    time.Now().Format("15:04:05"),
+			"time_anchor":     "5m_close_aligned",
+			"trigger_details": func() interface{} {
+				if data.StructureGate2.TriggerResult != nil && data.StructureGate2.TriggerResult.IsTriggered {
+					return map[string]interface{}{
+						"direction":   data.StructureGate2.TriggerResult.Direction,
+						"trigger_type": data.StructureGate2.TriggerResult.TriggerType,
+						"confidence":  FormatByDataTypeAndSymbol(data.StructureGate2.TriggerResult.Confidence, "confidence", data.Symbol),
+						"anchor_triggered": func() interface{} {
+							if data.StructureGate2.TriggerResult.TriggeredAnchor != nil {
+								return buildSingleAnchorOutput(*data.StructureGate2.TriggerResult.TriggeredAnchor, data.Symbol)
+							}
+							return nil
+						}(),
+					}
+				}
+				return nil
+			}(),
+		},
+	}
+	
+	return result
+}
+
+// buildBestAnchorOutput 构建最优锚点输出
+func buildBestAnchorOutput(anchors []AnchorCandidate, symbol string) interface{} {
+	if len(anchors) == 0 {
+		return nil
+	}
+	
+	// 返回排序后的第一个（最优）锚点
+	bestAnchor := anchors[0]
+	return buildSingleAnchorOutput(bestAnchor, symbol)
+}
+
+// buildTopAnchorsOutput 构建前N个锚点输出
+func buildTopAnchorsOutput(anchors []AnchorCandidate, symbol string, maxCount int) []interface{} {
+	result := make([]interface{}, 0, maxCount)
+	
+	count := len(anchors)
+	if count > maxCount {
+		count = maxCount
+	}
+	
+	for i := 0; i < count; i++ {
+		anchorOutput := buildSingleAnchorOutput(anchors[i], symbol)
+		result = append(result, anchorOutput)
+	}
+	
+	return result
+}
+
+// buildSingleAnchorOutput 构建单个锚点输出
+func buildSingleAnchorOutput(anchor AnchorCandidate, symbol string) map[string]interface{} {
+	// 计算ATR归一化距离（如果需要的话，从Meta中获取或计算）
+	var distanceATR float64
+	if meta := anchor.Meta; meta != nil {
+		if val, exists := meta["distance_atr"]; exists {
+			if f, ok := val.(float64); ok {
+				distanceATR = f
+			}
+		}
+	}
+	
+	return map[string]interface{}{
+		"type":           anchor.Type,
+		"timeframe":      anchor.TF,
+		"level":          FormatByDataTypeAndSymbol(anchor.Level, "price", symbol),
+		"direction":      anchor.Dir,
+		"priority_rank":  anchor.PriorityRank,
+		"anchor_score":   FormatByDataTypeAndSymbol(anchor.AnchorScore, "ratio", symbol),
+		"distance_atr":   FormatByDataTypeAndSymbol(distanceATR, "ratio", symbol),
+		"strength_z":     func() interface{} {
+			if anchor.StrengthZ != nil {
+				return FormatByDataTypeAndSymbol(*anchor.StrengthZ, "ratio", symbol)
+			}
+			return nil
+		}(),
+		"vol_ratio":      func() interface{} {
+			if anchor.VolRatio != nil {
+				return FormatByDataTypeAndSymbol(*anchor.VolRatio, "ratio", symbol)
+			}
+			return nil
+		}(),
+		"is_fresh":       anchor.IsFresh,
+		"score_breakdown": func() interface{} {
+			if meta := anchor.Meta; meta != nil {
+				if breakdown, exists := meta["score_breakdown"]; exists {
+					return breakdown
+				}
+			}
+			return nil
+		}(),
+	}
+}
+
+// buildAnchorScoreBreakdown 构建锚点评分breakdown
+func buildAnchorScoreBreakdown(gate2 *StructureGate2) map[string]interface{} {
+	result := map[string]interface{}{
+		"long_anchors_count":  len(gate2.TopAnchorsLong),
+		"short_anchors_count": len(gate2.TopAnchorsShort),
+		"total_anchors":       len(gate2.TopAnchorsLong) + len(gate2.TopAnchorsShort),
+	}
+	
+	// 添加最优锚点的详细breakdown（从Meta中获取）
+	if len(gate2.TopAnchorsLong) > 0 {
+		if meta := gate2.TopAnchorsLong[0].Meta; meta != nil {
+			if breakdown, exists := meta["score_breakdown"]; exists {
+				result["best_long_breakdown"] = breakdown
+			}
+		}
+	}
+	
+	if len(gate2.TopAnchorsShort) > 0 {
+		if meta := gate2.TopAnchorsShort[0].Meta; meta != nil {
+			if breakdown, exists := meta["score_breakdown"]; exists {
+				result["best_short_breakdown"] = breakdown
+			}
+		}
+	}
+	
+	// 添加优先级分布统计
+	priorityStats := make(map[string]int)
+	allAnchors := append(gate2.TopAnchorsLong, gate2.TopAnchorsShort...)
+	
+	for _, anchor := range allAnchors {
+		priorityKey := fmt.Sprintf("P%d", anchor.PriorityRank)
+		priorityStats[priorityKey]++
+	}
+	
+	result["priority_distribution"] = priorityStats
+	
+	return result
 }

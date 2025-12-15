@@ -59,6 +59,9 @@ type Data struct {
 	FairValueGaps     *FVGData // 公平价值缺口数据
 	Fibonacci         *FibonacciData // 斐波纳契分析数据
 	
+	// 🔥 Gate2 结构聚合输出 - V-13.5规范
+	StructureGate2    *StructureGate2 `json:"structure_gate2,omitempty"` // Gate2结构指标聚合结果
+	
 	// === 市场联动性分析（BTC相关性） ===
 	MarketContext     *MarketContextData // 市场上下文分析数据
 	
@@ -1340,6 +1343,20 @@ const (
 	TrendDownward
 	TrendSideways
 )
+
+// String 返回TrendType的字符串表示
+func (t TrendType) String() string {
+	switch t {
+	case TrendUpward:
+		return "upward"
+	case TrendDownward:
+		return "downward"
+	case TrendSideways:
+		return "sideways"
+	default:
+		return "unknown"
+	}
+}
 
 // FibQuality 斐波质量
 const (
