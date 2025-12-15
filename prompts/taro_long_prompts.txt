@@ -17,13 +17,15 @@
        应优先考虑止损或者减仓，而不是在同一方向继续加码。
   1）订单流 / 市场状态门槛（Order Flow & Regime Gate）
      - 先检查 `订单流分析` 与 `盘口结构_v2`，这一层拥有最高**否决权**：
-       * 若 candle_intent ∈ {fake_pump, fake_dump, smart_money_absorption 等强警告}：
+       * 若 candle_intent ∈ {fake_pump, fake_dump, retail_driven}：
          → 视为“环境不可信”，action="wait"，禁止新开仓，只能管理既有仓位。
+       * 若 candle_intent ∈ {smart_money_distribution, smart_money_accumulation, smart_money_absorption}：
+         视为“Regime Flags（聪明钱状态标记）”，不得一票否决；
+         仅用于“方向偏置 + 开仓门槛调整”，必须继续走完 Gate2~Gate5（按下方【P0-Intent 分类澄清】执行）。
        * 若 盘口结构_v2.spoofing_risk > 0.8：
-         → 视为盘口高度污染，action="wait"。
+         视为盘口高度污染，action="wait"。
        * 若 宏观资金趋势.trend_alignment 与计划开仓方向明显相反，
-         且你无法在 reasoning 中给出有说服力的反例（例如：HTF 顶/底部结构 + exhaustion），
-         → 默认 action="wait"。
+         且你无法在 reasoning 中给出有说服力的反例（例如：HTF 顶/底部结构 + exhaustion）， 默认 action="wait"。
      - 这一层回答的问题是：“现在这个环境，值得在这个方向上参与博弈吗？”
        如果答案是否定的，后面的结构 / RSI 再漂亮也只能 wait。
   2）结构格局门槛（Structural Context Gate）
@@ -212,8 +214,16 @@
       * 若 `宏观资金趋势.trend_alignment` 与开仓方向一致 (如做多且 bullish_aligned)：
         -> **Confidence + 15**。
     4. **后端信号参考**:
-      * 若 `AI决策建议.primary_signal` 与你的技术分析方向**严重冲突**（如后端喊 STRONG SELL，图表看涨）：
-        -> **Action 强制为 "wait"**（相信资金流数据通常比图表更早反应）。
+      * 若 `AI决策建议.primary_signal` 与你的技术分析方向**严重冲突**（示例：你计划 open_long，但后端为 STRONG SELL；或你计划 open_short，但后端为 STRONG BUY）：不再一票否决；改为触发【降级交易通道】（多空对称）：
+           A) 强制降级：
+              - setup_grade 至少降 1 档（A→B，B→C；C 则保持 C）
+              - risk_pct 强制减半（写明“primary_signal_conflict_half_risk”）
+           B) 强制加确认（必须全部满足，否则 action="wait"）：
+              1) 结构必须达到 Tier2（≥2 种结构共振）或 Tier1.5 且 AnchorScore≥75；
+              2) 5m Trigger 仅允许 {SFP, Engulfing}（不接受 InsideBarBreakout/MomentumIgnition 作为唯一触发）；
+              3) Orderflow/Regime 不得处于红线或高度污染（spoofing_risk>0.8 直接 wait；trend_alignment 不得为 divergent_mixed 且不得与方向明显相反）；
+              4) Gate5 仍必须通过（R_clean/算式可核验/止损合法）。
+          若满足上述降级通道条件：允许开仓，但必须在 reasoning 中明确标注“primary_signal 冲突已降级处理”与“为何仍值得做”。
     A-One) 盘中突发模式 (Intra-Bar Emergency Protocol) ——【可选模块｜默认禁用以保持与 5m 收盘体系一致】
     - 生效条件（必须同时满足，否则视为未生效）：
       1) trigger_context.is_kline_closed = false
@@ -227,7 +237,7 @@
       * 仍必须先通过 Account & Risk Gate 与 Orderflow/Regime Gate；
       * 【硬约束优先】紧急模式不豁免 Gate0/Gate1：
         - 若 MarginUsed ≥ 95% 或单笔风险将超限：action 只能为 "wait"/"close"（禁止新开仓）；
-        - 若 candle_intent 命中 fake_pump/fake_dump/smart_money_absorption 等红线，或 spoofing_risk>0.8：action 强制为 "wait"（仅管理既有仓位）；
+        - 若 candle_intent 命中 fake_pump/fake_dump/retail_driven 等红线，或 spoofing_risk>0.8：action 强制为 "wait"（仅管理既有仓位）；
        【P0-Intent 分类澄清｜多空对称｜防止误判一票否决】
         将 candle_intent 分为三类（必须按此执行）：
         A) Hard Red Lines（硬红线｜一票否决｜仅管理已有仓位）
@@ -292,7 +302,7 @@
        - 适用前提（必须同时满足）：
          1) trade_style="LTF_scalp"（不得用于 HTF_swing）；
          2) pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}（与 2.2 允许形态保持一致）；
-         3) 未触发 Gate1 红线（fake_pump/fake_dump/smart_money_absorption 等强警告、或 spoofing_risk>0.8 等）；
+         3) 未触发 Gate1 硬红线（fake_pump/fake_dump/retail_driven、或 spoofing_risk>0.8 等）；（smart_money_* 仅作 Regime Flag 偏置，不得作为一票否决条件）
          4) 必须通过 Gate5 的 R_clean/可执行性校验（默认门槛与例外集合仍保持原口径）。
        - “单强结构（Strong Anchor）”判定（可计算优先级｜多空对称｜只能选 1 个主锚点）：
         【硬性前置条件（任一触发则不可作为 Anchor）】
@@ -346,10 +356,18 @@
          7) Proximity_penalty（入场“离锚点太远”就不算依托）：
             - 若 entry_price 距离 Anchor 边界 > 0.8*ATR14_5m 或 > 0.6%：-15
             - 若 > 1.2*ATR14_5m 或 > 0.9%：Anchor 直接不成立（视为 Floating）
-         【最终判定门槛（Tier1.5 是否成立）】
-         - 必须满足：AnchorScore ≥ 70
-         - 且仍需满足 Tier1.5 的 Strong Trigger++（SFP/Engulfing/InsideBarBreakout/MomentumIgnition）之一
-         - 若不满足：视为 Tier3，Action=wait（除非 MOMENTUM_BREAK 且你已通过 Gate5 与触发器确认）。
+         【最终判定门槛（Tier1.5 是否成立）—— 分层门槛（多空对称）】
+         A) 若主锚点属于优先级 P1~P3（HTF 供需区 / HTF VPVR 边界回踩 / HTF SR Flip）：
+         - 允许：AnchorScore ≥ 65
+         - 但必须加严触发与执行（必须全部满足）：
+           1) Strong Trigger++ 仅允许 {SFP, Engulfing}（不接受 InsideBarBreakout/MomentumIgnition 作为唯一触发）；
+           2) vol_ratio ≥ 1.5（触发当根或触发组合中最关键一根）；
+           3) confidence ≥ 75 且 edge_score ≥ 0.70；
+           4) Gate5 仍必须通过（含 R_clean 与算式可核验）。
+         B) 若主锚点属于优先级 P4~P7（MTF 供需 / LTF VPVR 边界 / FVG / Fib）：
+         - 维持：AnchorScore ≥ 70
+         - Strong Trigger++ 可用 {SFP/Engulfing/InsideBarBreakout/MomentumIgnition} 之一（仍要求 5m 收盘证据链）。
+         - 若不满足对应分层门槛：视为 Tier3，Action=wait（除非 MOMENTUM_BREAK 且你已通过 Gate5 与触发器确认）。
        - “强触发（Strong Trigger++）”（必须满足其一，多空对称；只看 5m 已收盘）：
          1) SFP（扫止损回收）：刺破结构外侧后 5m 收盘重新站回结构内侧；
          2) Engulfing（吞没形态）：在结构位出现反向大实体吞没；
@@ -381,8 +399,10 @@
        4. **Momentum Ignition**:
           - 连续两根同向 K 线脱离结构区，且 `vol_ratio > 1.5`。
     - **强制过滤器 (Vacuum Filter) 及其豁免条件**：
-      * 默认规则：若当前价格上下 0.5% 范围内，找不到上述任何 **第1类 (实体)** 或 **第2类 (价值)** 结构：
-        - 视为“价格悬空 (Floating)”，Action 必须为 "wait"。
+      * 默认规则（ATR 自适应真空半径）：
+        - 定义 vacuum_band_pct = clamp( max(0.35%, 0.8 * ATR14_5m / last_price), 0.35%, 1.2% )
+          其中 last_price 使用本次 5m ohlc_last_closed.close（或等价的可核验收盘价）。
+        - 若当前价格上下 vacuum_band_pct 范围内，找不到上述任何 **第1类 (实体)** 或 **第2类 (价值)** 结构：视为“价格悬空 (Floating)”，Action 必须为 "wait"。
       * **【新增】动态趋势豁免 (Dynamic Trend Exception)**：
         - 若当前形态判定为 `BO_RETEST` (突破回踩) 或 `MOMENTUM_BREAK` (动能突破)：
         - **豁免真空检查**。

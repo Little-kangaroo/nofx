@@ -20,30 +20,30 @@ import (
 // OrderFlowManager 订单流分析管理器（统一管理所有组件）
 type OrderFlowManager struct {
 	// 核心组件
-	wsManager           *WSManager
-	cvdManager          *CVDManager
-	oiManager           *OIManager
-	orderBookManager    *OrderBookCalculator
+	wsManager             *WSManager
+	cvdManager            *CVDManager
+	oiManager             *OIManager
+	orderBookManager      *OrderBookCalculator
 	marketContextAnalyzer *MarketContextAnalyzer
-	
+
 	// 配置和状态
-	config              *MicrostructureConfig
-	mu                  sync.RWMutex
-	isRunning           bool
-	subscribedSymbols   map[string]bool // 已订阅的币种
-	
+	config            *MicrostructureConfig
+	mu                sync.RWMutex
+	isRunning         bool
+	subscribedSymbols map[string]bool // 已订阅的币种
+
 	// 🆕 协程监控
-	activeOIGoroutines  map[string]time.Time // symbol -> 上次活动时间
-	goroutineCheckTicker *time.Ticker        // 协程检查定时器
-	
+	activeOIGoroutines   map[string]time.Time // symbol -> 上次活动时间
+	goroutineCheckTicker *time.Ticker         // 协程检查定时器
+
 	// 🔧 修复: 数据流健康监控
-	dataFlowHealth      map[string]map[string]time.Time // symbol -> {trade/depth -> 最后数据时间}
-	
+	dataFlowHealth map[string]map[string]time.Time // symbol -> {trade/depth -> 最后数据时间}
+
 	// 数据缓存（用于快速获取）
-	latestPriceContext  map[string]*PriceContext // symbol -> PriceContext
-	
+	latestPriceContext map[string]*PriceContext // symbol -> PriceContext
+
 	// 清理任务
-	cleanupTicker       *time.Ticker
+	cleanupTicker *time.Ticker
 }
 
 // NewOrderFlowManager 创建订单流管理器
@@ -53,16 +53,16 @@ func NewOrderFlowManager(config *MicrostructureConfig) *OrderFlowManager {
 	}
 
 	manager := &OrderFlowManager{
-		config:              config,
-		subscribedSymbols:   make(map[string]bool),
-		latestPriceContext:  make(map[string]*PriceContext),
-		activeOIGoroutines:  make(map[string]time.Time), // 🆕 初始化协程监控
-		dataFlowHealth:      make(map[string]map[string]time.Time), // 🔧 修复: 初始化数据流监控
+		config:             config,
+		subscribedSymbols:  make(map[string]bool),
+		latestPriceContext: make(map[string]*PriceContext),
+		activeOIGoroutines: make(map[string]time.Time),            // 🆕 初始化协程监控
+		dataFlowHealth:     make(map[string]map[string]time.Time), // 🔧 修复: 初始化数据流监控
 	}
 
 	// 初始化各个组件
 	manager.initializeComponents()
-	
+
 	return manager
 }
 
@@ -70,39 +70,39 @@ func NewOrderFlowManager(config *MicrostructureConfig) *OrderFlowManager {
 func (ofm *OrderFlowManager) initializeComponents() {
 	// 创建WebSocket管理器
 	ofm.wsManager = NewWSManager(ofm.config)
-	
+
 	// 创建CVD管理器
 	ofm.cvdManager = NewCVDManager(ofm.config)
-	
+
 	// 创建OI管理器
 	ofm.oiManager = NewOIManager(ofm.config)
-	
+
 	// 创建盘口分析管理器（支持多交易对）
 	ofm.orderBookManager = NewOrderBookCalculator(5.0)
-	
+
 	// 创建市场上下文分析器
 	ofm.marketContextAnalyzer = NewMarketContextAnalyzer()
-	
+
 	// 🔧 修复：启动哨兵监控系统
 	sentinelMonitor := GetGlobalSentinelMonitor()
 	sentinelMonitor.Start()
-	
+
 	// V-12.2 启动哨兵触发引擎
 	sentinelTrigger := GetGlobalSentinelTriggerEngine()
 	sentinelTrigger.Start()
 	// 添加默认警报处理器
 	sentinelTrigger.AddAlertHandler(func(alert *SentinelTriggerAlert) {
-		log.Printf("📢 V-12.2战术机会 [%s] %s: %s (置信度: %.1f%%)", 
+		log.Printf("📢 V-12.2战术机会 [%s] %s: %s (置信度: %.1f%%)",
 			alert.Symbol, alert.Scenario, alert.Description, alert.Confidence*100)
 	})
-	
+
 	// V-12.2 启动动态阈值系统
 	dynamicThresholds := GetGlobalDynamicThresholdSystem()
 	dynamicThresholds.Start()
-	
+
 	// 设置WebSocket数据处理器
 	ofm.setupWebSocketHandlers()
-	
+
 	log.Printf("✅ 订单流管理器组件初始化完成")
 }
 
@@ -115,27 +115,27 @@ func (ofm *OrderFlowManager) setupWebSocketHandlers() {
 				log.Printf("❌ [关键错误] 交易数据处理器panic: %v, 数据: %+v", r, tradeData)
 			}
 		}()
-		
+
 		// 🔧 修复: 增加数据完整性验证
 		if err := ofm.validateTradeData(tradeData); err != nil {
 			log.Printf("❌ 交易数据验证失败 %s: %v", tradeData.Symbol, err)
 			return
 		}
-		
+
 		// 处理CVD数据并捕获错误
 		if ofm.cvdManager != nil {
 			ofm.cvdManager.ProcessTrade(tradeData)
 		} else {
 			log.Printf("⚠️ CVDManager为nil，跳过交易数据处理: %s", tradeData.Symbol)
 		}
-		
+
 		// 更新价格上下文
 		ofm.updatePriceContext(tradeData.Symbol, tradeData.Price)
-		
+
 		// 🔧 修复: 检测数据流中断
 		ofm.updateDataFlowHealth(tradeData.Symbol, "trade")
 	})
-	
+
 	// 设置盘口数据处理器
 	ofm.wsManager.SetDepthHandler(func(depthData *DepthData) {
 		defer func() {
@@ -143,24 +143,24 @@ func (ofm *OrderFlowManager) setupWebSocketHandlers() {
 				log.Printf("❌ [关键错误] 盘口数据处理器panic: %v, 数据: %+v", r, depthData)
 			}
 		}()
-		
+
 		// 🔧 修复: 增加数据完整性验证
 		if err := ofm.validateDepthData(depthData); err != nil {
 			log.Printf("❌ 盘口数据验证失败 %s: %v", depthData.Symbol, err)
 			return
 		}
-		
+
 		// 处理盘口数据并捕获错误
 		if ofm.orderBookManager != nil {
 			ofm.orderBookManager.ProcessDepthData(depthData.Symbol, depthData)
 		} else {
 			log.Printf("⚠️ OrderBookManager为nil，跳过盘口数据处理: %s", depthData.Symbol)
 		}
-		
+
 		// 🔧 修复: 检测数据流中断
 		ofm.updateDataFlowHealth(depthData.Symbol, "depth")
 	})
-	
+
 	log.Printf("✅ WebSocket数据处理器设置完成（增强错误处理）")
 }
 
@@ -168,7 +168,7 @@ func (ofm *OrderFlowManager) setupWebSocketHandlers() {
 func (ofm *OrderFlowManager) updatePriceContext(symbol string, currentPrice float64) {
 	ofm.mu.Lock()
 	defer ofm.mu.Unlock()
-	
+
 	// 获取或创建价格上下文
 	priceCtx, exists := ofm.latestPriceContext[symbol]
 	if !exists {
@@ -179,11 +179,13 @@ func (ofm *OrderFlowManager) updatePriceContext(symbol string, currentPrice floa
 			Volatility:   0,
 		}
 		ofm.latestPriceContext[symbol] = priceCtx
+		// 🔧 P0-01修复：初始创建后也尝试计算价格变化率（如果有历史数据）
+		ofm.calculateAndUpdatePriceChanges(priceCtx, symbol, currentPrice)
 	} else {
-		// 更新当前价格（这里是简化实现，实际应该基于历史数据计算变化率）
-		priceCtx.CurrentPrice = currentPrice
+		// 🔧 P0-01修复：计算价格变化率而非简单更新
+		ofm.calculateAndUpdatePriceChanges(priceCtx, symbol, currentPrice)
 	}
-	
+
 	// 🔧 修复：同时更新CVD管理器的价格历史，确保CVD计算器能正确计算价格变化
 	if ofm.cvdManager != nil {
 		ofm.cvdManager.UpdatePrice(symbol, currentPrice, time.Now())
@@ -194,25 +196,25 @@ func (ofm *OrderFlowManager) updatePriceContext(symbol string, currentPrice floa
 func (ofm *OrderFlowManager) Start() error {
 	ofm.mu.Lock()
 	defer ofm.mu.Unlock()
-	
+
 	if ofm.isRunning {
 		return fmt.Errorf("订单流管理器已在运行")
 	}
-	
+
 	// 启动WebSocket管理器
 	ofm.wsManager.Start()
-	
+
 	// 启动清理定时器
 	ofm.cleanupTicker = time.NewTicker(60 * time.Minute) // 每60分钟清理一次
 	go ofm.runCleanupLoop()
-	
+
 	// 🆕 启动协程监控定时器
 	ofm.goroutineCheckTicker = time.NewTicker(1 * time.Minute) // 每1分钟检查一次协程状态
 	go ofm.runGoroutineMonitor()
-	
+
 	ofm.isRunning = true
 	log.Printf("🚀 订单流管理器启动完成")
-	
+
 	return nil
 }
 
@@ -223,44 +225,44 @@ func (ofm *OrderFlowManager) Stop() {
 	fmt.Printf("🔍🔍🔍 [CRITICAL] 调用栈详情:\n%s\n", string(debug.Stack()))
 	log.Printf("🚨🚨🚨 [CRITICAL] OrderFlowManager.Stop() 被调用！时间: %s", time.Now().Format("15:04:05.000"))
 	log.Printf("🔍🔍🔍 [CRITICAL] 调用栈详情:\n%s", string(debug.Stack()))
-	
+
 	ofm.mu.Lock()
 	defer ofm.mu.Unlock()
-	
+
 	if !ofm.isRunning {
 		fmt.Printf("⚠️⚠️⚠️ [CRITICAL] OrderFlowManager已经停止，忽略重复调用\n")
 		log.Printf("⚠️⚠️⚠️ [CRITICAL] OrderFlowManager已经停止，忽略重复调用")
 		return
 	}
-	
+
 	fmt.Printf("⛔⛔⛔ [CRITICAL] 开始停止OrderFlowManager...\n")
 	log.Printf("⛔⛔⛔ [CRITICAL] 开始停止OrderFlowManager...")
-	
+
 	// 停止WebSocket管理器
 	ofm.wsManager.Stop()
-	
+
 	// 停止清理定时器
 	if ofm.cleanupTicker != nil {
 		ofm.cleanupTicker.Stop()
 	}
-	
+
 	// 🆕 停止协程监控定时器
 	if ofm.goroutineCheckTicker != nil {
 		ofm.goroutineCheckTicker.Stop()
 	}
-	
+
 	// 🔧 修复：停止哨兵监控系统
 	sentinelMonitor := GetGlobalSentinelMonitor()
 	sentinelMonitor.Stop()
-	
+
 	// V-12.2 停止哨兵触发引擎
 	sentinelTrigger := GetGlobalSentinelTriggerEngine()
 	sentinelTrigger.Stop()
-	
+
 	// V-12.2 停止动态阈值系统
 	dynamicThresholds := GetGlobalDynamicThresholdSystem()
 	dynamicThresholds.Stop()
-	
+
 	fmt.Printf("🚨🚨🚨 [CRITICAL] 即将设置isRunning=false！调用栈:\n%s\n", string(debug.Stack()))
 	log.Printf("🚨🚨🚨 [CRITICAL] 即将设置isRunning=false！调用栈:\n%s", string(debug.Stack()))
 	ofm.isRunning = false
@@ -274,7 +276,7 @@ func (ofm *OrderFlowManager) SubscribeSymbol(symbol string) error {
 	if !strings.HasSuffix(symbol, "USDT") {
 		symbol += "USDT"
 	}
-	
+
 	ofm.mu.Lock()
 	if ofm.subscribedSymbols[symbol] {
 		ofm.mu.Unlock()
@@ -284,17 +286,17 @@ func (ofm *OrderFlowManager) SubscribeSymbol(symbol string) error {
 	// 🆕 初始化协程监控记录
 	ofm.activeOIGoroutines[symbol] = time.Now()
 	ofm.mu.Unlock()
-	
+
 	// 订阅各种数据流
 	if err := ofm.wsManager.Subscribe(symbol); err != nil {
 		return fmt.Errorf("订阅WebSocket数据流失败: %w", err)
 	}
-	
+
 	// 订阅OI数据流（扩展WebSocket管理器功能）
 	if err := ofm.subscribeOIStream(symbol); err != nil {
 		log.Printf("⚠️ 订阅OI数据流失败 %s: %v", symbol, err)
 	}
-	
+
 	log.Printf("✅ 成功订阅币种: %s", symbol)
 	return nil
 }
@@ -306,22 +308,22 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 		log.Printf("🔄 [%s] OI更新协程启动", symbol)
 		ticker := time.NewTicker(30 * time.Second) // 🔧 修复：提升OI数据更新频率至30秒
 		defer ticker.Stop()
-		
+
 		// 🆕 增强的协程退出检测和日志
 		defer func() {
 			// 检查协程退出原因
 			ofm.mu.Lock() // 使用Lock而不是RLock，因为需要删除监控记录
 			globalRunning := ofm.isRunning
 			symbolSubscribed := ofm.subscribedSymbols[symbol]
-			
+
 			// 🆕 清理协程监控记录
 			delete(ofm.activeOIGoroutines, symbol)
-			
+
 			ofm.mu.Unlock()
-			
+
 			if globalRunning && symbolSubscribed {
 				// 如果全局还在运行且币种还在订阅中，但协程退出了，这是异常情况
-				log.Printf("❌ [%s] OI更新协程异常退出！全局运行状态: %v, 币种订阅状态: %v", 
+				log.Printf("❌ [%s] OI更新协程异常退出！全局运行状态: %v, 币种订阅状态: %v",
 					symbol, globalRunning, symbolSubscribed)
 				log.Printf("❌ [%s] 这可能导致订单流数据过期问题，需要检查系统状态", symbol)
 			} else if !globalRunning {
@@ -332,45 +334,45 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 				log.Printf("⚠️ [%s] OI更新协程退出", symbol)
 			}
 		}()
-		
+
 		// 立即获取一次数据
 		log.Printf("🔄 [%s] 执行立即OI获取", symbol)
 		ofm.fetchAndProcessOIData(symbol)
-		
+
 		for range ticker.C {
-			log.Printf("🔄 [%s] 定时器触发，准备获取OI数据", symbol)
-			
+			//log.Printf("🔄 [%s] 定时器触发，准备获取OI数据", symbol)
+
 			// 🔧 修复：增强状态检查，防止协程意外退出
 			ofm.mu.RLock()
 			globalRunning := ofm.isRunning
 			symbolSubscribed := ofm.subscribedSymbols[symbol]
 			ofm.mu.RUnlock()
-			
-			log.Printf("🔄 [%s] 检查状态: 全局运行=%v, 币种订阅=%v", symbol, globalRunning, symbolSubscribed)
-			
+
+			//log.Printf("🔄 [%s] 检查状态: 全局运行=%v, 币种订阅=%v", symbol, globalRunning, symbolSubscribed)
+
 			// 🔧 修复：只有在明确停止时才退出，避免误判
 			if !globalRunning {
 				log.Printf("⛔ [%s] 全局OrderFlowManager已停止，协程退出", symbol)
 				return
 			}
-			
+
 			if !symbolSubscribed {
 				log.Printf("⚠️ [%s] 币种已取消订阅，协程退出", symbol)
 				return
 			}
-			
+
 			// 🔧 修复：增加防护检查，确保实例仍然有效
 			if ofm == nil {
 				log.Printf("❌ [%s] OrderFlowManager实例为nil，协程异常退出", symbol)
 				return
 			}
-			
-			log.Printf("🔄 [%s] 开始获取OI数据", symbol)
+
+			//log.Printf("🔄 [%s] 开始获取OI数据", symbol)
 			ofm.fetchAndProcessOIData(symbol)
-			log.Printf("🔄 [%s] OI数据获取完成", symbol)
+			//log.Printf("🔄 [%s] OI数据获取完成", symbol)
 		}
 	}()
-	
+
 	return nil
 }
 
@@ -381,19 +383,19 @@ func (ofm *OrderFlowManager) fetchAndProcessOIData(symbol string) {
 			log.Printf("❌ 获取OI数据异常 %s: %v", symbol, r)
 		}
 	}()
-	
+
 	// 🆕 记录协程活动时间
 	ofm.mu.Lock()
 	ofm.activeOIGoroutines[symbol] = time.Now()
 	ofm.mu.Unlock()
-	
+
 	// 调用币安API获取OI数据
 	oiData, err := ofm.getOpenInterestFromAPI(symbol)
 	if err != nil {
 		log.Printf("❌ 获取OI数据失败 %s: %v", symbol, err)
 		return
 	}
-	
+
 	// 传递给OI管理器处理
 	ofm.oiManager.ProcessOIData(symbol, oiData)
 	log.Printf("✅ 成功获取并处理OI数据 %s: %.0f", symbol, oiData.OpenInterest)
@@ -402,47 +404,47 @@ func (ofm *OrderFlowManager) fetchAndProcessOIData(symbol string) {
 // getOpenInterestFromAPI 从币安API获取持仓量数据
 func (ofm *OrderFlowManager) getOpenInterestFromAPI(symbol string) (*OIData, error) {
 	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/openInterest?symbol=%s", symbol)
-	
+
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
-	
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("API请求失败: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("API返回错误状态码: %d", resp.StatusCode)
 	}
-	
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
-	
+
 	var result struct {
 		OpenInterest string `json:"openInterest"`
 		Symbol       string `json:"symbol"`
 		Time         int64  `json:"time"`
 	}
-	
+
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
-	
+
 	openInterest, err := strconv.ParseFloat(result.OpenInterest, 64)
 	if err != nil {
 		return nil, fmt.Errorf("解析持仓量失败: %w", err)
 	}
-	
+
 	return &OIData{
 		Symbol:       symbol,
 		OpenInterest: openInterest,
 		// 🔥 P0-05修复：双时间戳支持
-		Timestamp:    time.Now(),                              // 接收/处理时间
-		ExchangeTime: time.UnixMilli(result.Time),            // 交易所原始时间
+		Timestamp:    time.Now(),                  // 接收/处理时间
+		ExchangeTime: time.UnixMilli(result.Time), // 交易所原始时间
 	}, nil
 }
 
@@ -453,7 +455,7 @@ func (ofm *OrderFlowManager) GetMarketSnapshot(symbol string) *MarketSnapshot {
 	if !strings.HasSuffix(symbol, "USDT") {
 		symbol += "USDT"
 	}
-	
+
 	// 🔥 P0-05风险：使用time.Now()而非事件时间
 	return ofm.GetMarketSnapshotAt(symbol, time.Now())
 }
@@ -465,53 +467,92 @@ func (ofm *OrderFlowManager) GetMarketSnapshotAt(symbol string, eventTime time.T
 	if !strings.HasSuffix(symbol, "USDT") {
 		symbol += "USDT"
 	}
-	
+
 	// 获取各个组件的数据
 	cvdData := ofm.cvdManager.GetCVDData(symbol)
 	oiAnalysis := ofm.oiManager.GetOIAnalysis(symbol)
 	orderBookData := ofm.orderBookManager.GetCurrentOrderBookData(symbol, 5)
-	
+
 	// 获取价格上下文
 	ofm.mu.RLock()
 	priceContext, exists := ofm.latestPriceContext[symbol]
 	ofm.mu.RUnlock()
-	
+
 	if !exists {
-		priceContext = &PriceContext{
-			CurrentPrice: 0,
-			Change1H:     0,
-			Change4H:     0,
-			Volatility:   0,
+		// 🔧 P0-01修复：如果价格上下文不存在，尝试从CVD计算器获取最新价格并计算变化率
+		if ofm.cvdManager != nil {
+			if calc := ofm.cvdManager.GetCalculator(symbol); calc != nil && len(calc.priceHistory) > 0 {
+				// 获取最新价格
+				calc.mu.RLock()
+				latestPrice := calc.priceHistory[len(calc.priceHistory)-1].Price
+				calc.mu.RUnlock()
+				
+				// 创建价格上下文并计算变化率
+				priceContext = &PriceContext{
+					CurrentPrice: latestPrice,
+					Change1H:     0,
+					Change4H:     0,
+					Volatility:   0,
+				}
+				
+				// 计算变化率
+				now := time.Now()
+				price1HourAgo := calc.GetPriceAtTime(now.Add(-1 * time.Hour))
+				price4HourAgo := calc.GetPriceAtTime(now.Add(-4 * time.Hour))
+				
+				if price1HourAgo > 0 {
+					priceContext.Change1H = ((latestPrice - price1HourAgo) / price1HourAgo) * 100
+				}
+				if price4HourAgo > 0 {
+					priceContext.Change4H = ((latestPrice - price4HourAgo) / price4HourAgo) * 100
+				}
+				priceContext.Volatility = calc.CalculateVolatility(1 * time.Hour)
+			} else {
+				// 如果没有价格历史，返回空上下文
+				priceContext = &PriceContext{
+					CurrentPrice: 0,
+					Change1H:     0,
+					Change4H:     0,
+					Volatility:   0,
+				}
+			}
+		} else {
+			priceContext = &PriceContext{
+				CurrentPrice: 0,
+				Change1H:     0,
+				Change4H:     0,
+				Volatility:   0,
+			}
 		}
 	}
-	
+
 	// 生成市场上下文分析
 	marketContext := ofm.marketContextAnalyzer.AnalyzeMarketContext(
 		symbol, cvdData, oiAnalysis, priceContext,
 	)
-	
+
 	// 🔥 P0-05修复：使用事件时间而非time.Now()进行CVD增量计算
 	cvdDelta5m := ofm.cvdManager.CalculateRealtimeCVDDelta5m(symbol, eventTime)
-	
+
 	// 生成宏观趋势数据
 	macroTrend := ofm.generateMacroTrendData(symbol, cvdData, oiAnalysis)
-	
+
 	// 计算数据质量评估
 	dataQuality := ofm.calculateDataQuality(symbol, cvdData, oiAnalysis, orderBookData)
-	
+
 	return &MarketSnapshot{
-		Symbol:         symbol,
+		Symbol: symbol,
 		// 🔥 P0-05修复：使用事件时间而非time.Now()
-		Timestamp:      eventTime,
-		CVDData:        cvdData,
-		OIAnalysis:     oiAnalysis,
-		OrderBookData:  orderBookData,
-		MarketContext:  marketContext,
-		PriceContext:   priceContext,
+		Timestamp:     eventTime,
+		CVDData:       cvdData,
+		OIAnalysis:    oiAnalysis,
+		OrderBookData: orderBookData,
+		MarketContext: marketContext,
+		PriceContext:  priceContext,
 		// V2.0 新增字段 - 现在使用事件时间对齐
-		CVDDelta5m:     cvdDelta5m,
-		MacroTrend:     macroTrend,
-		DataQuality:    dataQuality,
+		CVDDelta5m:  cvdDelta5m,
+		MacroTrend:  macroTrend,
+		DataQuality: dataQuality,
 	}
 }
 
@@ -531,13 +572,13 @@ func (ofm *OrderFlowManager) GetAllMarketSnapshotsAt(eventTime time.Time) map[st
 		symbols = append(symbols, symbol)
 	}
 	ofm.mu.RUnlock()
-	
+
 	snapshots := make(map[string]*MarketSnapshot)
 	for _, symbol := range symbols {
 		// 🔥 P0-05修复：使用事件时间而非time.Now()
 		snapshots[symbol] = ofm.GetMarketSnapshotAt(symbol, eventTime)
 	}
-	
+
 	return snapshots
 }
 
@@ -559,31 +600,31 @@ func (ofm *OrderFlowManager) runGoroutineMonitor() {
 func (ofm *OrderFlowManager) checkGoroutineHealth() {
 	ofm.mu.RLock()
 	defer ofm.mu.RUnlock()
-	
+
 	now := time.Now()
 	deadlineMinutes := 8 // 如果8分钟内没有活动，则认为协程可能已死
-	
+
 	log.Printf("🔍 检查OI协程健康状态...")
-	
+
 	deadGoroutines := 0
 	totalGoroutines := 0
-	
+
 	for symbol, isSubscribed := range ofm.subscribedSymbols {
 		if !isSubscribed {
 			continue // 跳过已取消订阅的币种
 		}
-		
+
 		totalGoroutines++
 		lastActive, exists := ofm.activeOIGoroutines[symbol]
-		
+
 		if !exists {
 			log.Printf("❌ [%s] OI协程监控记录不存在，协程可能未正常启动", symbol)
 			deadGoroutines++
 			continue
 		}
-		
+
 		inactiveMinutes := now.Sub(lastActive).Minutes()
-		
+
 		if inactiveMinutes > float64(deadlineMinutes) {
 			log.Printf("❌ [%s] OI协程可能已死！上次活动: %.1f分钟前", symbol, inactiveMinutes)
 			log.Printf("❌ [%s] 这会导致30分钟后订单流数据过期，需要重启系统或重新订阅", symbol)
@@ -592,7 +633,7 @@ func (ofm *OrderFlowManager) checkGoroutineHealth() {
 			log.Printf("⚠️ [%s] OI协程活动缓慢，上次活动: %.1f分钟前", symbol, inactiveMinutes)
 		}
 	}
-	
+
 	if deadGoroutines > 0 {
 		log.Printf("❌ 协程健康检查完成: %d/%d 协程异常，系统可能需要重启", deadGoroutines, totalGoroutines)
 	} else if totalGoroutines > 0 {
@@ -605,16 +646,16 @@ func (ofm *OrderFlowManager) checkGoroutineHealth() {
 // performCleanup 执行清理任务
 func (ofm *OrderFlowManager) performCleanup() {
 	log.Printf("🧹 开始执行订单流数据清理...")
-	
+
 	// 清理各个管理器中的过期数据
 	ofm.cvdManager.Cleanup()
 	ofm.oiManager.Cleanup()
 	// OrderBookCalculator 不需要Cleanup方法
 	// ofm.orderBookManager.Cleanup()
-	
+
 	// 清理价格上下文中的过期数据
 	ofm.cleanupPriceContexts()
-	
+
 	log.Printf("✅ 订单流数据清理完成")
 }
 
@@ -622,7 +663,7 @@ func (ofm *OrderFlowManager) performCleanup() {
 func (ofm *OrderFlowManager) cleanupPriceContexts() {
 	ofm.mu.Lock()
 	defer ofm.mu.Unlock()
-	
+
 	// 检查哪些币种已经不再订阅
 	for symbol := range ofm.latestPriceContext {
 		if !ofm.subscribedSymbols[symbol] {
@@ -636,10 +677,10 @@ func (ofm *OrderFlowManager) cleanupPriceContexts() {
 func (ofm *OrderFlowManager) GetStatus() map[string]interface{} {
 	ofm.mu.RLock()
 	defer ofm.mu.RUnlock()
-	
+
 	// 获取WebSocket连接状态
 	wsStatus := ofm.wsManager.GetConnectionStatus()
-	
+
 	return map[string]interface{}{
 		"is_running":         ofm.isRunning,
 		"subscribed_symbols": len(ofm.subscribedSymbols),
@@ -667,7 +708,7 @@ func (ofm *OrderFlowManager) getSubscribedSymbolsList() []string {
 func (ofm *OrderFlowManager) ForceUpdateAllCVDDeltas() {
 	ofm.mu.RLock()
 	defer ofm.mu.RUnlock()
-	
+
 	if ofm.cvdManager != nil {
 		ofm.cvdManager.ForceUpdateAllCVDDeltas()
 	} else {
@@ -679,7 +720,7 @@ func (ofm *OrderFlowManager) ForceUpdateAllCVDDeltas() {
 func (ofm *OrderFlowManager) ForceUpdateAllCVDDeltasWithKLineTime(klineCloseTime time.Time) {
 	ofm.mu.RLock()
 	defer ofm.mu.RUnlock()
-	
+
 	if ofm.cvdManager != nil {
 		ofm.cvdManager.ForceUpdateAllCVDDeltasWithKLineTime(klineCloseTime)
 	} else {
@@ -691,17 +732,17 @@ func (ofm *OrderFlowManager) ForceUpdateAllCVDDeltasWithKLineTime(klineCloseTime
 
 // MarketSnapshot 市场快照（V2.0整合所有订单流数据）
 type MarketSnapshot struct {
-	Symbol         string           `json:"symbol"`
-	Timestamp      time.Time        `json:"timestamp"`
-	CVDData        *CVDData         `json:"cvd_data"`
-	OIAnalysis     *OIAnalysis      `json:"oi_analysis"`
-	OrderBookData  *OrderBookData   `json:"orderbook_data"`
-	MarketContext  *MarketContext   `json:"market_context"`
-	PriceContext   *PriceContext    `json:"price_context"`
+	Symbol        string         `json:"symbol"`
+	Timestamp     time.Time      `json:"timestamp"`
+	CVDData       *CVDData       `json:"cvd_data"`
+	OIAnalysis    *OIAnalysis    `json:"oi_analysis"`
+	OrderBookData *OrderBookData `json:"orderbook_data"`
+	MarketContext *MarketContext `json:"market_context"`
+	PriceContext  *PriceContext  `json:"price_context"`
 	// V2.0 新增字段
-	CVDDelta5m     *CVDDelta5m      `json:"cvd_delta_5m"`     // 5分钟增量数据
-	MacroTrend     *MacroTrendData  `json:"macro_trend"`      // 宏观趋势数据
-	DataQuality    *DataQualityInfo `json:"data_quality"`     // 数据质量评估
+	CVDDelta5m  *CVDDelta5m      `json:"cvd_delta_5m"` // 5分钟增量数据
+	MacroTrend  *MacroTrendData  `json:"macro_trend"`  // 宏观趋势数据
+	DataQuality *DataQualityInfo `json:"data_quality"` // 数据质量评估
 }
 
 // ToAIPayload 转换为AI输入的JSON格式（V2.0结构 + V-12.2增强）
@@ -713,23 +754,23 @@ func (ms *MarketSnapshot) ToAIPayload() map[string]interface{} {
 			return contextV12.ToAIPromptFormat()
 		}
 	}
-	
+
 	// V2.0兜底格式
 	return map[string]interface{}{
 		"订单流分析": map[string]interface{}{
 			"本周期博弈_5m": func() map[string]interface{} {
 				if ms.CVDDelta5m != nil {
 					return map[string]interface{}{
-						"price_delta_pct":         ms.CVDDelta5m.PriceDeltaPct,
-						"spot_cvd_delta_usd":      ms.CVDDelta5m.SpotCVDDeltaUSD,
-						"futures_cvd_delta_usd":   ms.CVDDelta5m.FuturesCVDDeltaUSD,
-						"oi_delta_pct":            ms.CVDDelta5m.OIDeltaPct,
-						"candle_intent":           ms.CVDDelta5m.CandleIntent,
-						"volume_delta":            ms.CVDDelta5m.VolumeDelta,
-						"volume_ratio":            ms.CVDDelta5m.VolumeRatio,
-						"period_start":            ms.CVDDelta5m.PeriodStartTime.Format("15:04:05"),
-						"period_end":              ms.CVDDelta5m.PeriodEndTime.Format("15:04:05"),
-						"data_quality":            ms.CVDDelta5m.DataQuality,
+						"price_delta_pct":       ms.CVDDelta5m.PriceDeltaPct,
+						"spot_cvd_delta_usd":    ms.CVDDelta5m.SpotCVDDeltaUSD,
+						"futures_cvd_delta_usd": ms.CVDDelta5m.FuturesCVDDeltaUSD,
+						"oi_delta_pct":          ms.CVDDelta5m.OIDeltaPct,
+						"candle_intent":         ms.CVDDelta5m.CandleIntent,
+						"volume_delta":          ms.CVDDelta5m.VolumeDelta,
+						"volume_ratio":          ms.CVDDelta5m.VolumeRatio,
+						"period_start":          ms.CVDDelta5m.PeriodStartTime.Format("15:04:05"),
+						"period_end":            ms.CVDDelta5m.PeriodEndTime.Format("15:04:05"),
+						"data_quality":          ms.CVDDelta5m.DataQuality,
 					}
 				}
 				return map[string]interface{}{
@@ -739,21 +780,21 @@ func (ms *MarketSnapshot) ToAIPayload() map[string]interface{} {
 			"宏观资金趋势": func() map[string]interface{} {
 				if ms.MacroTrend != nil {
 					return map[string]interface{}{
-						"spot_cvd_1h_usd":       ms.MacroTrend.SpotCVD1H,
-						"futures_cvd_1h_usd":    ms.MacroTrend.FuturesCVD1H,
-						"cvd_divergence_4h":     ms.MacroTrend.CVDDivergence4H,
-						"market_regime":         ms.MacroTrend.MarketRegime,
-						"trend_strength":        ms.MacroTrend.TrendStrength,
-						"dominant_direction":    ms.MacroTrend.DominantDirection,
-						"confidence_level":      ms.MacroTrend.ConfidenceLevel,
+						"spot_cvd_1h_usd":    ms.MacroTrend.SpotCVD1H,
+						"futures_cvd_1h_usd": ms.MacroTrend.FuturesCVD1H,
+						"cvd_divergence_4h":  ms.MacroTrend.CVDDivergence4H,
+						"market_regime":      ms.MacroTrend.MarketRegime,
+						"trend_strength":     ms.MacroTrend.TrendStrength,
+						"dominant_direction": ms.MacroTrend.DominantDirection,
+						"confidence_level":   ms.MacroTrend.ConfidenceLevel,
 					}
 				}
 				// 兜底使用原有CVD数据
 				return map[string]interface{}{
-					"spot_cvd_1h_usd":      ms.CVDData.SpotCVD1H,
-					"futures_cvd_1h_usd":   ms.CVDData.FuturesCVD1H,
-					"cvd_divergence":       ms.CVDData.CVDDivergence,
-					"signal":               ms.CVDData.Signal,
+					"spot_cvd_1h_usd":    ms.CVDData.SpotCVD1H,
+					"futures_cvd_1h_usd": ms.CVDData.FuturesCVD1H,
+					"cvd_divergence":     ms.CVDData.CVDDivergence,
+					"signal":             ms.CVDData.Signal,
 				}
 			}(),
 			"盘口结构": map[string]interface{}{
@@ -793,13 +834,13 @@ func (ms *MarketSnapshot) ToAIPayload() map[string]interface{} {
 			"数据质量": func() map[string]interface{} {
 				if ms.DataQuality != nil {
 					return map[string]interface{}{
-						"overall_score":          ms.DataQuality.OverallScore,
-						"cvd_reliability":        ms.DataQuality.CVDReliability,
-						"orderbook_reliability":  ms.DataQuality.OrderBookReliability,
-						"oi_reliability":         ms.DataQuality.OIReliability,
-						"data_lag_ms":            ms.DataQuality.DataLagMs,
-						"status":                 ms.DataQuality.Status,
-						"last_update":            ms.DataQuality.LastDataUpdate.Format("15:04:05"),
+						"overall_score":         ms.DataQuality.OverallScore,
+						"cvd_reliability":       ms.DataQuality.CVDReliability,
+						"orderbook_reliability": ms.DataQuality.OrderBookReliability,
+						"oi_reliability":        ms.DataQuality.OIReliability,
+						"data_lag_ms":           ms.DataQuality.DataLagMs,
+						"status":                ms.DataQuality.Status,
+						"last_update":           ms.DataQuality.LastDataUpdate.Format("15:04:05"),
 					}
 				}
 				// 兜底数据质量评估
@@ -833,12 +874,12 @@ func InitGlobalOrderFlowManager(config *MicrostructureConfig) error {
 	if config == nil {
 		config = DefaultMicrostructureConfig()
 	}
-	
+
 	// 🔧 修复：确保单例一致性，避免重复创建
 	globalOFMOnce.Do(func() {
 		globalOrderFlowManager = NewOrderFlowManager(config)
 	})
-	
+
 	// 如果已经运行，直接返回
 	if globalOrderFlowManager != nil {
 		status := globalOrderFlowManager.GetStatus()
@@ -848,7 +889,7 @@ func InitGlobalOrderFlowManager(config *MicrostructureConfig) error {
 		}
 		return globalOrderFlowManager.Start()
 	}
-	
+
 	return fmt.Errorf("无法创建全局OrderFlowManager")
 }
 
@@ -859,7 +900,7 @@ func StopGlobalOrderFlowManager() {
 	fmt.Printf("🔍🔍🔍 [CRITICAL] 全局停止调用栈:\n%s\n", string(debug.Stack()))
 	log.Printf("🚨🚨🚨 [CRITICAL] StopGlobalOrderFlowManager() 被调用！时间: %s", time.Now().Format("15:04:05.000"))
 	log.Printf("🔍🔍🔍 [CRITICAL] 全局停止调用栈:\n%s", string(debug.Stack()))
-	
+
 	if globalOrderFlowManager != nil {
 		fmt.Printf("🛑🛑🛑 [CRITICAL] 调用globalOrderFlowManager.Stop()\n")
 		log.Printf("🛑🛑🛑 [CRITICAL] 调用globalOrderFlowManager.Stop()")
@@ -867,6 +908,56 @@ func StopGlobalOrderFlowManager() {
 	} else {
 		fmt.Printf("⚠️⚠️⚠️ [CRITICAL] 全局OrderFlowManager为nil，无需停止\n")
 		log.Printf("⚠️⚠️⚠️ [CRITICAL] 全局OrderFlowManager为nil，无需停止")
+	}
+}
+
+// ===== 🔧 P0-01修复: 价格变化率计算方法 =====
+
+// calculateAndUpdatePriceChanges 🔧 P0-01修复：计算并更新价格变化率
+func (ofm *OrderFlowManager) calculateAndUpdatePriceChanges(priceCtx *PriceContext, symbol string, currentPrice float64) {
+	// 获取CVD管理器中的价格历史数据
+	if ofm.cvdManager == nil {
+		// 如果CVD管理器不可用，只更新当前价格
+		priceCtx.CurrentPrice = currentPrice
+		return
+	}
+
+	// 从CVD计算器获取价格历史
+	calc := ofm.cvdManager.GetCalculator(symbol)
+	if calc == nil {
+		priceCtx.CurrentPrice = currentPrice
+		return
+	}
+
+	now := time.Now()
+
+	// 获取1小时前和4小时前的价格
+	price1HourAgo := calc.GetPriceAtTime(now.Add(-1 * time.Hour))
+	price4HourAgo := calc.GetPriceAtTime(now.Add(-4 * time.Hour))
+
+	// 计算价格变化率
+	if price1HourAgo > 0 {
+		priceCtx.Change1H = ((currentPrice - price1HourAgo) / price1HourAgo) * 100
+	} else {
+		priceCtx.Change1H = 0
+	}
+
+	if price4HourAgo > 0 {
+		priceCtx.Change4H = ((currentPrice - price4HourAgo) / price4HourAgo) * 100
+	} else {
+		priceCtx.Change4H = 0
+	}
+
+	// 计算波动率（基于近1小时的价格标准差）
+	priceCtx.Volatility = calc.CalculateVolatility(1 * time.Hour)
+
+	// 更新当前价格
+	priceCtx.CurrentPrice = currentPrice
+
+	// 调试日志（可选）
+	if os.Getenv("NOFX_DEBUG_PRICE") == "true" {
+		log.Printf("📊 [P0-01] %s价格上下文更新: 当前=%.6f, 1H变化=%.2f%%, 4H变化=%.2f%%, 波动率=%.4f",
+			symbol, currentPrice, priceCtx.Change1H, priceCtx.Change4H, priceCtx.Volatility)
 	}
 }
 
@@ -903,59 +994,59 @@ func (ofm *OrderFlowManager) validateDepthData(depthData *DepthData) error {
 	if len(depthData.Bids) == 0 && len(depthData.Asks) == 0 {
 		return fmt.Errorf("买卖盘均为空")
 	}
-	
+
 	// 🔥 P0-03修复：验证买盘数据并检查排序
 	if len(depthData.Bids) > 0 {
 		for i, bid := range depthData.Bids {
 			if bid.Price <= 0 || bid.Quantity <= 0 {
 				return fmt.Errorf("买单第%d档数据无效: 价格=%.8f, 数量=%.8f", i, bid.Price, bid.Quantity)
 			}
-			
+
 			// 🔥 P0-03修复：检查买单价格是否按降序排列
 			if i > 0 && bid.Price > depthData.Bids[i-1].Price {
-				return fmt.Errorf("买单排序错误: 第%d档价格%.8f > 第%d档价格%.8f (应按降序)", 
+				return fmt.Errorf("买单排序错误: 第%d档价格%.8f > 第%d档价格%.8f (应按降序)",
 					i, bid.Price, i-1, depthData.Bids[i-1].Price)
 			}
 		}
 	}
-	
+
 	// 🔥 P0-03修复：验证卖盘数据并检查排序
 	if len(depthData.Asks) > 0 {
 		for i, ask := range depthData.Asks {
 			if ask.Price <= 0 || ask.Quantity <= 0 {
 				return fmt.Errorf("卖单第%d档数据无效: 价格=%.8f, 数量=%.8f", i, ask.Price, ask.Quantity)
 			}
-			
+
 			// 🔥 P0-03修复：检查卖单价格是否按升序排列
 			if i > 0 && ask.Price < depthData.Asks[i-1].Price {
-				return fmt.Errorf("卖单排序错误: 第%d档价格%.8f < 第%d档价格%.8f (应按升序)", 
+				return fmt.Errorf("卖单排序错误: 第%d档价格%.8f < 第%d档价格%.8f (应按升序)",
 					i, ask.Price, i-1, depthData.Asks[i-1].Price)
 			}
 		}
 	}
-	
+
 	// 🔥 P0-03修复：检查盘口交叉（bestBid >= bestAsk是异常情况）
 	if len(depthData.Bids) > 0 && len(depthData.Asks) > 0 {
 		bestBid := depthData.Bids[0].Price
 		bestAsk := depthData.Asks[0].Price
-		
+
 		if bestBid >= bestAsk {
 			return fmt.Errorf("盘口交叉异常: bestBid=%.8f >= bestAsk=%.8f", bestBid, bestAsk)
 		}
-		
+
 		// 🔥 P0-03修复：检查价差是否合理（避免极端窄价差）
 		spread := bestAsk - bestBid
 		spreadPct := (spread / bestBid) * 100
-		
+
 		if spreadPct < 0.0001 { // 0.01bp以下可能是数据错误
 			return fmt.Errorf("价差过窄可能异常: spread=%.8f (%.6f%%)", spread, spreadPct)
 		}
-		
+
 		if spreadPct > 10.0 { // 超过10%价差可能是数据异常
 			return fmt.Errorf("价差过宽可能异常: spread=%.8f (%.2f%%)", spread, spreadPct)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -963,11 +1054,11 @@ func (ofm *OrderFlowManager) validateDepthData(depthData *DepthData) error {
 func (ofm *OrderFlowManager) updateDataFlowHealth(symbol string, dataType string) {
 	ofm.mu.Lock()
 	defer ofm.mu.Unlock()
-	
+
 	if ofm.dataFlowHealth[symbol] == nil {
 		ofm.dataFlowHealth[symbol] = make(map[string]time.Time)
 	}
-	
+
 	ofm.dataFlowHealth[symbol][dataType] = time.Now()
 }
 
@@ -975,14 +1066,14 @@ func (ofm *OrderFlowManager) updateDataFlowHealth(symbol string, dataType string
 func (ofm *OrderFlowManager) checkDataFlowHealth() {
 	ofm.mu.RLock()
 	defer ofm.mu.RUnlock()
-	
+
 	now := time.Now()
 	staleThreshold := 2 * time.Minute // 2分钟无数据认为异常
-	
+
 	for symbol, health := range ofm.dataFlowHealth {
 		for dataType, lastTime := range health {
 			if now.Sub(lastTime) > staleThreshold {
-				log.Printf("⚠️ [数据流异常] %s的%s数据已%.1f分钟无更新", 
+				log.Printf("⚠️ [数据流异常] %s的%s数据已%.1f分钟无更新",
 					symbol, dataType, now.Sub(lastTime).Minutes())
 			}
 		}
@@ -1008,16 +1099,16 @@ func (ofm *OrderFlowManager) generateMacroTrendData(symbol string, cvdData *CVDD
 
 	// 计算4小时级别背离
 	cvdDivergence4H := ofm.detectCVDDivergence4H(cvdData)
-	
+
 	// 判断市场状态
 	marketRegime := ofm.determineMarketRegime(cvdData, oiAnalysis)
-	
+
 	// 计算趋势强度
 	trendStrength := ofm.calculateTrendStrength(cvdData, oiAnalysis)
-	
+
 	// 确定主导方向
 	dominantDirection := ofm.determineDominantDirection(cvdData, oiAnalysis)
-	
+
 	// 计算置信度
 	confidenceLevel := ofm.calculateConfidenceLevel(cvdData, oiAnalysis, trendStrength)
 
@@ -1037,35 +1128,35 @@ func (ofm *OrderFlowManager) generateMacroTrendData(symbol string, cvdData *CVDD
 func (ofm *OrderFlowManager) calculateDataQuality(symbol string, cvdData *CVDData, oiAnalysis *OIAnalysis, orderBookData *OrderBookData) *DataQualityInfo {
 	// CVD数据可靠性
 	cvdReliability := ofm.calculateCVDReliability(cvdData)
-	
+
 	// OI数据可靠性
 	oiReliability := ofm.calculateOIReliability(oiAnalysis)
-	
+
 	// 盘口数据可靠性
 	orderBookReliability := ofm.calculateOrderBookReliability(orderBookData)
-	
+
 	// 总体评分（加权平均）
 	overallScore := (cvdReliability*0.4 + oiReliability*0.3 + orderBookReliability*0.3)
-	
+
 	// 🔥 P0-06修复：提取真实的组件更新时间
 	var cvdLastUpdate, oiLastUpdate, orderBookLastUpdate time.Time
 	var componentTimes []time.Time
-	
+
 	if cvdData != nil && !cvdData.LastUpdate.IsZero() {
 		cvdLastUpdate = cvdData.LastUpdate
 		componentTimes = append(componentTimes, cvdLastUpdate)
 	}
-	
+
 	if oiAnalysis != nil && !oiAnalysis.LastUpdate.IsZero() {
 		oiLastUpdate = oiAnalysis.LastUpdate
 		componentTimes = append(componentTimes, oiLastUpdate)
 	}
-	
+
 	if orderBookData != nil && !orderBookData.LastUpdate.IsZero() {
 		orderBookLastUpdate = orderBookData.LastUpdate
 		componentTimes = append(componentTimes, orderBookLastUpdate)
 	}
-	
+
 	// 🔥 P0-06修复：LastDataUpdate = max(组件时间) 而非 time.Now()
 	var lastDataUpdate time.Time
 	if len(componentTimes) > 0 {
@@ -1079,7 +1170,7 @@ func (ofm *OrderFlowManager) calculateDataQuality(symbol string, cvdData *CVDDat
 		// 兜底：如果所有组件都无效，使用当前时间
 		lastDataUpdate = time.Now()
 	}
-	
+
 	// 🔥 P0-06修复：DataLagMs = now - min(组件时间) 衡量"最老组件落后多少"
 	var dataLagMs int64
 	if len(componentTimes) > 0 {
@@ -1095,7 +1186,7 @@ func (ofm *OrderFlowManager) calculateDataQuality(symbol string, cvdData *CVDDat
 		// 兜底：如果没有有效组件，延迟设为最大值
 		dataLagMs = 60000 // 1分钟
 	}
-	
+
 	// 确定状态
 	status := "正常"
 	if overallScore < 0.5 {
@@ -1110,13 +1201,13 @@ func (ofm *OrderFlowManager) calculateDataQuality(symbol string, cvdData *CVDDat
 		OIReliability:        oiReliability,
 		OverallScore:         overallScore,
 		// 🔥 P0-06修复：使用真实的组件最新时间而非time.Now()
-		LastDataUpdate:       lastDataUpdate,
-		DataLagMs:            dataLagMs,
-		Status:               status,
+		LastDataUpdate: lastDataUpdate,
+		DataLagMs:      dataLagMs,
+		Status:         status,
 		// 🔥 P0-06修复：单独跟踪每个组件的更新时间
-		CVDLastUpdate:        cvdLastUpdate,
-		OILastUpdate:         oiLastUpdate,
-		OrderBookLastUpdate:  orderBookLastUpdate,
+		CVDLastUpdate:       cvdLastUpdate,
+		OILastUpdate:        oiLastUpdate,
+		OrderBookLastUpdate: orderBookLastUpdate,
 	}
 }
 
@@ -1134,26 +1225,26 @@ func (ofm *OrderFlowManager) detectCVDDivergence4H(cvdData *CVDData) bool {
 		// 兜底：如果没有统计数据，使用改进的相对阈值
 		return ofm.detectCVDDivergenceWithRelativeThreshold(cvdData)
 	}
-	
+
 	// 基于统计分布判断方向强度
 	spotDirection := ofm.classifyCVDDirection(cvdData.SpotCVD1H, "spot")
 	futuresDirection := ofm.classifyCVDDirection(cvdData.FuturesCVD1H, "futures")
-	
+
 	// 🔧 P1-1修复：只有在两个方向都有明确统计意义时才判断背离
 	// 这避免了低市值币的噪音和高市值币的误判
 	if spotDirection == 0 || futuresDirection == 0 {
 		return false // 至少有一方向不明确，无法判断背离
 	}
-	
+
 	// 如果现货和期货方向明确且相反，认为有背离
-	isDirectionOpposite := (spotDirection > 0 && futuresDirection < 0) || 
-	                      (spotDirection < 0 && futuresDirection > 0)
-	
+	isDirectionOpposite := (spotDirection > 0 && futuresDirection < 0) ||
+		(spotDirection < 0 && futuresDirection > 0)
+
 	if isDirectionOpposite && os.Getenv("NOFX_DEBUG") == "true" {
-		log.Printf("🔧 [P1-1] CVD背离检测: 现货方向%d, 期货方向%d (统计显著)", 
+		log.Printf("🔧 [P1-1] CVD背离检测: 现货方向%d, 期货方向%d (统计显著)",
 			spotDirection, futuresDirection)
 	}
-	
+
 	return isDirectionOpposite
 }
 
@@ -1161,33 +1252,33 @@ func (ofm *OrderFlowManager) detectCVDDivergence4H(cvdData *CVDData) bool {
 func (ofm *OrderFlowManager) detectCVDDivergenceWithRelativeThreshold(cvdData *CVDData) bool {
 	spotCVD := cvdData.SpotCVD1H
 	futuresCVD := cvdData.FuturesCVD1H
-	
+
 	// 🔧 P1-1修复：计算相对阈值，而非固定10万美元
 	// 使用两个CVD的平均绝对值作为基准
 	avgAbsCVD := (math.Abs(spotCVD) + math.Abs(futuresCVD)) / 2
-	
+
 	// 相对阈值：平均值的20%，最小值为5万美元，最大值为50万美元
 	relativeThreshold := math.Max(50000, math.Min(500000, avgAbsCVD*0.2))
-	
+
 	// 判断方向
 	spotDirection := 0
 	futuresDirection := 0
-	
+
 	if spotCVD > relativeThreshold {
 		spotDirection = 1
 	} else if spotCVD < -relativeThreshold {
 		spotDirection = -1
 	}
-	
+
 	if futuresCVD > relativeThreshold {
 		futuresDirection = 1
 	} else if futuresCVD < -relativeThreshold {
 		futuresDirection = -1
 	}
-	
-	log.Printf("🔧 [P1-1兜底] CVD背离检测: 现货%.0f(方向%d), 期货%.0f(方向%d), 阈值%.0f", 
+
+	log.Printf("🔧 [P1-1兜底] CVD背离检测: 现货%.0f(方向%d), 期货%.0f(方向%d), 阈值%.0f",
 		spotCVD, spotDirection, futuresCVD, futuresDirection, relativeThreshold)
-	
+
 	// 如果现货和期货方向相反，认为有背离
 	return spotDirection != 0 && futuresDirection != 0 && spotDirection != futuresDirection
 }
@@ -1195,14 +1286,14 @@ func (ofm *OrderFlowManager) detectCVDDivergenceWithRelativeThreshold(cvdData *C
 // classifyCVDDirection 🔧 P1-1新增：基于统计分布分类CVD方向
 func (ofm *OrderFlowManager) classifyCVDDirection(cvdValue float64, cvdType string) int {
 	// 简化实现：使用CVD绝对值的分位数来判断是否"统计显著"
-	
+
 	// 计算相对强度评分 (0-1)
 	absValue := math.Abs(cvdValue)
-	
+
 	// 动态阈值：基于CVD值的对数特性
 	// 小额CVD需要更低的阈值，大额CVD需要更高的阈值
 	var significanceThreshold float64
-	
+
 	if absValue < 100000 { // 10万以下
 		significanceThreshold = 50000 // 5万门槛
 	} else if absValue < 1000000 { // 100万以下
@@ -1210,7 +1301,7 @@ func (ofm *OrderFlowManager) classifyCVDDirection(cvdValue float64, cvdType stri
 	} else { // 100万以上
 		significanceThreshold = 500000 // 50万门槛
 	}
-	
+
 	// 判断方向
 	if cvdValue > significanceThreshold {
 		return 1 // 多头
@@ -1262,9 +1353,9 @@ func (ofm *OrderFlowManager) calculateTrendStrength(cvdData *CVDData, oiAnalysis
 	}
 
 	// 基于CVD绝对值和一致性计算强度
-	spotStrength := math.Abs(cvdData.SpotCVD1H) / 500000 // 50万USD为满分
+	spotStrength := math.Abs(cvdData.SpotCVD1H) / 500000        // 50万USD为满分
 	futuresStrength := math.Abs(cvdData.FuturesCVD1H) / 1000000 // 100万USD为满分
-	oiStrength := math.Abs(oiAnalysis.ChangeRate1H) / 10 // 10%变化为满分
+	oiStrength := math.Abs(oiAnalysis.ChangeRate1H) / 10        // 10%变化为满分
 
 	// 限制在0-1范围内
 	spotStrength = math.Min(1.0, spotStrength)
@@ -1315,18 +1406,30 @@ func (ofm *OrderFlowManager) calculateConfidenceLevel(cvdData *CVDData, oiAnalys
 
 	// CVD和OI一致性
 	spotDirection := 0.0
-	if cvdData.SpotCVD1H > 0 { spotDirection = 1.0 } else if cvdData.SpotCVD1H < 0 { spotDirection = -1.0 }
-	
+	if cvdData.SpotCVD1H > 0 {
+		spotDirection = 1.0
+	} else if cvdData.SpotCVD1H < 0 {
+		spotDirection = -1.0
+	}
+
 	futuresDirection := 0.0
-	if cvdData.FuturesCVD1H > 0 { futuresDirection = 1.0 } else if cvdData.FuturesCVD1H < 0 { futuresDirection = -1.0 }
-	
+	if cvdData.FuturesCVD1H > 0 {
+		futuresDirection = 1.0
+	} else if cvdData.FuturesCVD1H < 0 {
+		futuresDirection = -1.0
+	}
+
 	oiDirection := 0.0
-	if oiAnalysis.ChangeRate1H > 0 { oiDirection = 1.0 } else if oiAnalysis.ChangeRate1H < 0 { oiDirection = -1.0 }
+	if oiAnalysis.ChangeRate1H > 0 {
+		oiDirection = 1.0
+	} else if oiAnalysis.ChangeRate1H < 0 {
+		oiDirection = -1.0
+	}
 
 	if spotDirection == futuresDirection && spotDirection != 0 {
 		confidence += 0.2 // CVD一致性
 	}
-	
+
 	if (spotDirection == oiDirection || futuresDirection == oiDirection) && oiDirection != 0 {
 		confidence += 0.1 // OI确认
 	}
@@ -1404,3 +1507,10 @@ func (ofm *OrderFlowManager) calculateOrderBookReliability(orderBookData *OrderB
 	return reliability
 }
 
+// GetOI5MinuteChangeRate 获取指定币种的5分钟OI变化率（P0-03修复：提供给CVD计算器使用）
+func (ofm *OrderFlowManager) GetOI5MinuteChangeRate(symbol string) float64 {
+	if ofm.oiManager == nil {
+		return 0.0
+	}
+	return ofm.oiManager.GetOI5MinuteChangeRate(symbol)
+}

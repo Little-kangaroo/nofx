@@ -25,17 +25,17 @@ type WallTracker struct {
 
 // WallHistoryEntry 挂单墙历史记录
 type WallHistoryEntry struct {
-	bucketKey     int64     // 🔧 新增：分桶key，容许价格范围内的微调
-	priceRange    [2]float64 // 🔧 新增：价格范围 [min, max]
-	firstSeen     time.Time
-	lastSeen      time.Time
-	appearances   int        // 出现次数
+	bucketKey      int64      // 🔧 新增：分桶key，容许价格范围内的微调
+	priceRange     [2]float64 // 🔧 新增：价格范围 [min, max]
+	firstSeen      time.Time
+	lastSeen       time.Time
+	appearances    int       // 出现次数
 	disappearances int       // 消失次数
-	maxSize       float64    // 历史最大规模
-	minSize       float64    // 历史最小规模
-	avgSize       float64    // 平均规模
-	sizeHistory   []float64  // 规模历史
-	isActive      bool       // 当前是否活跃
+	maxSize        float64   // 历史最大规模
+	minSize        float64   // 历史最小规模
+	avgSize        float64   // 平均规模
+	sizeHistory    []float64 // 规模历史
+	isActive       bool      // 当前是否活跃
 }
 
 // SymbolOrderBookData 单个交易对的订单簿数据
@@ -54,38 +54,38 @@ type SymbolOrderBookData struct {
 type PressureCalculationMode int
 
 const (
-	PressureModeSimple      PressureCalculationMode = iota // 简单模式：前5档
-	PressureModeDeep                                        // 深度模式：前20档
-	PressureModeWeighted                                    // 加权模式：距离加权
-	PressureModeFull                                        // 全深度模式：所有档位
+	PressureModeSimple   PressureCalculationMode = iota // 简单模式：前5档
+	PressureModeDeep                                    // 深度模式：前20档
+	PressureModeWeighted                                // 加权模式：距离加权
+	PressureModeFull                                    // 全深度模式：所有档位
 )
 
 // OrderBookCalculator 盘口计算器（支持多交易对）
 type OrderBookCalculator struct {
-	mu               sync.RWMutex
-	symbolData       map[string]*SymbolOrderBookData // symbol -> 数据
-	wallThreshold    float64                          // 挂单墙阈值倍数（默认5倍平均档位量）
-	maxHistorySize   int                              // 最大历史记录数量
-	pressureMode     PressureCalculationMode          // 🔧 P2-1新增：压力计算模式
+	mu             sync.RWMutex
+	symbolData     map[string]*SymbolOrderBookData // symbol -> 数据
+	wallThreshold  float64                         // 挂单墙阈值倍数（默认5倍平均档位量）
+	maxHistorySize int                             // 最大历史记录数量
+	pressureMode   PressureCalculationMode         // 🔧 P2-1新增：压力计算模式
 }
 
 // NewOrderBookCalculator 创建盘口计算器（支持多交易对）
 func NewOrderBookCalculator(wallThreshold float64) *OrderBookCalculator {
 	return &OrderBookCalculator{
-		symbolData:       make(map[string]*SymbolOrderBookData),
-		wallThreshold:    wallThreshold,
-		maxHistorySize:   100,
-		pressureMode:     PressureModeDeep, // 🔧 P2-1修复：默认使用深度模式，比简单模式更准确
+		symbolData:     make(map[string]*SymbolOrderBookData),
+		wallThreshold:  wallThreshold,
+		maxHistorySize: 100,
+		pressureMode:   PressureModeDeep, // 🔧 P2-1修复：默认使用深度模式，比简单模式更准确
 	}
 }
 
 // NewOrderBookCalculatorWithMode 创建带模式的盘口计算器（🔧 P2-1新增）
 func NewOrderBookCalculatorWithMode(wallThreshold float64, mode PressureCalculationMode) *OrderBookCalculator {
 	return &OrderBookCalculator{
-		symbolData:       make(map[string]*SymbolOrderBookData),
-		wallThreshold:    wallThreshold,
-		maxHistorySize:   100,
-		pressureMode:     mode,
+		symbolData:     make(map[string]*SymbolOrderBookData),
+		wallThreshold:  wallThreshold,
+		maxHistorySize: 100,
+		pressureMode:   mode,
 	}
 }
 
@@ -101,7 +101,7 @@ func (calc *OrderBookCalculator) getOrCreateSymbolData(symbol string) *SymbolOrd
 	if data, exists := calc.symbolData[symbol]; exists {
 		return data
 	}
-	
+
 	// 创建新的交易对数据
 	data := &SymbolOrderBookData{
 		currentBids:      make([]OrderBookLevel, 0, 20),
@@ -115,7 +115,7 @@ func (calc *OrderBookCalculator) getOrCreateSymbolData(symbol string) *SymbolOrd
 		},
 		last5mReset: time.Now(),
 	}
-	
+
 	calc.symbolData[symbol] = data
 	return data
 }
@@ -126,9 +126,9 @@ func (calc *OrderBookCalculator) calculateTickSize(symbol string) float64 {
 	if symbol == "BTCUSDT" {
 		return 10.0 // BTC: 10USD为一个分桶
 	} else if symbol == "ETHUSDT" {
-		return 5.0  // ETH: 5USD为一个分桶
+		return 5.0 // ETH: 5USD为一个分桶
 	} else {
-		return 0.1  // 其他币种: 0.1USD为一个分桶
+		return 0.1 // 其他币种: 0.1USD为一个分桶
 	}
 }
 
@@ -167,16 +167,16 @@ func (calc *OrderBookCalculator) ProcessDepthData(symbol string, depthData *Dept
 	if len(symbolData.currentBids) > 0 && len(symbolData.currentAsks) > 0 {
 		bestBid := symbolData.currentBids[0].Price
 		bestAsk := symbolData.currentAsks[0].Price
-		
+
 		// 双重检查：确保没有盘口交叉
 		if bestBid >= bestAsk {
-			log.Printf("🚨 [%s] 处理后仍然盘口交叉: bestBid=%.8f >= bestAsk=%.8f, 跳过此次更新", 
+			log.Printf("🚨 [%s] 处理后仍然盘口交叉: bestBid=%.8f >= bestAsk=%.8f, 跳过此次更新",
 				symbol, bestBid, bestAsk)
 			return
 		}
-		
+
 		symbolData.currentPrice = (bestBid + bestAsk) / 2
-		
+
 		// 🔥 P0-03修复：记录盘口健康度数据
 		calc.recordOrderBookHealth(symbol, bestBid, bestAsk, len(processedBids), len(processedAsks))
 	}
@@ -204,20 +204,20 @@ func (calc *OrderBookCalculator) processAndSortOrderBookLevels(levels []OrderBoo
 	if len(levels) == 0 {
 		return levels
 	}
-	
+
 	// 第一步：使用map合并同价位数量
 	priceMap := make(map[float64]float64)
-	
+
 	for _, level := range levels {
 		// 跳过无效数据
 		if level.Price <= 0 || level.Quantity <= 0 {
 			continue
 		}
-		
+
 		// 同价位累加数量
 		priceMap[level.Price] += level.Quantity
 	}
-	
+
 	// 第二步：转换回slice
 	result := make([]OrderBookLevel, 0, len(priceMap))
 	for price, totalQty := range priceMap {
@@ -228,7 +228,7 @@ func (calc *OrderBookCalculator) processAndSortOrderBookLevels(levels []OrderBoo
 			})
 		}
 	}
-	
+
 	// 第三步：强制排序
 	if side == "bids" {
 		// 买单按价格降序排列（最高价在前）
@@ -241,7 +241,7 @@ func (calc *OrderBookCalculator) processAndSortOrderBookLevels(levels []OrderBoo
 			return result[i].Price < result[j].Price
 		})
 	}
-	
+
 	return result
 }
 
@@ -250,13 +250,13 @@ func (calc *OrderBookCalculator) processAndSortOrderBookLevels(levels []OrderBoo
 func (calc *OrderBookCalculator) recordOrderBookHealth(symbol string, bestBid, bestAsk float64, bidLevels, askLevels int) {
 	spread := bestAsk - bestBid
 	spreadPct := (spread / bestBid) * 100
-	
+
 	// 记录关键指标用于后续分析
 	if spreadPct > 1.0 { // 价差超过1%时记录
-		log.Printf("⚠️ [%s] 价差较宽: %.6f%% (%.8f), 档位数: bid=%d, ask=%d", 
+		log.Printf("⚠️ [%s] 价差较宽: %.6f%% (%.8f), 档位数: bid=%d, ask=%d",
 			symbol, spreadPct, spread, bidLevels, askLevels)
 	}
-	
+
 	// 检查档位深度是否足够
 	if bidLevels < 5 || askLevels < 5 {
 		log.Printf("⚠️ [%s] 盘口深度不足: 买单%d档, 卖单%d档", symbol, bidLevels, askLevels)
@@ -297,13 +297,13 @@ func (calc *OrderBookCalculator) calculateImbalance(symbol string) float64 {
 	// 🔧 修复: 增强除零保护和边界情况处理
 	totalValue := totalBidValue + totalAskValue
 	if totalValue <= 0 || math.IsNaN(totalValue) || math.IsInf(totalValue, 0) {
-		log.Printf("⚠️ [%s] 计算失衡比例时发现异常总值: %.2f (买单:%.2f, 卖单:%.2f)", 
+		log.Printf("⚠️ [%s] 计算失衡比例时发现异常总值: %.2f (买单:%.2f, 卖单:%.2f)",
 			symbol, totalValue, totalBidValue, totalAskValue)
 		return 0
 	}
 
 	imbalance := (totalBidValue - totalAskValue) / totalValue
-	
+
 	// 🔧 修复: 确保返回值在有效范围内
 	if math.IsNaN(imbalance) || math.IsInf(imbalance, 0) {
 		log.Printf("⚠️ [%s] 计算失衡比例结果异常: %.6f", symbol, imbalance)
@@ -319,7 +319,7 @@ func (calc *OrderBookCalculator) addImbalancePoint(symbol string, point Imbalanc
 	if symbolData == nil {
 		return
 	}
-	
+
 	symbolData.imbalanceHistory = append(symbolData.imbalanceHistory, point)
 
 	// 限制历史记录大小
@@ -334,7 +334,7 @@ func (calc *OrderBookCalculator) findWalls(symbol string) (resistance *WallInfo,
 	if symbolData == nil {
 		return nil, nil
 	}
-	
+
 	// 计算平均档位量
 	avgBidValue := calc.calculateAverageLevel(symbolData.currentBids)
 	avgAskValue := calc.calculateAverageLevel(symbolData.currentAsks)
@@ -363,19 +363,19 @@ func (calc *OrderBookCalculator) calculateAverageLevel(levels []OrderBookLevel) 
 
 	var totalValue float64
 	validLevels := 0
-	
+
 	for _, level := range levels {
 		// 🔧 修复: 跳过无效的档位数据
 		if level.Price <= 0 || level.Quantity <= 0 {
 			continue
 		}
-		
+
 		levelValue := level.Price * level.Quantity
 		// 🔧 修复: 检查计算结果是否有效
 		if math.IsNaN(levelValue) || math.IsInf(levelValue, 0) {
 			continue
 		}
-		
+
 		totalValue += levelValue
 		validLevels++
 	}
@@ -446,13 +446,13 @@ func (calc *OrderBookCalculator) findResistanceWall(symbol string, threshold flo
 		LevelCount:  wallLevels,
 		// V2.0 新增字段
 		StabilityScore:    stabilityScore,
-		FlickerCount:     flickerCount,
+		FlickerCount:      flickerCount,
 		ExistenceDuration: existenceDuration,
-		LastSeen:         symbolData.lastUpdate,
-		FirstSeen:        calc.getWallFirstSeen(symbol, wallPrice),
-		AverageSize:      calc.getWallAverageSize(symbol, wallPrice),
-		MaxSize:          calc.getWallMaxSize(symbol, wallPrice),
-		MinSize:          calc.getWallMinSize(symbol, wallPrice),
+		LastSeen:          symbolData.lastUpdate,
+		FirstSeen:         calc.getWallFirstSeen(symbol, wallPrice),
+		AverageSize:       calc.getWallAverageSize(symbol, wallPrice),
+		MaxSize:           calc.getWallMaxSize(symbol, wallPrice),
+		MinSize:           calc.getWallMinSize(symbol, wallPrice),
 	}
 }
 
@@ -514,13 +514,13 @@ func (calc *OrderBookCalculator) findSupportWall(symbol string, threshold float6
 		LevelCount:  wallLevels,
 		// V2.0 新增字段
 		StabilityScore:    stabilityScore,
-		FlickerCount:     flickerCount,
+		FlickerCount:      flickerCount,
 		ExistenceDuration: existenceDuration,
-		LastSeen:         symbolData.lastUpdate,
-		FirstSeen:        calc.getWallFirstSeen(symbol, wallPrice),
-		AverageSize:      calc.getWallAverageSize(symbol, wallPrice),
-		MaxSize:          calc.getWallMaxSize(symbol, wallPrice),
-		MinSize:          calc.getWallMinSize(symbol, wallPrice),
+		LastSeen:          symbolData.lastUpdate,
+		FirstSeen:         calc.getWallFirstSeen(symbol, wallPrice),
+		AverageSize:       calc.getWallAverageSize(symbol, wallPrice),
+		MaxSize:           calc.getWallMaxSize(symbol, wallPrice),
+		MinSize:           calc.getWallMinSize(symbol, wallPrice),
 	}
 }
 
@@ -603,13 +603,13 @@ func (calc *OrderBookCalculator) GetCurrentOrderBookData(symbol string, smoothPe
 		BidPressure:       bidPressure,
 		AskPressure:       askPressure,
 		// V2.0 新增字段
-		ImbalanceTrend:      imbalanceTrend,
-		PressureDelta5m:     pressureDelta5m,
-		SpoofingRisk:        spoofingRisk,
-		LiquidityScore:      liquidityScore,
-		WallChangeCount5m:   symbolData.wallChangeCount5m,
-		LastUpdate:          symbolData.lastUpdate,
-		IsStale:             isStale,
+		ImbalanceTrend:    imbalanceTrend,
+		PressureDelta5m:   pressureDelta5m,
+		SpoofingRisk:      spoofingRisk,
+		LiquidityScore:    liquidityScore,
+		WallChangeCount5m: symbolData.wallChangeCount5m,
+		LastUpdate:        symbolData.lastUpdate,
+		IsStale:           isStale,
 	}
 
 	// V2.0: 缓存到全局缓存系统
@@ -618,8 +618,8 @@ func (calc *OrderBookCalculator) GetCurrentOrderBookData(symbol string, smoothPe
 
 	// 只在异常情况或调试模式下打印详细日志，避免日志噪音
 	if spoofingRisk > 0.8 || math.Abs(imbalanceRatio) > 0.9 || liquidityScore < 0.5 {
-		log.Printf("⚠️ [%s] 盘口异常: 失衡比%.3f, 虚假挂单风险%.3f, 流动性评分%.3f",
-			symbol, imbalanceRatio, spoofingRisk, liquidityScore)
+		//log.Printf("⚠️ [%s] 盘口异常: 失衡比%.3f, 虚假挂单风险%.3f, 流动性评分%.3f",
+		//	symbol, imbalanceRatio, spoofingRisk, liquidityScore)
 	}
 
 	return orderBookData
@@ -648,7 +648,7 @@ func (calc *OrderBookCalculator) calculatePressureEnhanced(symbol string, levels
 	if len(levels) == 0 {
 		return 0
 	}
-	
+
 	// 根据配置的压力计算模式选择算法
 	switch calc.pressureMode {
 	case PressureModeSimple:
@@ -709,23 +709,23 @@ func (calc *OrderBookCalculator) calculatePressureWeighted(symbol string, levels
 	if len(levels) == 0 {
 		return 0
 	}
-	
+
 	symbolData := calc.symbolData[symbol]
 	if symbolData == nil || symbolData.currentPrice <= 0 {
 		// 兜底：如果没有当前价格，使用深度模式
 		return calc.calculatePressureDeep(levels)
 	}
-	
+
 	currentPrice := symbolData.currentPrice
 	var weightedValue float64
 	maxLevels := int(math.Min(float64(len(levels)), 20)) // 加权计算前20档
-	
+
 	for i := 0; i < maxLevels; i++ {
 		level := levels[i]
 		if level.Price <= 0 || level.Quantity <= 0 {
 			continue
 		}
-		
+
 		// 计算距离权重：距离越近权重越高
 		var distance float64
 		if isBid {
@@ -735,15 +735,15 @@ func (calc *OrderBookCalculator) calculatePressureWeighted(symbol string, levels
 			// 卖单：距离 = |卖价 - 当前价| / 当前价
 			distance = math.Abs(level.Price-currentPrice) / currentPrice
 		}
-		
+
 		// 权重函数：距离越近权重越高，使用指数衰减
 		weight := math.Exp(-distance * 10) // 10为衰减系数，可调节
-		
+
 		// 加权价值：价值 × 权重
 		levelValue := level.Price * level.Quantity
 		weightedValue += levelValue * weight
 	}
-	
+
 	return weightedValue
 }
 
@@ -769,42 +769,42 @@ func (calc *OrderBookCalculator) calculatePressureFull(levels []OrderBookLevel) 
 func (calc *OrderBookCalculator) GetPressureCalculationInfo(symbol string) map[string]interface{} {
 	calc.mu.RLock()
 	defer calc.mu.RUnlock()
-	
+
 	symbolData := calc.symbolData[symbol]
 	if symbolData == nil {
 		return map[string]interface{}{
 			"error": "symbol not found",
 		}
 	}
-	
+
 	// 计算所有模式的压力值进行对比
 	bidPressures := make(map[string]float64)
 	askPressures := make(map[string]float64)
-	
+
 	// 简单模式
 	bidPressures["simple"] = calc.calculatePressureSimple(symbolData.currentBids)
 	askPressures["simple"] = calc.calculatePressureSimple(symbolData.currentAsks)
-	
+
 	// 深度模式
 	bidPressures["deep"] = calc.calculatePressureDeep(symbolData.currentBids)
 	askPressures["deep"] = calc.calculatePressureDeep(symbolData.currentAsks)
-	
+
 	// 加权模式
 	bidPressures["weighted"] = calc.calculatePressureWeighted(symbol, symbolData.currentBids, true)
 	askPressures["weighted"] = calc.calculatePressureWeighted(symbol, symbolData.currentAsks, false)
-	
+
 	// 全深度模式
 	bidPressures["full"] = calc.calculatePressureFull(symbolData.currentBids)
 	askPressures["full"] = calc.calculatePressureFull(symbolData.currentAsks)
-	
+
 	return map[string]interface{}{
-		"symbol":               symbol,
-		"current_mode":         calc.getModeString(),
-		"current_price":        symbolData.currentPrice,
-		"bid_levels_count":     len(symbolData.currentBids),
-		"ask_levels_count":     len(symbolData.currentAsks),
-		"bid_pressures":        bidPressures,
-		"ask_pressures":        askPressures,
+		"symbol":           symbol,
+		"current_mode":     calc.getModeString(),
+		"current_price":    symbolData.currentPrice,
+		"bid_levels_count": len(symbolData.currentBids),
+		"ask_levels_count": len(symbolData.currentAsks),
+		"bid_pressures":    bidPressures,
+		"ask_pressures":    askPressures,
 		"pressure_ratios": map[string]float64{
 			"simple_ratio":   safeDivisionForOrderBook(bidPressures["simple"], askPressures["simple"]),
 			"deep_ratio":     safeDivisionForOrderBook(bidPressures["deep"], askPressures["deep"]),
@@ -839,7 +839,7 @@ func safeDivisionForOrderBook(numerator, denominator float64) float64 {
 	if math.IsNaN(numerator) || math.IsInf(numerator, 0) {
 		return 0
 	}
-	
+
 	result := numerator / denominator
 	if math.IsNaN(result) || math.IsInf(result, 0) {
 		return 0
@@ -853,22 +853,22 @@ func safeDivisionForOrderBook(numerator, denominator float64) float64 {
 func (calc *OrderBookCalculator) updateWallTracking(symbol string, timestamp time.Time) {
 	// 获取当前的挂单墙
 	resistance, support := calc.findWalls(symbol)
-	
+
 	symbolData := calc.symbolData[symbol]
 	if symbolData == nil {
 		return
 	}
-	
+
 	// 更新阻力墙追踪
 	if resistance != nil {
 		calc.trackWall(symbol, resistance.Price, resistance.StrengthUSD, timestamp)
 	}
-	
+
 	// 更新支撑墙追踪
 	if support != nil {
 		calc.trackWall(symbol, support.Price, support.StrengthUSD, timestamp)
 	}
-	
+
 	// 清理过期的墙记录
 	calc.cleanupExpiredWalls(symbol, timestamp)
 }
@@ -879,11 +879,11 @@ func (calc *OrderBookCalculator) trackWall(symbol string, price, size float64, t
 	if symbolData == nil {
 		return
 	}
-	
+
 	// 🔧 修复：使用价格分桶机制，避免浮点数陷阱
 	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
 	entry, exists := symbolData.wallTracker.wallHistory[bucketKey]
-	
+
 	if !exists {
 		// 新墙
 		minPrice, maxPrice := calc.bucketToPrice(bucketKey, symbolData.wallTracker.tickSize)
@@ -904,14 +904,14 @@ func (calc *OrderBookCalculator) trackWall(symbol string, price, size float64, t
 	} else {
 		// 更新现有墙
 		entry.lastSeen = timestamp
-		
+
 		if !entry.isActive {
 			// 墙重新出现
 			entry.appearances++
 			entry.isActive = true
 			symbolData.wallChangeCount5m++
 		}
-		
+
 		// 更新价格范围（扩展到包含新价格）
 		if price < entry.priceRange[0] {
 			entry.priceRange[0] = price
@@ -919,7 +919,7 @@ func (calc *OrderBookCalculator) trackWall(symbol string, price, size float64, t
 		if price > entry.priceRange[1] {
 			entry.priceRange[1] = price
 		}
-		
+
 		// 更新大小统计
 		entry.sizeHistory = append(entry.sizeHistory, size)
 		if size > entry.maxSize {
@@ -928,7 +928,7 @@ func (calc *OrderBookCalculator) trackWall(symbol string, price, size float64, t
 		if size < entry.minSize {
 			entry.minSize = size
 		}
-		
+
 		// 计算平均大小
 		total := 0.0
 		for _, s := range entry.sizeHistory {
@@ -944,9 +944,9 @@ func (calc *OrderBookCalculator) cleanupExpiredWalls(symbol string, timestamp ti
 	if symbolData == nil {
 		return
 	}
-	
+
 	cutoffTime := timestamp.Add(-symbolData.wallTracker.maxWallAge)
-	
+
 	for bucketKey, entry := range symbolData.wallTracker.wallHistory {
 		if entry.lastSeen.Before(cutoffTime) {
 			delete(symbolData.wallTracker.wallHistory, bucketKey)
@@ -969,22 +969,22 @@ func (calc *OrderBookCalculator) isWallCurrentlyPresent(symbol string, price flo
 	if symbolData == nil {
 		return false
 	}
-	
+
 	// 计算阈值
 	avgBidValue := calc.calculateAverageLevel(symbolData.currentBids)
 	avgAskValue := calc.calculateAverageLevel(symbolData.currentAsks)
 	avgValue := (avgBidValue + avgAskValue) / 2
-	
+
 	if avgValue == 0 {
 		return false
 	}
-	
+
 	threshold := avgValue * calc.wallThreshold
-	
+
 	// 🔧 修复：使用分桶机制查找墙
 	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
 	minPrice, maxPrice := calc.bucketToPrice(bucketKey, symbolData.wallTracker.tickSize)
-	
+
 	// 检查买单档位
 	for _, bid := range symbolData.currentBids {
 		if bid.Price >= minPrice && bid.Price <= maxPrice { // 价格在分桶范围内
@@ -994,7 +994,7 @@ func (calc *OrderBookCalculator) isWallCurrentlyPresent(symbol string, price flo
 			}
 		}
 	}
-	
+
 	// 检查卖单档位
 	for _, ask := range symbolData.currentAsks {
 		if ask.Price >= minPrice && ask.Price <= maxPrice { // 价格在分桶范围内
@@ -1004,7 +1004,7 @@ func (calc *OrderBookCalculator) isWallCurrentlyPresent(symbol string, price flo
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -1014,7 +1014,7 @@ func (calc *OrderBookCalculator) calculateWallStability(symbol string, price, cu
 	if symbolData == nil {
 		return 0.5, 0, 0
 	}
-	
+
 	// 🔧 修复：使用分桶机制查找墙历史
 	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
 	entry, exists := symbolData.wallTracker.wallHistory[bucketKey]
@@ -1022,22 +1022,22 @@ func (calc *OrderBookCalculator) calculateWallStability(symbol string, price, cu
 		// 新墙，返回默认值
 		return 0.5, 0, 0
 	}
-	
+
 	// 计算存在时长
 	existenceDuration := entry.lastSeen.Sub(entry.firstSeen)
-	
+
 	// 计算稳定性评分 (0-1)
 	stabilityScore := 0.0
-	
+
 	// 1. 时间稳定性 (40%权重)
 	timeScore := math.Min(existenceDuration.Minutes()/30, 1.0) // 30分钟为满分
 	stabilityScore += timeScore * 0.4
-	
+
 	// 2. 闪烁频率 (30%权重)
 	flickerRatio := float64(entry.disappearances) / float64(entry.appearances)
 	flickerScore := math.Max(0, 1.0-flickerRatio) // 闪烁越少评分越高
 	stabilityScore += flickerScore * 0.3
-	
+
 	// 3. 大小一致性 (20%权重)
 	sizeConsistency := 0.0
 	if entry.maxSize > 0 {
@@ -1045,17 +1045,17 @@ func (calc *OrderBookCalculator) calculateWallStability(symbol string, price, cu
 		sizeConsistency = math.Max(0, 1.0-sizeVariation) // 变化越小评分越高
 	}
 	stabilityScore += sizeConsistency * 0.2
-	
+
 	// 4. 当前活跃性 (10%权重)
 	activeScore := 0.0
 	if entry.isActive {
 		activeScore = 1.0
 	}
 	stabilityScore += activeScore * 0.1
-	
+
 	// 确保评分在0-1范围内
 	stabilityScore = math.Max(0, math.Min(1, stabilityScore))
-	
+
 	return stabilityScore, entry.disappearances, existenceDuration
 }
 
@@ -1065,13 +1065,13 @@ func (calc *OrderBookCalculator) calculateImbalanceTrend(symbol string) string {
 	if symbolData == nil || len(symbolData.imbalanceHistory) < 3 {
 		return "insufficient_data"
 	}
-	
+
 	// 取最近3个点计算趋势
 	recentPoints := symbolData.imbalanceHistory[len(symbolData.imbalanceHistory)-3:]
-	
+
 	// 计算斜率
 	slope := (recentPoints[2].Ratio - recentPoints[0].Ratio) / 2
-	
+
 	if slope > 0.05 {
 		return "increasing_bid_pressure" // 买方压力增加
 	} else if slope < -0.05 {
@@ -1088,25 +1088,25 @@ func (calc *OrderBookCalculator) calculatePressureDelta5m(symbol string, current
 	if symbolData == nil {
 		return 0
 	}
-	
+
 	// 简化实现：基于当前失衡比例计算压力差异
 	currentImbalance := calc.calculateImbalance(symbol)
-	
+
 	if len(symbolData.imbalanceHistory) < 2 {
 		return 0
 	}
-	
+
 	// 🚨 P0-04风险：使用time.Now()而非数据时间戳
 	fiveMinuteAgo := time.Now().Add(-5 * time.Minute)
 	var baseline float64 // 🚨 P0-04风险：找不到基准点时保持0，产生虚假巨大变化
-	
+
 	for i := len(symbolData.imbalanceHistory) - 1; i >= 0; i-- {
 		if symbolData.imbalanceHistory[i].Timestamp.Before(fiveMinuteAgo) {
 			baseline = symbolData.imbalanceHistory[i].Ratio
 			break
 		}
 	}
-	
+
 	return currentImbalance - baseline
 }
 
@@ -1117,26 +1117,26 @@ func (calc *OrderBookCalculator) calculatePressureDelta5mFixed(symbol string, cu
 	if symbolData == nil {
 		return 0
 	}
-	
+
 	// 基于当前失衡比例计算压力差异
 	currentImbalance := calc.calculateImbalance(symbol)
-	
+
 	if len(symbolData.imbalanceHistory) < 2 {
 		return 0 // 数据不足，返回0而非虚假变化
 	}
-	
+
 	// 🔥 P0-04修复：使用传入的数据时间戳，而非time.Now()
 	fiveMinuteAgo := currentTime.Add(-5 * time.Minute)
-	
+
 	// 🔥 P0-04修复：寻找最接近5分钟前的基准点
 	var baseline float64
 	var baselineTime time.Time
 	var foundBaseline bool
-	
+
 	// 从最新数据向前寻找最接近5分钟前的点
 	for i := len(symbolData.imbalanceHistory) - 1; i >= 0; i-- {
 		historyPoint := symbolData.imbalanceHistory[i]
-		
+
 		// 🔥 P0-04修复：寻找 <= fiveMinuteAgo 的最近点
 		if historyPoint.Timestamp.Before(fiveMinuteAgo) || historyPoint.Timestamp.Equal(fiveMinuteAgo) {
 			baseline = historyPoint.Ratio
@@ -1145,57 +1145,57 @@ func (calc *OrderBookCalculator) calculatePressureDelta5mFixed(symbol string, cu
 			break
 		}
 	}
-	
+
 	// 🔥 P0-04修复：找不到基准点时的安全兜底
 	if !foundBaseline {
 		// 获取最早的数据点作为兜底基准
 		if len(symbolData.imbalanceHistory) > 0 {
 			oldestPoint := symbolData.imbalanceHistory[0]
 			coverageDuration := currentTime.Sub(oldestPoint.Timestamp)
-			
+
 			// 如果数据覆盖不足2分钟，认为变化不可信
 			if coverageDuration < 2*time.Minute {
 				return 0 // insufficient_data
 			}
-			
+
 			// 使用最早点作为基准，但应用置信度衰减
 			baseline = oldestPoint.Ratio
 			baselineTime = oldestPoint.Timestamp
-			
+
 			// 🔥 P0-04修复：置信度衰减机制
 			// 覆盖时长比例：实际覆盖时长 / 期望的5分钟
 			coverageRatio := coverageDuration.Minutes() / 5.0
 			confidenceDecay := math.Min(1.0, coverageRatio) // 最大衰减到原值
-			
+
 			rawDelta := currentImbalance - baseline
-			
+
 			if os.Getenv("NOFX_DEBUG") == "true" {
-				log.Printf("🔧 [%s] P0-04兜底：覆盖时长=%.1fm, 置信度衰减=%.3f, 原始差异=%.6f, 衰减后=%.6f", 
+				log.Printf("🔧 [%s] P0-04兜底：覆盖时长=%.1fm, 置信度衰减=%.3f, 原始差异=%.6f, 衰减后=%.6f",
 					symbol, coverageDuration.Minutes(), confidenceDecay, rawDelta, rawDelta*confidenceDecay)
 			}
-			
+
 			return rawDelta * confidenceDecay
 		}
-		
+
 		// 完全没有历史数据
 		return 0
 	}
-	
+
 	// 🔥 P0-04修复：正常情况，计算时间加权的压力差异
 	timeDiff := currentTime.Sub(baselineTime)
 	rawDelta := currentImbalance - baseline
-	
+
 	// 如果时间差异过大（>10分钟），应用时间衰减
 	if timeDiff > 10*time.Minute {
 		timeDecay := 10.0 / timeDiff.Minutes() // 10分钟后开始衰减
 		rawDelta *= timeDecay
-		
+
 		if os.Getenv("NOFX_DEBUG") == "true" {
-			log.Printf("🔧 [%s] P0-04时间衰减：基准点距离=%.1fm, 衰减系数=%.3f", 
+			log.Printf("🔧 [%s] P0-04时间衰减：基准点距离=%.1fm, 衰减系数=%.3f",
 				symbol, timeDiff.Minutes(), timeDecay)
 		}
 	}
-	
+
 	return rawDelta
 }
 
@@ -1205,25 +1205,25 @@ func (calc *OrderBookCalculator) calculateSpoofingRisk(symbol string) float64 {
 	if symbolData == nil {
 		return 0
 	}
-	
+
 	now := time.Now()
 	recentTimeThreshold := now.Add(-5 * time.Minute) // 🔧 修复：只看最近5分钟的墙
-	
+
 	var maxSingleRisk float64 = 0.0 // 🔧 修复：取单个墙的最大风险，而非累加
 	activeWallCount := 0
-	
+
 	// 🔧 修复：只遍历活跃且最近的墙
 	for _, entry := range symbolData.wallTracker.wallHistory {
 		// 🔧 修复：过滤条件 - 只看活跃且最近有活动的墙
 		if !entry.isActive || entry.lastSeen.Before(recentTimeThreshold) {
 			continue
 		}
-		
+
 		activeWallCount++
-		
+
 		// 计算单个墙的风险评分
 		singleRisk := 0.0
-		
+
 		// 闪烁风险：基于消失次数相对于出现次数的比例
 		if entry.appearances > 0 {
 			flickerRatio := float64(entry.disappearances) / float64(entry.appearances)
@@ -1231,7 +1231,7 @@ func (calc *OrderBookCalculator) calculateSpoofingRisk(symbol string) float64 {
 				singleRisk += math.Min(0.6, flickerRatio) // 最高0.6分
 			}
 		}
-		
+
 		// 大小变化风险：如果墙的大小变化过于剧烈
 		if entry.maxSize > 0 && len(entry.sizeHistory) > 3 {
 			sizeVariation := (entry.maxSize - entry.minSize) / entry.maxSize
@@ -1239,32 +1239,32 @@ func (calc *OrderBookCalculator) calculateSpoofingRisk(symbol string) float64 {
 				singleRisk += math.Min(0.3, sizeVariation-0.5) // 最高0.3分
 			}
 		}
-		
+
 		// 时间衰减：越久的墙风险越低
 		existenceMinutes := now.Sub(entry.firstSeen).Minutes()
 		timeDecay := math.Max(0.1, 1.0-existenceMinutes/60) // 1小时后衰减到0.1
 		singleRisk *= timeDecay
-		
+
 		// 🔧 修复：取最大值而非累加
 		if singleRisk > maxSingleRisk {
 			maxSingleRisk = singleRisk
 		}
 	}
-	
+
 	// 🔧 修复：基于5分钟内墙变化频率的额外风险（但有上限）
 	changeFrequencyRisk := 0.0
 	if symbolData.wallChangeCount5m > 20 { // 5分钟内变化超过20次才算异常
 		changeFrequencyRisk = math.Min(0.4, float64(symbolData.wallChangeCount5m-20)/50.0)
 	}
-	
+
 	// 🔧 修复：最终风险评分 = max(单墙风险, 变化频率风险)
 	finalRisk := math.Max(maxSingleRisk, changeFrequencyRisk)
-	
+
 	// 🔧 修复：如果没有活跃墙，风险为0
 	if activeWallCount == 0 {
 		finalRisk = 0
 	}
-	
+
 	// 确保在0-1范围内
 	return math.Max(0, math.Min(1, finalRisk))
 }
@@ -1275,18 +1275,18 @@ func (calc *OrderBookCalculator) calculateLiquidityScore(symbol string) float64 
 	if symbolData == nil || len(symbolData.currentBids) == 0 || len(symbolData.currentAsks) == 0 {
 		return 0
 	}
-	
+
 	liquidityScore := 0.0
-	
+
 	// 1. 档位深度评分 (40%权重)
 	depthScore := math.Min(float64(len(symbolData.currentBids)+len(symbolData.currentAsks))/40.0, 1.0)
 	liquidityScore += depthScore * 0.4
-	
+
 	// 2. 价差评分 (30%权重)
 	if len(symbolData.currentBids) > 0 && len(symbolData.currentAsks) > 0 {
 		bestBid := symbolData.currentBids[0].Price
 		bestAsk := symbolData.currentAsks[0].Price
-		
+
 		// 🔧 修复: 增强价差计算的安全性
 		if bestBid > 0 && bestAsk > bestBid {
 			spread := (bestAsk - bestBid) / bestBid
@@ -1297,11 +1297,11 @@ func (calc *OrderBookCalculator) calculateLiquidityScore(symbol string) float64 
 			}
 		}
 	}
-	
+
 	// 3. 总量评分 (30%权重)
 	totalBidValue := 0.0
 	totalAskValue := 0.0
-	
+
 	for _, bid := range symbolData.currentBids {
 		// 🔧 修复: 跳过无效数据
 		if bid.Price > 0 && bid.Quantity > 0 {
@@ -1311,7 +1311,7 @@ func (calc *OrderBookCalculator) calculateLiquidityScore(symbol string) float64 
 			}
 		}
 	}
-	
+
 	for _, ask := range symbolData.currentAsks {
 		// 🔧 修复: 跳过无效数据
 		if ask.Price > 0 && ask.Quantity > 0 {
@@ -1321,7 +1321,7 @@ func (calc *OrderBookCalculator) calculateLiquidityScore(symbol string) float64 
 			}
 		}
 	}
-	
+
 	totalLiquidity := totalBidValue + totalAskValue
 	// 🔧 修复: 确保总流动性计算有效
 	if totalLiquidity > 0 && !math.IsNaN(totalLiquidity) && !math.IsInf(totalLiquidity, 0) {
@@ -1329,7 +1329,7 @@ func (calc *OrderBookCalculator) calculateLiquidityScore(symbol string) float64 
 		volumeScore := math.Min(totalLiquidity/10000000.0, 1.0)
 		liquidityScore += volumeScore * 0.3
 	}
-	
+
 	// 🔧 修复: 确保最终评分在有效范围内
 	if math.IsNaN(liquidityScore) || math.IsInf(liquidityScore, 0) {
 		return 0
@@ -1344,7 +1344,7 @@ func (calc *OrderBookCalculator) getWallFirstSeen(symbol string, price float64) 
 	if symbolData == nil {
 		return time.Now()
 	}
-	
+
 	// 🔧 修复：将价格转换为bucketKey
 	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
 	if entry, exists := symbolData.wallTracker.wallHistory[bucketKey]; exists {
@@ -1359,7 +1359,7 @@ func (calc *OrderBookCalculator) getWallAverageSize(symbol string, price float64
 	if symbolData == nil {
 		return 0
 	}
-	
+
 	// 🔧 修复：将价格转换为bucketKey
 	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
 	if entry, exists := symbolData.wallTracker.wallHistory[bucketKey]; exists {
@@ -1374,7 +1374,7 @@ func (calc *OrderBookCalculator) getWallMaxSize(symbol string, price float64) fl
 	if symbolData == nil {
 		return 0
 	}
-	
+
 	// 🔧 修复：将价格转换为bucketKey
 	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
 	if entry, exists := symbolData.wallTracker.wallHistory[bucketKey]; exists {
@@ -1389,7 +1389,7 @@ func (calc *OrderBookCalculator) getWallMinSize(symbol string, price float64) fl
 	if symbolData == nil {
 		return 0
 	}
-	
+
 	// 🔧 修复：将价格转换为bucketKey
 	bucketKey := calc.priceToBucket(price, symbolData.wallTracker.tickSize)
 	if entry, exists := symbolData.wallTracker.wallHistory[bucketKey]; exists {
@@ -1423,7 +1423,7 @@ func (calc *OrderBookCalculator) Cleanup() {
 				validHistory = append(validHistory, point)
 			}
 		}
-		
+
 		// 只有在数据变化时才更新，减少内存分配
 		if len(validHistory) != len(symbolData.imbalanceHistory) {
 			symbolData.imbalanceHistory = validHistory
@@ -1438,7 +1438,7 @@ func (calc *OrderBookCalculator) Cleanup() {
 		if now.Sub(symbolData.lastUpdate) > 2*time.Hour {
 			delete(calc.symbolData, symbol)
 			cleanedSymbols++
-			log.Printf("🗑️ [内存清理] 删除过期交易对数据: %s (最后更新: %s)", 
+			log.Printf("🗑️ [内存清理] 删除过期交易对数据: %s (最后更新: %s)",
 				symbol, symbolData.lastUpdate.Format("15:04:05"))
 		}
 	}
@@ -1468,7 +1468,7 @@ func (calc *OrderBookCalculator) cleanupWallTrackerMemory(symbolData *SymbolOrde
 		if len(entry.sizeHistory) > 100 {
 			// 只保留最近的50个记录
 			entry.sizeHistory = entry.sizeHistory[len(entry.sizeHistory)-50:]
-			
+
 			// 重新计算平均值
 			total := 0.0
 			for _, size := range entry.sizeHistory {
@@ -1504,7 +1504,7 @@ func (calc *OrderBookCalculator) GetMemoryStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_symbols":         totalSymbols,
+		"total_symbols":          totalSymbols,
 		"total_imbalance_points": totalImbalancePoints,
 		"total_wall_records":     totalWallRecords,
 		"avg_imbalance_per_symbol": func() float64 {

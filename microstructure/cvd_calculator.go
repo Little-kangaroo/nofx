@@ -506,6 +506,13 @@ func (manager *CVDManager) Cleanup() {
 
 // ===== V2.0 5分钟CVD增量计算方法 =====
 
+// // GetCalculator 🔧 P0-01修复：获取指定交易对的CVD计算器（用于价格历史查询）
+func (manager *CVDManager) GetCalculator(symbol string) *CVDCalculator {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.calculators[symbol]
+}
+
 // UpdatePrice 更新价格（用于5分钟增量计算）
 func (calc *CVDCalculator) UpdatePrice(price float64, timestamp time.Time) {
 	calc.mu.Lock()
@@ -561,12 +568,18 @@ func (calc *CVDCalculator) update5MinuteDelta(currentTime time.Time) {
 	// 保留CVD Delta作为VolumeDelta字段（用于其他分析）
 	cvdDelta := math.Abs(spotDelta) + math.Abs(futuresDelta)
 	
+	// 🔥 P0-03修复：获取真实的5分钟OI变化率
+	oiDeltaPct := 0.0
+	if globalManager := GetGlobalOrderFlowManager(); globalManager != nil {
+		oiDeltaPct = globalManager.GetOI5MinuteChangeRate(calc.symbol)
+	}
+	
 	// 创建5分钟增量数据
 	delta5m := &CVDDelta5m{
 		PriceDeltaPct:       priceDeltaPct,
 		SpotCVDDeltaUSD:     spotDelta,
 		FuturesCVDDeltaUSD:  futuresDelta,
-		OIDeltaPct:          0, // 需要OI数据
+		OIDeltaPct:          oiDeltaPct, // 🔥 P0-03修复：使用真实OI数据
 		CandleIntent:        candleIntent,
 		VolumeDelta:         cvdDelta,  // CVD变化量（用于其他分析）
 		VolumeRatio:         volumeRatio,
@@ -854,8 +867,9 @@ func (calc *CVDCalculator) calculateDataQuality() float64 {
 	// 基于数据完整性和时效性计算质量评分
 	score := 1.0
 	
-	// 检查数据时效性（超过1分钟降分）
-	timeSinceUpdate := time.Since(calc.lastCleanup)
+	// 🔧 P0-02修复：检查数据时效性 - 使用lastDataUpdate而非lastCleanup
+	// lastDataUpdate表示最后一次收到真实交易数据的时间，lastCleanup只是清理时间
+	timeSinceUpdate := time.Since(calc.lastDataUpdate)
 	if timeSinceUpdate > time.Minute {
 		score -= 0.2
 	}
@@ -933,12 +947,18 @@ func (calc *CVDCalculator) CalculateRealtimeCVDDelta5m(currentTime time.Time) *C
 	// 保留CVD Delta作为VolumeDelta字段（用于其他分析）
 	cvdDelta := math.Abs(spotDelta) + math.Abs(futuresDelta)
 	
+	// 🔥 P0-03修复：获取真实的5分钟OI变化率
+	oiDeltaPct := 0.0
+	if globalManager := GetGlobalOrderFlowManager(); globalManager != nil {
+		oiDeltaPct = globalManager.GetOI5MinuteChangeRate(calc.symbol)
+	}
+	
 	// 创建实时5分钟增量数据
 	realtimeDelta := &CVDDelta5m{
 		PriceDeltaPct:       priceDeltaPct,
 		SpotCVDDeltaUSD:     spotDelta,
 		FuturesCVDDeltaUSD:  futuresDelta,
-		OIDeltaPct:          0, // 需要OI数据
+		OIDeltaPct:          oiDeltaPct, // 🔥 P0-03修复：使用真实OI数据
 		CandleIntent:        candleIntent,
 		VolumeDelta:         cvdDelta,
 		VolumeRatio:         volumeRatio,
@@ -1004,12 +1024,18 @@ func (calc *CVDCalculator) update5MinuteDeltaWithExactTiming(klineCloseTime time
 	cvdDelta := math.Abs(spotDelta) + math.Abs(futuresDelta)  // CVD变化量
 	volumeRatio := calc.calculateVolumeRatio(realVolumeUSD)   // 使用真实成交量计算比率
 	
+	// 🔥 P0-03修复：获取真实的5分钟OI变化率
+	oiDeltaPct := 0.0
+	if globalManager := GetGlobalOrderFlowManager(); globalManager != nil {
+		oiDeltaPct = globalManager.GetOI5MinuteChangeRate(calc.symbol)
+	}
+	
 	// 创建精确时序的5分钟增量数据
 	delta5m := &CVDDelta5m{
 		PriceDeltaPct:       priceDeltaPct,
 		SpotCVDDeltaUSD:     spotDelta,
 		FuturesCVDDeltaUSD:  futuresDelta,
-		OIDeltaPct:          0, // 需要OI数据
+		OIDeltaPct:          oiDeltaPct, // 🔥 P0-03修复：使用真实OI数据
 		CandleIntent:        candleIntent,
 		VolumeDelta:         cvdDelta,  // CVD变化量（用于其他分析）
 		VolumeRatio:         volumeRatio,
@@ -1207,6 +1233,64 @@ func (calc *CVDCalculator) calculateSafeCVDDelta(currentTime time.Time) (spotDel
 	}
 	
 	return spotDelta, futuresDelta
+}
+
+// // GetPriceAtTime 🔧 P0-01修复：获取指定时间点的价格（公开方法）
+// 用于支持PriceContext中Change1H/Change4H的计算
+func (calc *CVDCalculator) GetPriceAtTime(targetTime time.Time) float64 {
+	calc.mu.RLock()
+	defer calc.mu.RUnlock()
+	return calc.findPriceAtTime(targetTime)
+}
+
+// CalculateVolatility 🔧 P0-01修复：计算指定时间窗口的价格波动率
+func (calc *CVDCalculator) CalculateVolatility(window time.Duration) float64 {
+	calc.mu.RLock()
+	defer calc.mu.RUnlock()
+	
+	if len(calc.priceHistory) < 2 {
+		return 0.0
+	}
+	
+	now := time.Now()
+	cutoffTime := now.Add(-window)
+	
+	// 收集时间窗口内的价格变化率
+	var returns []float64
+	var lastPrice float64 = 0
+	
+	for _, snapshot := range calc.priceHistory {
+		if snapshot.Timestamp.Before(cutoffTime) {
+			continue
+		}
+		
+		if lastPrice > 0 {
+			returnPct := (snapshot.Price - lastPrice) / lastPrice
+			returns = append(returns, returnPct)
+		}
+		lastPrice = snapshot.Price
+	}
+	
+	if len(returns) < 2 {
+		return 0.0
+	}
+	
+	// 计算标准差作为波动率
+	mean := 0.0
+	for _, ret := range returns {
+		mean += ret
+	}
+	mean /= float64(len(returns))
+	
+	variance := 0.0
+	for _, ret := range returns {
+		variance += math.Pow(ret-mean, 2)
+	}
+	variance /= float64(len(returns)-1)
+	
+	// 返回年化波动率（百分比形式）
+	stdDev := math.Sqrt(variance)
+	return stdDev * 100 * math.Sqrt(365*24*60/window.Minutes()) // 年化
 }
 
 // findPriceAtTime 高效查找指定时间点的价格（二分查找优化）

@@ -527,5 +527,20 @@ func (manager *OIManager) isValidSymbol(symbol string) bool {
 	return true
 }
 
+// GetOI5MinuteChangeRate 获取指定币种的5分钟OI变化率（P0-03修复专用方法）
+func (manager *OIManager) GetOI5MinuteChangeRate(symbol string) float64 {
+	manager.mu.RLock()
+	calc, exists := manager.calculators[symbol]
+	manager.mu.RUnlock()
+
+	if !exists {
+		return 0.0 // 币种不存在，返回0变化率
+	}
+
+	// 使用现有的calculateChange方法计算5分钟变化率
+	_, changeRate := calc.calculateChange(5 * time.Minute)
+	return changeRate
+}
+
 // ===== WebSocket扩展支持OI流 =====
 
