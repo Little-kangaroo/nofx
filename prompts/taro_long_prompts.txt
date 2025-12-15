@@ -110,7 +110,8 @@
 1) 若 Gate0（账户/风险）否决：
    - action 只能为 "wait" / "close"（已有仓位可 "hold" / "close"），禁止 open_long/open_short；
    - X 段必须写：fail=>RISK。
-2) 若 Gate1（订单流/盘口红线）否决（fake_pump/fake_dump/smart_money_absorption 等 或 spoofing_risk>0.8）：
+2) 若 Gate1（订单流/盘口红线）否决（fake_pump/fake_dump/retail_driven 或 spoofing_risk>0.8）：
+   - 注意：smart_money_* 属于 Regime Flags（不得一票否决），必须按下方【P0-Intent 分类澄清】继续走 Gate2~Gate5。
    - action="wait"（仅允许管理既有仓位），禁止新开仓；
    - X 段必须写：fail=>OF。
 3) Gate2（结构格局）与 Gate3（趋势动能）若不支持拟开仓方向：
@@ -2687,7 +2688,8 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
      - 约束：若你最终对某个 symbol 输出 "action": "open_long" 或 "open_short"：
        * 则该 symbol 的 edge_score 必须 ≥ 0.5；
        * 若你主观判断 edge_score < 0.5，则应将 action 改为 "wait" / "hold"；
-       * 禁止出现 edge_score=0.0 却仍然开仓的情况。
+       * 仅对开仓动作约束：当 action ∈ {"open_long","open_short"} 时，edge_score 必须 ≥ 0.5；
+        非开仓动作（wait/hold/close/reduce）允许 edge_score = 0 或为负，用于表达“无edge/负edge”。
      - 对于 action="wait" / "hold" 的标的：
        * 若你认为当前机会明显负期望（结构混乱、潜在空间不足、与大级别强冲突）：
         - "setup_grade": "C"

@@ -61,8 +61,15 @@ func Get(symbol string) (*Data, error) {
 
 	// 基础技术指标计算阶段耗时统计
 	basicIndicatorsStart := time.Now()
-	// 计算当前指标 (基于5分钟最新数据)
-	currentPrice := klines5m[len(klines5m)-1].Close
+	
+	// 🔥 P0-01修复：使用统一时间锚点 - 最后一根已收盘K线
+	idx5m := lastClosedIndex(klines5m)
+	if idx5m < 0 {
+		return nil, fmt.Errorf("5分钟K线数据不足，无法获取已收盘数据")
+	}
+	
+	// 计算当前指标 (基于最后一根已收盘5分钟数据)
+	currentPrice := klines5m[idx5m].Close
 	currentEMA20 := calculateEMA(klines5m, 20)
 	currentMACD := calculateMACD(klines5m)
 	currentRSI7 := calculateRSI(klines5m, 7)
@@ -71,20 +78,22 @@ func Get(symbol string) (*Data, error) {
 	basicIndicatorsDuration := time.Since(basicIndicatorsStart)
 	log.Printf("📊 [%s-基础指标] 耗时: %v (Price+EMA20+MACD+RSI7)", symbol, basicIndicatorsDuration)
 
-	// 计算价格变化百分比
-	// 1小时价格变化 = 12个5分钟K线前的价格
+	// 🔥 P0-01修复：计算价格变化百分比 - 基于统一时间锚点回看
+	// 1小时价格变化 = 从最后已收盘锚点回看12个5分钟K线
 	priceChange1h := 0.0
-	if len(klines5m) >= 13 { // 至少需要13根K线 (当前 + 12根前)
-		price1hAgo := klines5m[len(klines5m)-13].Close
+	lookback1h := idx5m - 12  // 从当前已收盘锚点回看12根
+	if lookback1h >= 0 {      // 确保索引有效
+		price1hAgo := klines5m[lookback1h].Close
 		if price1hAgo > 0 {
 			priceChange1h = ((currentPrice - price1hAgo) / price1hAgo) * 100
 		}
 	}
 
-	// 4小时价格变化 = 1个4小时K线前的价格
+	// 4小时价格变化 = 使用4小时K线的最后已收盘数据
 	priceChange4h := 0.0
-	if len(klines4h) >= 2 {
-		price4hAgo := klines4h[len(klines4h)-2].Close
+	idx4h := lastClosedIndex(klines4h)
+	if idx4h >= 1 {  // 至少需要2根K线（当前已收盘 + 上一根）
+		price4hAgo := klines4h[idx4h-1].Close
 		if price4hAgo > 0 {
 			priceChange4h = ((currentPrice - price4hAgo) / price4hAgo) * 100
 		}
@@ -133,8 +142,9 @@ func Get(symbol string) (*Data, error) {
 	// OHLC数据提取阶段
 	ohlcExtractionStart := time.Now()
 
-	// 提取5m级别OHLC数据 (上一根已收盘 + 更早已收盘)
-	ohlc5mPrevClosed, ohlc5mEarlierClosed := extract5mOHLCData(klines5m)
+	// 🔥 P0-01修复：提取5m级别OHLC数据 (最后已收盘 + 上一根已收盘)
+	// 与currentPrice使用相同时间锚点，确保数据一致性
+	ohlc5mLastClosed, ohlc5mPrevClosed := extract5mOHLCData(klines5m)
 
 	// 提取4h级别OHLC数据 (上一根已收盘)
 	ohlc4hPrevClosed := extract4hOHLCData(klines4h)
@@ -151,9 +161,10 @@ func Get(symbol string) (*Data, error) {
 		CurrentMACD:   currentMACD,
 		CurrentRSI7:   currentRSI7,
 
-		// OHLC数据
-		OHLC5mPrevClosed:    ohlc5mPrevClosed,
-		OHLC5mEarlierClosed: ohlc5mEarlierClosed,
+		// 🔥 P0-01修复：OHLC数据 - 统一时间锚点确保数据一致性
+		// ohlc5mLastClosed现在与currentPrice使用相同时间锚点
+		OHLC5mPrevClosed:    ohlc5mLastClosed,  // 最后已收盘K线（与currentPrice同锚点）
+		OHLC5mEarlierClosed: ohlc5mPrevClosed,  // 上一根已收盘K线（用于对比）
 		OHLC4hPrevClosed:    ohlc4hPrevClosed,
 
 		OpenInterest:           oiData,
@@ -171,6 +182,15 @@ func Get(symbol string) (*Data, error) {
 		SupplyDemand:    comprehensiveResult.SupplyDemand,
 		FairValueGaps:   comprehensiveResult.FairValueGaps,
 		Fibonacci:       comprehensiveResult.Fibonacci,
+		
+		// 🔥 P0-03修复：缓存K线数据，避免FormatAsCompactData二次获取导致数据漂移
+		KlineCache: map[string][]Kline{
+			"5m":  klines5m,
+			"15m": klines15m, 
+			"30m": klines30m,
+			"1h":  klines1h,
+			"4h":  klines4h,
+		},
 	}
 
 	// 技术指标计算总体耗时统计
@@ -197,33 +217,53 @@ func extractOHLCData(kline Kline) *OHLCData {
 	}
 }
 
-// extract5mOHLCData 提取5m级别的OHLC数据 (prev_closed only - 上一根已收盘)
+// 🔥 P0-01修复：lastClosedIndex 通用helper - 统一时间锚点，避免进行中K线导致的数据不一致
+// 功能：判断最后一根K线是否为"未来收盘时间"的进行中K线，返回最后一根已收盘K线的索引
+// 解决：CurrentPrice vs OHLCPrevClosed 时间锚点不一致导致的指标错配
+func lastClosedIndex(klines []Kline) int {
+	if len(klines) == 0 {
+		return -1
+	}
+	nowMs := time.Now().UnixMilli()
+	last := klines[len(klines)-1]
+	// 若 CloseTime 在未来，说明这根大概率是"进行中K线"
+	if last.CloseTime > nowMs && len(klines) >= 2 {
+		return len(klines) - 2  // 返回倒数第二根（已收盘）
+	}
+	return len(klines) - 1      // 最后一根就是已收盘
+}
+
+// 🔥 P0-01修复：extract5mOHLCData 提取5m级别OHLC数据 - 统一时间锚点
+// 使用lastClosedIndex确保与currentPrice锚点一致，避免进行中K线导致的数据错配
 func extract5mOHLCData(klines5m []Kline) (*OHLCData, *OHLCData) {
-	if len(klines5m) < 2 {
-		log.Printf("⚠️ [5m OHLC] K线数据不足，无法提取prev_closed")
+	idx := lastClosedIndex(klines5m)
+	if idx < 0 {
+		log.Printf("⚠️ [5m OHLC] K线数据不足，无法提取已收盘数据")
 		return nil, nil
 	}
 
-	// 上一根已收盘K线(倒数第2根) - 主要数据
-	prevClosed := extractOHLCData(klines5m[len(klines5m)-2])
-	// 更早的已收盘K线(倒数第3根) - 用于对比分析
-	var earlierClosed *OHLCData
-	if len(klines5m) >= 3 {
-		earlierClosed = extractOHLCData(klines5m[len(klines5m)-3])
+	// 最后一根已收盘K线 - 与currentPrice使用相同锚点
+	lastClosed := extractOHLCData(klines5m[idx])
+	
+	// 上一根已收盘K线 - 用于对比分析
+	var prevClosed *OHLCData
+	if idx >= 1 {
+		prevClosed = extractOHLCData(klines5m[idx-1])
 	}
 
-	return prevClosed, earlierClosed
+	return lastClosed, prevClosed
 }
 
-// extract4hOHLCData 提取4h级别的OHLC数据 (prev_closed - 上一根已收盘)
+// 🔥 P0-01修复：extract4hOHLCData 提取4h级别OHLC数据 - 统一时间锚点
 func extract4hOHLCData(klines4h []Kline) *OHLCData {
-	if len(klines4h) < 2 {
-		log.Printf("⚠️ [4h OHLC] K线数据不足，无法提取prev_closed")
+	idx := lastClosedIndex(klines4h)
+	if idx < 1 {
+		log.Printf("⚠️ [4h OHLC] K线数据不足，无法提取已收盘数据")
 		return nil
 	}
 
-	// 上一根已收盘K线(倒数第2根)
-	return extractOHLCData(klines4h[len(klines4h)-2])
+	// 上一根已收盘K线 - 与主要分析逻辑保持一致
+	return extractOHLCData(klines4h[idx-1])
 }
 
 // calculateEMA 计算EMA
@@ -721,22 +761,17 @@ func FormatAsStructuredData(data *Data) string {
 
 // FormatAsCompactData 精简版市场数据格式化（供AI交易员使用）
 // 只包含计算出的关键指标结果，不包含原始K线数据和详细序列
+// 🔥 P0-03修复：FormatAsCompactData 消除同请求内K线数据漂移
+// 使用缓存的K线数据，避免二次获取导致的时间跨越新K线开始时的数据不一致
 func FormatAsCompactData(data *Data) string {
-	// 重新获取K线数据用于超级趋势计算
-	symbol := data.Symbol
-	klines5m, _ := WSMonitorCli.GetCurrentKlines(symbol, "5m")
-	klines15m, _ := WSMonitorCli.GetCurrentKlines(symbol, "15m")
-	klines30m, _ := WSMonitorCli.GetCurrentKlines(symbol, "30m")
-	klines1h, _ := WSMonitorCli.GetCurrentKlines(symbol, "1h")
-	klines4h, _ := WSMonitorCli.GetCurrentKlines(symbol, "4h")
-
-	timeframeKlines := map[string][]Kline{
-		"5m":  klines5m,
-		"15m": klines15m,
-		"30m": klines30m,
-		"1h":  klines1h,
-		"4h":  klines4h,
+	// 🔥 P0-03修复：使用缓存的K线数据，确保与基础指标计算使用相同时间快照
+	if data.KlineCache == nil {
+		log.Printf("⚠️ [CompactData] K线缓存为空，可能存在数据一致性风险")
+		return fmt.Sprintf("K线缓存数据不可用")
 	}
+	
+	// 直接使用缓存的K线数据，避免二次网络请求导致的数据漂移
+	timeframeKlines := data.KlineCache
 
 	result := map[string]interface{}{
 		data.Symbol: map[string]interface{}{
@@ -2024,10 +2059,21 @@ func CalculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 }
 
 // calculateMediumTermData 计算中期时间框架数据(15m/30m/1h)
+// 🔥 P0-02修复：calculateMediumTermData 中期数据统一时间锚点
+// 确保OHLCLastClosed、CurrentVolume、EMA/MACD/RSI/ATR使用相同已收盘锚点
 func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 	if len(klines) == 0 {
 		return &MediumTermData{Timeframe: timeframe}
 	}
+
+	// 🔥 P0-02修复：使用统一时间锚点，只处理已收盘K线
+	idx := lastClosedIndex(klines)
+	if idx < 0 {
+		return &MediumTermData{Timeframe: timeframe}
+	}
+	
+	// 只使用已收盘的K线数据，确保所有指标基于相同时间基准
+	closedKlines := klines[:idx+1]
 
 	data := &MediumTermData{
 		Timeframe:   timeframe,
@@ -2035,66 +2081,59 @@ func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 		RSI14Values: make([]float64, 0, 10),
 	}
 
+	// 🔥 P0-02修复：所有指标计算基于已收盘数据，避免信号抖动
 	// 计算EMA
-	data.EMA20 = calculateEMA(klines, 20)
-	data.EMA50 = calculateEMA(klines, 50)
+	data.EMA20 = calculateEMA(closedKlines, 20)
+	data.EMA50 = calculateEMA(closedKlines, 50)
 
 	// 计算当前指标
-	data.CurrentMACD = calculateMACD(klines)
-	data.CurrentRSI7 = calculateRSI(klines, 7)
-	data.CurrentRSI14 = calculateRSI(klines, 14)
+	data.CurrentMACD = calculateMACD(closedKlines)
+	data.CurrentRSI7 = calculateRSI(closedKlines, 7)
+	data.CurrentRSI14 = calculateRSI(closedKlines, 14)
 
 	// 计算ATR
-	data.ATR14 = calculateATR(klines, 14)
+	data.ATR14 = calculateATR(closedKlines, 14)
 
-	// 计算成交量
-	if len(klines) > 0 {
-		data.CurrentVolume = klines[len(klines)-1].Volume
+	// 🔥 P0-02修复：成交量计算使用统一锚点 - 最后已收盘K线
+	if len(closedKlines) > 0 {
+		data.CurrentVolume = closedKlines[idx].Volume  // 使用最后已收盘K线的成交量
 		// 计算平均成交量
 		sum := 0.0
-		for _, k := range klines {
+		for _, k := range closedKlines {
 			sum += k.Volume
 		}
-		data.AverageVolume = sum / float64(len(klines))
+		data.AverageVolume = sum / float64(len(closedKlines))
 	}
 
-	// 根据时间框架提取OHLC数据 (统一使用上一根已收盘)
-	if timeframe == "15m" {
-		// 15m级别: 上一根已收盘 + 更早已收盘
-		if len(klines) >= 2 {
-			data.OHLCLastClosed = extractOHLCData(klines[len(klines)-2])
-			if len(klines) >= 3 {
-				data.OHLCPrevClosed = extractOHLCData(klines[len(klines)-3])
-			}
-		}
-	} else if timeframe == "30m" {
-		// 30m级别: 上一根已收盘 + 更早已收盘
-		if len(klines) >= 2 {
-			data.OHLCLastClosed = extractOHLCData(klines[len(klines)-2])
-			if len(klines) >= 3 {
-				data.OHLCPrevClosed = extractOHLCData(klines[len(klines)-3])
+	// 🔥 P0-02修复：OHLC数据提取使用统一锚点逻辑
+	if timeframe == "15m" || timeframe == "30m" {
+		// 15m/30m级别: 最后已收盘 + 上一根已收盘  
+		if idx >= 0 {
+			data.OHLCLastClosed = extractOHLCData(closedKlines[idx])     // 最后已收盘
+			if idx >= 1 {
+				data.OHLCPrevClosed = extractOHLCData(closedKlines[idx-1]) // 上一根已收盘
 			}
 		}
 	} else if timeframe == "1h" {
-		// 1h级别: 仅上一根已收盘
-		if len(klines) >= 2 {
-			data.OHLCLastClosed = extractOHLCData(klines[len(klines)-2])
+		// 1h级别: 使用最后已收盘K线
+		if idx >= 0 {
+			data.OHLCLastClosed = extractOHLCData(closedKlines[idx])  // 统一锚点
 		}
 	}
 
-	// 计算MACD和RSI序列（最近10个数据点）
-	start := len(klines) - 10
+	// 🔥 P0-02修复：MACD和RSI序列计算基于已收盘数据
+	start := len(closedKlines) - 10
 	if start < 0 {
 		start = 0
 	}
 
-	for i := start; i < len(klines); i++ {
+	for i := start; i < len(closedKlines); i++ {
 		if i >= 25 {
-			macd := calculateMACD(klines[:i+1])
+			macd := calculateMACD(closedKlines[:i+1])
 			data.MACDValues = append(data.MACDValues, macd)
 		}
 		if i >= 14 {
-			rsi14 := calculateRSI(klines[:i+1], 14)
+			rsi14 := calculateRSI(closedKlines[:i+1], 14)
 			data.RSI14Values = append(data.RSI14Values, rsi14)
 		}
 	}
@@ -2567,9 +2606,12 @@ func determineSignalQuality(trendStrength, confidence float64, duration, totalBa
 }
 
 // calculateSupertrend 标准SuperTrend计算函数（向后兼容）
+// 🔥 P0-04修复：calculateSupertrend 正确透传参数到增强版计算
+// 确保atrPeriod和factor参数真正生效，避免"伪配置"问题
 func calculateSupertrend(klines []Kline, atrPeriod int, factor float64) SuperTrendResult {
-	// 使用增强版计算，timeframe设为默认，不传入自定义参数
-	return calculateSupertrendEnhanced(klines, "default")
+	// 🔥 P0-04修复：透传自定义参数到增强版计算，而不是忽略
+	// 将atrPeriod和factor作为customParams传递给calculateSupertrendEnhanced
+	return calculateSupertrendEnhanced(klines, "custom", float64(atrPeriod), factor)
 }
 
 // calculateATRAtIndex 计算指定位置的ATR

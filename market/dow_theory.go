@@ -20,34 +20,34 @@ func NewDowTheoryAnalyzer() *DowTheoryAnalyzer {
 }
 
 // Analyze 执行道氏理论分析（专注趋势识别，不包含通道）
-func (dta *DowTheoryAnalyzer) Analyze(klines3m, klines4h []Kline, currentPrice float64) *DowTheoryData {
+func (dta *DowTheoryAnalyzer) Analyze(klines5m, klines4h []Kline, currentPrice float64) *DowTheoryData {
 	// 数据量校验
 	minRequired4h := 100  // 最小需要100根K线进行结构分析
 	recommended4h := 500 // 建议500根以上获得更好的结构视野
-	minRequired3m := 50  // 最小需蔂50根K线进行短期分析
-	recommended3m := 200 // 建议200根以上获得更好的精度
+	minRequired5m := 50  // 最小需要50根K线进行短期分析
+	recommended5m := 200 // 建议200根以上获得更好的精度
 	
 	if len(klines4h) < minRequired4h {
 		log.Printf("🚨🔴 [道氏理论] ❌ 4h K线数据不足: 需要%d根，实际%d根 ❌", minRequired4h, len(klines4h))
 		return &DowTheoryData{}
 	}
-	if len(klines3m) < minRequired3m {
-		log.Printf("🚨🔴 [道氏理论] ❌ 5m K线数据不足: 需要%d根，实际%d根 ❌", minRequired3m, len(klines3m))
+	if len(klines5m) < minRequired5m {
+		log.Printf("🚨🔴 [道氏理论] ❌ 5m K线数据不足: 需要%d根，实际%d根 ❌", minRequired5m, len(klines5m))
 		return &DowTheoryData{}
 	}
 	
 	if len(klines4h) < recommended4h {
 		log.Printf("🟡⚠️ [道氏理论] 结构视野警告: 建议%d根，实际%d根 (可能影响结构识别精度) ⚠️🟡", recommended4h, len(klines4h))
 	}
-	if len(klines3m) < recommended3m {
-		log.Printf("🟡⚠️ [道氏理论] 短期分析警告: 建议%d根，实际%d根 (可能影响趋势精度) ⚠️🟡", recommended3m, len(klines3m))
+	if len(klines5m) < recommended5m {
+		log.Printf("🟡⚠️ [道氏理论] 短期分析警告: 建议%d根，实际%d根 (可能影响趋势精度) ⚠️🟡", recommended5m, len(klines5m))
 	}
 	
 	// 使用全部4小时数据进行主要分析（最大优化结构视野）
 	analysisKlines := klines4h
 	
-	// 使用全部5分钟数据进行短期分析（最大优化精度）
-	shortTermKlines := klines3m
+	// 🔥 P0-B2修复：使用全部5分钟数据进行短期分析（与交易规则保持一致）
+	shortTermKlines := klines5m
 
 	swingPoints := dta.identifySwingPoints(analysisKlines)
 	trendLines := dta.calculateTrendLines(swingPoints)
@@ -524,7 +524,8 @@ func (dta *DowTheoryAnalyzer) buildParallelChannel(trendLines []*TrendLine, swin
 	// 计算中轨
 	middleLine := dta.createMiddleLine(upperLine, lowerLine)
 
-	// 计算通道宽度
+	// 🔥 P0-B1修复TODO：需要传入klines参数才能使用索引坐标系统
+	// 目前保留时间戳方法，但已修复核心趋势线计算部分
 	currentTime := time.Now().UnixMilli()
 	upperPrice := upperLine.Slope*float64(currentTime) + upperLine.Intercept
 	lowerPrice := lowerLine.Slope*float64(currentTime) + lowerLine.Intercept
@@ -536,11 +537,17 @@ func (dta *DowTheoryAnalyzer) buildParallelChannel(trendLines []*TrendLine, swin
 	}
 
 	// 计算通道方向
+	// 🔥 P1-C2修复：使用价格归一化的斜率阈值，确保跨币种/跨周期可比性
 	direction := TrendFlat
-	if upperLine.Slope > 0.001 {
-		direction = TrendUp
-	} else if upperLine.Slope < -0.001 {
-		direction = TrendDown
+	normalizedSlope := math.Abs(upperLine.Slope) / currentPrice
+	// 0.001 = 0.1%的价格变化率作为趋势判定阈值
+	threshold := 0.001
+	if normalizedSlope > threshold {
+		if upperLine.Slope > 0 {
+			direction = TrendUp
+		} else {
+			direction = TrendDown
+		}
 	}
 
 	// 计算质量评分
@@ -761,7 +768,7 @@ func (dta *DowTheoryAnalyzer) calculateCurrentPosition(currentPrice, upperPrice,
 }
 
 // assessTrendStrength 评估趋势强度（加强成交量验证）
-func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, swingPoints []*SwingPoint, trendLines []*TrendLine) *TrendStrength {
+func (dta *DowTheoryAnalyzer) assessTrendStrength(klines5m, klines4h []Kline, swingPoints []*SwingPoint, trendLines []*TrendLine) *TrendStrength {
 	if len(klines4h) < 20 {
 		return &TrendStrength{
 			Overall:   0,
@@ -770,8 +777,8 @@ func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, sw
 		}
 	}
 
-	// 计算短期趋势强度（基于5分钟数据）
-	shortTerm := dta.calculateShortTermStrength(klines3m)
+	// 🔥 P0-B2修复：计算短期趋势强度（基于5分钟数据）
+	shortTerm := dta.calculateShortTermStrength(klines5m)
 
 	// 计算长期趋势强度（基于4小时数据）
 	longTerm := dta.calculateLongTermStrength(klines4h)
@@ -786,7 +793,7 @@ func (dta *DowTheoryAnalyzer) assessTrendStrength(klines3m, klines4h []Kline, sw
 	momentum := dta.calculateMomentum(klines4h)
 
 	// 计算一致性评分
-	consistency := dta.calculateConsistency(klines3m, klines4h)
+	consistency := dta.calculateConsistency(klines5m, klines4h)
 
 	// 🔥 修复：大幅提升成交量支撑度权重
 	volumeSupport := dta.calculateVolumeSupport(klines4h)
@@ -1278,13 +1285,13 @@ func (dta *DowTheoryAnalyzer) calculateMomentum(klines []Kline) float64 {
 }
 
 // calculateConsistency 计算一致性
-func (dta *DowTheoryAnalyzer) calculateConsistency(klines3m, klines4h []Kline) float64 {
-	if len(klines3m) < 20 || len(klines4h) < 5 {
+func (dta *DowTheoryAnalyzer) calculateConsistency(klines5m, klines4h []Kline) float64 {
+	if len(klines5m) < 20 || len(klines4h) < 5 {
 		return 0
 	}
 
-	// 短期趋势方向
-	shortTrend := (klines3m[len(klines3m)-1].Close - klines3m[len(klines3m)-20].Close) / klines3m[len(klines3m)-20].Close
+	// 🔥 P0-B2修复：短期趋势方向（基于5m数据）
+	shortTrend := (klines5m[len(klines5m)-1].Close - klines5m[len(klines5m)-20].Close) / klines5m[len(klines5m)-20].Close
 
 	// 长期趋势方向
 	longTrend := (klines4h[len(klines4h)-1].Close - klines4h[len(klines4h)-5].Close) / klines4h[len(klines4h)-5].Close
@@ -1402,6 +1409,8 @@ func (dta *DowTheoryAnalyzer) generateChannelSignal(currentPrice float64, channe
 	trendStrength *TrendStrength) *TradingSignal {
 
 	var signal *TradingSignal
+	// 🔥 P0-B1修复TODO：需要传入klines参数才能使用索引坐标系统  
+	// 目前保留时间戳方法，但已修复核心趋势线计算部分
 	currentTime := time.Now().UnixMilli()
 
 	// 获取通道边界价格
@@ -1500,7 +1509,9 @@ func (dta *DowTheoryAnalyzer) generateBreakoutSignal(klines []Kline, currentPric
 			continue
 		}
 
-		expectedPrice := line.Slope*float64(currentTime) + line.Intercept
+		// 🔥 P0-B1修复：使用当前K线索引而不是时间戳计算预期价格
+	currentIndex := len(klines) - 1 // 最新K线的索引
+	expectedPrice := line.Slope*float64(currentIndex) + line.Intercept
 		breakoutStrength := math.Abs(currentPrice-expectedPrice) / expectedPrice
 
 		if breakoutStrength > dta.config.SignalConfig.BreakoutStrength {

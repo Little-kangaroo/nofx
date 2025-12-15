@@ -42,6 +42,10 @@ type Data struct {
 	
 	// === 市场联动性分析（BTC相关性） ===
 	MarketContext     *MarketContextData // 市场上下文分析数据
+	
+	// 🔥 P0-03修复：K线数据缓存 - 避免FormatAsCompactData二次获取导致的数据漂移
+	// 存储Get()阶段获取的K线数据，供FormatAsCompactData()复用，确保同一请求内数据一致性
+	KlineCache       map[string][]Kline `json:"-"` // 缓存各时间框架K线数据，不序列化到JSON
 }
 
 // MultiTimeframeAnalysis 多时间框架分析结果

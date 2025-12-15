@@ -470,7 +470,7 @@ func (fa *FibonacciAnalyzer) calculateRetracements(swingPoints []PricePoint, kli
 			Age:        len(klines) - endPoint.Index,
 			IsActive:   true,
 			TouchCount: touchCount,
-			CreatedAt:  time.Now().Unix(),
+			CreatedAt:  time.Now().UnixMilli(), // 🔥 P0修复：统一使用毫秒时间戳
 		}
 		
 		// 🔥 修复：添加生存偏差过滤，移除无效历史斐波线
@@ -1244,7 +1244,7 @@ func (fa *FibonacciAnalyzer) analyzeGoldenPocket(retracements []*FibRetracement,
 	}
 	
 	// 分析成交量和触及事件
-	touchEvents := fa.analyzeTouchEvents(goldenLow, goldenHigh, klines, bestRetracement.EndPoint.Index)
+	touchEvents := fa.analyzeTouchEvents(goldenLow, goldenHigh, klines, bestRetracement.EndPoint.Index, bestRetracement.TrendType)
 	volumeProfile := fa.analyzeVolumeProfile(goldenLow, goldenHigh, klines, bestRetracement.EndPoint.Index)
 	
 	// 评估强度和质量
@@ -1264,14 +1264,15 @@ func (fa *FibonacciAnalyzer) analyzeGoldenPocket(retracements []*FibRetracement,
 		VolumeProfile: volumeProfile,
 		TouchEvents:   touchEvents,
 		IsActive:      fa.isGoldenPocketActive(goldenLow, goldenHigh, klines),
-		LastUpdate:    time.Now().Unix(),
+		LastUpdate:    time.Now().UnixMilli(), // 🔥 P0修复：统一使用毫秒时间戳
 	}
 	
 	return goldenPocket
 }
 
 // analyzeTouchEvents 分析触及事件
-func (fa *FibonacciAnalyzer) analyzeTouchEvents(low, high float64, klines []Kline, startIdx int) []TouchEvent {
+// 🔥 P0修复：基于趋势方向、触碰方向和5m收盘确认的正确反应分类逻辑
+func (fa *FibonacciAnalyzer) analyzeTouchEvents(low, high float64, klines []Kline, startIdx int, trendType TrendType) []TouchEvent {
 	var touchEvents []TouchEvent
 	tolerance := fa.config.TouchSensitivity
 	
@@ -1280,27 +1281,8 @@ func (fa *FibonacciAnalyzer) analyzeTouchEvents(low, high float64, klines []Klin
 		
 		// 检查是否触及黄金口袋区域
 		if (candle.Low <= high*(1+tolerance) && candle.High >= low*(1-tolerance)) {
-			// 判断反应类型
-			var reactionType ReactionType
-			nextIdx := minInt(i+3, len(klines)-1)
-			
-			if i < len(klines)-3 {
-				// 检查后续3根K线的价格行为
-				priceAfter := klines[nextIdx].Close
-				priceAtTouch := candle.Close
-				
-				if abs(priceAfter-priceAtTouch)/priceAtTouch > 0.01 {
-					if (priceAfter > priceAtTouch && low < high) || (priceAfter < priceAtTouch && low > high) {
-						reactionType = ReactionBounce
-					} else {
-						reactionType = ReactionBreak
-					}
-				} else {
-					reactionType = ReactionConsolidation
-				}
-			} else {
-				reactionType = ReactionConsolidation
-			}
+			// 🔥 P0修复：重构反应类型判断逻辑
+			reactionType := fa.classifyTouchReaction(candle, klines, i, low, high, trendType)
 			
 			// 计算反应强度
 			strength := fa.calculateReactionStrength(candle, klines, i)
@@ -1318,6 +1300,81 @@ func (fa *FibonacciAnalyzer) analyzeTouchEvents(low, high float64, klines []Klin
 	}
 	
 	return touchEvents
+}
+
+// classifyTouchReaction 分类触碰反应
+// 🔥 P0修复：基于趋势方向、触碰方向和价格确认的正确分类逻辑
+func (fa *FibonacciAnalyzer) classifyTouchReaction(candle Kline, klines []Kline, index int, goldenLow, goldenHigh float64, trendType TrendType) ReactionType {
+	// 确保有足够的后续K线进行确认
+	confirmationPeriod := 3 // 使用3根K线确认
+	if index+confirmationPeriod >= len(klines) {
+		return ReactionConsolidation
+	}
+	
+	// 🎯 关键修复1：获取确认期间的价格数据
+	priceAtTouch := candle.Close
+	priceAfter := klines[index+confirmationPeriod].Close
+	
+	// 🎯 关键修复2：判断触碰方向（从前一根K线判断）
+	var prevPrice float64
+	if index > 0 {
+		prevPrice = klines[index-1].Close
+	} else {
+		prevPrice = candle.Open
+	}
+	
+	// 判断是回撤触及还是反弹触及
+	isTouchFromAbove := prevPrice > (goldenHigh + goldenLow) / 2
+	
+	// 🎯 关键修复3：计算价格变化幅度和方向
+	priceChangePercent := abs(priceAfter - priceAtTouch) / priceAtTouch
+	
+	// 价格变化太小，判定为整固
+	if priceChangePercent <= 0.01 {
+		return ReactionConsolidation
+	}
+	
+	// 🎯 关键修复4：基于趋势方向和触碰方向进行正确分类
+	isPriceUp := priceAfter > priceAtTouch
+	isTrendUpward := trendType == TrendUpward
+	
+	switch {
+	case isTouchFromAbove: // 从上方回撤触及黄金口袋
+		if isTrendUpward {
+			// 上升趋势中的回撤触及
+			if isPriceUp {
+				return ReactionBounce // 回撤后反弹，正常延续
+			} else {
+				return ReactionBreak // 回撤后继续下跌，趋势失败
+			}
+		} else {
+			// 下降趋势中的回撤触及
+			if !isPriceUp {
+				return ReactionBounce // 回撤后继续下跌，正常延续
+			} else {
+				return ReactionBreak // 回撤后反弹，趋势失败
+			}
+		}
+		
+	case !isTouchFromAbove: // 从下方反弹触及黄金口袋
+		if isTrendUpward {
+			// 上升趋势中的反弹触及
+			if isPriceUp {
+				return ReactionBreak // 反弹后突破口袋，继续上涨
+			} else {
+				return ReactionBounce // 反弹后被阻，口袋阻力有效
+			}
+		} else {
+			// 下降趋势中的反弹触及
+			if !isPriceUp {
+				return ReactionBreak // 反弹后继续下跌，突破口袋
+			} else {
+				return ReactionBounce // 反弹后上涨，口袋支撑有效
+			}
+		}
+	}
+	
+	return ReactionConsolidation
 }
 
 // calculateReactionStrength 计算反应强度
@@ -1728,7 +1785,7 @@ func (fa *FibonacciAnalyzer) generateGoldenPocketSignal(goldenPocket *GoldenPock
 		Context:    "黄金口袋0.618回调支撑/阻力",
 		Source:     "fibonacci_golden_pocket",
 		Quality:    convertFibQualityToSignalQuality(goldenPocket.Quality),
-		Timestamp:  time.Now().Unix(),
+		Timestamp:  time.Now().UnixMilli(), // 🔥 P0修复：统一使用毫秒时间戳
 	}
 	
 	return signal

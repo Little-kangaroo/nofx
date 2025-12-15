@@ -1,6 +1,9 @@
 package market
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // FibonacciContextScoring 斐波纳契上下文评分计算器
 type FibonacciContextScoring struct {
@@ -51,7 +54,8 @@ func (fcs *FibonacciContextScoring) calculateSingleRetracementContext(retracemen
 
 	// 4. 判断是否新鲜 (is_fresh)
 	// 新鲜的斐波纳契回调通常具有更强的有效性
-	maxAge := int64(fcs.analyzer.config.MaxRetracementAge * 3600 * 1000) // 转换为毫秒
+	// 🔥 P0修复：MaxRetracementAge已经是小时为单位，直接转换为毫秒
+	maxAge := int64(fcs.analyzer.config.MaxRetracementAge) * 3600 * 1000 // 小时转换为毫秒
 	isFresh := contextCalc.IsFresh(retracement.CreatedAt, maxAge)
 
 	// 5. 计算时间评分 (time_score) 
@@ -72,12 +76,11 @@ func (fcs *FibonacciContextScoring) calculateSingleRetracementContext(retracemen
 	}
 }
 
-// calculateTrendLength 计算趋势长度
+// calculateTrendLength 计算趋势长度 - 返回绝对价格宽度
+// 🔥 P0修复：修复维度不一致问题，返回绝对价格差而非百分比
 func calculateTrendLength(startPoint, endPoint PricePoint) float64 {
-	if startPoint.Price == 0 {
-		return 0
-	}
-	return (endPoint.Price - startPoint.Price) / startPoint.Price * 100 // 返回百分比
+	// 返回绝对价格宽度，与ATR单位一致（都是价格单位）
+	return math.Abs(endPoint.Price - startPoint.Price)
 }
 
 // buildEnhancedSamplePool 构建增强的历史样本池（修复StrengthZ计算样本池问题）
@@ -188,8 +191,9 @@ func (fcs *FibonacciContextScoring) applyTimeWeighting(retracements []*FibRetrac
 	}
 	
 	// 计算时间衰减权重
-	currentTime := time.Now().Unix()
-	maxAge := int64(fcs.analyzer.config.MaxRetracementAge * 3600) // 转换为秒
+	// 🔥 P0修复：统一使用毫秒时间戳，与 retracement.CreatedAt 保持一致
+	currentTime := time.Now().UnixMilli() // 使用毫秒时间戳
+	maxAge := int64(fcs.analyzer.config.MaxRetracementAge) * 3600 * 1000 // 小时转换为毫秒
 	
 	for _, retracement := range retracements {
 		if retracement == nil || retracement.Quality == FibQualityLow {

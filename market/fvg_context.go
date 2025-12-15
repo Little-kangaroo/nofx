@@ -62,10 +62,17 @@ func (fcs *FVGContextScoring) calculateSingleFVGContext(gap *FairValueGap, allSt
 	// >1.5 为强，>2.0 为极强
 	strengthZ := contextCalc.CalculateStrengthZ(gap.Strength, allStrengths)
 
-	// 2. 计算宽度相对ATR的倍数 (width_atr)  
-	// 表示缺口宽度相对市场正常波动的大小
-	// >1.0 表示缺口超过正常日内波动
-	widthATR := contextCalc.CalculateWidthATR(gap.Width)
+	// 🔥 P0-05修复：计算宽度相对ATR的倍数 (width_atr) 
+	// 优先使用gap.WidthATR（基于FormationATR计算），避免时空错配
+	// 如果gap.WidthATR可用，直接使用；否则降级到当前ATR计算
+	var widthATR float64
+	if gap.WidthATR > 0 && gap.FormationATR > 0 {
+		// 🔥 使用形成时ATR计算的WidthATR，保持与FVG本体逻辑一致
+		widthATR = gap.WidthATR
+	} else {
+		// 降级：使用当前ATR重新计算（保持向后兼容）
+		widthATR = contextCalc.CalculateWidthATR(gap.Width)
+	}
 
 	// 3. 计算成交量比率 (vol_ratio)
 	// 表示形成FVG时的成交量相对平均成交量的倍数

@@ -342,13 +342,14 @@ func (cc *ContextCalculator) CalculateStrengthZ(strength float64, allStrengths [
 }
 
 // CalculateTimeScore 计算时间评分 (越新鲜评分越高)
+// 🔥 P0修复：统一使用毫秒时间戳，修复时间单位混用问题
 func (cc *ContextCalculator) CalculateTimeScore(creationTime int64, maxAge int64) float64 {
 	if maxAge <= 0 {
 		return 1.0
 	}
 
-	currentTime := time.Now().Unix()
-	age := currentTime - creationTime
+	currentTime := time.Now().UnixMilli() // 🔥 修复：使用毫秒时间戳
+	age := currentTime - creationTime     // 毫秒 - 毫秒 = 毫秒
 	
 	// 时间衰减函数：新鲜度随时间指数衰减
 	timeScore := math.Exp(-float64(age) / float64(maxAge))
@@ -356,9 +357,10 @@ func (cc *ContextCalculator) CalculateTimeScore(creationTime int64, maxAge int64
 }
 
 // IsFresh 判断是否新鲜 (根据创建时间和最大存活时间)
+// 🔥 P0修复：统一使用毫秒时间戳，修复时间单位混用问题
 func (cc *ContextCalculator) IsFresh(creationTime int64, maxAge int64) bool {
-	currentTime := time.Now().Unix()
-	age := currentTime - creationTime
+	currentTime := time.Now().UnixMilli() // 🔥 修复：使用毫秒时间戳
+	age := currentTime - creationTime     // 毫秒 - 毫秒 = 毫秒
 	return age <= maxAge/3 // 在生命周期前1/3认为是新鲜的
 }
 

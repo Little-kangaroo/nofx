@@ -314,12 +314,13 @@ func (dqa *DataQualityAnalyzer) calculateZoneQualityScore(zone *SupplyDemandZone
 	}
 	score += volScore
 	
-	// 强度评分 (30分) 
-	if zone.Strength >= 80 {
+	// 🔥 P0-06修复：FVG/供需区强度尺度统一到0-20 - 调整强度阈值
+	// 强度评分 (30分) - 阈值从0-100缩放到0-20
+	if zone.Strength >= 16 {  // 原80 -> 16 (80% * 20)
 		score += 30.0
-	} else if zone.Strength >= 60 {
+	} else if zone.Strength >= 12 {  // 原60 -> 12 (60% * 20)
 		score += 20.0
-	} else if zone.Strength >= 40 {
+	} else if zone.Strength >= 8 {   // 原40 -> 8 (40% * 20)
 		score += 10.0
 	}
 	

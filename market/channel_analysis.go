@@ -124,8 +124,8 @@ func (ca *ChannelAnalyzer) Analyze(klines []Kline, currentPrice float64) *Channe
 	// 4. 计算当前价格位置
 	position, ratio := ca.calculatePricePosition(currentPrice, channel, currentIndex)
 
-	// 🔥 新增：计算ATR分析
-	widthATR, atrGrade, atrAnalysis := ca.calculateATRAnalysis(channel, currentPrice, atr14)
+	// 🔥 P0-C1修复：计算ATR分析 - 传入正确的currentIndex
+	widthATR, atrGrade, atrAnalysis := ca.calculateATRAnalysis(channel, currentPrice, atr14, currentIndex)
 
 	// 5. 生成分析描述（整合ATR分析）
 	analysis := ca.generateAnalysisWithATR(channel, position, ratio, atrGrade, atrAnalysis)
@@ -447,8 +447,8 @@ func (ca *ChannelAnalyzer) findBestChannelWithATR(trendLines []*TrendLine, swing
 				continue
 			}
 
-			// 评分（包含ATR质量评分）
-			score := ca.scoreChannelWithATR(channel, swingPoints, atr14)
+			// 🔥 P0-C1修复：评分（传入正确的currentIndex参数）
+			score := ca.scoreChannelWithATR(channel, swingPoints, atr14, currentIndex)
 			if score > bestScore && channel.Quality >= ca.config.QualityThreshold {
 				bestScore = score
 				bestChannel = channel
@@ -570,13 +570,19 @@ func (ca *ChannelAnalyzer) createChannelWithATR(line1, line2 *TrendLine, current
 		Strength:  (upperLine.Strength + lowerLine.Strength) / 2,
 	}
 
-	// 🔥 修复：使用斜率值直接判断方向，避免精度阈值问题
+	// 🔥 P1-C2修复：使用价格归一化的斜率阈值，确保跨币种/跨周期可比性
 	direction := "flat"
 	avgSlope := (upperLine.Slope + lowerLine.Slope) / 2
-	if avgSlope > 0.001 {
-		direction = "up"
-	} else if avgSlope < -0.001 {
-		direction = "down"
+	// 动态阈值：斜率相对于当前价格的比例
+	normalizedSlope := math.Abs(avgSlope) / currentPrice
+	// 0.001 = 0.1%的价格变化率作为方向性阈值
+	threshold := 0.001 
+	if normalizedSlope > threshold {
+		if avgSlope > 0 {
+			direction = "up"
+		} else {
+			direction = "down"
+		}
 	}
 
 	// 🔥 修复：基于索引计算通道年龄
@@ -596,8 +602,8 @@ func (ca *ChannelAnalyzer) createChannelWithATR(line1, line2 *TrendLine, current
 }
 
 // scoreChannelWithATR 为通道评分（ATR增强版）
-// 🔥 新增：集成ATR质量评估的通道评分系统
-func (ca *ChannelAnalyzer) scoreChannelWithATR(channel *Channel, swingPoints []*SwingPoint, atr14 float64) float64 {
+// 🔥 P0-C1修复：传入正确的currentIndex，避免使用len(swingPoints)导致的坐标错误
+func (ca *ChannelAnalyzer) scoreChannelWithATR(channel *Channel, swingPoints []*SwingPoint, atr14 float64, currentIndex int) float64 {
 	score := 0.0
 
 	// 基础评分：基于趋势线强度
@@ -615,10 +621,10 @@ func (ca *ChannelAnalyzer) scoreChannelWithATR(channel *Channel, swingPoints []*
 		score += 1.0
 	}
 
-	// 🔥 新增：ATR宽度质量评分
+	// 🔥 P0-C1修复：ATR宽度质量评分 - 使用正确的当前索引
 	if atr14 > 0 {
-		// 计算当前通道的ATR宽度
-		currentIndexFloat := float64(len(swingPoints)) // 简化处理
+		// 🔥 P0-C1修复：使用传入的currentIndex而不是len(swingPoints)
+		currentIndexFloat := float64(currentIndex)
 		price1 := channel.UpperLine.Slope*currentIndexFloat + channel.UpperLine.Intercept
 		price2 := channel.LowerLine.Slope*currentIndexFloat + channel.LowerLine.Intercept
 		atrWidth := math.Abs(price1-price2) / atr14
@@ -679,13 +685,19 @@ func (ca *ChannelAnalyzer) createChannel(line1, line2 *TrendLine, currentPrice f
 		Strength:  (upperLine.Strength + lowerLine.Strength) / 2,
 	}
 
-	// 🔥 修复：使用斜率值直接判断方向，避免精度阈值问题
+	// 🔥 P1-C2修复：使用价格归一化的斜率阈值，确保跨币种/跨周期可比性
 	direction := "flat"
 	avgSlope := (upperLine.Slope + lowerLine.Slope) / 2
-	if avgSlope > 0.001 {
-		direction = "up"
-	} else if avgSlope < -0.001 {
-		direction = "down"
+	// 动态阈值：斜率相对于当前价格的比例
+	normalizedSlope := math.Abs(avgSlope) / currentPrice
+	// 0.001 = 0.1%的价格变化率作为方向性阈值
+	threshold := 0.001 
+	if normalizedSlope > threshold {
+		if avgSlope > 0 {
+			direction = "up"
+		} else {
+			direction = "down"
+		}
 	}
 
 	// 🔥 修复：基于索引计算通道年龄
@@ -794,14 +806,14 @@ func (ca *ChannelAnalyzer) generateAnalysis(channel *Channel, position string, r
 }
 
 // calculateATRAnalysis 计算ATR分析
-// 🔥 新增：基于ATR的通道宽度质量分析
-func (ca *ChannelAnalyzer) calculateATRAnalysis(channel *Channel, currentPrice float64, atr14 float64) (float64, string, string) {
+// 🔥 P0-C1修复：基于ATR的通道宽度质量分析 - 使用正确的currentIndex
+func (ca *ChannelAnalyzer) calculateATRAnalysis(channel *Channel, currentPrice float64, atr14 float64, currentIndex int) (float64, string, string) {
 	if atr14 == 0 {
 		return 0, "未知", "ATR数据不足，无法进行ATR分析"
 	}
 
-	// 计算通道宽度的ATR倍数
-	currentIndexFloat := float64(100) // 简化处理，使用固定索引
+	// 🔥 P0-C1修复：计算通道宽度的ATR倍数 - 使用正确的当前索引
+	currentIndexFloat := float64(currentIndex)
 	price1 := channel.UpperLine.Slope*currentIndexFloat + channel.UpperLine.Intercept
 	price2 := channel.LowerLine.Slope*currentIndexFloat + channel.LowerLine.Intercept
 	absoluteWidth := math.Abs(price1 - price2)
