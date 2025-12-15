@@ -1,0 +1,249 @@
+# AI自动交易系统 - 技术指标计算文件映射表
+
+## 项目概述
+本文档详细记录了AI自动交易系统中所有技术指标的计算实现位置和对应关系。
+系统采用Go语言开发，支持加密货币市场的实时技术分析和AI交易决策。
+
+## 基础技术指标 (/market/data.go)
+
+### ATR (平均真实范围)
+- 函数: calculateATR()
+- 功能: 计算指定周期的平均真实范围
+- 支持: 多周期计算 (ATR3, ATR14等)
+- 算法: Wilder平滑方法
+
+### EMA (指数移动平均)  
+- 函数: calculateEMA()
+- 支持周期: EMA20, EMA50, EMA100, EMA200
+- 特色: 包含收敛建议和精度警告
+- 斜率计算: calculateEMASlope() - 3根K线回看期
+
+### SMA (简单移动平均)
+- 函数: calculateSMA()  
+- 功能: 各时间框架基础均线计算
+- 用途: 与EMA配合进行趋势分析
+
+### MACD
+- 函数: calculateMACD()
+- 算法: 基于EMA12和EMA26的差值
+- 输出: MACD值，用于动量分析
+
+### RSI (相对强弱指标)
+- 函数: calculateRSI()
+- 支持周期: RSI7, RSI14  
+- 算法: 使用Wilder平滑方法
+- 稳定性: 建议使用周期3倍数据量
+
+### VWAP (成交量加权均价)
+- 函数: calculateVWAP()
+- 算法: 典型价格×成交量加权
+- 用途: 判断价格相对公允价值位置
+
+### SuperTrend (超级趋势)
+- 函数: calculateSupertrendEnhanced()
+- 特色: 增强版实现，支持动态参数配置
+- 功能: 趋势方向、强度量化、信号质量评估
+- 优化: 智能初始化、减少假信号
+
+## 高级结构分析指标
+
+### FVG (公允价值缺口) (/market/fvg.go)
+- 核心结构: FVGAnalyzer
+- 主要方法: Analyze() 
+- 功能: 
+  * 识别看涨/看跌缺口
+  * 缺口强度评估  
+  * 触及次数统计
+  * 缺口填补检测
+
+### VPVR (成交量分布) (/market/vpvr.go)
+- 核心结构: VPVRAnalyzer
+- 关键方法:
+  * calculatePriceLevels() - 价格区间划分
+  * findPOC() - 寻找成交量控制点 
+  * calculateValueArea() - 计算价值区域
+- 特色: Z-Score标准化支持
+
+### 供需区分析 (/market/supply_demand.go)  
+- 核心结构: SupplyDemandAnalyzer
+- 主要方法: AnalyzeWithSymbol()
+- 功能:
+  * Z-Score标准化
+  * 区域强度评分
+  * 触及统计
+  * 动态区域更新
+
+### 斐波纳契分析 (/market/fibonacci.go)
+- 核心结构: FibonacciAnalyzer  
+- 支持分析类型:
+  * 回调分析
+  * 扩展分析  
+  * 黄金口袋识别
+- 特色: 混合摆动点识别策略
+
+### 支撑阻力转换线 (/market/support_resistance.go)
+- 核心结构: SupportResistanceAnalyzer
+- 特色功能: 渐进确认机制
+- 优势: 避免假突破的智能识别
+
+### 道氏理论 (/market/dow_theory.go)
+- 核心结构: DowTheoryAnalyzer  
+- 专注功能: 趋势分析
+- 特点: 独立于通道分析的纯趋势判断
+
+### 通道分析 (/market/channel_analysis.go)
+- 核心结构: ChannelAnalyzer
+- 功能特色:
+  * 独立通道分析
+  * ATR标准宽度评估
+  * 动态宽度评估
+
+## 多时间框架综合分析 (/market/comprehensive_analysis.go)
+
+### 总协调器
+- 核心结构: ComprehensiveAnalyzer
+- 功能: 统一调度所有分析模块
+- 支持时间框架: 5m, 15m, 30m, 1h, 4h
+- 方法:
+  * AnalyzeMultiTimeframe() - 多时间框架分析
+  * AnalyzeAllTimeframes() - 全时间框架分析
+
+## 订单流微观结构分析 (/microstructure/)
+
+### CVD计算 (/microstructure/cvd_calculator.go)
+- 核心功能:
+  * CVD增量计算
+  * 5分钟数据处理
+  * K线意图推断
+- 特色: 实时市场行为模式分析
+
+### 开放利益分析 (/microstructure/open_interest.go)  
+- 核心结构: OICalculator
+- 分析维度:
+  * 1小时持仓量变化
+  * 4小时持仓量变化
+  * 趋势判断 (increasing/decreasing/stable)
+
+### 订单簿分析 (/microstructure/orderbook_analyzer.go)
+- 核心功能:
+  * calculateImbalance() - 买卖压力失衡计算
+  * findWalls() - 支撑/阻力墙检测
+- 增强功能:
+  * 虚假挂单风险评估
+  * 流动性评分
+  * 墙体稳定性分析
+
+### 数据结构定义 (/microstructure/types.go)
+- CVD相关: CVDData, CVDDelta5m, MacroTrendData
+- 订单簿相关: OrderBookData, WallInfo, OrderBookLevel  
+- 配置相关: MicrostructureConfig, DataQualityInfo
+
+### 缓存管理 (/microstructure/data_cache.go)
+- 5分钟数据缓存:
+  * CVD增量数据
+  * 盘口数据
+  * K线意图分析
+- 自动清理: 过期数据清理机制
+
+## 系统集成点 (/market/data.go)
+
+### 主入口函数
+- Get() 函数: 统一数据获取接口
+- 功能: 协调所有指标计算和数据整合
+
+### 格式化输出  
+- FormatAsCompactData(): AI交易员专用精简格式
+- getOrderFlowDataForAI(): 订单流数据集成
+- FormatAsStructuredData(): 完整结构化数据输出
+
+### 数据一致性保证
+- K线缓存: KlineCache字段避免数据漂移
+- 时间锚点统一: lastClosedIndex()确保时间一致性
+- 精度控制: FormatByDataTypeAndSymbol()按币种适配精度
+
+## 数据质量保证机制
+
+### 时间锚点统一
+- lastClosedIndex(): 避免进行中K线导致的数据不一致
+- 统一时间基准: 所有指标使用相同的已收盘K线
+
+### 数据验证
+- 各模块内置数据验证
+- 异常检测和处理机制
+- 数据过期检测
+
+### 精度格式化  
+- FormatByDataTypeAndSymbol(): 根据数据类型和币种自动格式化
+- 支持类型: price, volume, percentage, ratio, strength, confidence
+
+## 系统架构特点
+
+### 模块化设计
+- 每个技术指标都有专门的分析器
+- 独立的功能模块，便于维护和扩展
+- 统一的接口设计
+
+### 多时间框架支持
+- 5分钟、15分钟、30分钟、1小时、4小时
+- 时间框架间的一致性分析
+- 跨时间框架信号确认
+
+### 实时数据处理
+- WebSocket实时数据接入
+- 订单流实时分析
+- 缓存机制优化性能
+
+### AI集成设计
+- 专门的AI数据格式
+- 精简的数据结构
+- 质量评分机制
+
+## 技术指标输出数据结构映射
+
+### 用户数据结构中的指标对应关系:
+```
+基础指标 -> /market/data.go 中的计算函数
+├── current_price -> 最后已收盘K线价格
+├── current_ema20 -> calculateEMA(klines, 20)
+├── current_macd -> calculateMACD(klines)  
+├── current_rsi7 -> calculateRSI(klines, 7)
+├── price_change_1h -> 基于5分钟K线回看计算
+├── price_change_4h -> 基于4小时K线计算
+├── atr14 -> calculateATR(klines, 14)
+├── vwap -> calculateVWAP(klines)
+└── supertrend -> calculateSupertrendEnhanced()
+
+多时间框架分析 -> /market/comprehensive_analysis.go
+├── 5m级别 -> ComprehensiveAnalyzer.AnalyzeMultiTimeframe()
+├── 15m级别 -> 各分析器针对15分钟数据
+├── 30m级别 -> 各分析器针对30分钟数据  
+├── 1h级别 -> 各分析器针对1小时数据
+└── 4h级别 -> 各分析器针对4小时数据
+
+订单流分析 -> /microstructure/ 包
+├── CVD数据 -> cvd_calculator.go
+├── OI数据 -> open_interest.go  
+├── 盘口数据 -> orderbook_analyzer.go
+└── 数据质量 -> 综合评估机制
+```
+
+## 性能优化特性
+
+### 计算效率
+- K线数据缓存避免重复计算
+- 增量计算减少计算量
+- 多时间框架数据复用
+
+### 内存管理
+- 定期清理过期数据
+- 限制历史数据量
+- 智能缓存策略
+
+### 并发安全
+- 读写锁保护共享数据
+- 原子操作保证数据一致性
+- 协程安全的数据结构
+
+这个AI自动交易系统通过模块化的设计、多时间框架的全面分析、
+实时的订单流监控，为AI交易决策提供了完整的技术分析数据支撑。
+每个指标都经过精心设计和优化，确保数据的准确性和实时性。
