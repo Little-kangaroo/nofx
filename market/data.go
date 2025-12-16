@@ -71,7 +71,7 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 	klines1h = filterKlinesByAnchorTime(klines1h, anchorCloseTimeMs)
 	klines4h = filterKlinesByAnchorTime(klines4h, anchorCloseTimeMs)
 
-	log.Printf("📊 [%s-时间锚点] 裁剪后K线数量: 5m=%d, 15m=%d, 30m=%d, 1h=%d, 4h=%d", 
+	log.Printf("📊 [%s-时间锚点] 裁剪后K线数量: 5m=%d, 15m=%d, 30m=%d, 1h=%d, 4h=%d",
 		symbol, len(klines5m), len(klines15m), len(klines30m), len(klines1h), len(klines4h))
 
 	// K线数据获取阶段耗时统计
@@ -80,12 +80,12 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 
 	// 基础技术指标计算阶段耗时统计
 	basicIndicatorsStart := time.Now()
-	
+
 	// 🔥 P0-01修复：基于锚点时间裁剪后的K线数据计算指标，确保时间一致性
 	if len(klines5m) == 0 {
 		return nil, fmt.Errorf("5分钟K线数据经锚点裁剪后为空")
 	}
-	
+
 	// 计算当前指标 (基于锚点裁剪后的5分钟数据)
 	currentPrice := klines5m[len(klines5m)-1].Close
 	currentEMA20 := calculateEMA(klines5m, 20)
@@ -99,8 +99,8 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 	// 🔥 P0-01修复：计算价格变化百分比 - 基于裁剪后的数据统一时间锚点
 	// 1小时价格变化 = 从当前锚点回看12个5分钟K线
 	priceChange1h := 0.0
-	lookback1h := len(klines5m) - 12  // 从当前锚点回看12根
-	if lookback1h >= 0 {      // 确保索引有效
+	lookback1h := len(klines5m) - 12 // 从当前锚点回看12根
+	if lookback1h >= 0 {             // 确保索引有效
 		price1hAgo := klines5m[lookback1h].Close
 		if price1hAgo > 0 {
 			priceChange1h = ((currentPrice - price1hAgo) / price1hAgo) * 100
@@ -109,7 +109,7 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 
 	// 4小时价格变化 = 使用4小时K线的锚点裁剪数据
 	priceChange4h := 0.0
-	if len(klines4h) >= 2 {  // 至少需要2根K线（当前已收盘 + 上一根）
+	if len(klines4h) >= 2 { // 至少需要2根K线（当前已收盘 + 上一根）
 		price4hAgo := klines4h[len(klines4h)-2].Close
 		if price4hAgo > 0 {
 			priceChange4h = ((currentPrice - price4hAgo) / price4hAgo) * 100
@@ -166,7 +166,7 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 	// 确保与currentPrice使用相同时间锚点，避免进行中K线导致的数据错配
 	ohlc5mLastClosed, ohlc5mPrevClosed := extract5mOHLCDataFromFiltered(klines5m)
 
-	// 提取4h级别OHLC数据 (基于锚点裁剪后的数据) 
+	// 提取4h级别OHLC数据 (基于锚点裁剪后的数据)
 	// 🔥 P0-02修复：获取最新已收盘4h和上一根已收盘4h，避免HTF判断滞后
 	ohlc4hLastClosed, ohlc4hPrevClosed := extract4hOHLCDataFromFiltered(klines4h)
 
@@ -178,7 +178,7 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 	exchangeMeta = &ExchangeMeta{
 		Symbol:   symbol,
 		TickSize: getSmartTickSizeBySymbol(symbol), // 智能推断tick_size
-		LotSize:  1.0, // 默认lot_size为1.0，实际可根据交易所规则调整
+		LotSize:  1.0,                              // 默认lot_size为1.0，实际可根据交易所规则调整
 	}
 
 	data := &Data{
@@ -194,12 +194,12 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 
 		// 🔥 P0-01修复：OHLC数据 - 统一时间锚点确保数据一致性
 		// ohlc5mLastClosed现在与currentPrice使用相同时间锚点
-		OHLC5mPrevClosed:    ohlc5mLastClosed,  // 最后已收盘K线（与currentPrice同锚点）
-		OHLC5mEarlierClosed: ohlc5mPrevClosed,  // 上一根已收盘K线（用于对比）
-		
+		OHLC5mPrevClosed:    ohlc5mLastClosed, // 最后已收盘K线（与currentPrice同锚点）
+		OHLC5mEarlierClosed: ohlc5mPrevClosed, // 上一根已收盘K线（用于对比）
+
 		// 🔥 P0-02修复：4h OHLC数据 - 修复off-by-one错误，避免HTF判断滞后
-		OHLC4hLastClosed:    ohlc4hLastClosed,  // 最新已收盘4h（主要HTF数据）
-		OHLC4hPrevClosed:    ohlc4hPrevClosed,  // 上一根已收盘4h（用于对比）
+		OHLC4hLastClosed: ohlc4hLastClosed, // 最新已收盘4h（主要HTF数据）
+		OHLC4hPrevClosed: ohlc4hPrevClosed, // 上一根已收盘4h（用于对比）
 
 		OpenInterest:           oiData,
 		FundingRate:            fundingRate,
@@ -216,14 +216,14 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 		SupplyDemand:    comprehensiveResult.SupplyDemand,
 		FairValueGaps:   comprehensiveResult.FairValueGaps,
 		Fibonacci:       comprehensiveResult.Fibonacci,
-		
+
 		// 🔥 Gate2 结构聚合输出 - V-13.5规范
-		StructureGate2:  comprehensiveResult.StructureGate2,
-		
+		StructureGate2: comprehensiveResult.StructureGate2,
+
 		// 🔥 P0-03修复：缓存K线数据，避免FormatAsCompactData二次获取导致数据漂移
 		KlineCache: map[string][]Kline{
 			"5m":  klines5m,
-			"15m": klines15m, 
+			"15m": klines15m,
 			"30m": klines30m,
 			"1h":  klines1h,
 			"4h":  klines4h,
@@ -265,9 +265,9 @@ func lastClosedIndex(klines []Kline) int {
 	last := klines[len(klines)-1]
 	// 若 CloseTime 在未来，说明这根大概率是"进行中K线"
 	if last.CloseTime > nowMs && len(klines) >= 2 {
-		return len(klines) - 2  // 返回倒数第二根（已收盘）
+		return len(klines) - 2 // 返回倒数第二根（已收盘）
 	}
-	return len(klines) - 1      // 最后一根就是已收盘
+	return len(klines) - 1 // 最后一根就是已收盘
 }
 
 // 🔥 P0-01修复：extract5mOHLCData 提取5m级别OHLC数据 - 统一时间锚点
@@ -281,7 +281,7 @@ func extract5mOHLCData(klines5m []Kline) (*OHLCData, *OHLCData) {
 
 	// 最后一根已收盘K线 - 与currentPrice使用相同锚点
 	lastClosed := extractOHLCData(klines5m[idx])
-	
+
 	// 上一根已收盘K线 - 用于对比分析
 	var prevClosed *OHLCData
 	if idx >= 1 {
@@ -302,7 +302,7 @@ func extract4hOHLCData(klines4h []Kline) (*OHLCData, *OHLCData) {
 
 	// 最后一根已收盘K线 - 与5m逻辑对齐，避免HTF判断滞后
 	lastClosed := extractOHLCData(klines4h[idx])
-	
+
 	// 上一根已收盘K线 - 用于对比分析
 	var prevClosed *OHLCData
 	if idx >= 1 {
@@ -815,7 +815,7 @@ func FormatAsCompactData(data *Data) string {
 		log.Printf("⚠️ [CompactData] K线缓存为空，可能存在数据一致性风险")
 		return fmt.Sprintf("K线缓存数据不可用")
 	}
-	
+
 	// 直接使用缓存的K线数据，避免二次网络请求导致的数据漂移
 	timeframeKlines := data.KlineCache
 
@@ -824,7 +824,7 @@ func FormatAsCompactData(data *Data) string {
 			"基础指标":       calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
 			"订单流分析":     GetOrderFlowDataForAIV2(data.Symbol),
-			"Gate2结构聚合": buildGate2CompactOutput(data),
+			/*"Gate2结构聚合": buildGate2CompactOutput(data),*/
 		},
 	}
 
@@ -839,7 +839,7 @@ func FormatAsCompactData(data *Data) string {
 		var parsedData interface{}
 		if err := json.Unmarshal(jsonData, &parsedData); err == nil {
 			validationResult := ValidateAIOutput(parsedData, "compact")
-			
+
 			// 如果启用自动纠错且有纠错内容，使用纠错后的数据
 			if validationResult.ProcessedData != nil && len(validationResult.CorrectedFields) > 0 {
 				if correctedJSON, err := json.Marshal(validationResult.ProcessedData); err == nil {
@@ -847,7 +847,7 @@ func FormatAsCompactData(data *Data) string {
 					return string(correctedJSON)
 				}
 			}
-			
+
 			// 记录验证警告（不阻断输出）
 			if len(validationResult.Warnings) > 0 {
 				log.Printf("⚠️ [P1-2] AI输出验证发现 %d 个警告", len(validationResult.Warnings))
@@ -2160,7 +2160,7 @@ func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 
 	// 🔥 P0-01修复：成交量计算使用锚点裁剪后的数据
 	if len(klines) > 0 {
-		data.CurrentVolume = klines[len(klines)-1].Volume  // 使用最后一根K线的成交量
+		data.CurrentVolume = klines[len(klines)-1].Volume // 使用最后一根K线的成交量
 		// 计算平均成交量
 		sum := 0.0
 		for _, k := range klines {
@@ -2171,10 +2171,10 @@ func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 
 	// 🔥 P0-01修复：OHLC数据提取使用锚点裁剪后的数据
 	if timeframe == "15m" || timeframe == "30m" {
-		// 15m/30m级别: 最后已收盘 + 上一根已收盘  
+		// 15m/30m级别: 最后已收盘 + 上一根已收盘
 		lastIdx := len(klines) - 1
 		if lastIdx >= 0 {
-			data.OHLCLastClosed = extractOHLCData(klines[lastIdx])     // 最后已收盘
+			data.OHLCLastClosed = extractOHLCData(klines[lastIdx]) // 最后已收盘
 			if lastIdx >= 1 {
 				data.OHLCPrevClosed = extractOHLCData(klines[lastIdx-1]) // 上一根已收盘
 			}
@@ -2183,7 +2183,7 @@ func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 		// 1h级别: 使用最后已收盘K线
 		lastIdx := len(klines) - 1
 		if lastIdx >= 0 {
-			data.OHLCLastClosed = extractOHLCData(klines[lastIdx])  // 统一锚点
+			data.OHLCLastClosed = extractOHLCData(klines[lastIdx]) // 统一锚点
 		}
 	}
 
@@ -2214,19 +2214,19 @@ type SuperTrendResult struct {
 	CurrentLine float64 // 当前趋势线价格
 	UpperLine   float64 // 上轨价格
 	LowerLine   float64 // 下轨价格
-	
+
 	// 🔥 新增：增强结果结构
 	IsValid       bool    // 数据是否有效
 	TrendDuration int     // 当前趋势持续时间（K线数量）
 	FlipPrice     float64 // 最近一次翻转的价格
-	
+
 	// 🔥 新增：趋势强度量化
 	TrendStrength float64 // 趋势强度评分 (0-100)
 	Confidence    float64 // 置信度评分 (0-1)
-	
+
 	// 🔥 新增：信号质量
-	SignalQuality string  // "high", "medium", "low"
-	LastFlipTime  int64   // 最后翻转时间戳
+	SignalQuality string // "high", "medium", "low"
+	LastFlipTime  int64  // 最后翻转时间戳
 }
 
 // calculateSupertrendEnhanced 计算增强版超级趋势线
@@ -2248,7 +2248,7 @@ func calculateSupertrendEnhanced(klines []Kline, timeframe string, customParams 
 
 	// 🔥 动态参数配置：根据时间框架自动调整
 	atrPeriod, factor := getDynamicSupertrendParams(timeframe, customParams...)
-	
+
 	minRequired := atrPeriod + 1
 	recommended := atrPeriod * 3 // 建议使用ATR周期的3倍数据以确保稳定性
 	if len(klines) < minRequired {
@@ -2260,7 +2260,7 @@ func calculateSupertrendEnhanced(klines []Kline, timeframe string, customParams 
 	}
 
 	length := len(klines)
-	
+
 	// 1. 🔥 改进的ATR计算：使用Wilder's Smoothing (RMA)
 	atrs := calculateEnhancedATRSeries(klines, atrPeriod)
 	if atrs == nil {
@@ -2343,10 +2343,10 @@ func calculateSupertrendEnhanced(klines []Kline, timeframe string, customParams 
 
 	// 🔥 趋势强度量化
 	result.TrendStrength = calculateTrendStrength(klines, directions, supertrendLines, result.TrendDuration, lastIdx)
-	
+
 	// 🔥 置信度评分
 	result.Confidence = calculateConfidence(klines, atrs, result.TrendDuration, flipPoints, lastIdx)
-	
+
 	// 🔥 信号质量评估
 	result.SignalQuality = determineSignalQuality(result.TrendStrength, result.Confidence, result.TrendDuration, len(klines))
 
@@ -2360,14 +2360,14 @@ func getDynamicSupertrendParams(timeframe string, customParams ...float64) (int,
 	if len(customParams) >= 2 {
 		return int(customParams[0]), customParams[1]
 	}
-	
+
 	// 根据时间框架动态配置参数
 	switch timeframe {
 	case "1m", "3m", "5m":
 		// 低时间框架：更敏感的参数配置
 		return 10, 3.0 // ATR周期10，Factor 3.0
 	case "15m", "30m":
-		// 中时间框架：平衡的参数配置  
+		// 中时间框架：平衡的参数配置
 		return 14, 3.5 // ATR周期14，Factor 3.5
 	case "1h", "2h", "4h":
 		// 高时间框架：更稳定的参数配置
@@ -2390,7 +2390,7 @@ func calculateEnhancedATRSeries(klines []Kline, period int) []float64 {
 	}
 
 	atrs := make([]float64, length)
-	
+
 	// 🔥 计算True Range序列
 	trs := make([]float64, length)
 	for i := 1; i < length; i++ {
@@ -2420,7 +2420,7 @@ func calculateEnhancedATRSeries(klines []Kline, period int) []float64 {
 // 🔥 功能：改进初始化逻辑，避免错误的初始方向判断
 func isInitialBullish(klines []Kline, startIdx int, upperBand, lowerBand float64) bool {
 	currentClose := klines[startIdx].Close
-	
+
 	// 基础判断：收盘价与带的关系
 	if currentClose > upperBand {
 		return true
@@ -2428,13 +2428,13 @@ func isInitialBullish(klines []Kline, startIdx int, upperBand, lowerBand float64
 	if currentClose < lowerBand {
 		return false
 	}
-	
+
 	// 增强判断：分析最近几根K线的趋势
 	lookback := 5
 	if startIdx < lookback {
 		lookback = startIdx
 	}
-	
+
 	bullishSignals := 0
 	for i := startIdx - lookback; i <= startIdx; i++ {
 		if i > 0 {
@@ -2450,7 +2450,7 @@ func isInitialBullish(klines []Kline, startIdx int, upperBand, lowerBand float64
 			}
 		}
 	}
-	
+
 	// 如果看涨信号数量超过总信号的50%，则判断为看涨
 	return bullishSignals > lookback
 }
@@ -2509,25 +2509,25 @@ func calculateTrendStrength(klines []Kline, directions []string, supertrendLines
 	if duration <= 0 || lastIdx < duration {
 		return 0.0
 	}
-	
+
 	totalStrength := 0.0
 	factors := 0
-	
+
 	// 1. 价格距离强度 (权重: 30%)
 	currentPrice := klines[lastIdx].Close
 	supertrendPrice := supertrendLines[lastIdx]
-	priceDistance := math.Abs(currentPrice - supertrendPrice) / currentPrice
-	distanceStrength := math.Min(priceDistance * 500, 100) // 距离越大，强度越高，最大100
+	priceDistance := math.Abs(currentPrice-supertrendPrice) / currentPrice
+	distanceStrength := math.Min(priceDistance*500, 100) // 距离越大，强度越高，最大100
 	totalStrength += distanceStrength * 0.3
 	factors++
-	
+
 	// 2. 趋势一致性强度 (权重: 25%)
 	consistentBars := 0
 	startIdx := lastIdx - duration + 1
 	if startIdx < 0 {
 		startIdx = 0
 	}
-	
+
 	currentDirection := directions[lastIdx]
 	for i := startIdx; i <= lastIdx; i++ {
 		if directions[i] == currentDirection {
@@ -2536,7 +2536,7 @@ func calculateTrendStrength(klines []Kline, directions []string, supertrendLines
 	}
 	consistencyStrength := float64(consistentBars) / float64(duration) * 100
 	totalStrength += consistencyStrength * 0.25
-	
+
 	// 3. 成交量支撑强度 (权重: 20%)
 	if len(klines) > duration {
 		avgVolume := 0.0
@@ -2544,24 +2544,24 @@ func calculateTrendStrength(klines []Kline, directions []string, supertrendLines
 			avgVolume += klines[i].Volume
 		}
 		avgVolume /= float64(duration)
-		
+
 		recentVolume := klines[lastIdx].Volume
 		volumeRatio := recentVolume / avgVolume
-		volumeStrength := math.Min(volumeRatio * 50, 100) // 成交量比率转换为强度
+		volumeStrength := math.Min(volumeRatio*50, 100) // 成交量比率转换为强度
 		totalStrength += volumeStrength * 0.2
 	}
-	
+
 	// 4. 持续时间强度 (权重: 15%)
-	durationStrength := math.Min(float64(duration) * 2, 100) // 持续时间越长，强度越高
+	durationStrength := math.Min(float64(duration)*2, 100) // 持续时间越长，强度越高
 	totalStrength += durationStrength * 0.15
-	
+
 	// 5. 价格动量强度 (权重: 10%)
 	if duration >= 3 {
 		recentRange := 3
 		if duration < 3 {
 			recentRange = duration
 		}
-		
+
 		momentum := 0.0
 		for i := lastIdx - recentRange + 1; i <= lastIdx; i++ {
 			if i > 0 {
@@ -2573,10 +2573,10 @@ func calculateTrendStrength(klines []Kline, directions []string, supertrendLines
 				}
 			}
 		}
-		momentumStrength := math.Min(momentum * 1000, 100) // 动量转换为强度
+		momentumStrength := math.Min(momentum*1000, 100) // 动量转换为强度
 		totalStrength += momentumStrength * 0.1
 	}
-	
+
 	return math.Max(0, math.Min(100, totalStrength))
 }
 
@@ -2586,28 +2586,28 @@ func calculateConfidence(klines []Kline, atrs []float64, duration int, flipPoint
 	if lastIdx <= 0 || len(atrs) <= lastIdx {
 		return 0.0
 	}
-	
+
 	confidence := 0.0
 	factors := 0
-	
+
 	// 1. 数据充分性 (权重: 25%)
 	dataRatio := float64(len(klines)) / float64(50) // 50根K线为基准
 	dataConfidence := math.Min(dataRatio, 1.0)
 	confidence += dataConfidence * 0.25
 	factors++
-	
+
 	// 2. 趋势稳定性 (权重: 20%)
 	flipFrequency := 0.0
 	if len(flipPoints) > 0 && len(klines) > 0 {
 		flipFrequency = float64(len(flipPoints)) / float64(len(klines))
 	}
-	stabilityConfidence := math.Max(0, 1.0 - flipFrequency*10) // 翻转频率越低，稳定性越高
+	stabilityConfidence := math.Max(0, 1.0-flipFrequency*10) // 翻转频率越低，稳定性越高
 	confidence += stabilityConfidence * 0.2
-	
+
 	// 3. 持续时间置信度 (权重: 20%)
-	durationConfidence := math.Min(float64(duration) / 20.0, 1.0) // 20根K线为基准
+	durationConfidence := math.Min(float64(duration)/20.0, 1.0) // 20根K线为基准
 	confidence += durationConfidence * 0.2
-	
+
 	// 4. ATR相对强度 (权重: 15%)
 	currentATR := atrs[lastIdx]
 	avgATR := 0.0
@@ -2617,42 +2617,42 @@ func calculateConfidence(klines []Kline, atrs []float64, duration int, flipPoint
 			avgATR += atrs[i]
 		}
 		avgATR /= float64(atrPeriod)
-		
+
 		atrRatio := currentATR / avgATR
 		atrConfidence := math.Max(0, math.Min(1.0, atrRatio)) // ATR相对稳定时置信度较高
 		confidence += atrConfidence * 0.15
 	}
-	
+
 	// 5. 价格行为一致性 (权重: 20%)
 	behaviorConsistency := 0.0
 	if duration >= 5 {
 		consistentMoves := 0
 		totalMoves := 0
-		
+
 		startIdx := lastIdx - duration + 1
 		if startIdx < 1 {
 			startIdx = 1
 		}
-		
+
 		for i := startIdx; i <= lastIdx; i++ {
 			if i > 0 {
 				priceMove := klines[i].Close - klines[i-1].Close
 				totalMoves++
-				
+
 				// 检查价格移动是否与趋势一致
-				if (priceMove > 0 && klines[i].Close > klines[i].Open) || 
-				   (priceMove < 0 && klines[i].Close < klines[i].Open) {
+				if (priceMove > 0 && klines[i].Close > klines[i].Open) ||
+					(priceMove < 0 && klines[i].Close < klines[i].Open) {
 					consistentMoves++
 				}
 			}
 		}
-		
+
 		if totalMoves > 0 {
 			behaviorConsistency = float64(consistentMoves) / float64(totalMoves)
 		}
 	}
 	confidence += behaviorConsistency * 0.2
-	
+
 	return math.Max(0, math.Min(1.0, confidence))
 }
 
@@ -2661,7 +2661,7 @@ func calculateConfidence(klines []Kline, atrs []float64, duration int, flipPoint
 func determineSignalQuality(trendStrength, confidence float64, duration, totalBars int) string {
 	// 计算综合评分
 	score := (trendStrength * 0.4) + (confidence * 100 * 0.3) + (math.Min(float64(duration)/10, 10) * 10 * 0.2) + (math.Min(float64(totalBars)/100, 1) * 100 * 0.1)
-	
+
 	if score >= 70 && trendStrength >= 60 && confidence >= 0.7 {
 		return "high"
 	} else if score >= 50 && trendStrength >= 40 && confidence >= 0.5 {
@@ -2847,7 +2847,7 @@ func getOrderFlowDataForAI(symbol string) map[string]interface{} {
 	ofm := microstructure.GetGlobalOrderFlowManager()
 	if ofm == nil {
 		return map[string]interface{}{
-			"状态": "订单流系统未初始化",
+			"状态":          "订单流系统未初始化",
 			"本周期博弈_5m": buildEmptyCurrentPeriodDataV2(),
 			"宏观资金趋势":  buildEmptyMacroTrendDataV2(),
 			"盘口结构_v2":   buildEmptyOrderBookDataV2(),
@@ -2859,7 +2859,7 @@ func getOrderFlowDataForAI(symbol string) map[string]interface{} {
 	snapshot := ofm.GetMarketSnapshot(symbol)
 	if snapshot == nil {
 		return map[string]interface{}{
-			"状态": "暂无订单流数据",
+			"状态":          "暂无订单流数据",
 			"本周期博弈_5m": buildEmptyCurrentPeriodDataV2(),
 			"宏观资金趋势":  buildEmptyMacroTrendDataV2(),
 			"盘口结构_v2":   buildEmptyOrderBookDataV2(),
@@ -3065,20 +3065,20 @@ func buildDataQualityInfo(snapshot *microstructure.MarketSnapshot) map[string]in
 	// 🔥 P1-1修复：使用质量评分标准化器确保所有评分使用0-1量纲
 	normalizer := GetGlobalQualityNormalizer()
 	qualityBundle := normalizer.CreateQualityBundle(
-		0, // overallScore将在下面计算
+		0,                // overallScore将在下面计算
 		incrementalScore, // 数据质量
 		orderBookScore,   // 流动性评分
-		0,               // 稳定性评分（未提供）
-		0,               // 通道质量（未提供）  
-		0,               // 锚点评分（未提供）
+		0,                // 稳定性评分（未提供）
+		0,                // 通道质量（未提供）
+		0,                // 锚点评分（未提供）
 	)
-	
+
 	// 加权平均 - 使用标准化后的评分
 	normalizedCvdScore := normalizer.NormalizeDataQualityScore(cvdScore, "cvd_score").GetNormalizedScore()
 	normalizedOrderBookScore := qualityBundle.LiquidityScore.GetNormalizedScore()
 	normalizedOiScore := normalizer.NormalizeDataQualityScore(oiScore, "oi_score").GetNormalizedScore()
 	normalizedIncrementalScore := qualityBundle.DataQuality.GetNormalizedScore()
-	
+
 	overallScore = (normalizedCvdScore*0.3 + normalizedOrderBookScore*0.3 + normalizedOiScore*0.2 + normalizedIncrementalScore*0.2)
 
 	// 确定状态
@@ -3133,7 +3133,7 @@ func buildEmptyCurrentPeriodDataV2() map[string]interface{} {
 		"volume_ratio":          1.0,
 		"period_minutes":        5,
 		"data_quality":          0.0,
-		"period_start":          time.Now().Add(-5*time.Minute).Format("15:04:05"),
+		"period_start":          time.Now().Add(-5 * time.Minute).Format("15:04:05"),
 		"period_end":            time.Now().Format("15:04:05"),
 		"analysis_time":         time.Now().Format("15:04:05"),
 	}
@@ -3142,16 +3142,16 @@ func buildEmptyCurrentPeriodDataV2() map[string]interface{} {
 // buildEmptyMacroTrendDataV2 构建空的宏观趋势数据结构（V2.0完整版）
 func buildEmptyMacroTrendDataV2() map[string]interface{} {
 	return map[string]interface{}{
-		"spot_cvd_1h_usd":       0,
-		"futures_cvd_1h_usd":    0,
-		"oi_change_1h_pct":      0.0,
-		"cvd_divergence":        "unknown",
-		"context_inference":     "insufficient_data",
-		"signal_strength":       0.0,
-		"market_regime":         "unknown",
-		"dominant_direction":    "unknown",
-		"trend_alignment":       "unknown",
-		"confidence_level":      0.0,
+		"spot_cvd_1h_usd":    0,
+		"futures_cvd_1h_usd": 0,
+		"oi_change_1h_pct":   0.0,
+		"cvd_divergence":     "unknown",
+		"context_inference":  "insufficient_data",
+		"signal_strength":    0.0,
+		"market_regime":      "unknown",
+		"dominant_direction": "unknown",
+		"trend_alignment":    "unknown",
+		"confidence_level":   0.0,
 	}
 }
 
@@ -3229,16 +3229,16 @@ func buildMacroTrendDataV2(snapshot *microstructure.MarketSnapshot, isStale bool
 	}
 
 	return map[string]interface{}{
-		"spot_cvd_1h_usd":       FormatByDataTypeAndSymbol(snapshot.CVDData.SpotCVD1H, "volume", snapshot.Symbol),
-		"futures_cvd_1h_usd":    FormatByDataTypeAndSymbol(snapshot.CVDData.FuturesCVD1H, "volume", snapshot.Symbol),
-		"oi_change_1h_pct":      FormatByDataTypeAndSymbol(snapshot.OIAnalysis.ChangeRate1H, "percentage", snapshot.Symbol),
-		"cvd_divergence":        snapshot.MarketContext.CVDDivergence,
-		"context_inference":     snapshot.MarketContext.ContextInference,
-		"signal_strength":       FormatByDataTypeAndSymbol(snapshot.MarketContext.SignalStrength, "strength", snapshot.Symbol),
-		"market_regime":         snapshot.MarketContext.GameMatrix.MatrixType,
-		"dominant_direction":    snapshot.CVDData.Signal,
-		"trend_alignment":       calculateTrendAlignment(snapshot),
-		"confidence_level":      FormatByDataTypeAndSymbol(snapshot.MarketContext.SignalStrength/100.0, "confidence", snapshot.Symbol),
+		"spot_cvd_1h_usd":    FormatByDataTypeAndSymbol(snapshot.CVDData.SpotCVD1H, "volume", snapshot.Symbol),
+		"futures_cvd_1h_usd": FormatByDataTypeAndSymbol(snapshot.CVDData.FuturesCVD1H, "volume", snapshot.Symbol),
+		"oi_change_1h_pct":   FormatByDataTypeAndSymbol(snapshot.OIAnalysis.ChangeRate1H, "percentage", snapshot.Symbol),
+		"cvd_divergence":     snapshot.MarketContext.CVDDivergence,
+		"context_inference":  snapshot.MarketContext.ContextInference,
+		"signal_strength":    FormatByDataTypeAndSymbol(snapshot.MarketContext.SignalStrength, "strength", snapshot.Symbol),
+		"market_regime":      snapshot.MarketContext.GameMatrix.MatrixType,
+		"dominant_direction": snapshot.CVDData.Signal,
+		"trend_alignment":    calculateTrendAlignment(snapshot),
+		"confidence_level":   FormatByDataTypeAndSymbol(snapshot.MarketContext.SignalStrength/100.0, "confidence", snapshot.Symbol),
 	}
 }
 
@@ -3299,7 +3299,7 @@ func buildDataQualityInfoV2(snapshot *microstructure.MarketSnapshot, isStale boo
 	// 从缓存获取5分钟增量数据
 	globalCache := microstructure.GetGlobalCache()
 	cvdDelta5m := globalCache.GetCVDDelta5m(snapshot.Symbol)
-	
+
 	// 计算整体质量评分
 	overallScore := 1.0
 
@@ -3363,7 +3363,7 @@ func filterKlinesByAnchorTime(klines []Kline, anchorCloseTimeMs int64) []Kline {
 	if len(klines) == 0 {
 		return klines
 	}
-	
+
 	// 找到最大的满足 CloseTime <= anchorCloseTimeMs 的索引
 	maxValidIndex := -1
 	for i := len(klines) - 1; i >= 0; i-- {
@@ -3372,12 +3372,12 @@ func filterKlinesByAnchorTime(klines []Kline, anchorCloseTimeMs int64) []Kline {
 			break
 		}
 	}
-	
+
 	if maxValidIndex < 0 {
 		log.Printf("⚠️ [时间锚点] 所有K线都在锚点时间 %d 之后，返回空切片", anchorCloseTimeMs)
 		return []Kline{}
 	}
-	
+
 	// 返回裁剪后的K线数据 (0到maxValidIndex，包含maxValidIndex)
 	return klines[:maxValidIndex+1]
 }
@@ -3393,7 +3393,7 @@ func extract5mOHLCDataFromFiltered(filteredKlines []Kline) (*OHLCData, *OHLCData
 	// 最后一根K线 (锚点时间内的最后已收盘K线)
 	lastIdx := len(filteredKlines) - 1
 	lastClosed := extractOHLCData(filteredKlines[lastIdx])
-	
+
 	// 上一根K线 (用于对比分析)
 	var prevClosed *OHLCData
 	if lastIdx >= 1 {
@@ -3414,7 +3414,7 @@ func extract4hOHLCDataFromFiltered(filteredKlines []Kline) (*OHLCData, *OHLCData
 	// 最后一根K线 (最新已收盘K线) - 修复off-by-one错误
 	lastIdx := len(filteredKlines) - 1
 	lastClosed := extractOHLCData(filteredKlines[lastIdx])
-	
+
 	// 上一根K线 (前一根已收盘K线) - 用于对比分析
 	var prevClosed *OHLCData
 	if len(filteredKlines) >= 2 {
@@ -3432,54 +3432,54 @@ func extract4hOHLCDataFromFiltered(filteredKlines []Kline) (*OHLCData, *OHLCData
 func buildGate2CompactOutput(data *Data) map[string]interface{} {
 	if data.StructureGate2 == nil {
 		return map[string]interface{}{
-			"status":                "disabled",
-			"struct_state_long":     "UNKNOWN",
-			"struct_state_short":    "UNKNOWN",
-			"best_anchor_long":      nil,
-			"best_anchor_short":     nil,
-			"top_anchors_long":      []interface{}{},
-			"top_anchors_short":     []interface{}{},
+			"status":                 "disabled",
+			"struct_state_long":      "UNKNOWN",
+			"struct_state_short":     "UNKNOWN",
+			"best_anchor_long":       nil,
+			"best_anchor_short":      nil,
+			"top_anchors_long":       []interface{}{},
+			"top_anchors_short":      []interface{}{},
 			"anchor_score_breakdown": map[string]interface{}{},
-			"trigger_context":       map[string]interface{}{
+			"trigger_context": map[string]interface{}{
 				"is_triggered": false,
 				"trigger_time": time.Now().Format("15:04:05"),
-				"time_anchor": "5m_close_aligned",
+				"time_anchor":  "5m_close_aligned",
 			},
 		}
 	}
 
 	result := map[string]interface{}{
 		"status": "active",
-		
+
 		// 🔥 V-13.5统一价格字段 (避免双契约)
 		"last_price": FormatByDataTypeAndSymbol(data.LastPrice, "price", data.Symbol),
-		
+
 		// 🔥 结构状态输出
 		"struct_state_long":  data.StructureGate2.StructStateLong,
 		"struct_state_short": data.StructureGate2.StructStateShort,
-		
+
 		// 🔥 最优锚点输出
 		"best_anchor_long":  buildBestAnchorOutput(data.StructureGate2.TopAnchorsLong, data.Symbol),
 		"best_anchor_short": buildBestAnchorOutput(data.StructureGate2.TopAnchorsShort, data.Symbol),
-		
+
 		// 🔥 前3-5个锚点输出
 		"top_anchors_long":  buildTopAnchorsOutput(data.StructureGate2.TopAnchorsLong, data.Symbol, 3),
 		"top_anchors_short": buildTopAnchorsOutput(data.StructureGate2.TopAnchorsShort, data.Symbol, 3),
-		
+
 		// 🔥 锚点评分breakdown
 		"anchor_score_breakdown": buildAnchorScoreBreakdown(data.StructureGate2),
-		
+
 		// 🔥 触发上下文
 		"trigger_context": map[string]interface{}{
-			"is_triggered":    data.StructureGate2.TriggerResult != nil && data.StructureGate2.TriggerResult.IsTriggered,
-			"trigger_time":    time.Now().Format("15:04:05"),
-			"time_anchor":     "5m_close_aligned",
+			"is_triggered": data.StructureGate2.TriggerResult != nil && data.StructureGate2.TriggerResult.IsTriggered,
+			"trigger_time": time.Now().Format("15:04:05"),
+			"time_anchor":  "5m_close_aligned",
 			"trigger_details": func() interface{} {
 				if data.StructureGate2.TriggerResult != nil && data.StructureGate2.TriggerResult.IsTriggered {
 					return map[string]interface{}{
-						"direction":   data.StructureGate2.TriggerResult.Direction,
+						"direction":    data.StructureGate2.TriggerResult.Direction,
 						"trigger_type": data.StructureGate2.TriggerResult.TriggerType,
-						"confidence":  FormatByDataTypeAndSymbol(data.StructureGate2.TriggerResult.Confidence, "confidence", data.Symbol),
+						"confidence":   FormatByDataTypeAndSymbol(data.StructureGate2.TriggerResult.Confidence, "confidence", data.Symbol),
 						"anchor_triggered": func() interface{} {
 							if data.StructureGate2.TriggerResult.TriggeredAnchor != nil {
 								return buildSingleAnchorOutput(*data.StructureGate2.TriggerResult.TriggeredAnchor, data.Symbol)
@@ -3492,7 +3492,7 @@ func buildGate2CompactOutput(data *Data) map[string]interface{} {
 			}(),
 		},
 	}
-	
+
 	// 🔥 P1-2修复：Gate2输出JSON schema验证
 	validationResult := ValidateAIOutput(result, "gate2")
 	if validationResult.ProcessedData != nil && len(validationResult.CorrectedFields) > 0 {
@@ -3501,7 +3501,7 @@ func buildGate2CompactOutput(data *Data) map[string]interface{} {
 			return correctedResult
 		}
 	}
-	
+
 	return result
 }
 
@@ -3510,7 +3510,7 @@ func buildBestAnchorOutput(anchors []AnchorCandidate, symbol string) interface{}
 	if len(anchors) == 0 {
 		return nil
 	}
-	
+
 	// 返回排序后的第一个（最优）锚点
 	bestAnchor := anchors[0]
 	return buildSingleAnchorOutput(bestAnchor, symbol)
@@ -3519,17 +3519,17 @@ func buildBestAnchorOutput(anchors []AnchorCandidate, symbol string) interface{}
 // buildTopAnchorsOutput 构建前N个锚点输出
 func buildTopAnchorsOutput(anchors []AnchorCandidate, symbol string, maxCount int) []interface{} {
 	result := make([]interface{}, 0, maxCount)
-	
+
 	count := len(anchors)
 	if count > maxCount {
 		count = maxCount
 	}
-	
+
 	for i := 0; i < count; i++ {
 		anchorOutput := buildSingleAnchorOutput(anchors[i], symbol)
 		result = append(result, anchorOutput)
 	}
-	
+
 	return result
 }
 
@@ -3544,28 +3544,28 @@ func buildSingleAnchorOutput(anchor AnchorCandidate, symbol string) map[string]i
 			}
 		}
 	}
-	
+
 	return map[string]interface{}{
-		"type":           anchor.Type,
-		"timeframe":      anchor.TF,
-		"level":          FormatByDataTypeAndSymbol(anchor.Level, "price", symbol),
-		"direction":      anchor.Dir,
-		"priority_rank":  anchor.PriorityRank,
-		"anchor_score":   FormatByDataTypeAndSymbol(anchor.AnchorScore, "ratio", symbol),
-		"distance_atr":   FormatByDataTypeAndSymbol(distanceATR, "ratio", symbol),
-		"strength_z":     func() interface{} {
+		"type":          anchor.Type,
+		"timeframe":     anchor.TF,
+		"level":         FormatByDataTypeAndSymbol(anchor.Level, "price", symbol),
+		"direction":     anchor.Dir,
+		"priority_rank": anchor.PriorityRank,
+		"anchor_score":  FormatByDataTypeAndSymbol(anchor.AnchorScore, "ratio", symbol),
+		"distance_atr":  FormatByDataTypeAndSymbol(distanceATR, "ratio", symbol),
+		"strength_z": func() interface{} {
 			if anchor.StrengthZ != nil {
 				return FormatByDataTypeAndSymbol(*anchor.StrengthZ, "ratio", symbol)
 			}
 			return nil
 		}(),
-		"vol_ratio":      func() interface{} {
+		"vol_ratio": func() interface{} {
 			if anchor.VolRatio != nil {
 				return FormatByDataTypeAndSymbol(*anchor.VolRatio, "ratio", symbol)
 			}
 			return nil
 		}(),
-		"is_fresh":       anchor.IsFresh,
+		"is_fresh": anchor.IsFresh,
 		"score_breakdown": func() interface{} {
 			if meta := anchor.Meta; meta != nil {
 				if breakdown, exists := meta["score_breakdown"]; exists {
@@ -3584,7 +3584,7 @@ func buildAnchorScoreBreakdown(gate2 *StructureGate2) map[string]interface{} {
 		"short_anchors_count": len(gate2.TopAnchorsShort),
 		"total_anchors":       len(gate2.TopAnchorsLong) + len(gate2.TopAnchorsShort),
 	}
-	
+
 	// 添加最优锚点的详细breakdown（从Meta中获取）
 	if len(gate2.TopAnchorsLong) > 0 {
 		if meta := gate2.TopAnchorsLong[0].Meta; meta != nil {
@@ -3593,7 +3593,7 @@ func buildAnchorScoreBreakdown(gate2 *StructureGate2) map[string]interface{} {
 			}
 		}
 	}
-	
+
 	if len(gate2.TopAnchorsShort) > 0 {
 		if meta := gate2.TopAnchorsShort[0].Meta; meta != nil {
 			if breakdown, exists := meta["score_breakdown"]; exists {
@@ -3601,17 +3601,17 @@ func buildAnchorScoreBreakdown(gate2 *StructureGate2) map[string]interface{} {
 			}
 		}
 	}
-	
+
 	// 添加优先级分布统计
 	priorityStats := make(map[string]int)
 	allAnchors := append(gate2.TopAnchorsLong, gate2.TopAnchorsShort...)
-	
+
 	for _, anchor := range allAnchors {
 		priorityKey := fmt.Sprintf("P%d", anchor.PriorityRank)
 		priorityStats[priorityKey]++
 	}
-	
+
 	result["priority_distribution"] = priorityStats
-	
+
 	return result
 }
