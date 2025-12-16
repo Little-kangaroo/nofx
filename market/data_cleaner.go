@@ -154,7 +154,7 @@ func (dc *DataCleaner) CleanSupplyDemandData(sdData *SupplyDemandData) (*SupplyD
 		qualityMetrics := qualityAnalyzer.AnalyzeDataQuality(sdData, cleanedData, stats, allOutliers)
 
 		// 记录质量报告摘要
-		log.Printf("📊 [质量报告] 总体评分: %.1f/100, 趋势: %s, 建议: %d项",
+		log.Printf("📊 [质量报告] 总体评分: %.4f/1 (0-1标准化), 趋势: %s, 建议: %d项",
 			qualityMetrics.OverallQualityScore,
 			qualityMetrics.QualityTrendAnalysis.QualityTrend,
 			len(qualityMetrics.RecommendedActions))

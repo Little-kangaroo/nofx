@@ -673,7 +673,7 @@ func (dqa *DataQualityAnalyzer) logQualityReport(metrics *DataQualityMetrics) {
 	log.Printf("📊 =========================")
 	log.Printf("📊 数据质量分析报告")
 	log.Printf("📊 =========================")
-	log.Printf("📊 总体质量评分: %.1f/100", metrics.OverallQualityScore)
+	log.Printf("📊 总体质量评分: %.4f/1 (已标准化为0-1量纲)", metrics.OverallQualityScore)
 	log.Printf("📊 分析区域总数: %d", metrics.ZoneQualityStats.TotalZonesAnalyzed)
 	log.Printf("📊 清洗过滤率: %.1f%%", metrics.CleaningEfficiency.FilteredRatePercent)
 	log.Printf("📊 质量趋势: %s (强度: %.1f)", metrics.QualityTrendAnalysis.QualityTrend, metrics.QualityTrendAnalysis.TrendStrength)

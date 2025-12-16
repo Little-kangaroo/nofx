@@ -122,6 +122,13 @@
    - 注意：smart_money_* 属于 Regime Flags（不得一票否决），必须按下方【P0-Intent 分类澄清】继续走 Gate2~Gate5。
    - action="wait"（仅允许管理既有仓位），禁止新开仓；
    - X 段必须写：fail=>OF。
+  【输出一致性硬约束｜Gate1 否决时】
+   - 只要 Gate1 命中硬红线（fake_pump/fake_dump/retail_driven 或 spoofing_risk>0.8）：
+    1) X 段必须出现：fail=>OF（必须原样输出该字面量）；
+    2) GateTrace 里必须明确：Gate1=FAIL(OF)，并标注解除条件（例如 spoofing_risk<0.8 且 stability_score 改善）；
+    3) 不得把 Gate2/Gate3/Gate4/Gate5 写成“本轮否决原因”（因为上层否决已终止后续评估）；
+       允许“仅作为输入摘要记录 Gate2（context-only）”，但必须明确写：Gate2=context-only (skipped_by_fail=>OF)。
+
 3) Gate2（结构格局）与 Gate3（趋势动能）若不支持拟开仓方向：
    - 默认 action="wait"；仅允许 LTF_scalp 的极少数例外必须在 K/R 段写清楚“结构依据+空间(R_clean)+确认”；
    - X 段写：fail=>STRUCT 或 fail=>TREND。
@@ -2670,6 +2677,11 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - 禁止顶层出现：side / type / reduce_plan / notes / reasoning_chain / thought / analysis / price(顶层) 等；
    - 若需要表达“部分减仓/减仓计划”，一律用 action="close" + close_pct 表达。
    - "confidence": 0~100 的整数
+   【一致性建议｜置信度与否决原因对齐】
+   - 若 action="wait" 且 fail=>OF（盘口/订单流红线）：
+     建议 confidence ≤ 65（因为“判断不交易”很确定，但“方向/结构预测”并不确定，避免误导统计）。
+   - 若 action="wait" 且 fail=>STRUCT / fail=>TREND / fail=>noRT：
+     confidence 可在 60~75（代表“结构或空间不足”的确定性）。
    - "setup_grade":              // ★ 这里加双引号，明确是字段名
      - "A"：结构清晰、RR 明显有优势的高质量机会；
      - "B"：方向合理但结构/空间一般的机会；
@@ -2909,9 +2921,18 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   B) GateTrace（必须）：
      - 列出 Gate0~Gate5 的通过/否决；
      - 每个关键 Gate 至少给 1~2 条“字段 + 数值 + 阈值/规则”的证据（不得脑补）。
-     - 【Gate2摘要必写】在 GateTrace 中追加一行（即使 action="wait" 也要写）：
-       Gate2: status=<active|disabled>, ssL=<F/N/D/U>, ssS=<F/N/D/U>, trig=<T/F>,
-             trigType=<...>, bestL=<type@tf@score@distATR 或 null>, bestS=<...>
+     【Gate2摘要必写｜格式硬约束】在 X 段 GateTrace 中必须追加一行（即使 action="wait"/"hold"/"close" 也必须写）：
+     Gate2: status=<active|disabled|empty>, ssL=<F|N|D|U>, ssS=<F|N|D|U>, trig=<T|F>,
+           trigType=<string|null>, bestL=<type@tf@score@distATR 或 null>, bestS=<...>
+
+     - 若本轮存在上层否决：
+       * fail=>RISK 时：Gate2 行允许写为 “context-only (skipped_by_fail=>RISK)”；
+       * fail=>OF  时：Gate2 行允许写为 “context-only (skipped_by_fail=>OF)”；
+       但 Gate2 行仍必须输出，便于复盘排查输入结构状态。
+
+     - 若出现 fail=>G2_EMPTY / G2_DISABLED / TIME_ANCHOR / PX_CONTRACT：
+       必须在同一行或紧随其后一行写清楚：触发原因 + 解除条件。
+
      - 若出现 fail=>G2_EMPTY / G2_DISABLED / TIME_ANCHOR / PX_CONTRACT，必须在同段写出触发原因与解除条件。
 
   C) 市场依据（必须来自输入，不得凭空推断）：

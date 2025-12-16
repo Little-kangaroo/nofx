@@ -105,6 +105,9 @@ func (va *VPVRAnalyzer) Analyze(klines []Kline) *VolumeProfile {
 	// 使用稳定的TickSize计算策略
 	stabilizedTickSize := va.calculateStabilizedTickSize(minPrice, maxPrice, klines)
 
+	// 🔥 P0级新修复：为VPVR添加Context计算，解决StrengthZ和VolRatio为null的问题
+	context := va.calculateVPVRContext(levels, stats, poc, vah, val)
+
 	// 🔥 P0-04修复：构建VolumeProfile时添加配置标注，便于复盘和一致性校验
 	volumeProfile := &VolumeProfile{
 		POC:       poc,
@@ -114,6 +117,7 @@ func (va *VPVRAnalyzer) Analyze(klines []Kline) *VolumeProfile {
 		Levels:    levels,
 		Config:    &va.config,
 		Stats:     stats,
+		Context:   context,  // 🔥 添加Context字段
 		// 🔥 P0-04修复：明确标注实际使用的配置参数
 		UsedTimeFrame: va.config.TimeFrame,        // 实际使用的时间框架
 		UsedTickSize:  stabilizedTickSize,         // 实际使用的tick_size（可能经过动态调整）
@@ -2927,4 +2931,77 @@ func (va *VPVRAnalyzer) generateHVNLVNSignal(profile *VolumeProfile, currentPric
 	}
 
 	return nil
+}
+
+// calculateVPVRContext 计算VPVR上下文指标
+// 🔥 P0级修复：为VPVR添加Context计算，解决StrengthZ和VolRatio为null的问题
+func (va *VPVRAnalyzer) calculateVPVRContext(levels []*PriceLevel, stats *VolumeStats, poc *PriceLevel, vah, val float64) *ContextMetrics {
+	if stats == nil || poc == nil || len(levels) == 0 {
+		return &ContextMetrics{
+			StrengthZ:  0.0,
+			WidthATR:   0.0,
+			VolRatio:   1.0,
+			IsFresh:    true,
+			TimeScore:  1.0,
+			RankPct:    0.5,
+		}
+	}
+
+	// 计算强度Z-score：基于POC的体量密度
+	pocDensity := va.calculatePOCDensity(poc, stats.TotalVolume)
+	// 假设平均POC密度为10%，标准差为5%
+	avgPOCDensity := 0.10
+	stdPOCDensity := 0.05
+	strengthZ := (pocDensity - avgPOCDensity) / stdPOCDensity
+
+	// 计算宽度ATR：价值区域宽度相对于价格的比例
+	valueAreaWidth := vah - val
+	avgPrice := (vah + val) / 2
+	var widthATR float64
+	if avgPrice > 0 {
+		widthATR = valueAreaWidth / (avgPrice * 0.01) // 相对于1%价格变动的倍数
+	}
+
+	// 计算体量比率：当前VPVR的总成交量相对于预期的倍数
+	// 使用成交量集中度作为体量比率的代理指标
+	volRatio := 1.0
+	if stats.VolumeConcentration > 0 {
+		// 成交量集中度越高，说明体量越集中，比率越高
+		volRatio = stats.VolumeConcentration * 2.0 // 调节系数
+		if volRatio > 5.0 {
+			volRatio = 5.0 // 限制最大值
+		}
+	}
+
+	// 新鲜度：VPVR通常基于历史数据，设为false
+	isFresh := false
+
+	// 时间评分：VPVR基于历史时间窗口，给予中等评分
+	timeScore := 0.75
+
+	// 排名百分位：基于POC强度进行排名
+	rankPct := 0.5
+	if strengthZ > 1.0 {
+		rankPct = 0.8
+	} else if strengthZ > 0 {
+		rankPct = 0.6
+	} else if strengthZ < -1.0 {
+		rankPct = 0.2
+	} else {
+		rankPct = 0.4
+	}
+
+	context := &ContextMetrics{
+		StrengthZ:  strengthZ,
+		WidthATR:   widthATR,
+		VolRatio:   volRatio,
+		IsFresh:    isFresh,
+		TimeScore:  timeScore,
+		RankPct:    rankPct,
+	}
+
+	log.Printf("🔍 [VPVR Context] 计算完成: StrengthZ=%.4f, WidthATR=%.4f, VolRatio=%.4f, POCDensity=%.4f", 
+		strengthZ, widthATR, volRatio, pocDensity)
+
+	return context
 }

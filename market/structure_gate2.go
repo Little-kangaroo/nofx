@@ -85,13 +85,17 @@ type Gate2StructuredPayload struct {
 
 // Gate2AnchorInfo 紧凑锚点信息
 type Gate2AnchorInfo struct {
-	Type         string  `json:"type"`          // "HTF_ZONE"/"VPVR_BOUND"等
-	Level        float64 `json:"level"`         // 锚点价格
-	TimeFrame    string  `json:"timeframe"`     // "4h"/"1h"等
-	PriorityRank int     `json:"priority_rank"` // P1-P7
-	AnchorScore  float64 `json:"anchor_score"`  // 0-100评分
-	DistanceATR  float64 `json:"distance_atr"`  // ATR归一化距离
-	IsFresh      bool    `json:"is_fresh"`      // 是否新鲜
+	Type           string                 `json:"type"`            // "HTF_ZONE"/"VPVR_BOUND"等
+	Level          float64                `json:"level"`           // 锚点价格
+	TimeFrame      string                 `json:"timeframe"`       // "4h"/"1h"等
+	Direction      string                 `json:"direction"`       // "LONG"/"SHORT"
+	PriorityRank   int                    `json:"priority_rank"`   // P1-P7
+	AnchorScore    float64                `json:"anchor_score"`    // 0-100评分
+	DistanceATR    float64                `json:"distance_atr"`    // ATR归一化距离
+	IsFresh        bool                   `json:"is_fresh"`        // 是否新鲜
+	StrengthZ      *float64               `json:"strength_z"`      // Z-score强度指标 (可为null)
+	VolRatio       *float64               `json:"vol_ratio"`       // 体量比率 (可为null)
+	ScoreBreakdown map[string]interface{} `json:"score_breakdown"` // 评分细分
 }
 
 // Gate2TriggerInfo 5分钟触发信息
@@ -214,6 +218,10 @@ func convertToGate2AnchorInfo(anchor *AnchorCandidate, lastPrice, atr14 float64)
 		return nil
 	}
 	
+	// 🔥 P0-2深度修复：增加详细日志以诊断distance_atr=0问题
+	log.Printf("🔍 [P0-2诊断] 锚点转换: Level=%.4f, LastPrice=%.4f, ATR14=%.4f, Type=%s, TF=%s", 
+		anchor.Level, lastPrice, atr14, anchor.Type, anchor.TF)
+	
 	// 🔥 P0-2&P0-3修复：使用统一ATR管理器计算距离，确保一致性
 	var distanceATR float64
 	var distanceMode string
@@ -221,6 +229,8 @@ func convertToGate2AnchorInfo(anchor *AnchorCandidate, lastPrice, atr14 float64)
 	if atr14 > 0 {
 		distanceATR = math.Abs(anchor.Level - lastPrice) / atr14
 		distanceMode = "atr"
+		log.Printf("🔍 [P0-2诊断] ATR模式计算: |%.4f - %.4f| / %.4f = %.4f", 
+			anchor.Level, lastPrice, atr14, distanceATR)
 	} else {
 		// 使用统一的fallback机制
 		_ = GetGlobalATRManager() // ATR manager for consistency
@@ -247,6 +257,8 @@ func convertToGate2AnchorInfo(anchor *AnchorCandidate, lastPrice, atr14 float64)
 		
 		log.Printf("⚠️ [P0-2] ATR无效(%.4f)，距离计算降级为%s百分比模式: %.4f ATR (锚点: %s@%.4f)", 
 			atr14, anchor.TF, distanceATR, anchor.Type, anchor.Level)
+		log.Printf("🔍 [P0-2诊断] 百分比模式计算: |%.4f - %.4f| / %.4f = %.4f", 
+			anchor.Level, lastPrice, fallbackATR, distanceATR)
 	}
 	
 	// 在Meta中标注距离计算模式，用于后续分析
@@ -256,16 +268,34 @@ func convertToGate2AnchorInfo(anchor *AnchorCandidate, lastPrice, atr14 float64)
 	}
 	meta["distance_mode"] = distanceMode
 	meta["atr14_used"] = atr14
-	
-	return &Gate2AnchorInfo{
-		Type:         string(anchor.Type),
-		Level:        anchor.Level,
-		TimeFrame:    anchor.TF,
-		PriorityRank: anchor.PriorityRank,
-		AnchorScore:  anchor.AnchorScore,
-		DistanceATR:  distanceATR,
-		IsFresh:      anchor.IsFresh,
+
+	// 获取评分细分信息 (可能在Meta中)
+	var scoreBreakdown map[string]interface{}
+	if anchor.Meta != nil {
+		if breakdown, exists := anchor.Meta["score_breakdown"]; exists {
+			if bd, ok := breakdown.(map[string]interface{}); ok {
+				scoreBreakdown = bd
+			}
+		}
 	}
+	
+	result := &Gate2AnchorInfo{
+		Type:           string(anchor.Type),
+		Level:          anchor.Level,
+		TimeFrame:      anchor.TF,
+		Direction:      anchor.Dir,              // 使用Dir字段
+		PriorityRank:   anchor.PriorityRank,
+		AnchorScore:    anchor.AnchorScore,
+		DistanceATR:    distanceATR,
+		IsFresh:        anchor.IsFresh,
+		StrengthZ:      anchor.StrengthZ,
+		VolRatio:       anchor.VolRatio,
+		ScoreBreakdown: scoreBreakdown,
+	}
+	
+	log.Printf("✅ [P0-2诊断] 转换结果: DistanceATR=%.4f, Mode=%s", result.DistanceATR, distanceMode)
+	
+	return result
 }
 
 // determineDataQuality 确定数据质量

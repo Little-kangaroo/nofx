@@ -243,6 +243,67 @@ func (jsv *JSONSchemaValidator) initializeStandardSchemas() {
 		Aliases:     []string{"regime", "market_state", "market_mode"},
 	})
 
+	// Gate2专用字段 - 锚点相关
+	jsv.AddSchema(&FieldSchema{
+		Name:        "best_anchor_long",
+		Type:        TypeObject,
+		Required:    false,
+		Description: "最佳长方向锚点",
+	})
+
+	jsv.AddSchema(&FieldSchema{
+		Name:        "best_anchor_short", 
+		Type:        TypeObject,
+		Required:    false,
+		Description: "最佳短方向锚点",
+	})
+
+	jsv.AddSchema(&FieldSchema{
+		Name:        "top_anchors_long",
+		Type:        TypeArray,
+		Required:    false,
+		Description: "顶级长方向锚点列表",
+	})
+
+	jsv.AddSchema(&FieldSchema{
+		Name:        "top_anchors_short",
+		Type:        TypeArray,
+		Required:    false,
+		Description: "顶级短方向锚点列表",
+	})
+
+	// 分析状态和上下文字段
+	jsv.AddSchema(&FieldSchema{
+		Name:        "status",
+		Type:        TypeEnum,
+		Required:    false,
+		AllowedValues: []string{"active", "inactive", "pending", "completed", "error"},
+		Description: "分析状态",
+	})
+
+	jsv.AddSchema(&FieldSchema{
+		Name:        "trigger_context",
+		Type:        TypeObject,
+		Required:    false,
+		Description: "触发上下文信息",
+	})
+
+	jsv.AddSchema(&FieldSchema{
+		Name:        "anchor_score_breakdown",
+		Type:        TypeObject,
+		Required:    false,
+		Description: "锚点评分详细分解",
+	})
+
+	// 交易对符号字段 (支持动态交易对名称)
+	jsv.AddSchema(&FieldSchema{
+		Name:        "symbol",
+		Type:        TypeString,
+		Required:    false,
+		Description: "交易对符号",
+		Aliases:     []string{"pair", "trading_pair"},
+	})
+
 	log.Printf("✅ [P1-2] JSON Schema验证器初始化完成，已注册 %d 个标准字段schema", len(jsv.schemas))
 }
 
@@ -339,6 +400,15 @@ func (jsv *JSONSchemaValidator) ValidateJSON(data interface{}) *ValidationResult
 // validateObject 验证对象
 func (jsv *JSONSchemaValidator) validateObject(obj map[string]interface{}, result *ValidationResult) {
 	for field, value := range obj {
+		// 特殊处理：交易对符号字段 (如 BTCUSDT, ETHUSDT, HYPEUSDT等)
+		if jsv.isLikelyTradingPairSymbol(field) {
+			// 将其视为symbol字段处理，不报告为未知字段
+			if symbolSchema, exists := jsv.schemas["symbol"]; exists {
+				jsv.validateFieldValue("symbol", value, symbolSchema, result)
+			}
+			continue
+		}
+		
 		// 检查字段拼写
 		correctedField := jsv.checkFieldSpelling(field)
 		if correctedField != field {
@@ -574,27 +644,46 @@ func (jsv *JSONSchemaValidator) validatePattern(field string, value interface{},
 
 // checkRequiredFields 检查必需字段
 func (jsv *JSONSchemaValidator) checkRequiredFields(obj map[string]interface{}, result *ValidationResult) {
+	// 收集所有主schema（非别名）
+	processedSchemas := make(map[string]*FieldSchema)
+	
 	for schemaName, schema := range jsv.schemas {
+		// 只处理主字段名，跳过别名
+		if schemaName == schema.Name {
+			processedSchemas[schemaName] = schema
+		}
+	}
+	
+	// 检查必需的主字段
+	for schemaName, schema := range processedSchemas {
 		if schema.Required {
-			if _, exists := obj[schemaName]; !exists {
-				// 检查是否有别名字段存在
-				hasAlias := false
+			// 检查主字段名或任何别名是否存在
+			fieldFound := false
+			
+			// 检查主字段名
+			if _, exists := obj[schemaName]; exists {
+				fieldFound = true
+			}
+			
+			// 检查别名字段
+			if !fieldFound {
 				for _, alias := range schema.Aliases {
 					if _, aliasExists := obj[alias]; aliasExists {
-						hasAlias = true
+						fieldFound = true
 						break
 					}
 				}
-				
-				if !hasAlias {
-					result.Errors = append(result.Errors, ValidationError{
-						Field:     schemaName,
-						ErrorType: "missing_required_field",
-						Message:   fmt.Sprintf("缺少必需字段: %s", schemaName),
-						Severity:  "critical",
-					})
-					result.IsValid = false
-				}
+			}
+			
+			// 如果既没有主字段也没有别名字段，则报错
+			if !fieldFound {
+				result.Errors = append(result.Errors, ValidationError{
+					Field:     schemaName,
+					ErrorType: "missing_required_field",
+					Message:   fmt.Sprintf("缺少必需字段: %s (可接受别名: %v)", schemaName, schema.Aliases),
+					Severity:  "critical",
+				})
+				result.IsValid = false
 			}
 		}
 	}
@@ -639,6 +728,41 @@ func (jsv *JSONSchemaValidator) findClosestMatch(target string, candidates []str
 	}
 
 	return target
+}
+
+// isLikelyTradingPairSymbol 判断字段名是否可能是交易对符号
+func (jsv *JSONSchemaValidator) isLikelyTradingPairSymbol(field string) bool {
+	// 常见的交易对模式：
+	// 1. 以USDT结尾 (如 BTCUSDT, ETHUSDT, HYPEUSDT)
+	// 2. 以USDC结尾 (如 BTCUSDC, ETHUSDC)
+	// 3. 以BTC结尾 (如 ETHBTC, ADABTC)
+	// 4. 3-8个字符的大写字母组合
+	
+	if len(field) < 3 || len(field) > 12 {
+		return false
+	}
+	
+	// 检查是否全为大写字母
+	for _, char := range field {
+		if char < 'A' || char > 'Z' {
+			return false
+		}
+	}
+	
+	// 检查常见的交易对后缀
+	commonSuffixes := []string{"USDT", "USDC", "BTC", "ETH", "BNB"}
+	for _, suffix := range commonSuffixes {
+		if strings.HasSuffix(field, suffix) && len(field) > len(suffix) {
+			return true
+		}
+	}
+	
+	// 如果是3-6字符的纯大写字母，可能是代币符号
+	if len(field) >= 3 && len(field) <= 6 {
+		return true
+	}
+	
+	return false
 }
 
 // calculateSimilarity 计算字符串相似度（简化版Levenshtein距离）
