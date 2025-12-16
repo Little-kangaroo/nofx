@@ -329,10 +329,11 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 	// 🔥 Gate2 结构聚合 - 步骤1: 执行AnchorEngine聚合
 	var structureGate2 *StructureGate2
 	if multiTimeframeAnalysis != nil {
-		// 检查feature flag
+		// 获取管理器
 		featureManager := GetGate2FeatureManager()
 		performanceMonitor := GetGate2PerformanceMonitor()
 		
+		// 检查feature flag - 保留错误率和黑名单检查
 		if featureManager.IsEnabled(symbol) {
 			start := time.Now()
 			
@@ -372,7 +373,8 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 				featureManager.RecordSuccess()
 			}
 		} else {
-			// Feature flag未启用，使用空的Gate2结构
+			// 只有在错误率超标或黑名单时才禁用，记录原因
+			log.Printf("⚠️ [Gate2] %s 被禁用 - 可能原因: 错误率超标或在黑名单中", symbol)
 			structureGate2 = &StructureGate2{
 				TopAnchorsLong:    []AnchorCandidate{},
 				TopAnchorsShort:   []AnchorCandidate{},

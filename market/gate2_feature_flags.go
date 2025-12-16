@@ -71,7 +71,7 @@ func NewGate2FeatureManager() *Gate2FeatureManager {
 	// 从环境变量加载配置
 	manager.loadFromEnvironment()
 	
-	log.Printf("🚩 [Gate2FeatureFlags] 初始化完成: 全局开关=%v, 上线比例=%.1f%%", 
+	log.Printf("🚩 [Gate2FeatureFlags] 初始化完成: 全局开关=%v, 上线比例=%.1f%% (生产环境默认启用)", 
 		manager.flags.Enabled, manager.flags.RolloutPercentage)
 	
 	return manager
@@ -80,8 +80,8 @@ func NewGate2FeatureManager() *Gate2FeatureManager {
 // loadDefaultFlags 加载默认标志配置
 func loadDefaultFlags() *Gate2FeatureFlag {
 	return &Gate2FeatureFlag{
-		// 默认关闭，需要显式启用
-		Enabled:               false,
+		// 生产环境默认启用
+		Enabled:               true,
 		AnchorEngine:         true,
 		StructClassifier:     true,
 		TriggerDetector:      true,
@@ -90,8 +90,8 @@ func loadDefaultFlags() *Gate2FeatureFlag {
 		MaxAnchorsPerDirection: 5,
 		EnablePerformanceLog:   false,
 		
-		// 渐进式上线 - 默认0%
-		RolloutPercentage:     0.0,
+		// 生产环境100%上线
+		RolloutPercentage:     100.0,
 		WhitelistSymbols:      []string{},
 		BlacklistSymbols:      []string{},
 		
