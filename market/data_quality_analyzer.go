@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// DataQualityMetrics 数据质量指标 - P2修复最终组件
+// DataQualityMetrics 数据质量指标 - P1-1修复：统一量纲为0-1
 type DataQualityMetrics struct {
-	OverallQualityScore  float64                   `json:"overall_quality_score"`  // 总体质量评分 (0-100)
+	OverallQualityScore  float64                   `json:"overall_quality_score"`  // 总体质量评分 (0-1) 🔥 P1-1修复：统一量纲
 	ZoneQualityStats     *ZoneQualityStatistics    `json:"zone_quality_stats"`     // 区域质量统计
 	CleaningEfficiency   *CleaningEfficiencyStats  `json:"cleaning_efficiency"`    // 清洗效率统计
 	OutlierDistribution  *OutlierDistributionStats `json:"outlier_distribution"`   // 异常值分布统计
@@ -24,16 +24,16 @@ type ZoneQualityStatistics struct {
 	HighQualityZones       int     `json:"high_quality_zones"`       // 高质量区域数
 	MediumQualityZones     int     `json:"medium_quality_zones"`     // 中质量区域数
 	LowQualityZones        int     `json:"low_quality_zones"`        // 低质量区域数
-	AverageZoneScore       float64 `json:"average_zone_score"`       // 平均区域评分
+	AverageZoneScore       float64 `json:"average_zone_score"`       // 平均区域评分 (0-1)
 	ScoreStandardDeviation float64 `json:"score_standard_deviation"` // 评分标准差
-	QualityConsistency     float64 `json:"quality_consistency"`      // 质量一致性 (0-100)
+	QualityConsistency     float64 `json:"quality_consistency"`      // 质量一致性 (0-1) 🔥 P1-1修复：统一量纲
 }
 
 // CleaningEfficiencyStats 清洗效率统计
 type CleaningEfficiencyStats struct {
 	FilteredRatePercent      float64 `json:"filtered_rate_percent"`       // 过滤率百分比
 	OptimalFilterRate        float64 `json:"optimal_filter_rate"`         // 最优过滤率
-	EfficiencyScore          float64 `json:"efficiency_score"`            // 效率评分 (0-100)
+	EfficiencyScore          float64 `json:"efficiency_score"`            // 效率评分 (0-1) 🔥 P1-1修复：统一量纲
 	FalsePositiveRate        float64 `json:"false_positive_rate"`         // 误杀率估算
 	FalseNegativeRate        float64 `json:"false_negative_rate"`         // 漏检率估算
 	CleaningRecommendation   string  `json:"cleaning_recommendation"`     // 清洗建议
@@ -145,17 +145,20 @@ func (dqa *DataQualityAnalyzer) calculateOverallQualityScore(
 		filterRate = 0.0
 	}
 	
-	// 1. 基础清洗质量评分 (40分)
-	score += qualityScore * 0.4
+	// 🔥 P1-1修复：将QualityScore从0-100转换为0-1量纲
+	normalizedQualityScore := qualityScore / 100.0
 	
-	// 2. 过滤率合理性评分 (25分)
+	// 1. 基础清洗质量评分 (0.4权重)
+	score += normalizedQualityScore * 0.4
+	
+	// 2. 过滤率合理性评分 (0.25权重)
 	filterRateScore := dqa.calculateFilterRateScore(filterRate)
 	if math.IsNaN(filterRateScore) || math.IsInf(filterRateScore, 0) {
 		filterRateScore = 0.0
 	}
 	score += filterRateScore * 0.25
 	
-	// 3. 区域数量充足性评分 (20分)
+	// 3. 区域数量充足性评分 (0.20权重)
 	zoneCount := 0
 	if cleanedData.ActiveZones != nil {
 		zoneCount = len(cleanedData.ActiveZones)
@@ -163,7 +166,7 @@ func (dqa *DataQualityAnalyzer) calculateOverallQualityScore(
 	zoneCountScore := dqa.calculateZoneCountScore(zoneCount)
 	score += zoneCountScore * 0.20
 	
-	// 4. 数据一致性评分 (15分)
+	// 4. 数据一致性评分 (0.15权重)
 	consistencyScore := dqa.calculateConsistencyScore(cleanedData)
 	if math.IsNaN(consistencyScore) || math.IsInf(consistencyScore, 0) {
 		consistencyScore = 0.0
@@ -175,10 +178,11 @@ func (dqa *DataQualityAnalyzer) calculateOverallQualityScore(
 		score = 0.0
 	}
 	
-	return math.Min(score, 100.0)
+	// 🔥 P1-1修复：返回0-1量纲评分
+	return math.Min(score, 1.0)
 }
 
-// calculateFilterRateScore 计算过滤率评分
+// calculateFilterRateScore 计算过滤率评分 - P1-1修复：返回0-1量纲
 func (dqa *DataQualityAnalyzer) calculateFilterRateScore(filterRate float64) float64 {
 	// 🔥 修复NaN问题：检查输入值
 	if math.IsNaN(filterRate) || math.IsInf(filterRate, 0) {
@@ -187,33 +191,34 @@ func (dqa *DataQualityAnalyzer) calculateFilterRateScore(filterRate float64) flo
 	
 	// 理想过滤率范围：5%-25%
 	if filterRate >= 5.0 && filterRate <= 25.0 {
-		return 100.0 // 理想范围
+		return 1.0 // 🔥 P1-1修复：返回1.0而不是100.0
 	} else if filterRate < 5.0 {
 		// 过滤太少，可能有遗漏
-		score := 100.0 - (5.0-filterRate)*5 // 每少1%扣5分
+		score := 1.0 - (5.0-filterRate)*0.05 // 每少1%扣0.05分
 		return math.Max(0.0, score)
 	} else {
 		// 过滤太多，可能过度清洗
-		score := 100.0 - (filterRate-25.0)*3 // 每多1%扣3分
+		score := 1.0 - (filterRate-25.0)*0.03 // 每多1%扣0.03分
 		return math.Max(0.0, score)
 	}
 }
 
-// calculateZoneCountScore 计算区域数量评分
+// calculateZoneCountScore 计算区域数量评分 - P1-1修复：返回0-1量纲
 func (dqa *DataQualityAnalyzer) calculateZoneCountScore(zoneCount int) float64 {
 	// 理想区域数量：8-20个
 	if zoneCount >= 8 && zoneCount <= 20 {
-		return 100.0
+		return 1.0 // 🔥 P1-1修复：返回1.0而不是100.0
 	} else if zoneCount < 8 {
 		// 区域太少
-		return float64(zoneCount) / 8.0 * 100.0
+		return float64(zoneCount) / 8.0 // 🔥 P1-1修复：直接返回比例
 	} else {
 		// 区域太多，可能有噪音
-		return 100.0 - float64(zoneCount-20)*2
+		score := 1.0 - float64(zoneCount-20)*0.02 // 每多1个区域扣0.02分
+		return math.Max(0.0, score)
 	}
 }
 
-// calculateConsistencyScore 计算一致性评分
+// calculateConsistencyScore 计算一致性评分 - P1-1修复：返回0-1量纲
 func (dqa *DataQualityAnalyzer) calculateConsistencyScore(data *SupplyDemandData) float64 {
 	if len(data.ActiveZones) == 0 {
 		return 0.0
@@ -226,7 +231,7 @@ func (dqa *DataQualityAnalyzer) calculateConsistencyScore(data *SupplyDemandData
 	}
 	
 	if len(strengths) == 0 {
-		return 50.0
+		return 0.5 // 🔥 P1-1修复：返回0.5而不是50.0
 	}
 	
 	// 计算标准差
@@ -244,7 +249,7 @@ func (dqa *DataQualityAnalyzer) calculateConsistencyScore(data *SupplyDemandData
 	
 	// 🔥 修复NaN问题：检查均值
 	if math.IsNaN(mean) || math.IsInf(mean, 0) {
-		return 50.0
+		return 0.5 // 🔥 P1-1修复：返回0.5而不是50.0
 	}
 	
 	variance := 0.0
@@ -258,7 +263,7 @@ func (dqa *DataQualityAnalyzer) calculateConsistencyScore(data *SupplyDemandData
 	}
 	
 	if validCount == 0 {
-		return 50.0
+		return 0.5 // 🔥 P1-1修复：返回0.5而不是50.0
 	}
 	
 	variance /= float64(validCount)
@@ -266,11 +271,11 @@ func (dqa *DataQualityAnalyzer) calculateConsistencyScore(data *SupplyDemandData
 	
 	// 🔥 修复NaN问题：检查标准差
 	if math.IsNaN(stdDev) || math.IsInf(stdDev, 0) {
-		return 50.0
+		return 0.5 // 🔥 P1-1修复：返回0.5而不是50.0
 	}
 	
-	// 标准差越小，一致性越好
-	consistencyScore := 100.0 - math.Min(stdDev, 50.0)
+	// 🔥 P1-1修复：标准差越小，一致性越好，返回0-1量纲
+	consistencyScore := 1.0 - math.Min(stdDev/50.0, 1.0) // 标准差50作为最大值
 	return math.Max(consistencyScore, 0.0)
 }
 
@@ -369,7 +374,7 @@ func (dqa *DataQualityAnalyzer) analyzeZoneQuality(
 	}
 }
 
-// calculateZoneQualityScore 计算单个区域质量评分
+// calculateZoneQualityScore 计算单个区域质量评分 - P1-1修复：返回0-1量纲
 func (dqa *DataQualityAnalyzer) calculateZoneQualityScore(zone *SupplyDemandZone) float64 {
 	if zone.Context == nil {
 		return 0.0
@@ -377,46 +382,50 @@ func (dqa *DataQualityAnalyzer) calculateZoneQualityScore(zone *SupplyDemandZone
 	
 	score := 0.0
 	
-	// WidthATR评分 (40分)
+	// 🔥 P1-1修复：WidthATR评分 (0.4权重)
 	widthScore := 0.0
 	if zone.Context.WidthATR >= 0.5 && zone.Context.WidthATR <= 2.0 {
-		widthScore = 40.0
+		widthScore = 0.4 // 完美范围
 	} else if zone.Context.WidthATR >= 0.2 && zone.Context.WidthATR <= 3.0 {
-		widthScore = 30.0
+		widthScore = 0.3 // 良好范围
 	} else {
-		widthScore = 10.0
+		widthScore = 0.1 // 较差范围
 	}
 	score += widthScore
 	
-	// VolRatio评分 (30分)
+	// 🔥 P1-1修复：VolRatio评分 (0.3权重)
 	volScore := 0.0
 	if zone.Context.VolRatio >= 1.0 && zone.Context.VolRatio <= 5.0 {
-		volScore = 30.0
+		volScore = 0.3 // 理想成交量
 	} else if zone.Context.VolRatio >= 0.5 && zone.Context.VolRatio <= 8.0 {
-		volScore = 20.0
+		volScore = 0.2 // 可接受成交量
 	} else {
-		volScore = 5.0
+		volScore = 0.05 // 较差成交量
 	}
 	score += volScore
 	
-	// 🔥 P0-06修复：FVG/供需区强度尺度统一到0-20 - 调整强度阈值
-	// 强度评分 (30分) - 阈值从0-100缩放到0-20
+	// 🔥 P1-1修复：强度评分 (0.3权重) - 阈值从0-100缩放到0-20
 	if zone.Strength >= 16 {  // 原80 -> 16 (80% * 20)
-		score += 30.0
+		score += 0.3
 	} else if zone.Strength >= 12 {  // 原60 -> 12 (60% * 20)
-		score += 20.0
+		score += 0.2
 	} else if zone.Strength >= 8 {   // 原40 -> 8 (40% * 20)
-		score += 10.0
+		score += 0.1
 	}
 	
-	return score
+	return math.Min(score, 1.0) // 确保不超过1.0
 }
 
 // analyzeCleaningEfficiency 分析清洗效率
 func (dqa *DataQualityAnalyzer) analyzeCleaningEfficiency(
 	cleaningStats *CleaningStats,
 ) *CleaningEfficiencyStats {
+	// 🔥 修复NaN问题：检查和处理FilterRate中的无效值
 	filterRate := cleaningStats.FilterRate
+	if math.IsNaN(filterRate) || math.IsInf(filterRate, 0) {
+		filterRate = 0.0 // 无效数据时设置为0
+		log.Printf("⚠️ [数据质量分析] FilterRate为NaN，已重置为0.0")
+	}
 	optimalRate := 15.0 // 理想过滤率15%
 	
 	// 计算效率评分

@@ -104,7 +104,13 @@ func (dc *DataCleaner) CleanSupplyDemandData(sdData *SupplyDemandData) (*SupplyD
 	// 汇总统计信息
 	allOutliers := append(activeOutliers, append(supplyOutliers, demandOutliers...)...)
 	stats.FilteredZones = stats.TotalZones - len(cleanActiveZones)
-	stats.FilterRate = float64(stats.FilteredZones) / float64(stats.TotalZones) * 100
+	// 🔥 修复NaN问题：防止除零错误
+	if stats.TotalZones > 0 {
+		stats.FilterRate = float64(stats.FilteredZones) / float64(stats.TotalZones) * 100
+	} else {
+		stats.FilterRate = 0.0
+		log.Printf("⚠️ [数据清洗] 供需区总数为0，FilterRate设置为0.0")
+	}
 
 	// 统计异常值类型
 	for _, outlier := range allOutliers {
@@ -590,7 +596,13 @@ func (dc *DataCleaner) CleanFVGData(fvgData *FVGData) (*FVGData, *CleaningStats)
 	// 汇总统计信息
 	allOutliers := append(activeOutliers, append(bullishOutliers, bearishOutliers...)...)
 	stats.FilteredZones = stats.TotalZones - len(cleanActiveFVGs)
-	stats.FilterRate = float64(stats.FilteredZones) / float64(stats.TotalZones) * 100
+	// 🔥 修复NaN问题：防止除零错误
+	if stats.TotalZones > 0 {
+		stats.FilterRate = float64(stats.FilteredZones) / float64(stats.TotalZones) * 100
+	} else {
+		stats.FilterRate = 0.0
+		log.Printf("⚠️ [数据清洗] FVG总数为0，FilterRate设置为0.0")
+	}
 
 	// 统计异常值类型
 	for _, outlier := range allOutliers {
@@ -610,14 +622,17 @@ func (dc *DataCleaner) CleanFVGData(fvgData *FVGData) (*FVGData, *CleaningStats)
 			stats.TotalZones, stats.FilteredZones, stats.FilterRate, stats.QualityScore)
 	}
 
-	return &FVGData{
+	// 🔥 P0-1修复：应用统一JSON契约初始化，确保slice字段输出[]而非null
+	result := InitializeFVGData(&FVGData{
 		BullishFVGs:  cleanBullishFVGs,
 		BearishFVGs:  cleanBearishFVGs,
 		ActiveFVGs:   cleanActiveFVGs,
 		Config:       fvgData.Config,
 		Statistics:   fvgData.Statistics, // 可以重新计算
 		LastAnalysis: fvgData.LastAnalysis,
-	}, stats
+	})
+	
+	return result, stats
 }
 
 // cleanFVGList 清洗FVG列表

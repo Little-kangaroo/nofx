@@ -300,17 +300,24 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 		log.Printf("⚠️ [P0-03] 5m数据不可用，降级使用4h价格 - 可能影响时间锚点一致性")
 	}
 
-	// 🔥 Gate2 结构聚合 - 计算ATR14用于后续分析
-	// 使用价格的0.5%作为保守的fallback值，避免固定值100.0
+	// 🔥 P0-3修复：使用统一ATR管理器，确保ATR计算一致性
+	atrManager := GetGlobalATRManager()
 	var atr14 float64
+	
 	if len(klines4h) >= 14 {
-		atr14 = calculateATR14WithFallback(klines4h, currentPrice)
+		atrEntry := atrManager.GetATR14(klines4h, "4h", currentPrice)
+		atr14 = atrEntry.Value
+		log.Printf("🔍 [P0-3 ATR] %s 4h ATR14: %.4f (模式: %s, 置信度: %.2f)", 
+			symbol, atr14, atrEntry.Mode, atrEntry.Confidence)
 	} else if len(klines1h) >= 14 {
-		atr14 = calculateATR14WithFallback(klines1h, currentPrice) * 4.0 // 1h腂4h近似（放大系数）
+		atrEntry := atrManager.GetATR14(klines1h, "1h", currentPrice)
+		atr14 = atrEntry.Value * 4.0 // 1h到4h近似放大系数
+		log.Printf("🔍 [P0-3 ATR] %s 1h->4h ATR14: %.4f (模式: %s, 置信度: %.2f)", 
+			symbol, atr14, atrEntry.Mode, atrEntry.Confidence)
 	} else {
 		// 数据不足时，使用价格的0.5%作为保守ATR
 		atr14 = currentPrice * 0.005
-		log.Printf("⚠️ [Gate2 ATR] %s K线数据不足，使用保守ATR: %.4f (价格的0.5%%)", symbol, atr14)
+		log.Printf("⚠️ [P0-3 ATR] %s K线数据不足，使用保守ATR: %.4f (价格的0.5%%)", symbol, atr14)
 	}
 	
 	log.Printf("🎯 [Gate2] %s 开始结构聚合 - 当前价格: %.4f, ATR14: %.4f", symbol, currentPrice, atr14)
@@ -2463,10 +2470,13 @@ func getLimitedAnchors(anchors []AnchorCandidate, limit int) []AnchorCandidate {
 	return anchors[:limit]
 }
 
-// calculateATR14 计算14周期ATR
+// calculateATR14 计算14周期ATR (已废弃，请使用ATRManager)
+// 🔥 P0-3修复：此函数已由统一ATR管理器替代，仅保留以避免破坏现有调用
 func calculateATR14(klines []Kline) float64 {
+	log.Printf("⚠️ [废弃警告] calculateATR14函数已废弃，请使用GetGlobalATRManager().GetATR14()")
+	
 	if len(klines) < 14 {
-		return 100.0 // 默认值
+		return 0.0 // 不再使用硬编码100.0，提醒调用方使用统一ATR管理器
 	}
 	
 	var trs []float64
@@ -2497,15 +2507,17 @@ func calculateATR14(klines []Kline) float64 {
 	}
 	
 	if count == 0 {
-		return 100.0
+		return 0.0 // 不再返回硬编码100.0
 	}
 	
 	return sum / float64(count)
 }
 
-// calculateATR14WithFallback 计算14周期ATR（带智能fallback）
-// 🔥 关键修复：使用价格相关的动态fallback，避免硬编码100.0
+// calculateATR14WithFallback 计算14周期ATR（带智能fallback） - 已废弃
+// 🔥 P0-3修复：此函数已由统一ATR管理器替代，新代码请使用GetGlobalATRManager().GetATR14()
 func calculateATR14WithFallback(klines []Kline, currentPrice float64) float64 {
+	log.Printf("⚠️ [废弃警告] calculateATR14WithFallback函数已废弃，请使用GetGlobalATRManager().GetATR14()")
+	
 	if len(klines) < 14 {
 		// 数据不足时，使用价格的0.3%作为保守ATR
 		return currentPrice * 0.003

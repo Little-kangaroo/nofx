@@ -833,6 +833,28 @@ func FormatAsCompactData(data *Data) string {
 		return fmt.Sprintf("精简JSON序列化失败: %v", err)
 	}
 
+	// 🔥 P1-2修复：JSON schema验证 - 防止AI输出拼写错误
+	if len(jsonData) > 0 {
+		// 解析JSON数据进行验证
+		var parsedData interface{}
+		if err := json.Unmarshal(jsonData, &parsedData); err == nil {
+			validationResult := ValidateAIOutput(parsedData, "compact")
+			
+			// 如果启用自动纠错且有纠错内容，使用纠错后的数据
+			if validationResult.ProcessedData != nil && len(validationResult.CorrectedFields) > 0 {
+				if correctedJSON, err := json.Marshal(validationResult.ProcessedData); err == nil {
+					log.Printf("🔧 [P1-2] 自动纠正了 %d 个字段拼写错误", len(validationResult.CorrectedFields))
+					return string(correctedJSON)
+				}
+			}
+			
+			// 记录验证警告（不阻断输出）
+			if len(validationResult.Warnings) > 0 {
+				log.Printf("⚠️ [P1-2] AI输出验证发现 %d 个警告", len(validationResult.Warnings))
+			}
+		}
+	}
+
 	return string(jsonData)
 }
 
@@ -2877,6 +2899,15 @@ func getOrderFlowDataForAI(symbol string) map[string]interface{} {
 		"数据质量":      buildDataQualityInfo(snapshot),
 	}
 
+	// 🔥 P1-2修复：订单流输出JSON schema验证
+	validationResult := ValidateAIOutput(result, "orderflow")
+	if validationResult.ProcessedData != nil && len(validationResult.CorrectedFields) > 0 {
+		log.Printf("🔧 [P1-2] 订单流输出自动纠正了 %d 个字段", len(validationResult.CorrectedFields))
+		if correctedResult, ok := validationResult.ProcessedData.(map[string]interface{}); ok {
+			return correctedResult
+		}
+	}
+
 	return result
 }
 
@@ -3031,8 +3062,24 @@ func buildDataQualityInfo(snapshot *microstructure.MarketSnapshot) map[string]in
 		incrementalScore = cvdDelta5m.DataQuality
 	}
 
-	// 加权平均
-	overallScore = (cvdScore*0.3 + orderBookScore*0.3 + oiScore*0.2 + incrementalScore*0.2)
+	// 🔥 P1-1修复：使用质量评分标准化器确保所有评分使用0-1量纲
+	normalizer := GetGlobalQualityNormalizer()
+	qualityBundle := normalizer.CreateQualityBundle(
+		0, // overallScore将在下面计算
+		incrementalScore, // 数据质量
+		orderBookScore,   // 流动性评分
+		0,               // 稳定性评分（未提供）
+		0,               // 通道质量（未提供）  
+		0,               // 锚点评分（未提供）
+	)
+	
+	// 加权平均 - 使用标准化后的评分
+	normalizedCvdScore := normalizer.NormalizeDataQualityScore(cvdScore, "cvd_score").GetNormalizedScore()
+	normalizedOrderBookScore := qualityBundle.LiquidityScore.GetNormalizedScore()
+	normalizedOiScore := normalizer.NormalizeDataQualityScore(oiScore, "oi_score").GetNormalizedScore()
+	normalizedIncrementalScore := qualityBundle.DataQuality.GetNormalizedScore()
+	
+	overallScore = (normalizedCvdScore*0.3 + normalizedOrderBookScore*0.3 + normalizedOiScore*0.2 + normalizedIncrementalScore*0.2)
 
 	// 确定状态
 	status := "正常"
@@ -3043,10 +3090,10 @@ func buildDataQualityInfo(snapshot *microstructure.MarketSnapshot) map[string]in
 	}
 
 	return map[string]interface{}{
-		"cvd_reliability":       FormatByDataTypeAndSymbol(cvdScore, "ratio", ""),
-		"orderbook_reliability": FormatByDataTypeAndSymbol(orderBookScore, "ratio", ""),
-		"oi_reliability":        FormatByDataTypeAndSymbol(oiScore, "ratio", ""),
-		"incremental_quality":   FormatByDataTypeAndSymbol(incrementalScore, "ratio", ""),
+		"cvd_reliability":       FormatByDataTypeAndSymbol(normalizedCvdScore, "ratio", ""),
+		"orderbook_reliability": FormatByDataTypeAndSymbol(normalizedOrderBookScore, "ratio", ""),
+		"oi_reliability":        FormatByDataTypeAndSymbol(normalizedOiScore, "ratio", ""),
+		"incremental_quality":   FormatByDataTypeAndSymbol(normalizedIncrementalScore, "ratio", ""),
 		"overall_score":         FormatByDataTypeAndSymbol(overallScore, "ratio", ""),
 		"last_update":           snapshot.Timestamp.Format("15:04:05"),
 		"data_lag_ms":           time.Since(snapshot.Timestamp).Milliseconds(),
@@ -3444,6 +3491,15 @@ func buildGate2CompactOutput(data *Data) map[string]interface{} {
 				return nil
 			}(),
 		},
+	}
+	
+	// 🔥 P1-2修复：Gate2输出JSON schema验证
+	validationResult := ValidateAIOutput(result, "gate2")
+	if validationResult.ProcessedData != nil && len(validationResult.CorrectedFields) > 0 {
+		log.Printf("🔧 [P1-2] Gate2输出自动纠正了 %d 个字段", len(validationResult.CorrectedFields))
+		if correctedResult, ok := validationResult.ProcessedData.(map[string]interface{}); ok {
+			return correctedResult
+		}
 	}
 	
 	return result

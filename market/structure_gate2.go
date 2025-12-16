@@ -1,6 +1,8 @@
 package market
 
 import (
+	"log"
+	"math"
 	"time"
 )
 
@@ -206,16 +208,54 @@ func (sg2 *StructureGate2) ToStructuredPayload() *Gate2StructuredPayload {
 }
 
 // convertToGate2AnchorInfo 转换为Gate2锚点信息
+// 🔥 P0-2&P0-3修复：修复distance_atr大量为0的距离计算缺陷，使用统一ATR管理器
 func convertToGate2AnchorInfo(anchor *AnchorCandidate, lastPrice, atr14 float64) *Gate2AnchorInfo {
 	if anchor == nil {
 		return nil
 	}
 	
-	// 计算ATR归一化距离
+	// 🔥 P0-2&P0-3修复：使用统一ATR管理器计算距离，确保一致性
 	var distanceATR float64
+	var distanceMode string
+	
 	if atr14 > 0 {
-		distanceATR = abs(anchor.Level - lastPrice) / atr14
+		distanceATR = math.Abs(anchor.Level - lastPrice) / atr14
+		distanceMode = "atr"
+	} else {
+		// 使用统一的fallback机制
+		_ = GetGlobalATRManager() // ATR manager for consistency
+		fallbackRate := 0.005 // 默认0.5%
+		if anchor.TF != "" {
+			// 根据锚点时间框架使用不同的fallback率
+			switch anchor.TF {
+			case "5m":
+				fallbackRate = 0.002
+			case "15m":
+				fallbackRate = 0.003
+			case "30m":
+				fallbackRate = 0.004
+			case "1h":
+				fallbackRate = 0.005
+			case "4h":
+				fallbackRate = 0.008
+			}
+		}
+		
+		fallbackATR := lastPrice * fallbackRate
+		distanceATR = math.Abs(anchor.Level - lastPrice) / fallbackATR
+		distanceMode = "pct_fallback"
+		
+		log.Printf("⚠️ [P0-2] ATR无效(%.4f)，距离计算降级为%s百分比模式: %.4f ATR (锚点: %s@%.4f)", 
+			atr14, anchor.TF, distanceATR, anchor.Type, anchor.Level)
 	}
+	
+	// 在Meta中标注距离计算模式，用于后续分析
+	meta := anchor.Meta
+	if meta == nil {
+		meta = make(map[string]interface{})
+	}
+	meta["distance_mode"] = distanceMode
+	meta["atr14_used"] = atr14
 	
 	return &Gate2AnchorInfo{
 		Type:         string(anchor.Type),

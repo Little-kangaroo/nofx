@@ -160,14 +160,17 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 	// 计算统计信息
 	stats := sda.calculateStatistics(supplyZones, demandZones, activeZones)
 
-	return &SupplyDemandData{
+	// 🔥 P0-1修复：应用统一JSON契约初始化，确保slice字段输出[]而非null
+	result := InitializeSupplyDemandData(&SupplyDemandData{
 		SupplyZones:  supplyZones,
 		DemandZones:  demandZones,
 		ActiveZones:  activeZones,
 		Config:       &sda.config,
 		Statistics:   stats,
 		LastAnalysis: time.Now().UnixMilli(),
-	}
+	})
+	
+	return result
 }
 
 // identifySupplyZones 识别供给区

@@ -106,14 +106,17 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 	// 计算统计信息
 	statistics := fvg.calculateStatistics(bullishFVGs, bearishFVGs, activeFVGs)
 
-	return &FVGData{
+	// 🔥 P0-1修复：应用统一JSON契约初始化，确保slice字段输出[]而非null
+	result := InitializeFVGData(&FVGData{
 		BullishFVGs:  bullishFVGs,
 		BearishFVGs:  bearishFVGs,
 		ActiveFVGs:   activeFVGs,
 		Config:       &fvg.config,
 		Statistics:   statistics,
 		LastAnalysis: time.Now().UnixMilli(),
-	}
+	})
+	
+	return result
 }
 
 // calculateATR 计算ATR（内部辅助方法）
