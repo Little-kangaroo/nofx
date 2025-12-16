@@ -111,22 +111,22 @@ func NewJSONSchemaValidator() *JSONSchemaValidator {
 
 // initializeStandardSchemas 初始化标准字段schemas
 func (jsv *JSONSchemaValidator) initializeStandardSchemas() {
-	// Gate2结构相关字段
+	// Gate2结构相关字段 - 📝 修改：取消Gate2结构聚合指标输出，改为非必需字段
 	jsv.AddSchema(&FieldSchema{
 		Name:        "struct_state_long",
 		Type:        TypeEnum,
-		Required:    true,
+		Required:    false, // 📝 改为非必需
 		AllowedValues: []string{"STRONG_LONG", "MODERATE_LONG", "WEAK_LONG", "NEUTRAL", "UNKNOWN"},
-		Description: "Gate2长方向结构状态",
+		Description: "Gate2长方向结构状态（已禁用）",
 		Aliases:     []string{"struct_long", "structure_long", "long_state"},
 	})
 
 	jsv.AddSchema(&FieldSchema{
 		Name:        "struct_state_short",
 		Type:        TypeEnum,
-		Required:    true,
+		Required:    false, // 📝 改为非必需
 		AllowedValues: []string{"STRONG_SHORT", "MODERATE_SHORT", "WEAK_SHORT", "NEUTRAL", "UNKNOWN"},
-		Description: "Gate2短方向结构状态",
+		Description: "Gate2短方向结构状态（已禁用）",
 		Aliases:     []string{"struct_short", "structure_short", "short_state"},
 	})
 
@@ -940,10 +940,9 @@ func (jsv *JSONSchemaValidator) ExportSchemaAsJSON() (string, error) {
 
 // ValidateGate2Output 专门验证Gate2结构输出
 func (jsv *JSONSchemaValidator) ValidateGate2Output(data map[string]interface{}) *ValidationResult {
-	// Gate2输出的关键字段验证
+	// Gate2输出的关键字段验证 - 📝 修改：移除struct_state_*字段，因为已经取消Gate2结构聚合
 	requiredGate2Fields := []string{
-		"struct_state_long", "struct_state_short", 
-		"last_price",
+		"last_price", // 只保留必要的价格字段
 	}
 	
 	// 临时设置必需字段
