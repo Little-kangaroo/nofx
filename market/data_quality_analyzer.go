@@ -134,35 +134,68 @@ func (dqa *DataQualityAnalyzer) calculateOverallQualityScore(
 	
 	score := 0.0
 	
+	// 🔥 修复NaN问题：检查和处理无效值
+	qualityScore := cleaningStats.QualityScore
+	if math.IsNaN(qualityScore) || math.IsInf(qualityScore, 0) {
+		qualityScore = 0.0
+	}
+	
+	filterRate := cleaningStats.FilterRate
+	if math.IsNaN(filterRate) || math.IsInf(filterRate, 0) {
+		filterRate = 0.0
+	}
+	
 	// 1. 基础清洗质量评分 (40分)
-	score += cleaningStats.QualityScore * 0.4
+	score += qualityScore * 0.4
 	
 	// 2. 过滤率合理性评分 (25分)
-	filterRateScore := dqa.calculateFilterRateScore(cleaningStats.FilterRate)
+	filterRateScore := dqa.calculateFilterRateScore(filterRate)
+	if math.IsNaN(filterRateScore) || math.IsInf(filterRateScore, 0) {
+		filterRateScore = 0.0
+	}
 	score += filterRateScore * 0.25
 	
 	// 3. 区域数量充足性评分 (20分)
-	zoneCountScore := dqa.calculateZoneCountScore(len(cleanedData.ActiveZones))
+	zoneCount := 0
+	if cleanedData.ActiveZones != nil {
+		zoneCount = len(cleanedData.ActiveZones)
+	}
+	zoneCountScore := dqa.calculateZoneCountScore(zoneCount)
 	score += zoneCountScore * 0.20
 	
 	// 4. 数据一致性评分 (15分)
 	consistencyScore := dqa.calculateConsistencyScore(cleanedData)
+	if math.IsNaN(consistencyScore) || math.IsInf(consistencyScore, 0) {
+		consistencyScore = 0.0
+	}
 	score += consistencyScore * 0.15
+	
+	// 最终检查避免返回NaN
+	if math.IsNaN(score) || math.IsInf(score, 0) {
+		score = 0.0
+	}
 	
 	return math.Min(score, 100.0)
 }
 
 // calculateFilterRateScore 计算过滤率评分
 func (dqa *DataQualityAnalyzer) calculateFilterRateScore(filterRate float64) float64 {
+	// 🔥 修复NaN问题：检查输入值
+	if math.IsNaN(filterRate) || math.IsInf(filterRate, 0) {
+		return 0.0 // 无效数据返回最低分
+	}
+	
 	// 理想过滤率范围：5%-25%
 	if filterRate >= 5.0 && filterRate <= 25.0 {
 		return 100.0 // 理想范围
 	} else if filterRate < 5.0 {
 		// 过滤太少，可能有遗漏
-		return 100.0 - (5.0-filterRate)*5 // 每少1%扣5分
+		score := 100.0 - (5.0-filterRate)*5 // 每少1%扣5分
+		return math.Max(0.0, score)
 	} else {
 		// 过滤太多，可能过度清洗
-		return 100.0 - (filterRate-25.0)*3 // 每多1%扣3分
+		score := 100.0 - (filterRate-25.0)*3 // 每多1%扣3分
+		return math.Max(0.0, score)
 	}
 }
 
@@ -199,16 +232,42 @@ func (dqa *DataQualityAnalyzer) calculateConsistencyScore(data *SupplyDemandData
 	// 计算标准差
 	mean := 0.0
 	for _, s := range strengths {
-		mean += s
+		// 🔥 修复NaN问题：检查强度值
+		if !math.IsNaN(s) && !math.IsInf(s, 0) {
+			mean += s
+		}
 	}
-	mean /= float64(len(strengths))
+	
+	if len(strengths) > 0 {
+		mean /= float64(len(strengths))
+	}
+	
+	// 🔥 修复NaN问题：检查均值
+	if math.IsNaN(mean) || math.IsInf(mean, 0) {
+		return 50.0
+	}
 	
 	variance := 0.0
+	validCount := 0
 	for _, s := range strengths {
-		diff := s - mean
-		variance += diff * diff
+		if !math.IsNaN(s) && !math.IsInf(s, 0) {
+			diff := s - mean
+			variance += diff * diff
+			validCount++
+		}
 	}
-	stdDev := math.Sqrt(variance / float64(len(strengths)))
+	
+	if validCount == 0 {
+		return 50.0
+	}
+	
+	variance /= float64(validCount)
+	stdDev := math.Sqrt(variance)
+	
+	// 🔥 修复NaN问题：检查标准差
+	if math.IsNaN(stdDev) || math.IsInf(stdDev, 0) {
+		return 50.0
+	}
 	
 	// 标准差越小，一致性越好
 	consistencyScore := 100.0 - math.Min(stdDev, 50.0)
@@ -231,22 +290,34 @@ func (dqa *DataQualityAnalyzer) updateHistoricalData(score float64) {
 func (dqa *DataQualityAnalyzer) analyzeZoneQuality(
 	originalData, cleanedData *SupplyDemandData,
 ) *ZoneQualityStatistics {
-	totalAnalyzed := len(originalData.ActiveZones)
+	// 🔥 修复空指针问题
+	totalAnalyzed := 0
+	if originalData != nil && originalData.ActiveZones != nil {
+		totalAnalyzed = len(originalData.ActiveZones)
+	}
+	
 	scores := make([]float64, 0)
 	highCount, mediumCount, lowCount := 0, 0, 0
 	
-	for _, zone := range cleanedData.ActiveZones {
-		if zone.Context != nil {
-			// 基于上下文计算质量评分
-			score := dqa.calculateZoneQualityScore(zone)
-			scores = append(scores, score)
-			
-			if score >= 80 {
-				highCount++
-			} else if score >= 60 {
-				mediumCount++
-			} else {
-				lowCount++
+	// 🔥 修复空指针问题：检查cleanedData
+	if cleanedData != nil && cleanedData.ActiveZones != nil {
+		for _, zone := range cleanedData.ActiveZones {
+			if zone.Context != nil {
+				// 基于上下文计算质量评分
+				score := dqa.calculateZoneQualityScore(zone)
+				
+				// 🔥 修复NaN问题：检查评分
+				if !math.IsNaN(score) && !math.IsInf(score, 0) {
+					scores = append(scores, score)
+					
+					if score >= 80 {
+						highCount++
+					} else if score >= 60 {
+						mediumCount++
+					} else {
+						lowCount++
+					}
+				}
 			}
 		}
 	}
@@ -267,11 +338,25 @@ func (dqa *DataQualityAnalyzer) analyzeZoneQuality(
 			diff := s - avgScore
 			variance += diff * diff
 		}
-		stdDev = math.Sqrt(variance / float64(len(scores)-1))
+		variance /= float64(len(scores) - 1)
+		stdDev = math.Sqrt(variance)
+		
+		// 🔥 修复NaN问题：检查标准差
+		if math.IsNaN(stdDev) || math.IsInf(stdDev, 0) {
+			stdDev = 0.0
+		}
 	}
 	
 	// 计算质量一致性
 	consistency := 100.0 - math.Min(stdDev*2, 100.0)
+	
+	// 🔥 修复NaN问题：检查最终值
+	if math.IsNaN(avgScore) || math.IsInf(avgScore, 0) {
+		avgScore = 0.0
+	}
+	if math.IsNaN(consistency) || math.IsInf(consistency, 0) {
+		consistency = 0.0
+	}
 	
 	return &ZoneQualityStatistics{
 		TotalZonesAnalyzed:     totalAnalyzed,
