@@ -47,8 +47,9 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 		}
 	}
 
-	var supplyZones []*SupplyDemandZone
-	var demandZones []*SupplyDemandZone
+	// 🔥 P0修复：切片初始化避免JSON null输出
+	supplyZones := make([]*SupplyDemandZone, 0)
+	demandZones := make([]*SupplyDemandZone, 0)
 
 	// 识别供给区
 	supplyZones = sda.identifySupplyZones(klines, symbol, timeframe)
@@ -102,7 +103,7 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 	// 如果复杂模式识别没有找到足够的区域，使用简单的高低点方法作为补充
 	// 修复备用机��悖论：不管主算法找到多少个，都启用备用机制增强识别
 	// 这样可以确保在主算法识别能力有限时，依然有基础的供需区支撑
-	if len(activeZones) < 5 { // 提高启动条件：少于5个区域就启动备用机制
+	if len(supplyZones) < 2 || len(demandZones) < 2 { // 🔥 P0修复：按供需两边分别检查
 		backupZones := sda.identifyBasicZonesWithSymbol(klines, symbol, timeframe)
 		for _, zone := range backupZones {
 			// 【P0修复】对备用区域也进行位置验证
@@ -1902,37 +1903,26 @@ func (sda *SupplyDemandAnalyzer) inferSymbolTimeframe(klines []Kline) (string, s
 	return "", "" // 返回空值，让调用者明确传入symbol和timeframe
 }
 
-// validateZonePosition 验证区域位置的合理性（P0修复辅助方法）
-// 作用：确保供给区在当前价格上方，需求区在当前价格下方
+// validateZonePosition 验证区域位置的合理性（P0修复：使用距离过滤替代方向过滤）
+// 作用：确保供需区与当前价格的距离在合理范围内，避免过度过滤正在被测试的区域
 func (sda *SupplyDemandAnalyzer) validateZonePosition(zone *SupplyDemandZone, currentPrice float64, atr float64) bool {
-	bufferDistance := 0.1 * atr // 使用较小的缓冲区用于位置验证
-
-	if zone.Type == SupplyZone {
-		// 供给区应该在当前价格上方（或接近）
-		minValidPrice := currentPrice - bufferDistance
-		isValid := zone.LowerBound >= minValidPrice
-
-		if !isValid {
-			// 🔧 优化：移除冗余的位置验证失败日志，静默处理
-			// log.Printf("🚫 [位置验证失败] 供给区%.2f-%.2f在当前价格%.2f下方，不符合市场物理定律",
-			//	zone.LowerBound, zone.UpperBound, currentPrice)
-		}
-		return isValid
-
-	} else if zone.Type == DemandZone {
-		// 需求区应该在当前价格下方（或接近）
-		maxValidPrice := currentPrice + bufferDistance
-		isValid := zone.UpperBound <= maxValidPrice
-
-		if !isValid {
-			// 🔧 优化：移除冗余的位置验证失败日志，静默处理
-			// log.Printf("🚫 [位置验证失败] 需求区%.2f-%.2f在当前价格%.2f上方，不符合市场物理定律",
-			//	zone.LowerBound, zone.UpperBound, currentPrice)
-		}
-		return isValid
+	maxDistanceATR := 5.0 // 最大距离为5倍ATR
+	bufferDistance := maxDistanceATR * atr
+	
+	// 计算区域中心到当前价格的距离
+	zoneCenterPrice := (zone.UpperBound + zone.LowerBound) / 2
+	distance := math.Abs(currentPrice - zoneCenterPrice)
+	
+	// 距离验证：区域距离当前价格不能超过5倍ATR
+	isWithinRange := distance <= bufferDistance
+	
+	if !isWithinRange {
+		// 🔧 优化：移除冗余的位置验证失败日志，静默处理
+		// log.Printf("🚫 [距离验证失败] 区域%.2f-%.2f距离当前价格%.2f过远(%.2f > %.2f ATR)",
+		//	zone.LowerBound, zone.UpperBound, currentPrice, distance/atr, maxDistanceATR)
 	}
-
-	return true
+	
+	return isWithinRange
 }
 
 // ===== ATR辅助方法（P0级修复支持） =====

@@ -459,6 +459,22 @@ func (fa *FibonacciAnalyzer) calculateRetracements(swingPoints []PricePoint, kli
 		// 计算触及次数
 		touchCount := fa.calculateTouchCounts(levels, klines, startPoint.Index, endPoint.Index)
 		
+		// 🔥 P0修复：时间锚点一致性 - 使用交易所CloseTime而非time.Now()
+		currentTimeMs := int64(0)
+		if len(klines) > 0 {
+			currentTimeMs = klines[len(klines)-1].CloseTime
+		} else {
+			currentTimeMs = time.Now().UnixMilli()
+		}
+		endTimeMs := endPoint.Timestamp
+		
+		// 🔥 P0修复：Age单位一致性 - 统一使用小时单位
+		ageMs := currentTimeMs - endTimeMs
+		ageHours := int(ageMs / (3600 * 1000)) // 转换为小时
+		if ageHours < 0 {
+			ageHours = 0 // 防止负数年龄
+		}
+		
 		retracement := &FibRetracement{
 			ID:         fmt.Sprintf("fib_ret_%d_%d", startPoint.Index, endPoint.Index),
 			StartPoint: startPoint,
@@ -467,10 +483,10 @@ func (fa *FibonacciAnalyzer) calculateRetracements(swingPoints []PricePoint, kli
 			Levels:     levels,
 			Quality:    quality,
 			Strength:   strength,
-			Age:        len(klines) - endPoint.Index,
+			Age:        ageHours,    // 🔥 P0修复：使用小时单位
 			IsActive:   true,
 			TouchCount: touchCount,
-			CreatedAt:  time.Now().UnixMilli(), // 🔥 P0修复：统一使用毫秒时间戳
+			CreatedAt:  endTimeMs,   // 🔥 P0修复：使用交易所时间锚点
 		}
 		
 		// 🔥 修复：添加生存偏差过滤，移除无效历史斐波线
