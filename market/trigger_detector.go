@@ -214,30 +214,84 @@ func (td *TriggerDetector) DetectTrigger(
 }
 
 // findTriggeredAnchor 寻找被触发的锚点
+// 🔥 P0-06修复：为Zone和Line结构实现不同的触发检测逻辑
 func (td *TriggerDetector) findTriggeredAnchor(
 	kline *CandleInfo,
 	anchors []AnchorCandidate,
 ) (*AnchorCandidate, string) {
 	
 	for _, anchor := range anchors {
-		// 检查多头方向突破
-		if anchor.Dir == "LONG" {
-			// 多头突破：收盘价突破支撑上方
-			if kline.Close > anchor.Level {
-				return &anchor, "LONG"
+		// 🔥 P0-06修复：区分Zone和Line结构
+		if td.isZoneStructure(anchor) {
+			// Zone结构：使用边界进行判断
+			if triggered, direction := td.checkZoneTrigger(kline, anchor); triggered {
+				return &anchor, direction
 			}
-		}
-		
-		// 检查空头方向突破
-		if anchor.Dir == "SHORT" {
-			// 空头突破：收盘价突破阻力下方
-			if kline.Close < anchor.Level {
-				return &anchor, "SHORT"
+		} else {
+			// Line结构：使用点位进行判断
+			if triggered, direction := td.checkLineTrigger(kline, anchor); triggered {
+				return &anchor, direction
 			}
 		}
 	}
 	
 	return nil, ""
+}
+
+// 🔥 P0-06修复：检查是否为Zone结构
+// isZoneStructure 判断锚点候选者是否为Zone结构类型
+func (td *TriggerDetector) isZoneStructure(anchor AnchorCandidate) bool {
+	return anchor.Type == AnchorHTFZone || anchor.Type == AnchorZoneMTF
+}
+
+// 🔥 P0-06修复：Zone结构触发检测
+// checkZoneTrigger 检查Zone结构是否被触发
+func (td *TriggerDetector) checkZoneTrigger(kline *CandleInfo, anchor AnchorCandidate) (bool, string) {
+	zoneLo := anchor.BandLo
+	zoneHi := anchor.BandHi
+	
+	// 如果边界无效，降级为点位判断
+	if zoneLo == 0 && zoneHi == 0 {
+		return td.checkLineTrigger(kline, anchor)
+	}
+	
+	switch anchor.Dir {
+	case "LONG":
+		// 多头Zone触发：突破Zone上边界
+		// 这意味着价格从需求区下方或内部突破到上方
+		if kline.Close > zoneHi && kline.Open <= zoneHi {
+			return true, "LONG"
+		}
+		
+	case "SHORT":
+		// 空头Zone触发：突破Zone下边界
+		// 这意味着价格从供给区上方或内部突破到下方
+		if kline.Close < zoneLo && kline.Open >= zoneLo {
+			return true, "SHORT"
+		}
+	}
+	
+	return false, ""
+}
+
+// 🔥 P0-06修复：Line结构触发检测
+// checkLineTrigger 检查Line结构是否被触发（传统点位判断）
+func (td *TriggerDetector) checkLineTrigger(kline *CandleInfo, anchor AnchorCandidate) (bool, string) {
+	switch anchor.Dir {
+	case "LONG":
+		// 多头突破：收盘价突破支撑上方
+		if kline.Close > anchor.Level {
+			return true, "LONG"
+		}
+		
+	case "SHORT":
+		// 空头突破：收盘价突破阻力下方
+		if kline.Close < anchor.Level {
+			return true, "SHORT"
+		}
+	}
+	
+	return false, ""
 }
 
 // performValidations 执行所有验证
@@ -270,6 +324,7 @@ func (td *TriggerDetector) performValidations(
 }
 
 // validateBodyBreakout 验证实体突破
+// 🔥 P0-06修复：为Zone和Line结构实现不同的实体突破验证
 func (td *TriggerDetector) validateBodyBreakout(
 	kline *CandleInfo,
 	anchor *AnchorCandidate,
@@ -282,22 +337,13 @@ func (td *TriggerDetector) validateBodyBreakout(
 	var wickSize, breakoutDistance float64
 	var hasBodyBreakout bool
 	
-	if anchor.Dir == "LONG" {
-		// 多头突破验证
-		breakoutDistance = (kline.Close - anchor.Level) / atr14
-		hasBodyBreakout = kline.Close > anchor.Level && kline.Open <= anchor.Level
-		
-		// 计算上引线大小
-		upperWick := kline.High - math.Max(kline.Open, kline.Close)
-		wickSize = upperWick
+	// 🔥 P0-06修复：区分Zone和Line结构的突破验证
+	if td.isZoneStructure(*anchor) {
+		// Zone结构：使用边界进行突破验证
+		breakoutDistance, hasBodyBreakout, wickSize = td.validateZoneBreakout(kline, anchor, atr14)
 	} else {
-		// 空头突破验证
-		breakoutDistance = (anchor.Level - kline.Close) / atr14
-		hasBodyBreakout = kline.Close < anchor.Level && kline.Open >= anchor.Level
-		
-		// 计算下引线大小
-		lowerWick := math.Min(kline.Open, kline.Close) - kline.Low
-		wickSize = lowerWick
+		// Line结构：使用点位进行突破验证
+		breakoutDistance, hasBodyBreakout, wickSize = td.validateLineBreakout(kline, anchor, atr14)
 	}
 	
 	// 计算引线比例
@@ -316,6 +362,70 @@ func (td *TriggerDetector) validateBodyBreakout(
 		BodySize:         bodySize / atr14,
 		IsWickOnly:       isWickOnly,
 	}
+}
+
+// 🔥 P0-06修复：Zone结构的突破验证
+// validateZoneBreakout 验证Zone结构的实体突破
+func (td *TriggerDetector) validateZoneBreakout(
+	kline *CandleInfo,
+	anchor *AnchorCandidate,
+	atr14 float64,
+) (breakoutDistance float64, hasBodyBreakout bool, wickSize float64) {
+	zoneLo := anchor.BandLo
+	zoneHi := anchor.BandHi
+	
+	// 如果边界无效，降级为点位判断
+	if zoneLo == 0 && zoneHi == 0 {
+		return td.validateLineBreakout(kline, anchor, atr14)
+	}
+	
+	if anchor.Dir == "LONG" {
+		// 多头Zone突破：突破Zone上边界
+		breakoutDistance = (kline.Close - zoneHi) / atr14
+		hasBodyBreakout = kline.Close > zoneHi && kline.Open <= zoneHi
+		
+		// 计算上引线大小
+		upperWick := kline.High - math.Max(kline.Open, kline.Close)
+		wickSize = upperWick
+	} else {
+		// 空头Zone突破：突破Zone下边界
+		breakoutDistance = (zoneLo - kline.Close) / atr14
+		hasBodyBreakout = kline.Close < zoneLo && kline.Open >= zoneLo
+		
+		// 计算下引线大小
+		lowerWick := math.Min(kline.Open, kline.Close) - kline.Low
+		wickSize = lowerWick
+	}
+	
+	return
+}
+
+// 🔥 P0-06修复：Line结构的突破验证
+// validateLineBreakout 验证Line结构的实体突破（传统逻辑）
+func (td *TriggerDetector) validateLineBreakout(
+	kline *CandleInfo,
+	anchor *AnchorCandidate,
+	atr14 float64,
+) (breakoutDistance float64, hasBodyBreakout bool, wickSize float64) {
+	if anchor.Dir == "LONG" {
+		// 多头突破验证
+		breakoutDistance = (kline.Close - anchor.Level) / atr14
+		hasBodyBreakout = kline.Close > anchor.Level && kline.Open <= anchor.Level
+		
+		// 计算上引线大小
+		upperWick := kline.High - math.Max(kline.Open, kline.Close)
+		wickSize = upperWick
+	} else {
+		// 空头突破验证
+		breakoutDistance = (anchor.Level - kline.Close) / atr14
+		hasBodyBreakout = kline.Close < anchor.Level && kline.Open >= anchor.Level
+		
+		// 计算下引线大小
+		lowerWick := math.Min(kline.Open, kline.Close) - kline.Low
+		wickSize = lowerWick
+	}
+	
+	return
 }
 
 // validateVolume 验证量能

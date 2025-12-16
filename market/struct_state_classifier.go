@@ -293,6 +293,7 @@ func (ssc *StructStateClassifier) calculateStructuralSupport(candidates []Anchor
 }
 
 // countConflictingAnchors 统计冲突锚点
+// 🔥 P0-05修复：为Zone结构实现更精准的方向过滤器
 func (ssc *StructStateClassifier) countConflictingAnchors(
 	candidates []AnchorCandidate,
 	lastPrice float64,
@@ -300,15 +301,72 @@ func (ssc *StructStateClassifier) countConflictingAnchors(
 	conflictCount := 0
 	
 	for _, candidate := range candidates {
-		// 检查锚点是否在"错误"的方向
-		if candidate.Dir == "LONG" && candidate.Level > lastPrice {
-			conflictCount++ // 多头锚点在价格上方是冲突的
-		} else if candidate.Dir == "SHORT" && candidate.Level < lastPrice {
-			conflictCount++ // 空头锚点在价格下方是冲突的
+		// 🔥 P0-05修复：Zone结构需要特殊处理
+		if ssc.isZoneStructure(candidate) {
+			// 对于Zone结构，使用边界范围进行判断
+			if ssc.isZoneDirectionConflict(candidate, lastPrice) {
+				conflictCount++
+			}
+		} else {
+			// 对于点位结构（如VPVR、SR、FVG、Fib），使用传统逻辑
+			if candidate.Dir == "LONG" && candidate.Level > lastPrice {
+				conflictCount++ // 多头锚点在价格上方是冲突的
+			} else if candidate.Dir == "SHORT" && candidate.Level < lastPrice {
+				conflictCount++ // 空头锚点在价格下方是冲突的
+			}
 		}
 	}
 	
 	return conflictCount
+}
+
+// 🔥 P0-05修复：检查是否为Zone结构
+// isZoneStructure 判断锚点候选者是否为Zone结构类型
+func (ssc *StructStateClassifier) isZoneStructure(candidate AnchorCandidate) bool {
+	return candidate.Type == AnchorHTFZone || candidate.Type == AnchorZoneMTF
+}
+
+// 🔥 P0-05修复：Zone结构的方向冲突检测
+// isZoneDirectionConflict 检查Zone结构是否存在方向冲突
+func (ssc *StructStateClassifier) isZoneDirectionConflict(candidate AnchorCandidate, lastPrice float64) bool {
+	// 获取Zone边界
+	zoneLo := candidate.BandLo
+	zoneHi := candidate.BandHi
+	zoneCenter := candidate.Level
+	
+	// 如果边界无效，降级为点位判断
+	if zoneLo == 0 && zoneHi == 0 {
+		if candidate.Dir == "LONG" && zoneCenter > lastPrice {
+			return true // 多头Zone中心在价格上方是冲突的
+		} else if candidate.Dir == "SHORT" && zoneCenter < lastPrice {
+			return true // 空头Zone中心在价格下方是冲突的
+		}
+		return false
+	}
+	
+	// Zone结构的精确方向判断逻辑
+	switch candidate.Dir {
+	case "LONG":
+		// 多头Zone（需求区/支撑区）应该在价格下方或包含当前价格
+		// 如果整个Zone都在价格上方，则认为是冲突的
+		if zoneLo > lastPrice {
+			return true // 整个需求区都在当前价格上方，方向冲突
+		}
+		// 如果价格在Zone内或Zone下方，认为是合理的
+		return false
+		
+	case "SHORT":
+		// 空头Zone（供给区/阻力区）应该在价格上方或包含当前价格
+		// 如果整个Zone都在价格下方，则认为是冲突的
+		if zoneHi < lastPrice {
+			return true // 整个供给区都在当前价格下方，方向冲突
+		}
+		// 如果价格在Zone内或Zone上方，认为是合理的
+		return false
+		
+	default:
+		return false
+	}
 }
 
 // hasHTFSupport 检查是否有高时间框架支持

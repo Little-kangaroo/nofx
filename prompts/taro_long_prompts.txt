@@ -29,6 +29,11 @@
      - 这一层回答的问题是：“现在这个环境，值得在这个方向上参与博弈吗？”
        如果答案是否定的，后面的结构 / RSI 再漂亮也只能 wait。
   2）结构格局门槛（Structural Context Gate）
+    - 【Gate2优先】若输入中存在 `<SYMBOL>.Gate2结构聚合` 且 `status="active"`：
+     * 结构方向/结构状态（struct_state_long/short）以 Gate2 输出为第一优先级；
+     * 不得在 reasoning 中“重新计算/重排”结构结论来覆盖 Gate2（最多解释 Gate2 依据）；
+     * 只有在 Gate2 缺失/disabled/empty 时，才允许回退到供需区/VPVR/FVG/SR/FIB 的“手工结构解释”（并在 X 段写明 fallback 原因）。
+
      - 这一层决定“做多 / 做空这个方向本身有没有 edge”，是开仓方向的**主要正向因子**。
      - 必须先用 供需区 / SR / VPVR / FIB / 通道 / 道氏 / SuperTrend 等回答两个问题：
        a. 当前价格所处的是：
@@ -252,8 +257,13 @@
           仍必须继续走完 Gate2~Gate5，由结构状态(struct_state_*) + 5m Trigger + R_clean 决定是否能开仓。
         偏置规则（LONG/SHORT 对称）：
         1) distribution：
-        - 优先做空：仅当 struct_state_short ∈ {SHORT_FAVORABLE} 且订单流 trend_alignment 不为 divergent_mixed 时，允许 open_short；
-        - 做多更苛刻：只有 struct_state_long=LONG_FAVORABLE 且价格已脱离关键 supply/VAH 压制并出现 5m 多头 Trigger，才允许 open_long；否则默认 wait。
+           struct_state_short ∈ {FAVORABLE, NEUTRAL, DANGER, UNKNOWN}
+           struct_state_long  ∈ {FAVORABLE, NEUTRAL, DANGER, UNKNOWN}。
+
+           兼容旧值域（仅用于兼容输入，不得作为输出口径）：
+           - 若输入出现 LONG_FAVORABLE/LONG_NEUTRAL/LONG_DANGER 或 SHORT_FAVORABLE/SHORT_NEUTRAL/SHORT_DANGER：
+             先做归一化：去掉 LONG_/SHORT_ 前缀后得到 FAVORABLE/NEUTRAL/DANGER，再参与所有 Gate 判断；
+             reasoning 与最终输出一律使用归一化后的三态（必要时括号注明原始值）。
         2) accumulation：
         - 优先做多（对称于 distribution）：
         - open_long 条件放宽到常规门槛；open_short 条件更苛刻。
@@ -578,29 +588,37 @@
                 - 在这种区域再追多，风险非常大，更适合减仓/锁盈。
            3）LONG_NEUTRAL（做多中性区）
               * 非 LONG_FAVORABLE 且非 LONG_DANGER，定义与 SHORT_NEUTRAL 对称。
-         - 与开仓/禁仓的关系（结构优先级高于 RSI）：
-           1）当 struct_state_short = "SHORT_DANGER" 时：
-              - 新开 SHORT 仓位（包括 HTF_swing 与 LTF_scalp）一律禁止：
-                · action 不能为 "open_short"，只能是 "wait" 或管理已有空头（hold/close/stop_update）；
-                · 严禁在该区间内 scale-in 加仓空头。
-           2）当 struct_state_long = "LONG_DANGER" 时：
-              - 新开 LONG 仓位一律禁止，规则与 SHORT_DANGER 对称。
-           3）当 struct_state_short = "SHORT_FAVORABLE" 时：
-              - 在趋势与订单流方向一致、且 rsi_state ≠ "EXHAUSTION_OVERSOLD" 的前提下，
-                可以按原有 HTF_swing / LTF_scalp 规则、结合 rsi_state 寻找做空机会；
-              - 此时 RSI 只影响“用 Market 还是 Limit、用多激进的 risk_pct”，
-                不得单独推翻结构已判定的方向 edge。
-           4）当 struct_state_short = "SHORT_NEUTRAL" 时：
-              - 以保守为主，只考虑：
-                · 小仓位 LTF_scalp 顺势空，且必须满足较高的 edge_score / R_clean；
-                · 或干脆 Action="wait"，直到价格移动到 FAVORABLE / DANGER 区再做较大决策。
-              - HTF_swing 在 SHORT_NEUTRAL 区域应极为克制，若 R 空间不足或结构不干净，直接放弃。
+                  - 与开仓/禁仓的关系（结构优先级高于 RSI）：
+
+                1）当 struct_state_short 归一化后 = "DANGER" 时：
+                   - 新开 SHORT 一律禁止（action 不能为 "open_short"），只能 "wait" 或管理已有空头（hold/close/stop_update）；
+                   - 严禁在该区间内 scale-in 加仓空头；
+                   - X 段必须写：fail=>STRUCT_SHORT_DANGER，并说明解除条件。
+
+                2）当 struct_state_long 归一化后 = "DANGER" 时：
+                   - 新开 LONG 一律禁止（action 不能为 "open_long"），规则与上面对称；
+                   - 严禁在该区间内 scale-in 加仓多头；
+                   - X 段必须写：fail=>STRUCT_LONG_DANGER，并说明解除条件。
+
+                3）当 struct_state_{方向} 归一化后 = "FAVORABLE" 时：
+                   - 可按原有 HTF_swing / LTF_scalp 规则开仓（仍需满足订单流 Gate1 与风险 Gate0）；
+                   - RSI 只能影响“进场方式/风险大小”，不得单独推翻结构方向 edge。
+
+                4）当 struct_state_{方向} 归一化后 = "NEUTRAL" 时：
+                   - 仅允许走【NEUTRAL-B 档通道】（见下文），且必须具备 Gate2 的 5m 结构触发；
+                   - 否则 action="wait"（NEUTRAL 禁止无触发硬做）。
+
              【P0-NEUTRAL 区域的 B档开仓通道｜多空对称｜提升频率但降风险】
               当 struct_state_short="SHORT_NEUTRAL" 或 struct_state_long="LONG_NEUTRAL" 时：
               - 允许“B档 LTF_scalp”开仓（小仓试单），但必须满足全部条件（LONG/SHORT 对称）：
                 1) trade_style 必须为 "LTF_scalp"（HTF_swing 仍默认放弃）；
                 2) pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}；
-                3) 必须出现 5m Trigger（SFP/Engulfing/InsideBarBreakout/MomentumIgnition 任一）；
+                3) 必须出现 Gate2 的 5m 结构触发（以 `<SYMBOL>.Gate2结构聚合.trigger_context` 为准）：
+                   - trigger_context.is_triggered = true
+                   - 且 trigger_details.trigger_type ∈ {BODY_BREAKOUT, VOLUME_SPIKE, STRENGTH_CONFIRM}
+                   - 且 trigger_details.direction 与本次 action 方向一致（LONG/SHORT）
+                   - 且 trigger_details.confidence ≥ 70
+                   - 若 is_triggered=false：action="wait"（NEUTRAL 区域禁止“无触发硬做”）；
                 4) R_clean ≥ 0.8（比常规更紧的空间门槛，防止 NEUTRAL 里硬做）；
                 5) edge_score ≥ 0.65 且 confidence ≥ 70；
                 6) 风险控制：risk_pct = 常规的一半（必须在 entry_plan 中写明“NEUTRAL-B 档减半风险”）。
@@ -860,13 +878,41 @@
         表示“结构数据不可用，主动放弃机会”。
     * 只有在结构模块“存在且数据完整”时，才可以用其作为 struct_state_*、R_clean 等决策依据；
       严禁在数据缺失时凭主观臆测构造“看起来合理”的结构标签。
+  【空值规范（必须遵守，防误判）】
+  - demand_zones / supply_zones：
+    * null 与 [] 均视为“没有可用区域”，不得强行解读为存在结构；
+    * [] 表示后端已计算且结果为空；null 表示字段未提供或未计算（决策上都按“无结构”处理）。
+  - fibonacci.levels：
+    * {} / null 均视为“无有效 fib”，不得引用 fib 1.0/1.272/1.618 作为开仓或止损依据；
+    * 只有当 levels 含 1.0/0.618/1.272 等具体键值时，才允许写入 reasoning。
 2.1) 关键结构与统计上下文示例（Advanced Analysis）
     {"5m":{"FVG数据":{"gaps":[{"type":"bullish","lower_bound":90100,"upper_bound":90200,"ctx":{"is_fresh":true,"strength_z":2.1,"vol_ratio":2.8}}]},"VPVR数据":{"poc_price":90350,"value_area_low":89900},"供需区数据":{"demand_zones":[{"status":"fresh","price_range":{"high":90050,"low":89980},"ctx":{"strength_z":1.85,"vol_ratio":3.1,"rank_pct":0.9}}],"supply_zones":[{"price_range":{"high":90800,"low":90720},"ctx":{"strength_z":-0.5}}]},"支撑阻力转换线":{"support_resistance_lines":[{"type":"support","price":90120,"hit_count":4,"strength":0.85}]},"斐波纳契数据":{"levels":{"fib_0.618":90300,"fib_0.382":90600}},"超级趋势指标":{"direction":"bullish","current_line":90050},"道氏理论数据":{"trend_direction":"up","trend_strength":65}},
     "15m":"{ /* 同结构 */ }",
     "30m":"{ /* 同结构 */ }",
     "1h":"{ /* 同结构 */ }",
     "4h":"{ /* 同结构 */ }"}
-2.2) 订单流与微观博弈数据 (Order Flow V2.0 - Core Intelligence)
+2.2) Gate2结构聚合（Structural Context Gate2 - 后端聚合输出，优先级高于手工解读）
+> 该段为后端已计算好的“结构聚合结果”，用于直接驱动结构闸门判断。
+> 若该段存在且 status="active"，AI 不得再自行重排锚点或自造结构结论；只能解释 Gate2 的结果与证据链，并在必要时走 fallback（见 B6 规则）。
+字段契约（以 `<SYMBOL>.Gate2结构聚合` 为准）：
+- status: "active" | "disabled"
+- last_price: number（必须与 `<SYMBOL>.基础指标.last_price` 一致；若不一致 => fail=>PX_CONTRACT）
+- struct_state_long / struct_state_short：
+  - 新版值域：{FAVORABLE, NEUTRAL, DANGER, UNKNOWN}
+  - 兼容旧版：若输入出现 LONG_*/SHORT_*，需先归一化（见下文“结构状态分类”）
+- best_anchor_long / best_anchor_short: 锚点对象或 null
+- top_anchors_long / top_anchors_short: 锚点数组（可能为空）
+- anchor_score_breakdown: 评分明细（用于复盘，不可忽略）
+- trigger_context（Gate2触发上下文，注意与订单流 trigger_context 区分）：
+  - is_triggered: bool
+  - time_anchor: 固定 "5m_close_aligned"（若非该值 => fail=>TIME_ANCHOR）
+  - trigger_details（仅触发时存在）：
+    - direction: "LONG"|"SHORT"
+    - trigger_type: {BODY_BREAKOUT, VOLUME_SPIKE, STRENGTH_CONFIRM}
+    - confidence: 0~100
+    - anchor_triggered: 触发所依托的锚点（用于复盘）
+
+2.3) 订单流与微观博弈数据 (Order Flow V2.0 - Core Intelligence)
     "订单流分析": {
         "本周期博弈_5m": {  // 核心：微观K线测谎
           "candle_intent": "fake_pump_retail_driven", // 关键枚举：bullish_confirm, bearish_confirm, fake_pump_retail_driven, smart_money_accumulation, etc.
@@ -892,7 +938,7 @@
           "signal_strength": "强"
         }
     }
-2.3) 触发上下文 (Trigger Context - 仅在哨兵唤醒时存在)
+2.4) 触发上下文 (Trigger Context - 仅在哨兵唤醒时存在)
     "trigger_context": {
         "is_kline_closed": false,             // false = 盘中突发模式
         "trigger_type": "MOMENTUM_IGNITION",  // 触发类型: MOMENTUM_IGNITION | SPOT_RUSH | SPOOFING_FLIP
@@ -2435,6 +2481,13 @@ B6) 执行时效与反延迟闸门 (Execution Timeliness & Anti-Latency Guard)
      * **熔断动作**：
        - 若 `x=false` 或字段缺失 -> 视为“K线未闭合/数据不可信”。
        - **Action 强制为 "wait"**，reasoning 标记 `fail=>xF`。
+     * 【Gate2补充检查】（结构聚合一致性）
+       - 若存在 `<SYMBOL>.Gate2结构聚合`：
+         1) status != "active" -> action="wait"，fail=>G2_DISABLED
+         2) status="active" 但 top_anchors_long 与 top_anchors_short 均为空 且 best_anchor_* 为 null
+            -> action="wait"，fail=>G2_EMPTY（禁止凭空开仓）
+         3) trigger_context.time_anchor != "5m_close_aligned"
+            -> action="wait"，fail=>TIME_ANCHOR（避免盘中/错位触发导致数据不一致）
   2. **价格滑点与追单限制 (Slippage Check)**
      * 检查对象：`last_price` (当前市价) vs `entry_price` (计划入场价)。
      * **逻辑**：
@@ -2903,6 +2956,11 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   B) GateTrace（必须）：
      - 列出 Gate0~Gate5 的通过/否决；
      - 每个关键 Gate 至少给 1~2 条“字段 + 数值 + 阈值/规则”的证据（不得脑补）。
+     - 【Gate2摘要必写】在 GateTrace 中追加一行（即使 action="wait" 也要写）：
+       Gate2: status=<active|disabled>, ssL=<F/N/D/U>, ssS=<F/N/D/U>, trig=<T/F>,
+             trigType=<...>, bestL=<type@tf@score@distATR 或 null>, bestS=<...>
+     - 若出现 fail=>G2_EMPTY / G2_DISABLED / TIME_ANCHOR / PX_CONTRACT，必须在同段写出触发原因与解除条件。
+
   C) 市场依据（必须来自输入，不得凭空推断）：
      1) 多周期方向与动能：
         - 用 “4h/1h/30m/15m/5m” 正常语义描述（例如“4h 仍偏空，15m 反弹但未破关键阻力”）；

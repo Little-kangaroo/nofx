@@ -301,11 +301,16 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 	}
 
 	// 🔥 Gate2 结构聚合 - 计算ATR14用于后续分析
-	var atr14 float64 = 100.0 // 默认值，防止数据不足
+	// 使用价格的0.5%作为保守的fallback值，避免固定值100.0
+	var atr14 float64
 	if len(klines4h) >= 14 {
-		atr14 = calculateATR14(klines4h)
+		atr14 = calculateATR14WithFallback(klines4h, currentPrice)
 	} else if len(klines1h) >= 14 {
-		atr14 = calculateATR14(klines1h) * 0.25 // 1h转4h近似
+		atr14 = calculateATR14WithFallback(klines1h, currentPrice) * 4.0 // 1h腂4h近似（放大系数）
+	} else {
+		// 数据不足时，使用价格的0.5%作为保守ATR
+		atr14 = currentPrice * 0.005
+		log.Printf("⚠️ [Gate2 ATR] %s K线数据不足，使用保守ATR: %.4f (价格的0.5%%)", symbol, atr14)
 	}
 	
 	log.Printf("🎯 [Gate2] %s 开始结构聚合 - 当前价格: %.4f, ATR14: %.4f", symbol, currentPrice, atr14)
@@ -327,7 +332,14 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 	})
 
 	// 🔥 Gate2 结构聚合 - 步骤1: 执行AnchorEngine聚合
-	var structureGate2 *StructureGate2
+	var (
+		structureGate2       *StructureGate2
+		anchorEngineTime     float64
+		structClassifierTime float64
+		triggerDetectorTime  float64
+		err                  error
+	)
+	
 	if multiTimeframeAnalysis != nil {
 		// 获取管理器
 		featureManager := GetGate2FeatureManager()
@@ -337,31 +349,42 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 		if featureManager.IsEnabled(symbol) {
 			start := time.Now()
 			
-			// 执行Gate2结构聚合
-			structureGate2, anchorEngineTime, structClassifierTime, triggerDetectorTime, err := ca.executeGate2StructureAggregationWithMonitoring(
-				symbol, currentPrice, atr14, multiTimeframeAnalysis, klines5m)
+			// 🔥 P0-01修复：使用 = 赋值避免变量遮蔽
+			structureGate2, anchorEngineTime, structClassifierTime, triggerDetectorTime, err = 
+				ca.executeGate2StructureAggregationWithMonitoring(symbol, currentPrice, atr14, multiTimeframeAnalysis, map[string][]Kline{
+					"5m":  klines5m,
+					"15m": klines15m,
+					"30m": klines30m,
+					"1h":  klines1h,
+					"4h":  klines4h,
+				})
 			
 			elapsed := time.Since(start).Seconds() * 1000 // 转换为毫秒
 			
-			// 记录性能监控数据
-			performanceMonitor.RecordExecution(
-				symbol, 
-				elapsed,
-				anchorEngineTime,
-				structClassifierTime, 
-				triggerDetectorTime,
-				structureGate2.TopAnchorsLong,
-				structureGate2.TopAnchorsShort,
-				err,
-			)
-			
-			// 记录详细锚点评分统计
-			performanceMonitor.LogAnchorScoreDetails(symbol, structureGate2.TopAnchorsLong, structureGate2.TopAnchorsShort)
+			// 只有在成功时才记录性能监控数据
+			if err == nil && structureGate2 != nil {
+				// 记录性能监控数据
+				performanceMonitor.RecordExecution(
+					symbol, 
+					elapsed,
+					anchorEngineTime,
+					structClassifierTime, 
+					triggerDetectorTime,
+					structureGate2.TopAnchorsLong,
+					structureGate2.TopAnchorsShort,
+					err,
+				)
+				
+				// 记录详细锚点评分统计
+				performanceMonitor.LogAnchorScoreDetails(symbol, structureGate2.TopAnchorsLong, structureGate2.TopAnchorsShort)
+			}
 			
 			// 记录性能日志
 			if featureManager.IsPerformanceLogEnabled() {
-				log.Printf("📊 [Gate2性能] %s 执行耗时: %.2fms, 锚点数: L=%d, S=%d", 
-					symbol, elapsed, len(structureGate2.TopAnchorsLong), len(structureGate2.TopAnchorsShort))
+				if structureGate2 != nil {
+					log.Printf("📊 [Gate2性能] %s 执行耗时: %.2fms, 锚点数: L=%d, S=%d", 
+						symbol, elapsed, len(structureGate2.TopAnchorsLong), len(structureGate2.TopAnchorsShort))
+				}
 				log.Printf("📊 [Gate2性能] %s 模块耗时: AnchorEngine=%.2fms, StructClassifier=%.2fms, TriggerDetector=%.2fms",
 					symbol, anchorEngineTime, structClassifierTime, triggerDetectorTime)
 			}
@@ -369,6 +392,18 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 			if err != nil {
 				featureManager.RecordError(err, symbol)
 				log.Printf("❌ [Gate2] %s 执行失败: %v", symbol, err)
+				// 失败时提供空结构，但标记失败原因
+				structureGate2 = &StructureGate2{
+					TopAnchorsLong:       []AnchorCandidate{},
+					TopAnchorsShort:      []AnchorCandidate{},
+					StructStateLong:      StructStateNeutral,
+					StructStateShort:     StructStateNeutral,
+					TriggerResult:        nil,
+					AnchorScoreBreakdown: map[string]interface{}{
+						"error": err.Error(),
+						"status": "failed",
+					},
+				}
 			} else {
 				featureManager.RecordSuccess()
 			}
@@ -376,11 +411,15 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 			// 只有在错误率超标或黑名单时才禁用，记录原因
 			log.Printf("⚠️ [Gate2] %s 被禁用 - 可能原因: 错误率超标或在黑名单中", symbol)
 			structureGate2 = &StructureGate2{
-				TopAnchorsLong:    []AnchorCandidate{},
-				TopAnchorsShort:   []AnchorCandidate{},
-				StructStateLong:   StructStateNeutral,
-				StructStateShort:  StructStateNeutral,
-				TriggerResult:     nil,
+				TopAnchorsLong:       []AnchorCandidate{},
+				TopAnchorsShort:      []AnchorCandidate{},
+				StructStateLong:      StructStateNeutral,
+				StructStateShort:     StructStateNeutral,
+				TriggerResult:        nil,
+				AnchorScoreBreakdown: map[string]interface{}{
+					"status": "disabled",
+					"reason": "feature_flag_disabled",
+				},
 			}
 		}
 	}
@@ -2014,11 +2053,12 @@ func (ca *ComprehensiveAnalyzer) calculateSignalConfidence(timeframes map[string
 
 // executeGate2StructureAggregationWithMonitoring 执行Gate2结构指标聚合（带性能监控）
 // 这是Gate2系统的核心集成方法，统一调用AnchorEngine、StructStateClassifier和TriggerDetector
+// 🔥 P0-03修复：接受完整的timeframes K线数据映射，避免空数据集
 func (ca *ComprehensiveAnalyzer) executeGate2StructureAggregationWithMonitoring(
 	symbol string, 
 	lastPrice, atr14 float64, 
 	mtfAnalysis *MultiTimeframeAnalysis,
-	klines5m []Kline,
+	timeframesKlines map[string][]Kline,
 ) (*StructureGate2, float64, float64, float64, error) {
 	start := time.Now()
 	
@@ -2043,16 +2083,15 @@ func (ca *ComprehensiveAnalyzer) executeGate2StructureAggregationWithMonitoring(
 	anchorStart := time.Now()
 	anchorEngine := NewAnchorEngine(nil) // 使用默认配置
 	
-	// 步骤2: 创建时间框架数据映射
-	timeframes := make(map[string][]Kline)
-	for tf, _ := range mtfAnalysis.Timeframes {
-		// 从分析中恢复K线数据（简化版本，实际可能需要传入原始数据）
-		// 这里我们需要重构来传入时间框架K线数据
-		timeframes[tf] = []Kline{} // 暂时为空，后续需要完善
-	}
+	// 步骤2: 使用传入的真实K线数据映射
+	// 🔥 P0-03修复：使用真实的K线数据而非空数组
+	timeframes := timeframesKlines
+	log.Printf("🔍 [Gate2 P0-03] 使用真实K线数据: 5m=%d, 15m=%d, 30m=%d, 1h=%d, 4h=%d", 
+		len(timeframes["5m"]), len(timeframes["15m"]), len(timeframes["30m"]), 
+		len(timeframes["1h"]), len(timeframes["4h"]))
 	
 	// 步骤3: 执行锚点聚合处理
-	longCandidates, shortCandidates := ca.processAnchorCandidates(anchorEngine, mtfAnalysis, timeframes, lastPrice)
+	longCandidates, shortCandidates := ca.processAnchorCandidates(anchorEngine, mtfAnalysis, timeframes, lastPrice, atr14)
 	
 	anchorEngineTime = time.Since(anchorStart).Seconds() * 1000
 	log.Printf("🎯 [Gate2] %s AnchorEngine处理完成 - 多头锚点: %d, 空头锚点: %d, 耗时: %.2fms", 
@@ -2096,10 +2135,12 @@ func (ca *ComprehensiveAnalyzer) executeGate2StructureAggregationWithMonitoring(
 		bestShort = &shortCandidates[0]
 	}
 	
-	// 步骤6: 5分钟触发检测（如果有5分钟数据）
+	// 步骤6: 5分钟触发检测（使用真实5分钟K线数据）
 	var triggerResult *TriggerResult
 	triggerStart := time.Now()
 	
+	// 🔥 P0-03修复：使用真实5分钟K线数据
+	klines5m := timeframes["5m"]
 	if featureManager.IsModuleEnabled("trigger_detector") && len(klines5m) > 1 {
 		triggerResult = ca.detectFiveMinuteTrigger(klines5m, longCandidates, shortCandidates, atr14)
 		triggerDetectorTime = time.Since(triggerStart).Seconds() * 1000
@@ -2151,41 +2192,52 @@ func (ca *ComprehensiveAnalyzer) executeGate2StructureAggregationWithMonitoring(
 }
 
 // processAnchorCandidates 处理锚点候选者聚合
+// 🔥 P0-02修复：接受真实的atr14参数，避免hardcode 100.0导致距离计算错误
 func (ca *ComprehensiveAnalyzer) processAnchorCandidates(
 	engine *AnchorEngine, 
 	mtfAnalysis *MultiTimeframeAnalysis, 
 	timeframes map[string][]Kline,
-	lastPrice float64,
+	lastPrice, atr14 float64,
 ) ([]AnchorCandidate, []AnchorCandidate) {
 	
-	// 收集各时间框架的分析数据
+	// 🔥 P0-04修复：实现结构源fallback机制，按类型进行降级
+	// 收集各时间框架的分析数据，实现智能选择和降级策略
 	var supplyDemandData *SupplyDemandData
 	var vpvrData *VolumeProfile
 	var srData *SupportResistanceData
 	var fvgData *FVGData
 	var fibData *FibonacciData
+	var selectedTimeframe string
 	
-	// 优先使用4h时间框架的数据，如果没有则使用其他时间框架
-	if tf4h, exists := mtfAnalysis.Timeframes["4h"]; exists {
-		supplyDemandData = tf4h.SupplyDemand
-		vpvrData = tf4h.VolumeProfile
-		srData = tf4h.SupportResistance
-		fvgData = tf4h.FairValueGaps
-		fibData = tf4h.Fibonacci
-		log.Printf("🔍 [Gate2] 使用4h时间框架数据作为主要分析源")
-	} else if tf1h, exists := mtfAnalysis.Timeframes["1h"]; exists {
-		supplyDemandData = tf1h.SupplyDemand
-		vpvrData = tf1h.VolumeProfile
-		srData = tf1h.SupportResistance
-		fvgData = tf1h.FairValueGaps
-		fibData = tf1h.Fibonacci
-		log.Printf("🔍 [Gate2] 使用1h时间框架数据作为主要分析源")
-	} else {
-		log.Printf("⚠️ [Gate2] 未找到4h或1h数据，使用空数据集")
+	// 定义时间框架优先级顺序（从高到低）
+	timeframePriority := []string{"4h", "1h", "30m", "15m", "5m"}
+	
+	// 逐个检查时间框架的可用性，按优先级选择
+	for _, tf := range timeframePriority {
+		if tfData, exists := mtfAnalysis.Timeframes[tf]; exists {
+			// 统一从这个时间框架获取所有类型的数据
+			supplyDemandData = tfData.SupplyDemand
+			vpvrData = tfData.VolumeProfile
+			srData = tfData.SupportResistance
+			fvgData = tfData.FairValueGaps
+			fibData = tfData.Fibonacci
+			selectedTimeframe = tf
+			log.Printf("🔍 [Gate2 P0-04] 使用%s时间框架数据作为主要分析源", tf)
+			break
+		}
 	}
 	
-	// 计算ATR14（简化版本，使用固定值）
-	atr14 := 100.0 // 这应该从调用方传入
+	// 🔥 P0-04核心修复：按类型实现智能降级策略
+	// 如果主要时间框架的某个类型数据为空，尝试从其他时间框架获取
+	if selectedTimeframe != "" {
+		ca.applyStructureSourceFallback(mtfAnalysis, selectedTimeframe, 
+			&supplyDemandData, &vpvrData, &srData, &fvgData, &fibData)
+	} else {
+		log.Printf("⚠️ [Gate2 P0-04] 所有时间框架都不可用，使用空数据集")
+	}
+	
+	// 🔥 P0-02修复：使用传入的真实ATR14值（上层已确保有效性）
+	log.Printf("🔍 [Gate2 P0-02] 使用真实ATR14: %.4f", atr14)
 	
 	// 使用AnchorEngine处理候选者
 	longCandidates, shortCandidates, err := engine.ProcessCandidates(
@@ -2201,6 +2253,112 @@ func (ca *ComprehensiveAnalyzer) processAnchorCandidates(
 		len(longCandidates), len(shortCandidates))
 	
 	return longCandidates, shortCandidates
+}
+
+// 🔥 P0-04修复：结构源智能降级函数
+// applyStructureSourceFallback 按类型实现结构源的智能降级策略
+func (ca *ComprehensiveAnalyzer) applyStructureSourceFallback(
+	mtfAnalysis *MultiTimeframeAnalysis, 
+	primaryTimeframe string,
+	supplyDemandData **SupplyDemandData,
+	vpvrData **VolumeProfile, 
+	srData **SupportResistanceData,
+	fvgData **FVGData,
+	fibData **FibonacciData,
+) {
+	// 定义降级时间框架顺序（排除主要时间框架）
+	var fallbackTimeframes []string
+	allTimeframes := []string{"4h", "1h", "30m", "15m", "5m"}
+	
+	for _, tf := range allTimeframes {
+		if tf != primaryTimeframe {
+			fallbackTimeframes = append(fallbackTimeframes, tf)
+		}
+	}
+	
+	log.Printf("🔧 [Gate2 P0-04] 开始结构源降级检查，主时间框架=%s", primaryTimeframe)
+	
+	// 1. 供需区数据降级
+	if *supplyDemandData == nil {
+		for _, fallbackTF := range fallbackTimeframes {
+			if tfData, exists := mtfAnalysis.Timeframes[fallbackTF]; exists && tfData.SupplyDemand != nil {
+				*supplyDemandData = tfData.SupplyDemand
+				log.Printf("📉 [Gate2 P0-04] 供需区数据降级: %s -> %s", primaryTimeframe, fallbackTF)
+				break
+			}
+		}
+	}
+	
+	// 2. VPVR数据降级
+	if *vpvrData == nil {
+		for _, fallbackTF := range fallbackTimeframes {
+			if tfData, exists := mtfAnalysis.Timeframes[fallbackTF]; exists && tfData.VolumeProfile != nil {
+				*vpvrData = tfData.VolumeProfile
+				log.Printf("📊 [Gate2 P0-04] VPVR数据降级: %s -> %s", primaryTimeframe, fallbackTF)
+				break
+			}
+		}
+	}
+	
+	// 3. 支撑阻力数据降级
+	if *srData == nil {
+		for _, fallbackTF := range fallbackTimeframes {
+			if tfData, exists := mtfAnalysis.Timeframes[fallbackTF]; exists && tfData.SupportResistance != nil {
+				*srData = tfData.SupportResistance
+				log.Printf("🔗 [Gate2 P0-04] 支撑阻力数据降级: %s -> %s", primaryTimeframe, fallbackTF)
+				break
+			}
+		}
+	}
+	
+	// 4. FVG数据降级
+	if *fvgData == nil {
+		for _, fallbackTF := range fallbackTimeframes {
+			if tfData, exists := mtfAnalysis.Timeframes[fallbackTF]; exists && tfData.FairValueGaps != nil {
+				*fvgData = tfData.FairValueGaps
+				log.Printf("🕳️ [Gate2 P0-04] FVG数据降级: %s -> %s", primaryTimeframe, fallbackTF)
+				break
+			}
+		}
+	}
+	
+	// 5. 斐波纳契数据降级
+	if *fibData == nil {
+		for _, fallbackTF := range fallbackTimeframes {
+			if tfData, exists := mtfAnalysis.Timeframes[fallbackTF]; exists && tfData.Fibonacci != nil {
+				*fibData = tfData.Fibonacci
+				log.Printf("🌀 [Gate2 P0-04] 斐波纳契数据降级: %s -> %s", primaryTimeframe, fallbackTF)
+				break
+			}
+		}
+	}
+	
+	// 统计最终可用数据源
+	availableSources := 0
+	sourceDetails := []string{}
+	if *supplyDemandData != nil {
+		availableSources++
+		sourceDetails = append(sourceDetails, "供需区")
+	}
+	if *vpvrData != nil {
+		availableSources++
+		sourceDetails = append(sourceDetails, "VPVR")
+	}
+	if *srData != nil {
+		availableSources++
+		sourceDetails = append(sourceDetails, "支撑阻力")
+	}
+	if *fvgData != nil {
+		availableSources++
+		sourceDetails = append(sourceDetails, "FVG")
+	}
+	if *fibData != nil {
+		availableSources++
+		sourceDetails = append(sourceDetails, "斐波纳契")
+	}
+	
+	log.Printf("✅ [Gate2 P0-04] 结构源降级完成: %d/%d可用 (%v)", 
+		availableSources, 5, sourceDetails)
 }
 
 // detectFiveMinuteTrigger 检测5分钟触发信号
@@ -2343,4 +2501,62 @@ func calculateATR14(klines []Kline) float64 {
 	}
 	
 	return sum / float64(count)
+}
+
+// calculateATR14WithFallback 计算14周期ATR（带智能fallback）
+// 🔥 关键修复：使用价格相关的动态fallback，避免硬编码100.0
+func calculateATR14WithFallback(klines []Kline, currentPrice float64) float64 {
+	if len(klines) < 14 {
+		// 数据不足时，使用价格的0.3%作为保守ATR
+		return currentPrice * 0.003
+	}
+	
+	var trs []float64
+	for i := 1; i < len(klines); i++ {
+		high := klines[i].High
+		low := klines[i].Low
+		prevClose := klines[i-1].Close
+		
+		tr1 := high - low
+		tr2 := math.Abs(high - prevClose)
+		tr3 := math.Abs(low - prevClose)
+		
+		tr := math.Max(tr1, math.Max(tr2, tr3))
+		trs = append(trs, tr)
+	}
+	
+	// 计算最后14个TR的平均值
+	start := len(trs) - 14
+	if start < 0 {
+		start = 0
+	}
+	
+	sum := 0.0
+	count := 0
+	for i := start; i < len(trs); i++ {
+		sum += trs[i]
+		count++
+	}
+	
+	if count == 0 {
+		// 计算失败时，使用价格的0.3%作为fallback
+		return currentPrice * 0.003
+	}
+	
+	atr := sum / float64(count)
+	
+	// 合理性检查：ATR不应该超过价格的5%，也不应该小于价格的0.05%
+	minATR := currentPrice * 0.0005  // 0.05%
+	maxATR := currentPrice * 0.05    // 5%
+	
+	if atr < minATR {
+		log.Printf("⚠️ [ATR检查] ATR过小(%.4f < %.4f)，使用最小值", atr, minATR)
+		return minATR
+	}
+	if atr > maxATR {
+		log.Printf("⚠️ [ATR检查] ATR过大(%.4f > %.4f)，使用最大值", atr, maxATR) 
+		return maxATR
+	}
+	
+	return atr
 }
