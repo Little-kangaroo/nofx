@@ -824,7 +824,7 @@ func FormatAsCompactData(data *Data) string {
 			"基础指标":       calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
 			"订单流分析":     GetOrderFlowDataForAIV2(data.Symbol),
-			//"Gate2结构聚合": buildGate2CompactOutput(data),
+			"Gate2结构聚合":  buildGate2CompactOutput(data),
 		},
 	}
 
