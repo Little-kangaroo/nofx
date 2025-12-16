@@ -149,18 +149,32 @@ func GetFullDecisionWithCustomPromptAndAnchor(ctx *Context, mcpClient *mcp.Clien
 
 // GetFullDecisionWithCustomPrompt 获取AI的完整交易决策（支持自定义prompt和模板选择）
 func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, customPrompt string, overrideBase bool, templateName string) (*FullDecision, error) {
-	// 1. 为所有币种获取市场数据
+	// 📊 性能监控：总耗时开始计时
+	totalStart := time.Now()
+	
+	// 1. 为所有币种获取市场数据 - 📊 数据指标计算耗时统计
+	dataStart := time.Now()
 	if err := fetchMarketDataForContext(ctx); err != nil {
+		// 📊 性能监控：数据获取失败时的统计
+		dataTimeMs := float64(time.Since(dataStart).Nanoseconds()) / 1e6
+		log.Printf("❌ [决策性能统计] 数据获取失败 | 尝试耗时: %.2fms", dataTimeMs)
 		return nil, fmt.Errorf("获取市场数据失败: %w", err)
 	}
+	dataTime := time.Since(dataStart)
 
 	// 2. 构建 System Prompt（固定规则）和 User Prompt（动态数据）
 	systemPrompt := buildSystemPromptWithCustom(customPrompt, overrideBase, templateName)
 	userPrompt := buildUserPrompt(ctx)
 
-	// 3. 调用AI API（使用 system + user prompt）
+	// 3. 调用AI API（使用 system + user prompt）- 📊 AI响应耗时统计
+	aiStart := time.Now()
 	aiResponse, err := mcpClient.CallWithMessages(systemPrompt, userPrompt)
+	aiTime := time.Since(aiStart)
+	
 	if err != nil {
+		// 📊 性能监控：即使失败也输出部分统计
+		dataTimeMs := float64(dataTime.Nanoseconds()) / 1e6
+		log.Printf("❌ [决策性能统计] AI响应失败 | 数据指标计算: %.2fms", dataTimeMs)
 		return nil, fmt.Errorf("调用AI API失败: %w", err)
 	}
 
@@ -194,6 +208,18 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 	if err != nil {
 		return decision, fmt.Errorf("解析AI响应失败: %w", err)
 	}
+
+	// 📊 性能监控：输出耗时对比统计
+	totalTime := time.Since(totalStart)
+	dataTimeMs := float64(dataTime.Nanoseconds()) / 1e6
+	aiTimeMs := float64(aiTime.Nanoseconds()) / 1e6
+	totalTimeMs := float64(totalTime.Nanoseconds()) / 1e6
+	
+	dataPercent := (dataTimeMs / totalTimeMs) * 100
+	aiPercent := (aiTimeMs / totalTimeMs) * 100
+	
+	log.Printf("⏱️ [决策性能统计] 数据指标计算: %.2fms (%.1f%%) | AI响应: %.2fms (%.1f%%) | 总耗时: %.2fms", 
+		dataTimeMs, dataPercent, aiTimeMs, aiPercent, totalTimeMs)
 
 	decision.Timestamp = time.Now()
 	decision.SystemPrompt = systemPrompt // 保存系统prompt
