@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +18,46 @@ import (
 
 	"github.com/adshao/go-binance/v2/futures"
 )
+
+// TradeRecord 交易记录结构（简化版用于数据验证）
+type TradeRecord struct {
+	ID            string     `json:"id"`
+	TraderID      string     `json:"trader_id"`
+	Symbol        string     `json:"symbol"`
+	Side          string     `json:"side"` // 'long' 或 'short'
+	Quantity      float64    `json:"quantity"`
+	Leverage      int        `json:"leverage"`
+	OpenPrice     float64    `json:"open_price"`
+	ClosePrice    *float64   `json:"close_price"`
+	PositionValue float64    `json:"position_value"`
+	MarginUsed    float64    `json:"margin_used"`
+	PnL           float64    `json:"pnl"`
+	PnLPct        float64    `json:"pnl_pct"`
+	DurationSecs  int        `json:"duration_seconds"`
+	OpenTime      time.Time  `json:"open_time"`
+	CloseTime     *time.Time `json:"close_time"`
+	Status        string     `json:"status"` // 'open', 'closed', 'liquidated'
+	CloseReason   string     `json:"close_reason"` // 'manual', 'stop_loss', 'take_profit', 'liquidation'
+	OpenOrderID   string     `json:"open_order_id"`
+	CloseOrderID  string     `json:"close_order_id"`
+}
+
+// OrderExecutionResult 订单执行结果（含实际成交数据）
+type OrderExecutionResult struct {
+	OrderID         int64     `json:"order_id"`
+	Symbol          string    `json:"symbol"`
+	ActualFillPrice float64   `json:"actual_fill_price"` // 实际成交价格
+	ActualFillQty   float64   `json:"actual_fill_qty"`   // 实际成交数量
+	FillTime        time.Time `json:"fill_time"`         // 实际成交时间
+	Status          string    `json:"status"`
+}
+
+// FillInfo 成交信息
+type FillInfo struct {
+	AvgPrice  float64   `json:"avg_price"`
+	FilledQty float64   `json:"filled_qty"`
+	FillTime  time.Time `json:"fill_time"`
+}
 
 // FuturesTrader 币安合约交易器
 type FuturesTrader struct {
@@ -1133,4 +1174,471 @@ func (t *FuturesTrader) GetTradeHistory(symbol string, limit int) ([]map[string]
 	
 	log.Printf("✅ [Binance] 成交历史查询完成: %d条记录", len(result))
 	return result, nil
+}
+
+// waitForOrderFill 等待订单完全成交并返回实际成交信息
+func (t *FuturesTrader) waitForOrderFill(symbol string, orderID int64, timeout time.Duration) (*FillInfo, error) {
+	log.Printf("⏳ [WaitForFill] 等待订单成交: OrderID=%d, Timeout=%v", orderID, timeout)
+	
+	ticker := time.NewTicker(200 * time.Millisecond) // 每200ms检查一次
+	defer ticker.Stop()
+	
+	deadline := time.Now().Add(timeout)
+	checkCount := 0
+	
+	for time.Now().Before(deadline) {
+		select {
+		case <-ticker.C:
+			checkCount++
+			
+			status, err := t.GetOrderStatus(symbol, orderID)
+			if err != nil {
+				if checkCount%25 == 0 { // 每5秒记录一次错误
+					log.Printf("⚠️ [WaitForFill] 检查订单状态失败(#%d): %v", checkCount, err)
+				}
+				continue // 继续等待
+			}
+			
+			orderStatus, ok := status["status"].(string)
+			if !ok {
+				continue
+			}
+			
+			log.Printf("🔍 [WaitForFill] 订单状态检查(#%d): %s", checkCount, orderStatus)
+			
+			if orderStatus == "FILLED" {
+				// 订单已完全成交，解析实际成交数据
+				avgPriceStr, _ := status["avgPrice"].(string)
+				executedQtyStr, _ := status["executedQty"].(string)
+				updateTimeInt, _ := status["updateTime"].(int64)
+				
+				avgPrice, err := strconv.ParseFloat(avgPriceStr, 64)
+				if err != nil {
+					return nil, fmt.Errorf("无法解析成交价格 %s: %w", avgPriceStr, err)
+				}
+				
+				executedQty, err := strconv.ParseFloat(executedQtyStr, 64)
+				if err != nil {
+					return nil, fmt.Errorf("无法解析成交数量 %s: %w", executedQtyStr, err)
+				}
+				
+				fillTime := time.Unix(updateTimeInt/1000, 0)
+				
+				fillInfo := &FillInfo{
+					AvgPrice:  avgPrice,
+					FilledQty: executedQty,
+					FillTime:  fillTime,
+				}
+				
+				log.Printf("✅ [WaitForFill] 订单完全成交: 价格=%.6f, 数量=%.6f, 时间=%s", 
+					avgPrice, executedQty, fillTime.Format("15:04:05.000"))
+				
+				return fillInfo, nil
+			}
+			
+			if orderStatus == "CANCELED" || orderStatus == "EXPIRED" || orderStatus == "REJECTED" {
+				return nil, fmt.Errorf("订单失败，状态: %s", orderStatus)
+			}
+			
+			// 对于部分成交等状态，继续等待
+		}
+	}
+	
+	return nil, fmt.Errorf("订单在%v内未完全成交", timeout)
+}
+
+// OpenLongWithConfirmation 开多仓并等待成交确认
+func (t *FuturesTrader) OpenLongWithConfirmation(symbol string, quantity float64, leverage int) (*OrderExecutionResult, error) {
+	log.Printf("🚀 [OpenLongWithConfirmation] 开始确认性开多仓: %s, 数量=%.6f", symbol, quantity)
+	
+	// 先取消该币种的所有委托单（清理旧的止损止盈单）
+	if err := t.CancelAllOrders(symbol); err != nil {
+		log.Printf("  ⚠ 取消旧委托单失败（可能没有委托单）: %v", err)
+	}
+
+	// 设置杠杆
+	if err := t.SetLeverage(symbol, leverage); err != nil {
+		return nil, err
+	}
+
+	// 格式化数量到正确精度
+	quantityStr, err := t.FormatQuantity(symbol, quantity)
+	if err != nil {
+		return nil, err
+	}
+
+	// 1. 创建市价买入订单
+	log.Printf("🌐 [Binance API] 调用: NewCreateOrderService() - Symbol=%s, Side=BUY, PositionSide=LONG, Type=MARKET, Quantity=%s", symbol, quantityStr)
+	order, err := t.client.NewCreateOrderService().
+		Symbol(symbol).
+		Side(futures.SideTypeBuy).
+		PositionSide(futures.PositionSideTypeLong).
+		Type(futures.OrderTypeMarket).
+		Quantity(quantityStr).
+		Do(context.Background())
+
+	if err != nil {
+		return nil, fmt.Errorf("创建开多仓订单失败: %w", err)
+	}
+
+	log.Printf("📋 [OpenLongWithConfirmation] 订单已创建: OrderID=%d, 等待成交确认...", order.OrderID)
+
+	// 2. 等待订单完全成交（最多等待30秒），但要处理部分成交情况
+	fillInfo, err := t.waitForOrderFill(symbol, order.OrderID, 30*time.Second)
+	if err != nil {
+		// 🔥 关键修复：即使超时也要检查订单状态，防止数据丢失
+		log.Printf("⚠️ [OpenLongWithConfirmation] 订单成交确认超时，检查最终状态...")
+		
+		finalStatus, statusErr := t.GetOrderStatus(symbol, order.OrderID)
+		if statusErr == nil {
+			if status, ok := finalStatus["status"].(string); ok {
+				if status == "FILLED" {
+					// 订单已成交，构建成交信息
+					avgPriceStr, _ := finalStatus["avgPrice"].(string)
+					executedQtyStr, _ := finalStatus["executedQty"].(string)
+					updateTime, _ := finalStatus["updateTime"].(int64)
+					
+					avgPrice, _ := strconv.ParseFloat(avgPriceStr, 64)
+					executedQty, _ := strconv.ParseFloat(executedQtyStr, 64)
+					
+					result := &OrderExecutionResult{
+						OrderID:         order.OrderID,
+						Symbol:          symbol,
+						ActualFillPrice: avgPrice,
+						ActualFillQty:   executedQty,
+						FillTime:        time.Unix(updateTime/1000, 0),
+						Status:          "FILLED",
+					}
+					
+					log.Printf("✅ [OpenLongWithConfirmation] 超时后确认成交: 价格=%.6f, 数量=%.6f", avgPrice, executedQty)
+					return result, nil
+				} else if status == "PARTIALLY_FILLED" {
+					// 🔥 关键：处理部分成交情况，记录实际成交部分
+					avgPriceStr, _ := finalStatus["avgPrice"].(string)
+					executedQtyStr, _ := finalStatus["executedQty"].(string)
+					updateTime, _ := finalStatus["updateTime"].(int64)
+					
+					avgPrice, _ := strconv.ParseFloat(avgPriceStr, 64)
+					executedQty, _ := strconv.ParseFloat(executedQtyStr, 64)
+					
+					if executedQty > 0 {
+						result := &OrderExecutionResult{
+							OrderID:         order.OrderID,
+							Symbol:          symbol,
+							ActualFillPrice: avgPrice,
+							ActualFillQty:   executedQty,
+							FillTime:        time.Unix(updateTime/1000, 0),
+							Status:          "PARTIALLY_FILLED",
+						}
+						
+						log.Printf("⚠️ [OpenLongWithConfirmation] 记录部分成交: 价格=%.6f, 数量=%.6f (部分成交)", avgPrice, executedQty)
+						return result, nil
+					}
+				}
+			}
+		}
+		
+		return nil, fmt.Errorf("开多仓订单处理失败: %w", err)
+	}
+
+	// 3. 返回实际成交数据
+	result := &OrderExecutionResult{
+		OrderID:         order.OrderID,
+		Symbol:          symbol,
+		ActualFillPrice: fillInfo.AvgPrice,  // 🔥 关键：实际成交价
+		ActualFillQty:   fillInfo.FilledQty, // 🔥 关键：实际成交量
+		FillTime:        fillInfo.FillTime,  // 🔥 关键：实际成交时间
+		Status:          "FILLED",
+	}
+
+	log.Printf("✅ [OpenLongWithConfirmation] 开多仓成功确认: 实际价格=%.6f, 实际数量=%.6f", 
+		result.ActualFillPrice, result.ActualFillQty)
+
+	return result, nil
+}
+
+// OpenShortWithConfirmation 开空仓并等待成交确认
+func (t *FuturesTrader) OpenShortWithConfirmation(symbol string, quantity float64, leverage int) (*OrderExecutionResult, error) {
+	log.Printf("🚀 [OpenShortWithConfirmation] 开始确认性开空仓: %s, 数量=%.6f", symbol, quantity)
+	
+	// 先取消该币种的所有委托单（清理旧的止损止盈单）
+	if err := t.CancelAllOrders(symbol); err != nil {
+		log.Printf("  ⚠ 取消旧委托单失败（可能没有委托单）: %v", err)
+	}
+
+	// 设置杠杆
+	if err := t.SetLeverage(symbol, leverage); err != nil {
+		return nil, err
+	}
+
+	// 格式化数量到正确精度
+	quantityStr, err := t.FormatQuantity(symbol, quantity)
+	if err != nil {
+		return nil, err
+	}
+
+	// 1. 创建市价卖出订单
+	log.Printf("🌐 [Binance API] 调用: NewCreateOrderService() - Symbol=%s, Side=SELL, PositionSide=SHORT, Type=MARKET, Quantity=%s", symbol, quantityStr)
+	order, err := t.client.NewCreateOrderService().
+		Symbol(symbol).
+		Side(futures.SideTypeSell).
+		PositionSide(futures.PositionSideTypeShort).
+		Type(futures.OrderTypeMarket).
+		Quantity(quantityStr).
+		Do(context.Background())
+
+	if err != nil {
+		return nil, fmt.Errorf("创建开空仓订单失败: %w", err)
+	}
+
+	log.Printf("📋 [OpenShortWithConfirmation] 订单已创建: OrderID=%d, 等待成交确认...", order.OrderID)
+
+	// 2. 等待订单完全成交（最多等待30秒），但要处理部分成交情况
+	fillInfo, err := t.waitForOrderFill(symbol, order.OrderID, 30*time.Second)
+	if err != nil {
+		// 🔥 关键修复：即使超时也要检查订单状态，防止数据丢失
+		log.Printf("⚠️ [OpenShortWithConfirmation] 订单成交确认超时，检查最终状态...")
+		
+		finalStatus, statusErr := t.GetOrderStatus(symbol, order.OrderID)
+		if statusErr == nil {
+			if status, ok := finalStatus["status"].(string); ok {
+				if status == "FILLED" {
+					// 订单已成交，构建成交信息
+					avgPriceStr, _ := finalStatus["avgPrice"].(string)
+					executedQtyStr, _ := finalStatus["executedQty"].(string)
+					updateTime, _ := finalStatus["updateTime"].(int64)
+					
+					avgPrice, _ := strconv.ParseFloat(avgPriceStr, 64)
+					executedQty, _ := strconv.ParseFloat(executedQtyStr, 64)
+					
+					result := &OrderExecutionResult{
+						OrderID:         order.OrderID,
+						Symbol:          symbol,
+						ActualFillPrice: avgPrice,
+						ActualFillQty:   executedQty,
+						FillTime:        time.Unix(updateTime/1000, 0),
+						Status:          "FILLED",
+					}
+					
+					log.Printf("✅ [OpenShortWithConfirmation] 超时后确认成交: 价格=%.6f, 数量=%.6f", avgPrice, executedQty)
+					return result, nil
+				} else if status == "PARTIALLY_FILLED" {
+					// 🔥 关键：处理部分成交情况，记录实际成交部分
+					avgPriceStr, _ := finalStatus["avgPrice"].(string)
+					executedQtyStr, _ := finalStatus["executedQty"].(string)
+					updateTime, _ := finalStatus["updateTime"].(int64)
+					
+					avgPrice, _ := strconv.ParseFloat(avgPriceStr, 64)
+					executedQty, _ := strconv.ParseFloat(executedQtyStr, 64)
+					
+					if executedQty > 0 {
+						result := &OrderExecutionResult{
+							OrderID:         order.OrderID,
+							Symbol:          symbol,
+							ActualFillPrice: avgPrice,
+							ActualFillQty:   executedQty,
+							FillTime:        time.Unix(updateTime/1000, 0),
+							Status:          "PARTIALLY_FILLED",
+						}
+						
+						log.Printf("⚠️ [OpenShortWithConfirmation] 记录部分成交: 价格=%.6f, 数量=%.6f (部分成交)", avgPrice, executedQty)
+						return result, nil
+					}
+				}
+			}
+		}
+		
+		return nil, fmt.Errorf("开空仓订单处理失败: %w", err)
+	}
+
+	// 3. 返回实际成交数据
+	result := &OrderExecutionResult{
+		OrderID:         order.OrderID,
+		Symbol:          symbol,
+		ActualFillPrice: fillInfo.AvgPrice,  // 🔥 关键：实际成交价
+		ActualFillQty:   fillInfo.FilledQty, // 🔥 关键：实际成交量
+		FillTime:        fillInfo.FillTime,  // 🔥 关键：实际成交时间
+		Status:          "FILLED",
+	}
+
+	log.Printf("✅ [OpenShortWithConfirmation] 开空仓成功确认: 实际价格=%.6f, 实际数量=%.6f", 
+		result.ActualFillPrice, result.ActualFillQty)
+
+	return result, nil
+}
+
+// GetExchangeOrderTime 从订单状态获取交易所时间戳
+func (t *FuturesTrader) GetExchangeOrderTime(symbol string, orderID int64) (time.Time, error) {
+	orderStatus, err := t.GetOrderStatus(symbol, orderID)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("无法获取订单状态: %w", err)
+	}
+	
+	// 从订单状态获取交易所时间戳
+	updateTime, exists := orderStatus["updateTime"].(int64)
+	if !exists {
+		return time.Time{}, fmt.Errorf("无法获取订单时间戳")
+	}
+	
+	exchangeTime := time.Unix(updateTime/1000, 0)
+	log.Printf("🕐 [GetExchangeOrderTime] 订单时间: OrderID=%d, ExchangeTime=%s", orderID, exchangeTime.Format("15:04:05.000"))
+	
+	return exchangeTime, nil
+}
+
+// VerifyTradeDataConsistency 验证交易数据一致性
+func (t *FuturesTrader) VerifyTradeDataConsistency(symbol string, tradeRecords []*TradeRecord) *DataConsistencyReport {
+	log.Printf("🔍 [DataVerification] 开始验证交易数据一致性: %s (%d条记录)", symbol, len(tradeRecords))
+	
+	report := &DataConsistencyReport{
+		Symbol:           symbol,
+		TotalRecords:     len(tradeRecords),
+		VerifiedRecords:  0,
+		InconsistentRecords: make([]*InconsistentRecord, 0),
+		StartTime:        time.Now(),
+	}
+	
+	// 获取交易所的成交历史用于对比
+	exchangeTrades, err := t.GetTradeHistory(symbol, 1000) // 获取最近1000条交易记录
+	if err != nil {
+		report.ErrorMessage = fmt.Sprintf("获取交易所历史数据失败: %v", err)
+		report.EndTime = time.Now()
+		return report
+	}
+	
+	log.Printf("📊 [DataVerification] 获取到交易所历史数据: %d条", len(exchangeTrades))
+	
+	// 创建交易所数据映射（按订单ID索引）
+	exchangeTradeMap := make(map[string]map[string]interface{})
+	for _, trade := range exchangeTrades {
+		if orderID, ok := trade["orderId"]; ok {
+			exchangeTradeMap[fmt.Sprintf("%v", orderID)] = trade
+		}
+	}
+	
+	// 验证每条数据库记录
+	for _, dbRecord := range tradeRecords {
+		if dbRecord.Status != "closed" {
+			continue // 只验证已关闭的交易
+		}
+		
+		// 验证开仓订单
+		if dbRecord.OpenOrderID != "" {
+			if err := t.verifyOrderData(dbRecord, dbRecord.OpenOrderID, exchangeTradeMap, "open", report); err != nil {
+				log.Printf("⚠️ [DataVerification] 验证开仓订单失败: %v", err)
+			}
+		}
+		
+		// 验证平仓订单
+		if dbRecord.CloseOrderID != "" {
+			if err := t.verifyOrderData(dbRecord, dbRecord.CloseOrderID, exchangeTradeMap, "close", report); err != nil {
+				log.Printf("⚠️ [DataVerification] 验证平仓订单失败: %v", err)
+			}
+		}
+		
+		report.VerifiedRecords++
+	}
+	
+	report.EndTime = time.Now()
+	report.VerificationDuration = report.EndTime.Sub(report.StartTime)
+	
+	log.Printf("✅ [DataVerification] 验证完成: 总计%d条, 验证%d条, 不一致%d条, 耗时%v", 
+		report.TotalRecords, report.VerifiedRecords, len(report.InconsistentRecords), report.VerificationDuration)
+	
+	return report
+}
+
+// verifyOrderData 验证单个订单数据
+func (t *FuturesTrader) verifyOrderData(dbRecord *TradeRecord, orderID string, exchangeTradeMap map[string]map[string]interface{}, orderType string, report *DataConsistencyReport) error {
+	exchangeTrade, exists := exchangeTradeMap[orderID]
+	if !exists {
+		// 交易所没有这个订单记录
+		inconsistent := &InconsistentRecord{
+			TradeID:     dbRecord.ID,
+			OrderID:     orderID,
+			OrderType:   orderType,
+			Issue:       "order_not_found_in_exchange",
+			Description: fmt.Sprintf("交易所未找到订单ID %s", orderID),
+		}
+		report.InconsistentRecords = append(report.InconsistentRecords, inconsistent)
+		return nil
+	}
+	
+	// 验证价格一致性
+	exchangePriceStr, _ := exchangeTrade["price"].(string)
+	exchangePrice, err := strconv.ParseFloat(exchangePriceStr, 64)
+	if err == nil {
+		var dbPrice float64
+		if orderType == "open" {
+			dbPrice = dbRecord.OpenPrice
+		} else if orderType == "close" && dbRecord.ClosePrice != nil {
+			dbPrice = *dbRecord.ClosePrice
+		}
+		
+		// 允许微小的价格差异（0.01%以内）
+		priceDiffPct := math.Abs(exchangePrice-dbPrice) / exchangePrice * 100
+		if priceDiffPct > 0.01 { // 超过0.01%的差异视为不一致
+			inconsistent := &InconsistentRecord{
+				TradeID:      dbRecord.ID,
+				OrderID:      orderID,
+				OrderType:    orderType,
+				Issue:        "price_mismatch",
+				Description:  fmt.Sprintf("价格不一致: 数据库=%.6f, 交易所=%.6f, 差异=%.4f%%", dbPrice, exchangePrice, priceDiffPct),
+				DBValue:      fmt.Sprintf("%.6f", dbPrice),
+				ExchangeValue: fmt.Sprintf("%.6f", exchangePrice),
+			}
+			report.InconsistentRecords = append(report.InconsistentRecords, inconsistent)
+		}
+	}
+	
+	// 验证时间一致性
+	exchangeTimeInt, _ := exchangeTrade["time"].(int64)
+	exchangeTime := time.Unix(exchangeTimeInt/1000, 0)
+	
+	var dbTime time.Time
+	if orderType == "open" {
+		dbTime = dbRecord.OpenTime
+	} else if orderType == "close" && dbRecord.CloseTime != nil {
+		dbTime = *dbRecord.CloseTime
+	}
+	
+	// 允许5秒的时间差异
+	timeDiff := math.Abs(exchangeTime.Sub(dbTime).Seconds())
+	if timeDiff > 5 {
+		inconsistent := &InconsistentRecord{
+			TradeID:      dbRecord.ID,
+			OrderID:      orderID,
+			OrderType:    orderType,
+			Issue:        "time_mismatch",
+			Description:  fmt.Sprintf("时间不一致: 数据库=%s, 交易所=%s, 差异=%.1f秒", dbTime.Format("15:04:05"), exchangeTime.Format("15:04:05"), timeDiff),
+			DBValue:      dbTime.Format("2006-01-02 15:04:05"),
+			ExchangeValue: exchangeTime.Format("2006-01-02 15:04:05"),
+		}
+		report.InconsistentRecords = append(report.InconsistentRecords, inconsistent)
+	}
+	
+	return nil
+}
+
+// DataConsistencyReport 数据一致性验证报告
+type DataConsistencyReport struct {
+	Symbol               string                `json:"symbol"`
+	TotalRecords         int                   `json:"total_records"`
+	VerifiedRecords      int                   `json:"verified_records"`
+	InconsistentRecords  []*InconsistentRecord `json:"inconsistent_records"`
+	StartTime            time.Time             `json:"start_time"`
+	EndTime              time.Time             `json:"end_time"`
+	VerificationDuration time.Duration         `json:"verification_duration"`
+	ErrorMessage         string                `json:"error_message,omitempty"`
+}
+
+// InconsistentRecord 不一致记录
+type InconsistentRecord struct {
+	TradeID       string `json:"trade_id"`
+	OrderID       string `json:"order_id"`
+	OrderType     string `json:"order_type"`     // "open" or "close"
+	Issue         string `json:"issue"`          // "price_mismatch", "time_mismatch", "order_not_found_in_exchange"
+	Description   string `json:"description"`
+	DBValue       string `json:"db_value,omitempty"`
+	ExchangeValue string `json:"exchange_value,omitempty"`
 }

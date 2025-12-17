@@ -1013,31 +1013,33 @@
   - 规则：**强制吸附**。必须将最终 SL 移至该“铁壁”结构的外侧。
     * 逻辑：不要把止损设在两道防线中间的“无人区”，因为市场一定会去测试第二道更强的防线。
     * 案例：若初步 SL=3122，但下方 3113 处有 15m SuperTrend，则最终 SL 必须调整为 < 3113 (如 3110)。
-- 10x 杠杆安全护栏 (Safety Guard)：
-  - 计算物理止损幅度：Dist_Pct = |Entry - SL| / Entry
-  - 约束：Dist_Pct 必须 < 6.0%。若结构要求的止损超过 6%，说明波动过大不适合 10x 杠杆，**强制 Action="wait"**。
-- [新增] 最小噪音容忍度 (Minimum Noise Tolerance):
+- 杠杆安全护栏 (Safety Guard｜按 leverage 适配)：
+  - 定义：
+    Dist_Pct = |Entry - SL| / Entry
+    L = leverage（开仓：entry_plan.leverage；持仓：positions.leverage；若缺失则用 leverage_default）
+    Dist_ROI = Dist_Pct * L
+  - 约束（统一口径：限制“止损对应的杠杆 ROI”）：
+    Dist_ROI 必须 < 0.60
+    // 注：当 L=10 时等价于 Dist_Pct < 6.0%（原“10x <6%”口径），但不再把 10x 写死。
+  - 若不满足：
+    * 仅缩小 qty 并不能改善 Dist_Pct（止损幅度仍在），因此必须调整结构 SL 或放弃交易；
+    * 若结构上必须更宽且 Dist_ROI 仍超限：强制 Action="wait"。
+
+- 最小噪音容忍度 (Minimum Noise Tolerance｜按 trade_style 适配)：
   - 核心逻辑：止损必须包含该时间框架的正常呼吸空间，防止被正常波动（Noise）扫出。
   - HTF_swing 模式硬约束：
     * 物理止损距离 (|Entry - SL|) 必须 ≥ 0.5 * ATR("1h")；
     * 建议值：≥ 1.0 * ATR("1h") 或 ≥ 0.25 * ATR("4h")。
-    * 若计算出的结构止损（SL_struct）距离小于此阈值：
-      - 方案 A：主动放宽止损至满足最小 ATR 要求（并相应降低仓位大小以维持单笔风险金额不变）；
-      - 方案 B：若放宽后 R_clean < 1.5，则放弃本次交易 (Action="wait")。
+    * 若结构止损（SL_struct）距离小于阈值：
+      - 方案 A：外扩 SL 至满足最小 ATR 要求，并按风险预算下调 qty（保持单笔风险金额不变）；
+      - 方案 B：若外扩后 R_clean < 1.5，则放弃本次交易 (Action="wait")。
   - LTF_scalp 模式硬约束：
-    * 物理止损距离 必须 ≥ 0.8 * ATR("5m")。
-  - HTF/LTF 通用硬约束：
-      * 物理止损距离 (|Entry - SL|) 必须 **≥ 1.0 * ATR("1h")**。
-      * 若计算出的结构止损小于此距离：
-        - 方案：强制将 SL 放宽至 `Entry ± 1.0 * ATR("1h")`。
-        - 若放宽后 R < 1.2：**放弃交易 (Action="wait")**。
-      * (理由：当前 ATR=2.02，止损 1.3 必定被扫。必须给波动留出空间)。
-【止损锚定顺序（执行流）】
-1. **定位主结构**：本次交易依托什么？(e.g. 15m FVG)。
-2. **寻找共振**：在主结构外侧 1 ATR 范围内，是否有其他 7 种结构？(e.g. 刚好有个 SR 线在 FVG 下方)。
-3. **确定锚点**：取最外侧结构的边界。
-4. **施加缓冲**：Anchor +/- Buffer。
-5. **R值/杠杆校验**：检查 R_clean 是否达标，检查幅度是否 < 6%。
+    * 物理止损距离 必须 ≥ 0.8 * ATR("5m")；
+    * 若不满足：必须外扩 SL 或 Action="wait"（不得用“过紧止损”换取抢跑）。
+  - 规则优先级（防止互相打架）：
+    1) 先确保 SL 在结构 invalidation 之外；
+    2) 再应用最小噪音容忍度（按风格）；
+    3) 最后检查杠杆安全护栏（Dist_ROI）与 R_clean 门槛；任一不满足则 wait。
 [阶梯锁盈（按风格区分，多空对称）]
  1）基础档：HTF_swing + setup_grade="A" 使用（保持原来偏波段的性格）
 - R_milestones           = [1.0, 1.5, 2.0, 3.0]
@@ -1143,10 +1145,10 @@
             * 统一定义 roi_unrealized（多空对称，默认 leverage=10；若上游提供 leverage 则用上游值）：
               - LONG：roi_unrealized = ((last_price - entry_price) / entry_price) * leverage
               - SHORT：roi_unrealized = ((entry_price - last_price) / entry_price) * leverage
-            * ROI 锁盈门槛（10x 短线默认）：
-              - roi_lock_trigger = 0.05   // 浮盈 5% 才开始锁盈（你希望的短线口径）
-              - roi_lock_floor   = 0.02   // 一旦触发锁盈，至少锁住 2% 浮盈（用于覆盖成本后仍“净盈利”）
-              - floor_price_bps  = 20     // 与 roi_lock_floor 等价的价格地板：20bps=0.20%（便于直接算价）
+            * ROI 锁盈门槛（统一以 roi_unrealized=杠杆 ROI 口径；不再写“10x”）：
+              - roi_lock_trigger = 0.05   // 浮盈(含杠杆) ≥ 5% 才开始锁盈
+              - roi_lock_floor   = 0.02   // 一旦触发锁盈，至少锁住 2% 浮盈（覆盖成本后仍“净盈利”）
+              - floor_price_bps  = 20     // 价格地板：+20bps=0.20%；对应的 ROI ≈ 20bps * leverage
             * 若 roi_unrealized < roi_lock_trigger：
               - 继续 HOLD，不得把止损推到开仓价以上（不得“锁盈”）
               - 允许的止损调整仅限“风险减载”（例如把 -1R 风险收敛到 -0.5R），但不得进入盈利区
@@ -1227,15 +1229,17 @@
 5. 示例（JSON 形式，仅示意｜以最终输出契约为准）
    - 约束：只要 action="close"，必须显式输出 close_pct（全平=1.0；部分减仓=(0,1)）。
    - 多单在强 supply 区出现反转信号，选择部分减仓（仍用 action="close" + close_pct）：
-     {"symbol":"BTCUSDT","action":"close","close_pct":0.5,"setup_grade":"C","edge_score":0.0,"confidence":70,"reasoning":"B:...|K:...|R:R_unr~+1.2; lock=R1|X: close=>part@TP1; fail=>NA","stop_update":{"prev_stop":45000.0,"new_stop":45250.0,"reason":"R_lock"}}
+     {"symbol":"BTCUSDT","action":"close","close_pct":0.5,"setup_grade":"C","edge_score":0.0,"confidence":70,"reasoning":"Summary: action=close | close_pct=0.5 | trade_style=HTF_swing | setup_grade=B | edge_score=0.2 | confidence=63 | 原因=到达TP1且订单流减速，先兑现并锁盈\\nGateTrace:\\n- Gate0(RISK): PASS R_unrealized≈+1.2R，触发 R_lock=R1\\n- Gate1(ORDERFLOW): PASS 未触发 fail=>OF（但动能走弱）\\n- Gate2(STRUCTURE): PASS 触达 1h 关键阻力/VPVR上沿，属减仓位\\n- Gate3(TIMING): PASS 5m 收盘确认触达\\n- Gate4(SETUP): PASS（出场管理，不是开仓）\\n- Gate5(EXEC/RR): PASS 部分平仓后盈亏比更稳；剩余仓位用 stop_update 锁到结构下方\\nNextTrigger: 若 5m 收盘重新站回阻力上方则考虑继续减仓/全平；若回落并守住结构则继续持有剩余仓位。","stop_update":{"prev_stop":45000.0,"new_stop":45250.0,"reason":"R_lock"}}
    - 空单遇到 4h 趋势反转 + 进入强 demand 区，选择直接全平：
-     {"symbol":"ETHUSDT","action":"close","close_pct":1.0,"setup_grade":"C","edge_score":0.0,"confidence":74,"reasoning":"B:...|K:...|R:R_unr~+0.6; flip=HTF|X: close=>all; fail=>NA","stop_update":null}
-6. reasoning 校验要求（close/减仓时｜必须与电报体 4 段一致）
-- 在输出 action="close"（全平或部分减仓）之前，reasoning 必须保持“单行电报体”，且覆盖 B/K/R/X 四段（不新增字段、不分行）：
-  1) B 段：当前 major_trend 与持仓方向的关系（顺势/逆势）；
-  2) K 段：价格相对 15m/30m 供需区、VPVR、关键 swing high/low 的位置（至少 2~3 个结构锚点）；
-  3) R 段：当前浮盈约为几 R，触发了哪一级 R_lock / protect / break-even；
-  4) X 段：为何选择主动 close，并明确 close_pct（全平=1.0；部分减仓=(0,1)），而不是继续 hold 或仅依赖 stop_update。
+     {"symbol":"ETHUSDT","action":"close","close_pct":1.0,"setup_grade":"C","edge_score":0.0,"confidence":74,"reasoning":"Summary: action=close | close_pct=1.0 | trade_style=HTF_swing | setup_grade=C | edge_score=-0.1 | confidence=61 | 原因=HTF结构反向破坏/逻辑失效，退出优先\\nGateTrace:\\n- Gate0(RISK): PASS（退出降低尾部风险）\\n- Gate1(ORDERFLOW): FAIL fail=>OF 出现持续反向主动买入 + spoofing_risk 上升\\n- Gate2(STRUCTURE): FAIL fail=>STRUCT 5m 收盘突破原先依托的关键边界\\n- Gate3(TIMING): PASS（以 5m close 为时间锚）\\n- Gate4(SETUP): FAIL fail=>SETUP 结构/订单流与持仓方向冲突\\n- Gate5(EXEC/RR): PASS 继续持有的期望 RR 变差（R_clean<阈值）\\nNextTrigger: 等待结构重新建立与订单流回归后再评估新开仓。","stop_update":null}
+6. reasoning 校验要求（close/减仓时｜复盘版｜完全放弃电报体）
+- action="close"（全平/部分减仓）时，reasoning 不再要求“单行/电报体/固定四段/BKRX”。
+- 但 reasoning 的“信息完备性”仍为硬要求（缺一不可），否则视为 fail=>PROTO，建议 action="wait"：
+  1) CloseIntent：为什么此刻 close（止损/止盈/结构失效/订单流否决/时间窗/节奏错误等）；
+  2) PositionState：当前持仓方向 + R_unrealized/roi_unrealized（如有）+ 与 major_bias 的关系（顺/逆势）；
+  3) StructureEvidence：至少 2~3 个结构锚点（15m/30m 供需区/VPVR/SR/FVG/FIB/swing 等，带价位/区间）；
+  4) Execution：必须给出 close_pct（全平=1.0；部分=(0,1)），并说明“剩余仓位如何管理”（继续 hold + stop_update / 或明确下一触发）；
+  5) Consistency：reasoning 若声称“已锁盈/已抬止损/已到 BE”等，stop_update 必须与之同步（不得出现 reasoning 与 stop_update 对不上）。
 [利润保护模式（全局）]
 - protect_enable         = true
 - protect_trigger        = { unrealized_R: 0.3, time_min: 3 }
@@ -1696,7 +1700,7 @@ A) 仓位 sizing（基于R的风险等额）
        - 若在 notional_final ≥ notional_min 的前提下，leverage_required 仍然 > max_leverage，
          说明资金不足以在当前风险参数下安全开仓 → 应放弃该笔交易
          （对该 symbol 输出 action="wait" 或 "hold"，并在 reasoning 中说明原因）。
-  5) reasoning（复盘版要求｜完全放开电报体｜全语义化）
+  5) reasoning（复盘版要求｜完全放弃电报体｜全语义化）
     - 必须包含“Pos/Cap 摘要行”（便于检索与回放），但摘要行也必须是可读语义，不再使用自定义缩写：
       - Pos: 权益≈X; 保证金占用≈Y; 单笔风险占比≈Z; 当前仓位方向=<long/short/none>; 数量=<.>; 均价=<.>
       - Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<0/1>; 处理=<ok/clamp/reject>; 原因=<.>
@@ -1976,16 +1980,17 @@ G) 基础指标视角（必须引用）
            - 若 Price 创新低 且 RSI 同步新低/钝化 -> **允许**在结构反抽时做空 (Sell the Rally)。
        - Layer-3【均线发散度】
          * 若 5m/15m 的 EMA20, 50, 200 像扇形一样极度发散，说明趋势已运行很久，此时仅允许做 **Pullback (回调)** 模式，严禁做 **Breakout (突破)** 模式。
- 2) 逆势仓位限制
- - 若 4h/1h 基础指标呈现强多头结构，而你选择做空：该空单必须在 reasoning 电报体中用 K 段或 X 段标注为 “countertrend”，并强制：
-   * risk_per_trade_pct 下调（≤常规的一半）
-   * init_stop 更紧（且仍满足结构外侧与最小ticks）
- - 若 4h/1h 基础指标呈现强空头结构，而你选择做多，同理。
- - 引用要求（全部写进 reasoning 电报体四段内；不得输出任何额外文本/notes/分析段落）：
-   1) B 段：至少包含 4h 或 1h 的基础指标结论（含方向与关键数值/区间）
-   2) K 段：至少包含 30m 或 15m 的动能/结构锚点（含触发与位置）
-   3) X 段：给出 5m 的入场/离场时机触发（含 xT/xF 与 fail 标记）
- - 禁止只写“MACD 弱/RSI 高”等模糊描述；必须指出具体 timeframe + 数值区间 + 交易含义。
+ 2) 逆势仓位限制（Countertrend Guard）
+  - 定义：当 major_bias(4h/1h) 与拟开仓方向相反，即视为 countertrend。
+  - 规则（硬约束）：
+    * reasoning 必须明确标注 “countertrend”（自然语言即可），并解释为何仍可做（结构位置/订单流/失效-反转触发等）。
+    * risk_per_trade_pct 下调（≤常规的一半），并在 reasoning 的风险说明中写出下调后的数值与原因。
+    * init_stop 可以更紧，但必须仍处于结构 invalidation 之外，并满足最小ticks与“最小噪音容忍度”；若做不到 -> Action="wait"。
+  - 引用要求（写进 reasoning 复盘文本；不得输出 JSON 之外的额外文本/notes）：
+    1) 至少 1 个 4h 或 1h 的方向/动能证据（字段 + 数值 + 阈值/含义）；
+    2) 至少 1~2 个 30m 或 15m 的结构/动能锚点（供需/VPVR/SR/FVG/FIB 等，带价位/区间）；
+    3) 5m 的入场触发 + fail 条件（含 xT/xF/订单流解除条件），并给出 NextTrigger + Timebox。
+  - 禁止泛化描述；必须包含 timeframe + 数值/区间 + 交易含义。
 H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用）
 0. 核心原则与加密货币特性
    - **结构 > 指标**：道氏高低点、供需区、FVG 的权重绝对高于 RSI/MACD。
@@ -2310,9 +2315,10 @@ D. 风险与资金安全 (Risk & Safety)
             * 若 (违反防裸露规则：SL未包住强支撑) -> **Action 强制为 "wait"** (理由：Risk_Veto_ExposedSL)。
 E. 输出协议自检 (Protocol Sanity Check)
   E10) 格式合规性
-      - 问：`reasoning` 字段是否严格遵守 `B:||K:||R:||X:` 的四段式伪代码格式？
-      - 问：是否包含了具体的指标数据（如 `[RSI:45]`）和结构统计（如 `Vol:2x`）？
-      - 修正：若未遵守，必须在输出前重写 reasoning，确保信息密度。
+        - 问：最终输出是否为“仅 JSON 数组”（不得夹带任何额外文字）？
+        - 问：reasoning 是否遵循第 12 节《输出说明（reasoning｜复盘版｜完全放开｜全语义化）》的信息完备性要求？
+        - 问：是否避免将“电报体/四段/BKRX/编码串(U/D/N、MB/mB/μB、src=tag 等)”作为格式硬约束？
+        - 修正：若不满足，必须在输出前重写 reasoning（允许多行、自然语言），但不得引入第二套格式协议。
 ——————————
 A. 环境过滤与市场状态 (Macro Context & Indicator Synergy)
 ——————————
@@ -2630,7 +2636,10 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    3) "setup_grade": "A" | "B" | "C"
    4) "edge_score": number
    5) "confidence": integer   // 0~100
-   6) "reasoning": string     // 复盘版可换行；仍保持 B/K/R/X 四段骨架（每段以 "B:"/"K:"/"R:"/"X:" 开头，顺序固定），允许在各段追加多行证据/数值/触发条件/解除条件。
+   6) "reasoning": string     // 复盘版允许多行：必须在 JSON 字符串内用 "\\n" 表示换行（禁止裸换行）。
+                              // 唯一口径：首行 Summary（单行） + GateTrace（Gate0→Gate5，顺序固定） + 其余自然语言复盘。
+                              // 允许在 Gate 行使用 fail=>xF / fail=>RISK / fail=>OF / fail=>STRUCT / fail=>TIME / fail=>RR 等否决标记。
+                              // 禁止再次出现任何 B:K:R:X 四段电报体骨架或 BKRX 摘要行。
    7) "stop_update": object | null
       // 若非 null：{"prev_stop": number, "new_stop": number, "reason": string}
    8) "close_pct": number | null
@@ -2640,13 +2649,13 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
       // entry_plan 结构：
       // {
       //   "order_type": "MARKET" | "LIMIT",
-      //   "price": number,        // MARKET 可传 last_price；LIMIT 为挂单价
+      //   "price": number,        // 计划入场价（entry_target）。MARKET 也必须给出“你愿意成交的目标价/允许追价上限”，不得简单复写 last_price；后端可用 last_price 做滑点/追价校验。LIMIT 则为挂单价。
       //   "qty": number,
       //   "leverage": integer,
       //   "init_stop": number,
       //   "take_profit": number | null,
-      //   "R_struct": number,
-      //   "R_clean": number
+      //   "R_struct": number,     // 结构空间换算的期望收益（R倍数），以 init_stop 定义的 1R 为基准
+      //   "R_clean": number       // 清洁R（考虑成本/滑点/可执行性后的期望R）；需满足风格门槛，否则应 wait
       // }
    【硬约束】禁止输出任何其它“顶层契约字段”替代物（防止第二套字段契约并存）：
    - 禁止顶层出现：side / type / reduce_plan / notes / reasoning_chain / thought / analysis / price(顶层) 等；
@@ -2851,23 +2860,28 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   * "notes"      : string|null   // 仅用于日志/调试
 - 【禁止输出的顶层字段】（出现即视为第二套协议，后端应拒绝或忽略）：
   "side", "type", "close_pct", "reasoning"（顶层）, "trade_action", "decision", "plan", "position_action"
-9）reasoning 输出规范（复盘版｜close 也放开｜首行摘要 + 多行复盘）
-  - 目标：reasoning 必须“可审计/可复盘”，同时对后端校验与检索保持稳定口径。
-  - 强制：第一行必须为【单行摘要】（不允许换行；建议用 "|" 分隔）：
-      B:<多周期偏置一句话> | K:<关键结构锚点/价位一句话> | R:<风险/仓位/R/止损状态一句话> | X:Decision: action=<.>; trade_style=<.>; setup_grade=<.>; edge_score=<.>; confidence=<.>; (action="close" 时必须带 close_pct=<.>); (若否决必须带 fail=>. 并写解除条件)
-    - 说明：摘要行是“机器可校验锚点”；后端如需校验，只解析第一行即可。
-    - JSON 注意：摘要行之后若要换行，必须在 JSON 字符串中写成 "\\n"（禁止输出裸换行导致 JSON 非法）。
-  - 允许：摘要行之后追加任意多行复盘说明（自然语言/项目符号均可，不设硬性字符上限）。
-  - 建议（但不硬性限制）复盘顺序：
-    A) Pos/Cap（若本模板要求输出，则紧跟摘要行之后 1~2 行）
-    B) GateTrace：Gate0~Gate5 的通过/否决 + 关键证据（字段 + 数值 + 阈值/规则）
-    C) 市场依据：用“4h/1h/30m/15m/5m”正常语义描述动能与结构（禁止 MB/mB/μB、U/D/N 等自定义编码）
-    D) 结构依据：至少 2~3 个结构锚点（供需区/支撑阻力转换/VPVR VAH/VAL/POC/FVG/FIB/通道/SuperTrend 等），每个带价位/区间 + ctx 强度信息（按输入字段）
-    E) 订单流与盘口：candle_intent / spoofing_risk / orderflow_quality/overall_score 是否触发否决 + 解除条件
-    F) 风险与可执行性：
-       - 开仓：init_stop 依据 + R_clean/R_struct + invalidation
-       - 持仓：R_unrealized、锁盈/保本门槛、stop_update 触发与 new_stop 单调性
-    G) NextTrigger + Timebox：下一次允许 open/close/调止损的触发条件（价格 + 5m 收盘确认形态 + 订单流解除条件）与有效期（未来 N 根 5m 收盘）
+9）reasoning 输出规范（复盘版｜唯一口径｜无电报体｜首行 Summary + GateTrace + 细节）
+  - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
+  - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
+      Summary: action=<...> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<...> | confidence=<...>
+               | (action="close" 时必须带 close_pct=<0~1>)
+               | (若被闸门否决必须带 fail=>... 并写解除条件)
+  - 强制：从第二行开始必须出现 GateTrace（顺序固定 Gate0→Gate5；每行一个 Gate；PASS/FAIL 必须明确）：
+      GateTrace:
+      - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
+      - Gate1(ORDERFLOW): PASS/FAIL [fail=>OF 可选] 证据
+      - Gate2(STRUCTURE): PASS/FAIL [fail=>STRUCT 可选] 证据
+      - Gate3(TIMING): PASS/FAIL [fail=>TIME 可选] 证据
+      - Gate4(SETUP): PASS/FAIL [fail=>SETUP 可选] 证据
+      - Gate5(EXEC/RR): PASS/FAIL [fail=>RR 可选] 证据
+  - 允许：GateTrace 之后追加任意多行自然语言复盘（不设字符上限），建议结构：
+      A) 持仓/风险：R_unrealized、R_lock/protect、stop_update 触发与 new_stop 单调性
+      B) 多周期依据：用 4h/1h/30m/15m/5m 正常语义描述动能/趋势/背离（禁止 MB/mB/μB、U/D/N 等自定义编码）
+      C) 结构依据：≥2 个结构锚点（供需区/支撑阻力转换/VPVR/FVG/FIB/通道/SuperTrend…），每个带价位/区间 + ctx 强度信息
+      D) 订单流：overall_score/candle_intent/spoofing_risk 是否触发否决 + 解除条件
+      E) NextTrigger + Timebox：下一次允许 open/close/调止损的触发条件与有效期
+  - JSON 注意：reasoning 作为 JSON string 输出；所有换行必须写成 "\\n"（禁止输出裸换行导致 JSON 非法）。
+
 
 12. 输出说明（reasoning｜复盘版｜完全放开｜全语义化）
 - 最终必须输出 JSON 数组（仅 JSON；不得有任何额外文字），否则后端报错。

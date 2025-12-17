@@ -176,13 +176,13 @@ func (d *Database) createTables() error {
 			pnl REAL DEFAULT 0,
 			pnl_pct REAL DEFAULT 0,
 			duration_seconds INTEGER DEFAULT 0,
-			open_time DATETIME NOT NULL,
+			open_time DATETIME NOT NULL, -- 🔥 修复：改为手动传入交易所时间，不使用CURRENT_TIMESTAMP
 			close_time DATETIME,
 			status TEXT NOT NULL DEFAULT 'open', -- 'open', 'closed', 'liquidated'
 			close_reason TEXT DEFAULT '', -- 'manual', 'stop_loss', 'take_profit', 'liquidation'
 			open_order_id TEXT,
 			close_order_id TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP, -- 保留系统记录时间用于调试
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (trader_id) REFERENCES traders(id) ON DELETE CASCADE
 		)`,
@@ -199,10 +199,10 @@ func (d *Database) createTables() error {
 			price REAL NOT NULL,
 			leverage INTEGER DEFAULT 1,
 			order_id TEXT,
-			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			timestamp DATETIME NOT NULL, -- 🔥 修复：改为手动传入交易所时间，不使用CURRENT_TIMESTAMP
 			success BOOLEAN DEFAULT 0,
 			error_message TEXT DEFAULT '',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP, -- 保留系统记录时间用于调试
 			FOREIGN KEY (trader_id) REFERENCES traders(id) ON DELETE CASCADE,
 			FOREIGN KEY (decision_record_id) REFERENCES decision_records(id) ON DELETE SET NULL,
 			FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE SET NULL
@@ -1489,7 +1489,7 @@ func (d *Database) GetTraderTrades(traderID string, limit int) ([]*TradeRecord, 
 			created_at, updated_at
 		FROM trades 
 		WHERE trader_id = ? 
-		ORDER BY open_time DESC
+		ORDER BY open_time ASC  -- 🔥 修复：改为ASC，按开仓时间正序排列
 	`
 	
 	if limit > 0 {
@@ -1574,7 +1574,7 @@ func (d *Database) GetTradeActions(traderID string, limit int) ([]*TradeActionRe
 			quantity, price, leverage, order_id, timestamp, success, error_message, created_at
 		FROM trade_actions 
 		WHERE trader_id = ? 
-		ORDER BY timestamp DESC
+		ORDER BY timestamp ASC  -- 🔥 修复：改为ASC，按交易动作时间正序排列
 	`
 	
 	if limit > 0 {
@@ -1892,19 +1892,13 @@ func (d *Database) GetTradePerformanceAnalysis(traderID string, limit int) (map[
 	analysis["best_symbol"] = bestSymbol
 	analysis["worst_symbol"] = worstSymbol
 	
-	// 只保留最近的交易（倒序：最新的在前）
+	// 🔥 修复：由于数据库查询已按时间正序，无需反转，直接截取最近的交易
 	if len(recentTrades) > 10 {
-		// 反转数组，让最新的在前
-		for i, j := 0, len(recentTrades)-1; i < j; i, j = i+1, j-1 {
-			recentTrades[i], recentTrades[j] = recentTrades[j], recentTrades[i]
-		}
-		recentTrades = recentTrades[:10]
-	} else if len(recentTrades) > 0 {
-		// 反转数组
-		for i, j := 0, len(recentTrades)-1; i < j; i, j = i+1, j-1 {
-			recentTrades[i], recentTrades[j] = recentTrades[j], recentTrades[i]
-		}
+		// 取最近10个交易（数据库查询已按时间正序）
+		startIndex := len(recentTrades) - 10
+		recentTrades = recentTrades[startIndex:]
 	}
+	// 如果少于10个交易，则保持原样，已经是按时间正序
 	
 	analysis["recent_trades"] = recentTrades
 	

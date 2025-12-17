@@ -486,83 +486,199 @@ func (wom *WebSocketOrderManager) handleStopLossExecution(order *TrackedOrder, r
 	log.Printf("🚨 [WebSocketOrderManager] 处理止损单成交: %s %s OrderID=%d", 
 		order.Symbol, order.Side, order.OrderID)
 	
-	// 1. 解析真实成交价格和数量
+	// 1. 🔥 关键：解析真实成交数据，但提供降级处理防止数据丢失
 	executionPrice, err := strconv.ParseFloat(report.LastExecutedPrice, 64)
 	if err != nil {
-		log.Printf("❌ [WebSocketOrderManager] 解析成交价格失败: %v", err)
-		executionPrice = order.StopPrice // 降级使用止损价格
+		log.Printf("❌ [WebSocketOrderManager] LastExecutedPrice解析失败: %v", err)
+		// 🔥 不直接return，而是触发手动查询机制
+		go wom.handleDataParsingError(order, report)
+		return
 	}
 	
 	executionQty, err := strconv.ParseFloat(report.CumulativeQuantity, 64)
 	if err != nil {
-		log.Printf("❌ [WebSocketOrderManager] 解析成交数量失败: %v", err)
-		executionQty = order.Quantity // 降级使用订单数量
+		log.Printf("❌ [WebSocketOrderManager] CumulativeQuantity解析失败: %v", err)
+		// 🔥 不直接return，而是触发手动查询机制
+		go wom.handleDataParsingError(order, report)
+		return
 	}
 	
-	log.Printf("💰 [WebSocketOrderManager] 止损成交详情: 价格=%.6f 数量=%.6f", executionPrice, executionQty)
+	executionTime := time.Unix(report.TransactionTime/1000, 0)
+	log.Printf("💰 [WebSocketOrderManager] 止损成交详情: 价格=%.6f 数量=%.6f 时间=%s", 
+		executionPrice, executionQty, executionTime.Format("15:04:05.000"))
 	
-	// 2. 获取对应的数据库交易记录用于计算盈亏
-	var pnl, pnlPct float64
-	var calculationMethod = "websocket_realtime"
-	
+	// 2. 🔥 关键：立即更新数据库，使用实际成交数据
 	if wom.database != nil && order.TradeID != "" {
-		// 尝试从数据库获取开仓信息进行精确计算
-		if openTrade, err := wom.database.GetOpenTrade(wom.autoTrader.GetID(), order.Symbol, order.Side); err == nil {
-			log.Printf("✅ [WebSocketOrderManager] 找到开仓记录: 开仓价=%.6f 保证金=%.2f", 
-				openTrade.OpenPrice, openTrade.MarginUsed)
-			
-			// 计算精确盈亏
-			if order.Side == "long" {
-				pnl = (executionPrice - openTrade.OpenPrice) * executionQty
-			} else {
-				pnl = (openTrade.OpenPrice - executionPrice) * executionQty
-			}
-			
-			if openTrade.MarginUsed > 0 {
-				pnlPct = (pnl / openTrade.MarginUsed) * 100
-			}
-			
-			calculationMethod = "websocket_precise_with_db"
-			log.Printf("💎 [WebSocketOrderManager] 精确盈亏计算: %.2f USDT (%.2f%%)", pnl, pnlPct)
+		// 获取开仓记录
+		openTrade, err := wom.database.GetOpenTrade(wom.autoTrader.GetID(), order.Symbol, order.Side)
+		if err != nil {
+			log.Printf("❌ [WebSocketOrderManager] 无法获取开仓记录，拒绝处理: %v", err)
+			return // 🔥 关键：没有开仓数据就不能计算盈亏
+		}
+		
+		log.Printf("✅ [WebSocketOrderManager] 找到开仓记录: 开仓价=%.6f 保证金=%.2f", 
+			openTrade.OpenPrice, openTrade.MarginUsed)
+		
+		// 计算真实盈亏
+		var realPnL float64
+		if order.Side == "long" {
+			realPnL = (executionPrice - openTrade.OpenPrice) * executionQty
 		} else {
-			log.Printf("⚠️ [WebSocketOrderManager] 无法获取开仓记录: %v，使用估算方式", err)
-			// 降级计算：假设止损就是亏损
-			pnl = 0.0 // 无法精确计算
-			calculationMethod = "websocket_fallback_no_db"
+			realPnL = (openTrade.OpenPrice - executionPrice) * executionQty
+		}
+		
+		realPnLPct := (realPnL / openTrade.MarginUsed) * 100
+		
+		// 计算持仓时间
+		durationSecs := int(executionTime.Sub(openTrade.OpenTime).Seconds())
+		
+		log.Printf("💎 [WebSocketOrderManager] 精确盈亏计算: %.2f USDT (%.2f%%), 持仓时长: %d秒", 
+			realPnL, realPnLPct, durationSecs)
+		
+		// 🔥 立即更新数据库 - 使用实际数据
+		err = wom.database.UpdateTrade(
+			order.TradeID,
+			executionPrice,      // 实际成交价
+			executionTime,       // 实际成交时间
+			"closed",
+			"stop_loss",
+			fmt.Sprintf("%d", order.OrderID),
+			realPnL,            // 实际盈亏
+			realPnLPct,         // 实际盈亏百分比
+			durationSecs,       // 实际持仓时间
+		)
+		
+		if err != nil {
+			log.Printf("❌ [WebSocketOrderManager] 数据库更新失败: %v", err)
+		} else {
+			log.Printf("✅ [WebSocketOrderManager] 交易记录已更新: 实际价格=%.6f, 实际盈亏=%.2f USDT", 
+				executionPrice, realPnL)
+		}
+		
+		// 记录WebSocket特定动作
+		wom.recordStopLossAction(order, executionPrice, executionQty, realPnL)
+		
+		// 创建止损成交事件
+		event := StopLossExecutionEvent{
+			TradeID:           order.TradeID,
+			Symbol:            order.Symbol,
+			Side:              order.Side,
+			OrderID:           order.OrderID,
+			ExecutionPrice:    executionPrice,
+			ExecutionQty:      executionQty,
+			PnL:               realPnL,
+			PnLPct:            realPnLPct,
+			Timestamp:         executionTime,
+			CalculationMethod: "websocket_realtime_with_db",
+		}
+		
+		// 通知系统其他组件止损成交
+		wom.publishStopLossEvent(&event)
+	} else {
+		log.Printf("❌ [WebSocketOrderManager] 数据库不可用或TradeID为空，无法处理止损成交")
+		return
+	}
+	
+	log.Printf("🎯 [WebSocketOrderManager] 止损单成交处理完成: %s %s", order.Symbol, order.Side)
+}
+
+// VerifyOrderIntegrity 验证订单状态完整性
+func (wom *WebSocketOrderManager) VerifyOrderIntegrity() error {
+	log.Printf("🔍 [WebSocketOrderManager] 开始验证订单状态完整性...")
+	
+	wom.orderMutex.RLock()
+	trackedOrders := make([]*TrackedOrder, 0, len(wom.trackedOrders))
+	for _, order := range wom.trackedOrders {
+		trackedOrders = append(trackedOrders, order)
+	}
+	wom.orderMutex.RUnlock()
+	
+	if len(trackedOrders) == 0 {
+		log.Printf("✅ [WebSocketOrderManager] 当前无跟踪订单，验证通过")
+		return nil
+	}
+	
+	log.Printf("🔍 [WebSocketOrderManager] 验证 %d 个跟踪订单状态...", len(trackedOrders))
+	
+	missedUpdates := 0
+	for _, order := range trackedOrders {
+		// 验证每个订单的状态
+		status, err := wom.trader.GetOrderStatus(order.Symbol, order.OrderID)
+		if err != nil {
+			log.Printf("⚠️ [WebSocketOrderManager] 无法验证订单状态: OrderID=%d, %v", order.OrderID, err)
+			continue
+		}
+		
+		orderStatus, ok := status["status"].(string)
+		if !ok {
+			log.Printf("⚠️ [WebSocketOrderManager] 订单状态格式异常: OrderID=%d", order.OrderID)
+			continue
+		}
+		
+		if orderStatus == "FILLED" || orderStatus == "CANCELED" || orderStatus == "EXPIRED" {
+			log.Printf("🔍 [WebSocketOrderManager] 发现未处理的订单状态变化: OrderID=%d, Status=%s", order.OrderID, orderStatus)
+			missedUpdates++
+			
+			// 处理遗漏的订单状态变化
+			if err := wom.handleMissedOrderUpdate(order, status); err != nil {
+				log.Printf("❌ [WebSocketOrderManager] 处理遗漏订单更新失败: %v", err)
+			}
 		}
 	}
 	
-	// 3. 🆕 调用AutoTrader的实时止损处理方法（统一处理）
-	if wom.autoTrader != nil {
-		log.Printf("🔄 [WebSocketOrderManager] 调用AutoTrader实时止损处理...")
-		
-		// 调用新的统一处理方法
-		wom.autoTrader.handleRealtimeStopLossExecution(order.Symbol, order.Side, 
-			order.OrderID, executionPrice, executionQty)
-		
-		// 记录额外的WebSocket特定动作
-		wom.recordStopLossAction(order, executionPrice, executionQty, pnl)
+	if missedUpdates > 0 {
+		log.Printf("⚠️ [WebSocketOrderManager] 发现并处理了 %d 个遗漏的订单状态更新", missedUpdates)
+	} else {
+		log.Printf("✅ [WebSocketOrderManager] 所有订单状态正常，无遗漏更新")
 	}
 	
-	// 4. 创建止损成交事件
-	event := StopLossExecutionEvent{
-		TradeID:           order.TradeID,
-		Symbol:            order.Symbol,
-		Side:              order.Side,
-		OrderID:           order.OrderID,
-		ExecutionPrice:    executionPrice,
-		ExecutionQty:      executionQty,
-		PnL:               pnl,
-		PnLPct:            pnlPct,
-		Timestamp:         time.Unix(report.TransactionTime/1000, 0),
-		CalculationMethod: calculationMethod,
+	return nil
+}
+
+// handleMissedOrderUpdate 处理遗漏的订单状态变化
+func (wom *WebSocketOrderManager) handleMissedOrderUpdate(order *TrackedOrder, status map[string]interface{}) error {
+	log.Printf("🔄 [WebSocketOrderManager] 处理遗漏的订单更新: OrderID=%d", order.OrderID)
+	
+	orderStatus, _ := status["status"].(string)
+	
+	if orderStatus == "FILLED" {
+		// 构建模拟执行报告
+		avgPrice, _ := status["avgPrice"].(string)
+		executedQty, _ := status["executedQty"].(string)
+		updateTime, _ := status["updateTime"].(int64)
+		
+		mockReport := &ExecutionReport{
+			OrderID:              order.OrderID,
+			Symbol:               order.Symbol,
+			OrderStatus:          "FILLED",
+			ExecutionType:        "TRADE",
+			LastExecutedPrice:    avgPrice,
+			CumulativeQuantity:   executedQty,
+			TransactionTime:      updateTime,
+		}
+		
+		log.Printf("📊 [WebSocketOrderManager] 补充处理成交订单: OrderID=%d, 价格=%s, 数量=%s", 
+			order.OrderID, avgPrice, executedQty)
+		
+		// 根据订单类型处理
+		if order.Type == "STOP_MARKET" || order.Type == "STOP" {
+			wom.handleStopLossExecution(order, mockReport)
+		} else {
+			wom.handleMarketOrderExecution(order, mockReport)
+		}
+		
+		// 移除已处理的订单
+		wom.UntrackOrder(order.OrderID)
+		
+		log.Printf("✅ [WebSocketOrderManager] 遗漏订单处理完成: OrderID=%d", order.OrderID)
+		
+	} else if orderStatus == "CANCELED" || orderStatus == "EXPIRED" {
+		log.Printf("⚠️ [WebSocketOrderManager] 订单已取消或过期: OrderID=%d, Status=%s", order.OrderID, orderStatus)
+		// 移除失效的订单
+		wom.UntrackOrder(order.OrderID)
 	}
 	
-	// 5. 通知系统其他组件止损成交
-	wom.publishStopLossEvent(&event)
-	
-	log.Printf("🎯 [WebSocketOrderManager] 止损单成交处理完成: %s %s 盈亏=%.2f USDT", 
-		order.Symbol, order.Side, pnl)
+	return nil
 }
 
 // handleMarketOrderExecution 处理市价单成交
@@ -1004,4 +1120,51 @@ func (wom *WebSocketOrderManager) sendPing() {
 	}
 	
 	log.Printf("💓 [WebSocketOrderManager] 心跳ping发送成功")
+}
+
+// handleDataParsingError 处理数据解析错误的降级机制
+// 🔥 关键：当WebSocket数据解析失败时，主动查询交易所获取正确数据
+func (wom *WebSocketOrderManager) handleDataParsingError(order *TrackedOrder, report *ExecutionReport) {
+	log.Printf("🚨 [WebSocketOrderManager] 处理数据解析错误: OrderID=%d, 启动降级查询", order.OrderID)
+	
+	// 等待一小段时间，让交易所数据稳定
+	time.Sleep(500 * time.Millisecond)
+	
+	// 手动查询订单状态获取正确数据
+	orderStatus, err := wom.trader.GetOrderStatus(order.Symbol, order.OrderID)
+	if err != nil {
+		log.Printf("❌ [WebSocketOrderManager] 降级查询失败: %v", err)
+		// 🔥 即使查询失败，也要保留订单跟踪，避免丢失
+		return
+	}
+	
+	// 检查订单是否已完成
+	status, ok := orderStatus["status"].(string)
+	if !ok || status != "FILLED" {
+		log.Printf("📋 [WebSocketOrderManager] 降级查询显示订单未完成: %s", status)
+		return
+	}
+	
+	// 构建可靠的执行报告
+	avgPriceStr, _ := orderStatus["avgPrice"].(string)
+	executedQtyStr, _ := orderStatus["executedQty"].(string)
+	updateTime, _ := orderStatus["updateTime"].(int64)
+	
+	correctedReport := &ExecutionReport{
+		OrderID:              order.OrderID,
+		Symbol:               order.Symbol,
+		OrderStatus:          "FILLED",
+		ExecutionType:        "TRADE",
+		LastExecutedPrice:    avgPriceStr,
+		CumulativeQuantity:   executedQtyStr,
+		TransactionTime:      updateTime,
+	}
+	
+	log.Printf("✅ [WebSocketOrderManager] 降级查询成功，重新处理: 价格=%s, 数量=%s", avgPriceStr, executedQtyStr)
+	
+	// 使用纠正后的数据重新处理止损成交
+	wom.handleStopLossExecution(order, correctedReport)
+	
+	// 移除已处理的订单
+	wom.UntrackOrder(order.OrderID)
 }
