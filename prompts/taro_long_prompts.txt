@@ -2709,12 +2709,20 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
         - 并在 reasoning 中说明“为何择优放弃这个而选择其它标的”。
      - reasoning 字段必须包含：
         1. 当前 major_bias / minor_bias / micro_bias 及依据的 timeframe + 关键结构；
-        2. 当前大致浮盈是几 R，触发了哪一级 R_lock 或 protect；
-        3. 为何选择当前 action（open_long/open_short/close/hold/wait）而不是其他；若为“部分减仓”，仍输出 action="close"，并额外给出 close_pct（0~1）说明是部分平仓；
-        4. 若是开仓（open_long/open_short），需在开头显式写明本次决策采用的模式：
+        2.【强制｜结构快照不参与闸门】即使 Gate1(ORDERFLOW) 触发 FAIL（例如 spoofing_risk>0.8）导致 Gate2(STRUCTURE) 标记为 N/A，
+             也必须在 GateTrace 之后追加一段“StructureSnapshot”，用于复盘与 NextTrigger 制定，但不得据此绕过 Gate1 否决、不得改变本次 action。
+
+             StructureSnapshot（最多 3~6 行，必须引用输入中的结构字段，禁止臆测）：
+             - VPVR：poc_price / VAH / VAL，与 last_price 的相对位置（例如“贴近 POC=xx，属于 POC_chop_zone”）
+             - 供需区/FVG：最近的 zone/gap（若为空必须写“none/0 zones”，并标注 ctxNA 或 data_empty）
+             - SR/趋势线：最近 1~2 条关键支撑/阻力（含 hit_count/strength）
+             - 可选：SuperTrend / 通道位置 / 道氏趋势（只写结论 + 关键价位）
+        3. 当前大致浮盈是几 R，触发了哪一级 R_lock 或 protect；
+        4. 为何选择当前 action（open_long/open_short/close/hold/wait）而不是其他；若为“部分减仓”，仍输出 action="close"，并额外给出 close_pct（0~1）说明是部分平仓；
+        5. 若是开仓（open_long/open_short），需在开头显式写明本次决策采用的模式：
           - 例如："trade_style=HTF_swing，理由：4h/1h 顺势波段，目标空间≥2R ..."；
           - 或："trade_style=LTF_scalp，理由：30m/15m/5m 短线趋势清晰，目标约1~1.5R，小仓快进快出"。
-        5. 若是开仓（open_long/open_short），还需明确说明最近反向结构与可用空间：
+        6. 若是开仓（open_long/open_short），还需明确说明最近反向结构与可用空间：
          - 指出当前 entry_price 到最近反向结构的距离：
            · 对多单：最近的 30m/15m/5m supply 区或 swing high；
            · 对空单：最近的 30m/15m/5m demand 区或 swing low；
@@ -2747,12 +2755,12 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
            3) 若 R_clean < 1.0：
               - 默认不得开仓；
               - 仅允许你模板已定义的极少数 LTF_scalp 例外，并必须满足：pattern∈{EDGE,BO_RETEST} + 5m Confirm/Reject 可验证 + edge_score≥0.65 + confidence≥70，否则一律 wait。
-        6. 若是开仓（open_long/open_short），还需明确说明本次止损 sl_struct 依托的结构：
+        7. 若是开仓（open_long/open_short），还需明确说明本次止损 sl_struct 依托的结构：
           - 对多单：例如“sl_struct 设在最近 15m demand 区下沿 2.065，再下方留出 ≈0.2*ATR 作为缓冲”；
           - 对空单：例如“sl_struct 设在最近 30m supply 区上沿 0.1459，上方留出若干 tick 作为缓冲”；
           - 并在此基础上给出 R_struct = |entry_price - sl_struct| 与 R_clean，
             保证止损价格确实落在关键结构之外，而不是结构内部。
-        7. 必须显式引用 `ctx` 数据来支持你的论点：
+        8. 必须显式引用 `ctx` 数据来支持你的论点：
                    - 不要只说“强支撑”，要说“强支撑（Z=2.1, Vol=1.8x）”；
                    - 不要只说“忽略该阻力”，要说“忽略弱阻力（Z=-1.2, Rank=15%）”。
          - "stop_update":
