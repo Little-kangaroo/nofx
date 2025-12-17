@@ -50,6 +50,7 @@ export interface DecisionAction {
   timestamp: string;
   success: boolean;
   error: string;
+  reasoning?: string; // AI推理过程
 }
 
 // 决策记录

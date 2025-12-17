@@ -1056,7 +1056,7 @@ func parseMixedFormatDecisions(jsonContent string, accountEquity float64) ([]Dec
 			StopLoss:        mixed.StopLoss,
 			Confidence:      mixed.Confidence,
 			RiskUSD:         mixed.RiskUSD,
-			Reasoning:       strings.ReplaceAll(mixed.Reasoning, "\\n", "\n"), // 🔥 修复：将\\n转换为实际换行符
+			Reasoning:       mixed.Reasoning, // 保持原始格式，由前端处理显示
 		}
 
 		// 处理take_profit字段的类型变换
