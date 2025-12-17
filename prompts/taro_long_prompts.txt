@@ -2739,12 +2739,12 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
      - reasoning 字段必须包含：
         1. 当前 major_bias / minor_bias / micro_bias 及依据的 timeframe + 关键结构；
         2.【结构快照改为“可选引用”｜避免重复耗时】
-         - 结构锚点的唯一“落点”是 Gate2(STRUCTURE) 行：必须给出 ≥2 个结构锚点（含价位/区间+ctx强度/状态）。
-         - StructureSnapshot 改为【可选】：
-           * 当 Gate2(STRUCTURE) 已输出 ≥2 个结构锚点时，允许不输出 StructureSnapshot（推荐省略以降耗时）。
-           * 若输出 StructureSnapshot，则只能“引用/复述 Gate2 行已出现的结构锚点”，不得新增新价位/新区间/新方向判断/新指标结论（禁止二次推导）。
-         - 无论是否输出 StructureSnapshot：不得据此绕过 Gate1 否决、不得改变本次 action。
-        3.【强制｜结构分析不因 Gate1 阻断而缺失】StructureSnapshot 仍需保留，但必须“复用 Gate2(STRUCTURE) 行已经给出的结构锚点”，最多 3 行；禁止在 StructureSnapshot 再新增一套结构推导（避免重复耗时与重复输出）。
+          - 结构锚点的唯一“落点”是 Gate2(STRUCTURE) 行：必须给出 ≥2 个结构锚点（含价位/区间+ctx强度/状态）与方向偏置（LONG/SHORT/NEUTRAL）。
+          - 无论 Gate1(ORDERFLOW) PASS/FAIL：Gate2(STRUCTURE) 均必须输出（PASS 或 DIAG(EVAL_ONLY)）；不得写 N/A/跳过。
+          - StructureSnapshot 为【可选】（默认省略以降低耗时）：
+            * 若输出：最多 1~2 行，只能引用/复述 Gate2(STRUCTURE) 行已出现的结构锚点；
+            * 严禁在此新增：新价位/新区间/新指标结论/新方向判断（禁止二次推导）。
+          - 无论是否输出 StructureSnapshot：不得据此绕过 Gate1 否决、不得改变本次 action。
         4. 为何选择当前 action（open_long/open_short/close/hold/wait）而不是其他；若为“部分减仓”，仍输出 action="close"，并额外给出 close_pct（0~1）说明是部分平仓；
         5. 若是开仓（open_long/open_short），需在开头显式写明本次决策采用的模式：
           - 例如："trade_style=HTF_swing，理由：4h/1h 顺势波段，目标空间≥2R ..."；
@@ -2919,17 +2919,21 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
       Summary: action=<...> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<...> | confidence=<...>
                | (action="close" 时必须带 close_pct=<0~1>)
                | (若被闸门否决必须带 fail=>... 并写解除条件)
-  - 强制：从第二行开始必须出现 GateTrace（顺序固定 Gate0→Gate5；每行一个 Gate；PASS/FAIL 必须明确）：
-      GateTrace:
-            - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
-            - Gate1(ORDERFLOW): PASS/FAIL [fail=>OF 可选] 证据（红线/否决必须明确写触发条件与解除条件）
-            - Gate2(STRUCTURE): PASS/FAIL [fail=>STRUCT 可选] 证据（至少2个结构锚点+价位/区间）
-            - Gate3(TIMING): PASS/FAIL [fail=>TIME 或 fail=>xF 可选] 证据（5m收盘锚点/触发窗口/数据是否闭合）
-            - Gate4(SETUP): PASS/FAIL [fail=>SETUP 可选] 证据（趋势动能/RSI/形态确认/入场触发质量；RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向）
-            - Gate5(EXEC/RR): PASS/FAIL [fail=>RR 可选] 证据（可执行性/滑点追价/成本；R_clean 必须给可核验算式）
+    - 强制：从第二行开始必须出现 GateTrace（顺序固定 Gate0→Gate5；每行一个 Gate；PASS/FAIL/DIAG(EVAL_ONLY) 必须明确；禁止写 N/A/跳过）：
+        GateTrace:
+              - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
+              - Gate1(ORDERFLOW): PASS/FAIL [fail=>OF 可选] 证据（红线/否决必须明确写触发条件与解除条件）
+              - Gate2(STRUCTURE): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>STRUCT 可选] 证据（至少2个结构锚点+价位/区间）
+              - Gate3(TIMING): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>TIME 或 fail=>xF 可选] 证据（5m收盘锚点/触发窗口/数据是否闭合）
+              - Gate4(SETUP): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>SETUP 可选] 证据（趋势动能/RSI/形态确认/入场触发质量；RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向）
+              - Gate5(EXEC/RR): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>RR 可选] 证据（可执行性/滑点追价/成本；R_clean 必须给可核验算式）
             -【禁回溯｜禁新增】Summary/StructureSnapshot 不得引入任何 GateTrace 尚未出现的新结构信息。
-             若需要结构结论，必须写在 Gate2(STRUCTURE) 行；Summary 只能引用 GateTrace 的结论字段（action/fail=>/setup_grade/edge_score/confidence）。
-
+            - 若需要结构结论，必须写在 Gate2(STRUCTURE) 行；Summary 只能引用 GateTrace 的结论字段（action/fail=>/setup_grade/edge_score/confidence）。
+            -【违规处理｜fail=>PROTO_BACKTRACK】若触发“禁回溯｜禁新增”：
+              * 顶层 action 必须输出 "wait"（无论原本想输出什么动作）；
+              * Summary 的 fail=> 必须写为 fail=>PROTO_BACKTRACK（覆盖其它 fail=>）；
+              * reasoning 末尾额外追加一行：fail=>PROTO_BACKTRACK（便于日志检索）；
+              * 违规后仍需按规则输出 GateTrace（Gate2~Gate5 用 DIAG(EVAL_ONLY)），但禁止为了解释而在 Summary/StructureSnapshot 里新增结构信息。
   - 允许：GateTrace 之后追加任意多行自然语言复盘（不设字符上限），建议结构：
       A) 持仓/风险：R_unrealized、R_lock/protect、stop_update 触发与 new_stop 单调性
       B) 多周期依据：用 4h/1h/30m/15m/5m 正常语义描述动能/趋势/背离（禁止 MB/mB/μB、U/D/N 等自定义编码）
