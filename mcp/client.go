@@ -269,7 +269,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		case ProviderDeepSeek:
 			maxTokens = 8192 // DeepSeek API 限制为 8192
 		case ProviderQwen:
-			maxTokens = 32768 // Qwen 支持更高的 token 限制
+			maxTokens = 8192 // Qwen 支持更高的 token 限制
 		case ProviderCustom:
 			maxTokens = 8000 // 自定义 API 默认使用较高限制
 		default:
