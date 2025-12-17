@@ -105,22 +105,36 @@
        此时才允许由“RSI + 结构 + 订单流”三者联合否决顺势续单，优先考虑减仓、反向或者纯观望。
 【冲突消解与溯源规则（唯一口径｜不再定义第二套优先级）】
 - 唯一“决策优先级”以《【决策优先级总纲（Decision Priority Framework）】0~5 层 Gate》为准；本节只规定“冲突时如何在 reasoning 里溯源解释”。
-- 任何上层 Gate 否决，必须在 X 段用 fail=>... 明确标注，且不得用下层信号推翻。
+- 任何上层 Gate 否决，必须在 reasoning 的 GateTrace 对应 Gate 行标注：FAIL + fail=>...，并写清“触发原因 + 解除条件”；不得用下层信号推翻。
 【冲突时的硬规则（必须遵守）】
+0) 总则：任何上层 Gate 否决，都必须在 reasoning 的 GateTrace 对应 Gate 行标注 FAIL + fail=>...，并写清“触发原因 + 解除条件”。禁止再使用“X 段/K 段/R 段”表述。
+
 1) 若 Gate0（账户/风险）否决：
    - action 只能为 "wait" / "close"（已有仓位可 "hold" / "close"），禁止 open_long/open_short；
-   - X 段必须写：fail=>RISK。
+   - GateTrace 的 Gate0(RISK) 行必须：FAIL + fail=>RISK，并写风险触发条件（如 Dist_ROI 超限、单笔风险超 risk_per_trade_pct 等）与解除条件。
+
 2) 若 Gate1（订单流/盘口红线）否决（fake_pump/fake_dump/retail_driven 或 spoofing_risk>0.8）：
-   - 注意：smart_money_* 属于 Regime Flags（不得一票否决），必须按下方【P0-Intent 分类澄清】继续走 Gate2~Gate5。
+   - 注意：smart_money_* 属于 Regime Flags（不得一票否决），必须继续走 Gate2~Gate5 做综合判断；
    - action="wait"（仅允许管理既有仓位），禁止新开仓；
-   - X 段必须写：fail=>OF。
-3) Gate2（结构格局）与 Gate3（趋势动能）若不支持拟开仓方向：
-   - 默认 action="wait"；仅允许 LTF_scalp 的极少数例外必须在 K/R 段写清楚“结构依据+空间(R_clean)+确认”；
-   - X 段写：fail=>STRUCT 或 fail=>TREND。
-4) Gate4（RSI）只能改变“执行方式/等待回踩/缩仓”，不得单独改变方向：
-   - 若因 EXHAUSTION_* 否决顺势续单：X 段写 fail=>RSI_Veto。
-5) Gate5（执行与 R 过滤）不通过：
-   - action="wait"；X 段写 fail=>noRT（空间不足/不可执行/无法给出合法 SL/TP）。
+   - GateTrace 的 Gate1(ORDERFLOW) 行必须：FAIL + fail=>OF，并写触发红线与解除条件。
+
+3) 若 Gate2（结构格局）不支持拟开仓方向：
+   - 默认 action="wait"；
+   - 仅允许 LTF_scalp 的极少数例外：必须同时满足 Gate5(EXEC/RR) 为 PASS 且 R_clean 达门槛，并在 GateTrace 后追加一行 "Exception:" 说明为何允许（结构锚点/入场触发/失效条件/时间窗）。
+   - 若否决：Gate2(STRUCTURE) 行必须：FAIL + fail=>STRUCT。
+
+4) 若 Gate3（TIMING）不满足（例如缺少5m收盘确认、数据未闭合 xF、或不在触发窗口）：
+   - action="wait"；
+   - Gate3(TIMING) 行必须：FAIL + fail=>TIME（或 fail=>xF），并写“何时恢复可评估”（NextTrigger+Timebox）。
+
+5) Gate4（SETUP）只能在综合条件不足时否决开仓；其中 RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向：
+   - 若综合不足：action="wait"；Gate4(SETUP) 行标注 FAIL + fail=>SETUP，并写缺失项（趋势动能/确认形态/触发质量等）。
+   - 若仅 RSI 引发“等待回踩/缩仓”：Gate4 仍可 PASS，但需在 Gate4 行写清执行调整，不得改方向。
+
+6) 若 Gate5（执行与 R 过滤）不通过：
+   - action="wait"；
+   - Gate5(EXEC/RR) 行必须：FAIL + fail=>RR（统一使用 fail=>RR；禁止输出 fail=>noRT），并写不可执行原因（空间不足/滑点追价/无法给出合法 SL/TP/成本后 R_clean 不达标等）。
+
 【动作选择要求】
 - 当不同模块信号冲突时，你必须在 reasoning 中显式说明：
   1. 哪些高优先级模块否决了开仓；
@@ -261,7 +275,7 @@
         - absorption 解释为“吸收/承接导致更可能突破”，默认偏向 BO_RETEST / MOMENTUM_BREAK 路径；
         - 若要做反转（EDGE-Rejection），必须额外满足：5m 出现 SFP 或 Engulfing 且结构位置在供需边缘（LONG/SHORT 对称），否则一律按突破思路处理或 wait。
         - 即使触发特权（追涨/跟庄/轧空），也不得在 fail=>OF / fail=>RISK 场景下开新仓。
-      * 允许基于 intrabar 触发做“应急开仓/平仓”，但 reasoning 必须明确记录 intrabar 证据链（建议写在 X 段 GateTrace/Intrabar 行）：trigger_context.mode=INTRABAR_ENABLE；small_tf_close_x=true；small_tf_close_time=<...>；以及该证据如何支持本次执行。
+      * 允许基于 intrabar 触发做“应急开仓/平仓”，但 reasoning 必须明确记录 intrabar 证据链（建议写在 reasoning 的 GateTrace 之后，单独追加一行：IntrabarEvidence: <触发类型/阈值/触发时间窗/解除条件/关键证据>。）：trigger_context.mode=INTRABAR_ENABLE；small_tf_close_x=true；small_tf_close_time=<...>；以及该证据如何支持本次执行。
       * 任何“追涨/追跌授权”仅在 orderflow_quality 为 good 且触发源可信时才可使用。
     A) 结构共振判定 (Structural Confluence) —— 寻找“硬地板/硬天花板”
        AI 必须在当前价格附近寻找以下 3 类结构的重叠。重叠越多，时机越完美：
@@ -808,7 +822,7 @@
  【P0-Preflight｜数值一致性 Hard-Fail（开仓前总闸门）】
  - 只要 action ∈ {"open_long","open_short"}，必须先在 reasoning 的开头输出一个 “PreflightCheck” 小节；
  - 且必须逐条给出可核验的数字对账（禁止只写结论）。
- - 任意一条无法核验、核验不通过、或出现自相矛盾 => action 强制改为 "wait"（并在 X 段写 fail=>PREFLIGHT）。
+ - 任意一条无法核验、核验不通过、或出现自相矛盾 => action 强制改为 "wait"。
  PreflightCheck 必须包含（不少于以下项）：
  1) ZoneContainmentCheck（入场与结构边界一致性）
     - 若本次依托的是 supply_zone 做空：
@@ -1225,7 +1239,7 @@
    - 部分减仓的硬约束：
      * action 必须为 "close"（禁止使用 "REDUCE" 作为 action）；
      * close_pct 必须显式给出：全平=1.0；部分减仓=(0,1)；
-     * reasoning 的 X 段必须明确写出 close_pct 与触发原因（例如 “close=>part@TP1” 或 “close=>part@reversal”）。
+     * reasoning 的 Summary 行必须明确写出 close_pct=...；并在 CloseIntent/或 GateTrace 后续复盘中说明触发原因（TP1/反转/结构失效等）。
 5. 示例（JSON 形式，仅示意｜以最终输出契约为准）
    - 约束：只要 action="close"，必须显式输出 close_pct（全平=1.0；部分减仓=(0,1)）。
    - 多单在强 supply 区出现反转信号，选择部分减仓（仍用 action="close" + close_pct）：
@@ -2024,7 +2038,7 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
             - 等待突破后按 BO_RETEST（有效突破 + 回踩带）执行；或
             - action="wait"。
        - 若你仍想例外开仓（极少数）：
-         - setup_grade 必须降为 "C"，且必须在 X 段写清楚：为何 zone 虽老化仍具备 edge（必须给出数字佐证），否则一律 wait。
+         - setup_grade 必须降为 "C"，且必须在 reasoning（Summary+GateTrace 之后的复盘段）写清楚：为何 zone 虽老化仍具备 edge（必须给出数字佐证），否则一律 wait。，否则一律 wait。
    (d) VPVR 分析 (Volume Profile) —— 价值共识
        - **趋势延续**: Price 站稳 VAH (Value Area High) -> 看涨延伸；Price 跌破 VAL -> 看跌延伸。
        - **震荡吸筹**: Price 在 VAH 和 VAL 之间游走。
@@ -2423,7 +2437,7 @@ B5) 智能障碍识别与空间计算 (Smart Space Calculation)
   - 默认门槛：
     * HTF_swing：R_clean ≥ 2.0
     * LTF_scalp：R_clean ≥ 1.0
-  - 例外（仅 LTF_scalp 可用，且必须在 X 段 GateTrace 写明“why exception”）：
+  - 例外（仅 LTF_scalp 可用，且并在 GateTrace 之后追加一行：Exception: <为何允许例外/满足了哪些必要条件/不满足哪些常规条件/风险对冲方式/失败即止的退出触发>）：
     * 允许 R_clean ∈ [0.5, 1.0) 的唯一条件集合与 Gate5 保持一致：
       - rsi_state ∈ {TREND_OVEREXTENDED, TREND_OVERSOLD/OVERBOUGHT} 且
       - pattern ∈ {EDGE, BO_RETEST} 且
@@ -2816,16 +2830,16 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - 正确示例： "notes": "避开低流动性标的"
    - 错误示例： "notes":避开低流动性标的"
    - 错误示例： "notes": '避开低流动性标的'
-10. 最终输出示例（统一为唯一字段契约；reasoning 严格 B/K/R/X；非开仓 entry_plan=null）
+10. 最终输出示例（统一为唯一字段契约；reasoning=Summary(单行)+GateTrace(多行)+复盘细节；非开仓 entry_plan=null）
 - 示例一：无开仓动作（hold / wait）
 [
   {"symbol":"HYPEUSDT","action":"hold","setup_grade":"C","edge_score":0.0,"confidence":86,
-   "reasoning":"B: MB=D,mB=D,μB=D; sn=4h(p<e20<e50,m-,r14 44)/1h(p<e20<e50,m-,r14 39)/15m(e20<e50,m-,r14 36)/5m(xT,e20<e50,m-,r7 31,vR 1.0); src=sn,ctx; K: SZs(??) ctx=z? v?; OF:[BearishConfirm] Warn:[None]; R: Rc=1.2/0.6=2.0; style=HTF_swing; SL=NA;TP1=NA;TP2=NA; Trail=lock@+1R->+0.5R; X: hold=>Trail=lock@+1R->+0.5R",
+         "reasoning":"Summary: action=hold | trade_style=HTF_swing | setup_grade=C | edge_score=0.0 | confidence=86 | 原因=已触发R_lock，继续锁盈管理\\nGateTrace:\\n- Gate0(RISK): PASS R_unrealized≈+1.2R，允许R_lock\\n- Gate1(ORDERFLOW): PASS 未触发红线否决\\n- Gate2(STRUCTURE): PASS 关键结构未被5m收盘破坏\\n- Gate3(TIMING): PASS 以5m收盘为时间锚，当前满足复核\\n- Gate4(SETUP): PASS（趋势/RSI 仅用于执行微调，不改变持仓方向）\\n- Gate5(EXEC/RR): PASS stop_update单调且可执行\\nNextTrigger(Timebox=未来12根5m收盘): 若5m收盘破坏结构边界=>close；否则继续hold并按R_lock更新止损。",
    "stop_update":{"prev_stop":37.10,"new_stop":37.85,"reason":"R_lock"},
    "entry_plan":null
   },
   {"symbol":"SOLUSDT","action":"wait","setup_grade":"C","edge_score":0.0,"confidence":82,
-   "reasoning":"B: MB=D,mB=D,μB=D; sn=4h(p<e20<e50,m-,r14 46)/1h(p<e20<e50,m-,r14 41)/15m(e20<e50,m-,r14 34)/5m(xT,e20<e50,m-,r7 24,vR 0.9); src=sn,ctx,RSI; K: DZ(135.8-139.9) ctx=z? v?; OF:[WarnNone]; R: SL=NA;TP1=NA;TP2=NA; X: wait=>trig@rebound140-145; fail=>noRT",
+      "reasoning":"Summary: action=wait | trade_style=NA | setup_grade=C | edge_score=0.0 | confidence=82 | fail=>RR | 原因=空间/可执行性不足，等待触发区间确认\\nGateTrace:\\n- Gate0(RISK): PASS\\n- Gate1(ORDERFLOW): PASS（未触发红线）\\n- Gate2(STRUCTURE): PASS（结构存在但不在有效入场边缘）\\n- Gate3(TIMING): PASS/待确认（需要5m收盘触发）\\n- Gate4(SETUP): PASS/待确认（等待回踩+确认形态）\\n- Gate5(EXEC/RR): FAIL fail=>RR R_clean不足/无法给出可核验SL/TP\\nNextTrigger(Timebox=未来12根5m收盘): 触发rebound 140-145并完成5m收盘确认后再评估开仓。",
    "stop_update":null,
    "entry_plan":null
   }
@@ -2833,7 +2847,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 - 示例二：开仓动作（open_long / open_short｜entry_plan 必须为 object）
 [
   {"symbol":"SOLUSDT","action":"open_short","setup_grade":"B","edge_score":0.7,"confidence":78,
-   "reasoning":"B: MB=N,mB=D,μB=D; sn=4h(p>e20>e50,m+,r14 51)/1h(p<e20<e50,m+,r14 44)/15m(e20<e50,m-,r14 36)/5m(xT,e20<e50,m-,r7 30,vR 1.1); src=sn,ctx,OF; K: SZs(137.8-139.3) ctx=z1.4 v13.9; SR_R(136.5); OF:[BearishConfirm SpotLedDecline] Warn:[None]; R: Rc=1.5/1.0=1.5; style=LTF_scalp; SL=137.9(5mSZs z1.4 buf0.5); TP1=135.1(15mSZd); TP2=NA; BE=@+0.5R; X: open=>Mkt_S@136.4; add=NA; mg=NA",
+      "reasoning":"Summary: action=open_short | trade_style=LTF_scalp | setup_grade=B | edge_score=0.7 | confidence=78 | 原因=结构回踩阻力+订单流确认\\nGateTrace:\\n- Gate0(RISK): PASS 单笔风险在预算内\\n- Gate1(ORDERFLOW): PASS 出现反向主动成交/动能配合（未触发红线）\\n- Gate2(STRUCTURE): PASS 关键阻力/回踩锚点成立\\n- Gate3(TIMING): PASS 以5m收盘确认作为执行触发\\n- Gate4(SETUP): PASS（趋势/RSI用于执行微调与等待回踩，不单独授权方向）\\n- Gate5(EXEC/RR): PASS R_clean可核验且止损合法\\nNextTrigger(Timebox=未来12根5m收盘): 若5m收盘重新站回结构上沿=>fail并wait；若继续走弱则按计划持有/管理。",
    "stop_update":null,
    "entry_plan":{"order_type":"MARKET","price":136.4,"qty":0.7,"leverage":10,"init_stop":137.9,"take_profit":null,
                 "R_struct":1,"R_clean":1.5,"nearest_opposite_structure_type":"demand_zone","nearest_opposite_structure_value":135.1,
@@ -2849,7 +2863,9 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   3) "setup_grade" : enum {"A","B","C"}
   4) "edge_score"  : number (0~1)
   5) "confidence"  : int (0~100)
-  6) "reasoning"   : string   // 复盘版允许多行：必须在 JSON 字符串内用 "\\n" 表示换行（禁止裸换行）；骨架固定为 B/K/R/X 四段（顺序固定，每段以 "B:"/"K:"/"R:"/"X:" 开头，段内可追加多行证据/数值/触发条件/解除条件）。
+  6) "reasoning"   : string   // 复盘版允许多行：必须在 JSON 字符串内用 "\\n" 表示换行（禁止裸换行）。
+                             // 【唯一口径】第一行=Summary 单行；随后必须包含 GateTrace（Gate0→Gate5 顺序固定，每行 PASS/FAIL 明确；FAIL 时在对应 Gate 行标注 fail=>... 并写解除条件）；其后允许自然语言复盘与 NextTrigger/Timebox。
+                             // 【禁止】任何 B:K:R:X 四段电报体骨架 / BKRX 摘要行 / 自定义编码串（MB/mB/μB、U/D/N 等）。
   7) "stop_update" : object|null  // {prev_stop,new_stop,reasoning} 或 null
   8) "entry_plan"  : object|null  // ★注意：必须始终输出；仅在 open_* 时为 object，否则必须为 null
 - entry_plan 规则（硬约束）：
@@ -2859,7 +2875,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   * "reduce_plan": object|null   // 仅当 action="close" 且为“部分减仓”时使用（见下方 close 示例）
   * "notes"      : string|null   // 仅用于日志/调试
 - 【禁止输出的顶层字段】（出现即视为第二套协议，后端应拒绝或忽略）：
-  "side", "type", "close_pct", "reasoning"（顶层）, "trade_action", "decision", "plan", "position_action"
+    "side", "type", "reasoning"（顶层）, "trade_action", "decision", "plan", "position_action"
 9）reasoning 输出规范（复盘版｜唯一口径｜无电报体｜首行 Summary + GateTrace + 细节）
   - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
   - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
@@ -2868,12 +2884,12 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                | (若被闸门否决必须带 fail=>... 并写解除条件)
   - 强制：从第二行开始必须出现 GateTrace（顺序固定 Gate0→Gate5；每行一个 Gate；PASS/FAIL 必须明确）：
       GateTrace:
-      - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
-      - Gate1(ORDERFLOW): PASS/FAIL [fail=>OF 可选] 证据
-      - Gate2(STRUCTURE): PASS/FAIL [fail=>STRUCT 可选] 证据
-      - Gate3(TIMING): PASS/FAIL [fail=>TIME 可选] 证据
-      - Gate4(SETUP): PASS/FAIL [fail=>SETUP 可选] 证据
-      - Gate5(EXEC/RR): PASS/FAIL [fail=>RR 可选] 证据
+            - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
+            - Gate1(ORDERFLOW): PASS/FAIL [fail=>OF 可选] 证据（红线/否决必须明确写触发条件与解除条件）
+            - Gate2(STRUCTURE): PASS/FAIL [fail=>STRUCT 可选] 证据（至少2个结构锚点+价位/区间）
+            - Gate3(TIMING): PASS/FAIL [fail=>TIME 或 fail=>xF 可选] 证据（5m收盘锚点/触发窗口/数据是否闭合）
+            - Gate4(SETUP): PASS/FAIL [fail=>SETUP 可选] 证据（趋势动能/RSI/形态确认/入场触发质量；RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向）
+            - Gate5(EXEC/RR): PASS/FAIL [fail=>RR 可选] 证据（可执行性/滑点追价/成本；R_clean 必须给可核验算式）
   - 允许：GateTrace 之后追加任意多行自然语言复盘（不设字符上限），建议结构：
       A) 持仓/风险：R_unrealized、R_lock/protect、stop_update 触发与 new_stop 单调性
       B) 多周期依据：用 4h/1h/30m/15m/5m 正常语义描述动能/趋势/背离（禁止 MB/mB/μB、U/D/N 等自定义编码）
