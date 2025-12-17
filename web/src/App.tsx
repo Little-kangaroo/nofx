@@ -700,7 +700,7 @@ function DecisionCard({ decision, language }: { decision: DecisionRecord; langua
           </button>
           {showCoT && (
             <div className="mt-2 rounded p-4 text-sm font-mono whitespace-pre-wrap max-h-96 overflow-y-auto" style={{ background: '#0B0E11', border: '1px solid #2B3139', color: '#EAECEF' }}>
-              {decision.cot_trace}
+              {decision.cot_trace.replace(/\\n/g, '\n')}
             </div>
           )}
         </div>

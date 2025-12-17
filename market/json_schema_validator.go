@@ -134,7 +134,7 @@ func (jsv *JSONSchemaValidator) initializeStandardSchemas() {
 	jsv.AddSchema(&FieldSchema{
 		Name:        "last_price",
 		Type:        TypePrice,
-		Required:    true,
+		Required:    false, // 🔥 修复：AI决策输出中不一定包含last_price
 		MinValue:    &[]float64{0.0}[0],
 		Description: "最新价格 (统一字段)",
 		Aliases:     []string{"current_price", "price", "latest_price"},
