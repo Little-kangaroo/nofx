@@ -1642,3 +1642,297 @@ type InconsistentRecord struct {
 	DBValue       string `json:"db_value,omitempty"`
 	ExchangeValue string `json:"exchange_value,omitempty"`
 }
+
+// ===== 权威数据获取方法（确保与交易所完全一致） =====
+
+// GetOrderTrades 获取指定订单的真实成交明细
+func (t *FuturesTrader) GetOrderTrades(symbol string, orderID int64) ([]OrderTradeDetail, error) {
+	log.Printf("🔍 [GetOrderTrades] 查询订单成交明细: 币种=%s, 订单ID=%d", symbol, orderID)
+	
+	// 调用币安 GET /fapi/v1/userTrades API
+	result, err := t.client.NewListAccountTradeService().Symbol(symbol).OrderID(orderID).Do(context.Background())
+	if err != nil {
+		log.Printf("❌ [GetOrderTrades] API调用失败: %v", err)
+		return nil, fmt.Errorf("获取订单成交明细失败: %w", err)
+	}
+	
+	var trades []OrderTradeDetail
+	for _, trade := range result {
+		// 解析并转换数据
+		price, _ := strconv.ParseFloat(trade.Price, 64)
+		qty, _ := strconv.ParseFloat(trade.Quantity, 64)
+		quoteQty, _ := strconv.ParseFloat(trade.QuoteQuantity, 64)
+		commission, _ := strconv.ParseFloat(trade.Commission, 64)
+		realizedPnl, _ := strconv.ParseFloat(trade.RealizedPnl, 64)
+		
+		tradeDetail := OrderTradeDetail{
+			TradeID:         trade.ID,
+			OrderID:         trade.OrderID,
+			Symbol:          trade.Symbol,
+			Side:            getSideFromBuyer(trade.Buyer),
+			PositionSide:    string(trade.PositionSide),
+			Price:           price,
+			Quantity:        qty,
+			QuoteQty:        quoteQty,
+			Commission:      commission,
+			CommissionAsset: trade.CommissionAsset,
+			RealizedPnL:     realizedPnl,
+			IsMaker:         trade.Maker,
+			TradeTime:       time.Unix(trade.Time/1000, 0),
+		}
+		
+		trades = append(trades, tradeDetail)
+	}
+	
+	log.Printf("✅ [GetOrderTrades] 查询成功: 找到 %d 条成交记录", len(trades))
+	return trades, nil
+}
+
+// GetRecentTrades 获取最近的成交历史
+func (t *FuturesTrader) GetRecentTrades(symbol string, limit int) ([]OrderTradeDetail, error) {
+	log.Printf("🔍 [GetRecentTrades] 查询最近成交历史: 币种=%s, 数量=%d", symbol, limit)
+	
+	if limit <= 0 || limit > 500 {
+		limit = 500 // 币安API限制
+	}
+	
+	// 调用币安 GET /fapi/v1/userTrades API
+	result, err := t.client.NewListAccountTradeService().Symbol(symbol).Limit(limit).Do(context.Background())
+	if err != nil {
+		log.Printf("❌ [GetRecentTrades] API调用失败: %v", err)
+		return nil, fmt.Errorf("获取成交历史失败: %w", err)
+	}
+	
+	var trades []OrderTradeDetail
+	for _, trade := range result {
+		// 解析并转换数据（与GetOrderTrades相同的逻辑）
+		price, _ := strconv.ParseFloat(trade.Price, 64)
+		qty, _ := strconv.ParseFloat(trade.Quantity, 64)
+		quoteQty, _ := strconv.ParseFloat(trade.QuoteQuantity, 64)
+		commission, _ := strconv.ParseFloat(trade.Commission, 64)
+		realizedPnl, _ := strconv.ParseFloat(trade.RealizedPnl, 64)
+		
+		tradeDetail := OrderTradeDetail{
+			TradeID:         trade.ID,
+			OrderID:         trade.OrderID,
+			Symbol:          trade.Symbol,
+			Side:            getSideFromBuyer(trade.Buyer),
+			PositionSide:    string(trade.PositionSide),
+			Price:           price,
+			Quantity:        qty,
+			QuoteQty:        quoteQty,
+			Commission:      commission,
+			CommissionAsset: trade.CommissionAsset,
+			RealizedPnL:     realizedPnl,
+			IsMaker:         trade.Maker,
+			TradeTime:       time.Unix(trade.Time/1000, 0),
+		}
+		
+		trades = append(trades, tradeDetail)
+	}
+	
+	log.Printf("✅ [GetRecentTrades] 查询成功: 找到 %d 条成交记录", len(trades))
+	return trades, nil
+}
+
+// GetIncomeHistory 获取资金流水历史
+func (t *FuturesTrader) GetIncomeHistory(symbol string, incomeType string, limit int) ([]IncomeRecord, error) {
+	log.Printf("🔍 [GetIncomeHistory] 查询资金流水: 币种=%s, 类型=%s, 数量=%d", symbol, incomeType, limit)
+	
+	if limit <= 0 || limit > 1000 {
+		limit = 100 // 默认限制
+	}
+	
+	// 构建查询参数
+	service := t.client.NewGetIncomeHistoryService()
+	if symbol != "" {
+		service = service.Symbol(symbol)
+	}
+	if incomeType != "" {
+		service = service.IncomeType(incomeType)
+	}
+	service = service.Limit(int64(limit))
+	
+	// 调用币安 GET /fapi/v1/income API
+	result, err := service.Do(context.Background())
+	if err != nil {
+		log.Printf("❌ [GetIncomeHistory] API调用失败: %v", err)
+		return nil, fmt.Errorf("获取资金流水失败: %w", err)
+	}
+	
+	var incomes []IncomeRecord
+	for _, income := range result {
+		// 解析并转换数据
+		incomeAmount, _ := strconv.ParseFloat(income.Income, 64)
+		
+		incomeRecord := IncomeRecord{
+			Symbol:     income.Symbol,
+			IncomeType: income.IncomeType,
+			Income:     incomeAmount,
+			Asset:      income.Asset,
+			Info:       income.Info,
+			Time:       time.Unix(income.Time/1000, 0),
+			TranID:     income.TranID,
+			TradeID:    income.TradeID,
+		}
+		
+		incomes = append(incomes, incomeRecord)
+	}
+	
+	log.Printf("✅ [GetIncomeHistory] 查询成功: 找到 %d 条资金流水记录", len(incomes))
+	return incomes, nil
+}
+
+// getSideFromBuyer 根据isBuyer字段转换为标准的Side
+func getSideFromBuyer(isBuyer bool) string {
+	if isBuyer {
+		return "BUY"
+	}
+	return "SELL"
+}
+
+// GetAuthoritativeCloseData 获取权威的平仓数据（核心方法）
+func (t *FuturesTrader) GetAuthoritativeCloseData(symbol, positionSide string, closeOrderID string) (*AuthoritativeCloseData, error) {
+	log.Printf("🎯 [GetAuthoritativeCloseData] 获取权威平仓数据: %s %s, 订单ID=%s", symbol, positionSide, closeOrderID)
+	
+	// 方法1: 如果有订单ID，优先查询该订单的成交明细
+	if closeOrderID != "" && closeOrderID != "unknown" {
+		if orderID, err := strconv.ParseInt(closeOrderID, 10, 64); err == nil {
+			trades, err := t.GetOrderTrades(symbol, orderID)
+			if err == nil && len(trades) > 0 {
+				return t.aggregateOrderTrades(trades, positionSide, "ORDER_TRADES")
+			}
+			log.Printf("⚠️ [GetAuthoritativeCloseData] 订单成交查询失败，尝试其他方法: %v", err)
+		}
+	}
+	
+	// 方法2: 查询最近成交历史并匹配平仓交易
+	trades, err := t.GetRecentTrades(symbol, 50)
+	if err == nil {
+		if closeData := t.findMatchingCloseTrade(trades, symbol, positionSide); closeData != nil {
+			return closeData, nil
+		}
+		log.Printf("⚠️ [GetAuthoritativeCloseData] 未在成交历史中找到匹配的平仓交易")
+	}
+	
+	// 方法3: 查询资金流水获取真实已实现盈亏
+	incomes, err := t.GetIncomeHistory(symbol, "REALIZED_PNL", 20)
+	if err == nil && len(incomes) > 0 {
+		return t.deriveFromIncomeHistory(incomes, symbol, positionSide)
+	}
+	
+	// 如果所有方法都失败，拒绝返回估算数据
+	return nil, fmt.Errorf("无法获取 %s %s 的权威平仓数据，拒绝使用估算数据", symbol, positionSide)
+}
+
+// aggregateOrderTrades 聚合订单成交数据为权威平仓数据
+func (t *FuturesTrader) aggregateOrderTrades(trades []OrderTradeDetail, positionSide, dataSource string) (*AuthoritativeCloseData, error) {
+	if len(trades) == 0 {
+		return nil, fmt.Errorf("无成交记录")
+	}
+	
+	// 计算加权平均价格
+	totalQty := 0.0
+	totalValue := 0.0
+	totalCommission := 0.0
+	totalRealizedPnL := 0.0
+	latestTime := trades[0].TradeTime
+	
+	for _, trade := range trades {
+		totalQty += trade.Quantity
+		totalValue += trade.QuoteQty
+		totalCommission += trade.Commission
+		totalRealizedPnL += trade.RealizedPnL
+		
+		if trade.TradeTime.After(latestTime) {
+			latestTime = trade.TradeTime
+		}
+	}
+	
+	avgPrice := totalValue / totalQty
+	
+	log.Printf("✅ [aggregateOrderTrades] 聚合完成: 平均价格=%.6f, 总数量=%.6f, 总盈亏=%.2f", 
+		avgPrice, totalQty, totalRealizedPnL)
+	
+	return &AuthoritativeCloseData{
+		ActualPrice:    avgPrice,
+		ActualTime:     latestTime,
+		ActualQuantity: totalQty,
+		ActualPnL:      totalRealizedPnL,
+		ActualPnLPct:   0, // 需要根据开仓成本计算
+		Duration:       0, // 需要根据开仓时间计算
+		Commission:     totalCommission,
+		DataSource:     dataSource,
+		OrderID:        fmt.Sprintf("%d", trades[0].OrderID),
+	}, nil
+}
+
+// findMatchingCloseTrade 在成交历史中查找匹配的平仓交易
+func (t *FuturesTrader) findMatchingCloseTrade(trades []OrderTradeDetail, symbol, positionSide string) *AuthoritativeCloseData {
+	log.Printf("🔍 [findMatchingCloseTrade] 在 %d 条成交记录中查找 %s %s 的平仓交易", 
+		len(trades), symbol, positionSide)
+	
+	// 查找最近的减仓交易（可能是平仓）
+	for _, trade := range trades {
+		if trade.Symbol != symbol {
+			continue
+		}
+		
+		// 根据持仓方向判断是否为平仓交易
+		// LONG持仓 -> SELL为平仓, SHORT持仓 -> BUY为平仓
+		isCloseTrade := false
+		if positionSide == "LONG" && trade.Side == "SELL" {
+			isCloseTrade = true
+		} else if positionSide == "SHORT" && trade.Side == "BUY" {
+			isCloseTrade = true
+		}
+		
+		if isCloseTrade && trade.RealizedPnL != 0 {
+			log.Printf("✅ [findMatchingCloseTrade] 找到匹配的平仓交易: TradeID=%d, 价格=%.6f, 盈亏=%.2f", 
+				trade.TradeID, trade.Price, trade.RealizedPnL)
+			
+			return &AuthoritativeCloseData{
+				ActualPrice:    trade.Price,
+				ActualTime:     trade.TradeTime,
+				ActualQuantity: trade.Quantity,
+				ActualPnL:      trade.RealizedPnL,
+				ActualPnLPct:   0,
+				Duration:       0,
+				Commission:     trade.Commission,
+				DataSource:     "RECENT_TRADES_MATCH",
+				OrderID:        fmt.Sprintf("%d", trade.OrderID),
+			}
+		}
+	}
+	
+	log.Printf("⚠️ [findMatchingCloseTrade] 未找到匹配的平仓交易")
+	return nil
+}
+
+// deriveFromIncomeHistory 从资金流水推导平仓数据
+func (t *FuturesTrader) deriveFromIncomeHistory(incomes []IncomeRecord, symbol, positionSide string) (*AuthoritativeCloseData, error) {
+	log.Printf("🔍 [deriveFromIncomeHistory] 从 %d 条资金流水中推导平仓数据", len(incomes))
+	
+	// 找到最近的已实现盈亏记录
+	for _, income := range incomes {
+		if income.Symbol == symbol && income.IncomeType == "REALIZED_PNL" && income.Income != 0 {
+			log.Printf("✅ [deriveFromIncomeHistory] 找到已实现盈亏记录: %.2f USDT, 时间=%s", 
+				income.Income, income.Time.Format("15:04:05"))
+			
+			// 注意：从Income无法获取成交价格，但可以获取准确的盈亏
+			return &AuthoritativeCloseData{
+				ActualPrice:    0, // 无法从Income获取价格
+				ActualTime:     income.Time,
+				ActualQuantity: 0, // 无法从Income获取数量
+				ActualPnL:      income.Income,
+				ActualPnLPct:   0,
+				Duration:       0,
+				Commission:     0,
+				DataSource:     "INCOME_HISTORY",
+				OrderID:        income.TradeID,
+			}, nil
+		}
+	}
+	
+	return nil, fmt.Errorf("未在资金流水中找到相关的已实现盈亏记录")
+}

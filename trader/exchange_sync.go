@@ -596,38 +596,77 @@ func (sync *ExchangeRecordSync) closePositionInDatabase(symbol, side string, clo
 		return fmt.Errorf("数据库连接不可用")
 	}
 	
+	log.Printf("⚠️ [ExchangeSync] closePositionInDatabase 被调用，但已废弃估算逻辑")
+	log.Printf("    参数: symbol=%s, side=%s, estimatedPrice=%.6f, reason=%s", symbol, side, closePrice, reason)
+	log.Printf("🚫 [ExchangeSync] 拒绝使用估算价格 %.6f，必须从交易所获取权威数据", closePrice)
+	
 	// 查找对应的开仓记录
 	openTrade, err := sync.database.GetOpenTrade(sync.traderID, symbol, side)
 	if err != nil {
 		return fmt.Errorf("未找到开仓记录: %w", err)
 	}
 	
-	// 计算盈亏
-	var pnl float64
-	if side == "long" {
-		pnl = openTrade.Quantity * (closePrice - openTrade.OpenPrice)
+	log.Printf("✅ [ExchangeSync] 找到开仓记录: ID=%s, 开仓价=%.6f", openTrade.ID, openTrade.OpenPrice)
+	
+	// 🎯 关键修改：必须从交易所获取权威数据
+	binanceTrader, ok := sync.trader.(*FuturesTrader)
+	if !ok {
+		return fmt.Errorf("交易器不支持权威数据查询")
+	}
+	
+	// 获取权威的平仓数据
+	authData, err := binanceTrader.GetAuthoritativeCloseData(symbol, side, orderID)
+	if err != nil {
+		log.Printf("❌ [ExchangeSync] 无法获取权威数据: %v", err)
+		log.Printf("🚫 [ExchangeSync] 拒绝写入估算数据到数据库")
+		
+		// 记录失败原因，但不写入错误数据
+		return fmt.Errorf("拒绝使用估算数据，获取权威数据失败: %w", err)
+	}
+	
+	log.Printf("✅ [ExchangeSync] 获取权威数据成功:")
+	log.Printf("    真实价格: %.6f", authData.ActualPrice)
+	log.Printf("    真实盈亏: %.2f USDT", authData.ActualPnL)
+	log.Printf("    数据来源: %s", authData.DataSource)
+	
+	// 使用权威数据
+	var finalPnL float64
+	var finalPnLPct float64
+	var finalPrice float64
+	var finalTime time.Time
+	
+	if authData.ActualPnL != 0 && authData.DataSource != "INCOME_HISTORY" {
+		finalPnL = authData.ActualPnL
+		finalPrice = authData.ActualPrice
+		finalTime = authData.ActualTime
+	} else if authData.ActualPrice > 0 {
+		if side == "long" {
+			finalPnL = openTrade.Quantity * (authData.ActualPrice - openTrade.OpenPrice)
+		} else {
+			finalPnL = openTrade.Quantity * (openTrade.OpenPrice - authData.ActualPrice)
+		}
+		finalPrice = authData.ActualPrice
+		finalTime = authData.ActualTime
 	} else {
-		pnl = openTrade.Quantity * (openTrade.OpenPrice - closePrice)
+		return fmt.Errorf("权威数据不完整，无法写入数据库")
 	}
 	
-	pnlPct := 0.0
 	if openTrade.MarginUsed > 0 {
-		pnlPct = (pnl / openTrade.MarginUsed) * 100
+		finalPnLPct = (finalPnL / openTrade.MarginUsed) * 100
 	}
 	
-	closeTime := time.Now()
-	durationSecs := int(closeTime.Sub(openTrade.OpenTime).Seconds())
+	durationSecs := int(finalTime.Sub(openTrade.OpenTime).Seconds())
 	
-	// 更新数据库
-	err = sync.database.UpdateTrade(openTrade.ID, closePrice, closeTime, 
-		"closed", reason, orderID, pnl, pnlPct, durationSecs)
+	// 只有在获得完整权威数据后才更新数据库
+	err = sync.database.UpdateTrade(openTrade.ID, finalPrice, finalTime, 
+		"closed", reason, orderID, finalPnL, finalPnLPct, durationSecs)
 		
 	if err != nil {
 		return fmt.Errorf("更新交易记录失败: %w", err)
 	}
 	
 	log.Printf("✅ [DB Close] 数据库记录已关闭: %s %s 盈亏=%.2f USDT", 
-		symbol, side, pnl)
+		symbol, side, finalPnL)
 	
 	return nil
 }

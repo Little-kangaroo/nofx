@@ -1056,3 +1056,23 @@ func (t *AsterTrader) GetTradeHistory(symbol string, limit int) ([]map[string]in
 	log.Printf("⚠️ [Aster] GetTradeHistory 暂未实现")
 	return []map[string]interface{}{}, nil
 }
+
+// ===== 权威数据查询方法（暂未实现，返回空值避免编译错误） =====
+
+// GetOrderTrades 获取指定订单的真实成交明细（暂未实现）
+func (t *AsterTrader) GetOrderTrades(symbol string, orderID int64) ([]OrderTradeDetail, error) {
+	log.Printf("⚠️ [Aster] GetOrderTrades 暂未实现")
+	return []OrderTradeDetail{}, fmt.Errorf("Aster GetOrderTrades 暂未实现")
+}
+
+// GetRecentTrades 获取最近的成交历史（暂未实现）
+func (t *AsterTrader) GetRecentTrades(symbol string, limit int) ([]OrderTradeDetail, error) {
+	log.Printf("⚠️ [Aster] GetRecentTrades 暂未实现")
+	return []OrderTradeDetail{}, fmt.Errorf("Aster GetRecentTrades 暂未实现")
+}
+
+// GetIncomeHistory 获取资金流水历史（暂未实现）
+func (t *AsterTrader) GetIncomeHistory(symbol string, incomeType string, limit int) ([]IncomeRecord, error) {
+	log.Printf("⚠️ [Aster] GetIncomeHistory 暂未实现")
+	return []IncomeRecord{}, fmt.Errorf("Aster GetIncomeHistory 暂未实现")
+}

@@ -305,20 +305,20 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		switch client.Provider {
 		case ProviderDeepSeek:
 			requestBody["max_tokens"] = maxTokens // DeepSeek仍使用max_tokens
-			requestBody["temperature"] = 0.2      // DeepSeek支持temperature参数
+			requestBody["temperature"] = 0.3      // DeepSeek支持temperature参数
 			// 🔧 新增：DeepSeek支持JSON格式输出
 			requestBody["response_format"] = map[string]interface{}{
 				"type": "json_object",
 			}
 		case ProviderQwen:
 			requestBody["max_tokens"] = maxTokens // Qwen仍使用max_tokens
-			requestBody["temperature"] = 0.5      // Qwen支持temperature参数
+			requestBody["temperature"] = 0.3      // Qwen支持temperature参数
 		case ProviderCustom:
 			// 自定义API（通常是OpenAI兼容）- 支持GPT-5.1参数
 			requestBody["max_completion_tokens"] = maxTokens
 
 			// GPT-5.1专用参数
-			if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
+			if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5.2") {
 				requestBody["reasoning_effort"] = "low"
 				requestBody["prompt_cache_retention"] = "24h"
 			}

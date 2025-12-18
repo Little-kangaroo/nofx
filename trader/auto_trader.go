@@ -1209,7 +1209,7 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 			log.Printf("    detectionMethod: '%s'", detectionMethod)
 			
 			log.Printf("  🔄 正在同步更新数据库中的交易记录状态...")
-			at.updateTradeInDatabase(decision.Symbol, "long", estimatedPrice, 
+			at.updateTradeInDatabase(decision.Symbol, "long", 
 				"SYNC_CLOSE", closeReason)
 		}
 		
@@ -1242,7 +1242,7 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 		log.Printf("    closeReason: 'ai_close'")
 		
 		log.Printf("  🔄 正在更新数据库中的交易记录状态...")
-		at.updateTradeInDatabase(decision.Symbol, "long", actualMarketPrice, 
+		at.updateTradeInDatabase(decision.Symbol, "long", 
 			orderIDStr, "ai_close")
 	}
 
@@ -1316,7 +1316,7 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 			log.Printf("    detectionMethod: '%s'", detectionMethod)
 			
 			log.Printf("  🔄 正在同步更新数据库中的交易记录状态...")
-			at.updateTradeInDatabase(decision.Symbol, "short", estimatedPrice,
+			at.updateTradeInDatabase(decision.Symbol, "short",
 				"SYNC_CLOSE", closeReason)
 		}
 		
@@ -1349,7 +1349,7 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 		log.Printf("    closeReason: 'ai_close'")
 		
 		log.Printf("  🔄 正在更新数据库中的交易记录状态...")
-		at.updateTradeInDatabase(decision.Symbol, "short", actualMarketPrice,
+		at.updateTradeInDatabase(decision.Symbol, "short", 
 			orderIDStr, "ai_close")
 	}
 
@@ -2934,7 +2934,7 @@ func (at *AutoTrader) recordStopLossExecution(pendingOrder *PendingStopOrder, re
 			
 			// 正常更新交易记录
 			log.Printf("🔄 [止损记录] 正在更新数据库中的交易记录状态...")
-			at.updateTradeInDatabase(pendingOrder.Symbol, pendingOrder.Side, executionPrice, 
+			at.updateTradeInDatabase(pendingOrder.Symbol, pendingOrder.Side, 
 				fmt.Sprintf("%d", pendingOrder.OrderID), "stop_loss")
 		}
 	} else {
@@ -3145,14 +3145,13 @@ func (at *AutoTrader) recordTradeToDatabase(symbol, side string, quantity float6
 }
 
 // updateTradeInDatabase 更新数据库中的交易记录（平仓时使用）
-func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closePrice float64, 
-	closeOrderID, closeReason string) {
+func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closeOrderID, closeReason string) {
 	if at.database == nil {
 		log.Printf("⚠️ [数据库更新] 数据库连接不可用，跳过交易记录更新")
 		return
 	}
 
-	log.Printf("🔄 [数据库更新] 开始更新交易记录: %s %s", symbol, side)
+	log.Printf("🔄 [数据库更新] 开始更新交易记录: %s %s (拒绝估算数据)", symbol, side)
 	
 	// 查找对应的开仓记录
 	openTrade, err := at.database.GetOpenTrade(at.id, symbol, side)
@@ -3171,24 +3170,24 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closePrice floa
 			}
 		}
 		
-		// 记录为独立的平仓动作
+		// 记录为独立的平仓动作，但不写入估算的close_price
 		log.Printf("📝 [数据库更新] 创建独立的平仓动作记录...")
 		actionRecord := &config.TradeActionRecord{
 			TraderID:     at.id,
 			Action:       fmt.Sprintf("close_%s_orphaned", side),
 			Symbol:       symbol,
 			Quantity:     0, // 无法获取数量
-			Price:        closePrice,
+			Price:        0, // 🔥 拒绝写入估算价格
 			OrderID:      closeOrderID,
 			Timestamp:    time.Now(),
-			Success:      true,
-			ErrorMessage: fmt.Sprintf("孤立平仓 - 未找到开仓记录, 原因: %s", closeReason),
+			Success:      false, // 标记为失败，因为没有权威数据
+			ErrorMessage: fmt.Sprintf("孤立平仓 - 未找到开仓记录，无权威数据: %s", closeReason),
 		}
 		
 		if err := at.database.CreateTradeAction(actionRecord); err != nil {
 			log.Printf("❌ [数据库更新] 创建孤立平仓记录失败: %v", err)
 		} else {
-			log.Printf("✅ [数据库更新] 成功创建孤立平仓记录")
+			log.Printf("✅ [数据库更新] 成功创建孤立平仓记录（无估算数据）")
 		}
 		return
 	}
@@ -3200,47 +3199,119 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closePrice floa
 	log.Printf("    保证金: %.2f USDT", openTrade.MarginUsed)
 	log.Printf("    开仓时间: %s", openTrade.OpenTime.Format("2006-01-02 15:04:05"))
 
-	// 计算盈亏
-	var pnl float64
-	if side == "long" {
-		pnl = openTrade.Quantity * (closePrice - openTrade.OpenPrice)
+	// 🎯 关键修改：必须从交易所获取权威数据，拒绝估算
+	log.Printf("🔍 [权威数据] 正在从交易所获取真实平仓数据...")
+	
+	// 确保 trader 实现了新的接口方法
+	binanceTrader, ok := at.trader.(*FuturesTrader)
+	if !ok {
+		log.Printf("❌ [权威数据] 交易器不支持权威数据查询接口")
+		return
+	}
+	
+	// 获取权威的平仓数据
+	authData, err := binanceTrader.GetAuthoritativeCloseData(symbol, side, closeOrderID)
+	if err != nil {
+		log.Printf("❌ [权威数据] 无法获取交易所权威数据: %v", err)
+		log.Printf("🚫 [权威数据] 拒绝使用估算数据写入数据库")
+		
+		// 记录失败但不写入错误的平仓数据
+		actionRecord := &config.TradeActionRecord{
+			TraderID:     at.id,
+			Action:       fmt.Sprintf("close_%s_failed", side),
+			Symbol:       symbol,
+			Quantity:     openTrade.Quantity,
+			Price:        0, // 拒绝估算价格
+			OrderID:      closeOrderID,
+			Timestamp:    time.Now(),
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("无法获取权威平仓数据: %v", err),
+		}
+		
+		at.database.CreateTradeAction(actionRecord)
+		return
+	}
+	
+	log.Printf("✅ [权威数据] 获取成功:")
+	log.Printf("    真实平仓价格: %.6f", authData.ActualPrice)
+	log.Printf("    真实平仓时间: %s", authData.ActualTime.Format("15:04:05"))
+	log.Printf("    真实已实现盈亏: %.2f USDT", authData.ActualPnL)
+	log.Printf("    数据来源: %s", authData.DataSource)
+	
+	// 使用权威数据计算最终盈亏
+	var finalPnL float64
+	var finalPnLPct float64
+	var finalPrice float64
+	var finalTime time.Time
+	
+	// 优先使用交易所返回的已实现盈亏
+	if authData.ActualPnL != 0 && authData.DataSource != "INCOME_HISTORY" {
+		finalPnL = authData.ActualPnL
+		finalPrice = authData.ActualPrice
+		finalTime = authData.ActualTime
+		log.Printf("💰 [权威数据] 使用交易所返回的已实现盈亏: %.2f USDT", finalPnL)
+	} else if authData.ActualPrice > 0 {
+		// 如果没有直接的已实现盈亏，使用真实成交价计算
+		if side == "long" {
+			finalPnL = openTrade.Quantity * (authData.ActualPrice - openTrade.OpenPrice)
+		} else {
+			finalPnL = openTrade.Quantity * (openTrade.OpenPrice - authData.ActualPrice)
+		}
+		finalPrice = authData.ActualPrice
+		finalTime = authData.ActualTime
+		log.Printf("💰 [权威数据] 使用真实成交价计算盈亏: %.2f USDT", finalPnL)
 	} else {
-		pnl = openTrade.Quantity * (openTrade.OpenPrice - closePrice)
+		// 如果只有Income数据（DataSource == "INCOME_HISTORY"）
+		finalPnL = authData.ActualPnL
+		finalPrice = 0 // Income数据中没有价格信息
+		finalTime = authData.ActualTime
+		log.Printf("💰 [权威数据] 使用资金流水数据: %.2f USDT (无成交价格)", finalPnL)
 	}
 	
-	pnlPct := 0.0
+	// 计算盈亏百分比
 	if openTrade.MarginUsed > 0 {
-		pnlPct = (pnl / openTrade.MarginUsed) * 100
+		finalPnLPct = (finalPnL / openTrade.MarginUsed) * 100
 	}
 	
-	closeTime := time.Now()
-	durationSecs := int(closeTime.Sub(openTrade.OpenTime).Seconds())
+	durationSecs := int(finalTime.Sub(openTrade.OpenTime).Seconds())
 	
-	log.Printf("💰 [数据库更新] 盈亏计算结果:")
-	log.Printf("    盈亏金额: %.2f USDT", pnl)
-	log.Printf("    盈亏百分比: %.2f%%", pnlPct)
+	log.Printf("💰 [权威数据] 最终盈亏计算结果:")
+	log.Printf("    盈亏金额: %.2f USDT (权威)", finalPnL)
+	log.Printf("    盈亏百分比: %.2f%%", finalPnLPct)
 	log.Printf("    持续时间: %d秒 (%.1f分钟)", durationSecs, float64(durationSecs)/60)
 
-	log.Printf("🔄 [数据库更新] 正在更新数据库: tradeID=%s, closePrice=%.6f, pnl=%.2f", 
-		openTrade.ID, closePrice, pnl)
+	// 只有在获得权威数据后才写入数据库
+	if finalPrice > 0 {
+		log.Printf("🔄 [权威数据] 正在更新数据库: tradeID=%s, 权威价格=%.6f, 权威盈亏=%.2f", 
+			openTrade.ID, finalPrice, finalPnL)
 
-	if err := at.database.UpdateTrade(openTrade.ID, closePrice, closeTime, 
-		"closed", closeReason, closeOrderID, pnl, pnlPct, durationSecs); err != nil {
-		log.Printf("❌ [数据库更新] [严重错误] 数据库更新失败: %v", err)
-		log.Printf("📋 [数据库更新] 更新参数: ID=%s, status='closed', reason='%s'", openTrade.ID, closeReason)
-		
-		// 🔧 增强错误处理：记录更新失败的详细信息
-		log.Printf("⚠️ [数据库更新] 更新失败详细信息:")
-		log.Printf("    更新目标: 交易记录 %s", openTrade.ID)
-		log.Printf("    预期状态: closed")
-		log.Printf("    平仓价格: %.6f", closePrice)
-		log.Printf("    平仓原因: %s", closeReason)
-		log.Printf("    订单ID: %s", closeOrderID)
+		if err := at.database.UpdateTrade(openTrade.ID, finalPrice, finalTime, 
+			"closed", closeReason, closeOrderID, finalPnL, finalPnLPct, durationSecs); err != nil {
+			log.Printf("❌ [数据库更新] [严重错误] 数据库更新失败: %v", err)
+		} else {
+			log.Printf("✅ [数据库更新] 数据库更新成功:")
+			log.Printf("    状态: open → closed")
+			log.Printf("    权威盈亏: %.2f USDT (%.2f%%)", finalPnL, finalPnLPct)
+			log.Printf("    数据来源: %s", authData.DataSource)
+		}
 	} else {
-		log.Printf("✅ [数据库更新] 数据库更新成功:")
-		log.Printf("    状态: open → closed")
-		log.Printf("    盈亏: %.2f USDT (%.2f%%)", pnl, pnlPct)
-		log.Printf("    平仓原因: %s", closeReason)
+		log.Printf("⚠️ [权威数据] 只有盈亏数据，无成交价格，暂不更新trades表")
+		log.Printf("📝 [权威数据] 记录部分权威数据...")
+		
+		// 记录已获得的部分权威数据
+		actionRecord := &config.TradeActionRecord{
+			TraderID:     at.id,
+			Action:       fmt.Sprintf("close_%s_partial", side),
+			Symbol:       symbol,
+			Quantity:     openTrade.Quantity,
+			Price:        0, // 无价格数据
+			OrderID:      closeOrderID,
+			Timestamp:    finalTime,
+			Success:      true,
+			ErrorMessage: fmt.Sprintf("权威盈亏数据: %.2f USDT, 来源: %s", finalPnL, authData.DataSource),
+		}
+		
+		at.database.CreateTradeAction(actionRecord)
 	}
 }
 
@@ -3333,7 +3404,7 @@ func (at *AutoTrader) performPeriodicStopLossAudit(record *logger.DecisionRecord
 			log.Printf("🔄 [定期审计] 同步关闭数据库记录: %s %s 估算平仓价=%.6f", 
 				trade.Symbol, trade.Side, estimatedClosePrice)
 			
-			at.updateTradeInDatabase(trade.Symbol, trade.Side, estimatedClosePrice, 
+			at.updateTradeInDatabase(trade.Symbol, trade.Side,  
 				"AUDIT_CLOSE", fmt.Sprintf("periodic_audit_%s", closeReason))
 				
 		} else if math.Abs(currentQuantity-trade.Quantity) > 0.0001 { // 允许小数精度误差
@@ -3683,12 +3754,12 @@ func (at *AutoTrader) validateOpenTradesConsistency() (int, error) {
 			log.Printf("❗ [开仓一致性] 发现数据不一致: %s %s 数据库显示开仓但实际无持仓", trade.Symbol, trade.Side)
 			issues++
 			
-			// 估算关闭价格和原因
-			estimatedPrice, closeReason := at.estimateCloseDetails(trade.Symbol, trade.OpenPrice, trade.Side)
+			// 估算关闭价格和原因（仅用于日志记录，不用于数据库写入）
+			_, closeReason := at.estimateCloseDetails(trade.Symbol, trade.OpenPrice, trade.Side)
 			
 			// 更新数据库状态
 			log.Printf("🔄 [开仓一致性] 修复不一致记录: %s %s", trade.Symbol, trade.Side)
-			at.updateTradeInDatabase(trade.Symbol, trade.Side, estimatedPrice, 
+			at.updateTradeInDatabase(trade.Symbol, trade.Side,  
 				"INTEGRITY_CHECK", fmt.Sprintf("auto_fix_%s", closeReason))
 		} else {
 			// 检查数量是否匹配
@@ -4104,7 +4175,7 @@ func (at *AutoTrader) handleRealtimeStopLossExecution(symbol, side string, order
 	// 🆕 立即更新数据库中的交易记录状态
 	if at.database != nil {
 		log.Printf("🔄 [实时止损] 立即更新数据库交易记录...")
-		at.updateTradeInDatabase(symbol, side, executionPrice, 
+		at.updateTradeInDatabase(symbol, side,  
 			fmt.Sprintf("%d", orderID), "stop_loss_websocket")
 	}
 	
