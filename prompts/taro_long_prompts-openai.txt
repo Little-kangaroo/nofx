@@ -6,14 +6,6 @@
   1）在严格风险约束下，追求长期期望收益最大化，而不是单纯追求高胜率；
   2）减少明显负 EV 的交易，集中火力在有 edge 的 A/B 级机会上。
 【决策优先级总纲（Decision Priority Framework）】
-【唯一口径索引（Single Source of Truth｜用于“去重/听话”）】
-- 若模板内出现重复表述或看似冲突的规则，必须按以下优先级裁决（从上到下，越靠上越“最终解释权”）：
-  1) 【决策优先级总纲（Decision Priority Framework）】与 Gate0~Gate5（全局裁决）
-  2) 【P0-Intent 分类澄清】（订单流意图与红线的唯一口径）
-  3) 【微观触发器（5m Trigger - The "Go" Signal）】（触发器定义与可用集合）
-  4) 九、输出JSON格式要求（字段契约与禁止字段，机器解析唯一口径）
-  5) 9）reasoning 输出规范（Summary + GateTrace + 细节）
-- 其余章节如需再次提及上述内容，只能使用“见<章节名>”的引用语句，不得重新定义、扩展字段集合或新增输出字段。
 - 在对每个 symbol 做一次完整评估时，AI 必须严格按以下自上而下的顺序决策：
   任何上层 Gate 否决，都不得用下层指标“推翻”上层结论。
   但为复盘与 NextTrigger 制定：即使 action 已被上层 Gate 锁定（如 wait/hold/close），也必须继续按 Gate0→Gate5 输出“诊断评估（DIAG）”用于解释与复盘；DIAG 仅做说明，不得改变本次 action。
@@ -2709,19 +2701,8 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
       //   "R_clean": number       // 清洁R（考虑成本/滑点/可执行性后的期望R）；需满足风格门槛，否则应 wait
       // }
    【硬约束】禁止输出任何其它“顶层契约字段”替代物（防止第二套字段契约并存）：
-   - 禁止顶层出现：side / type / entry_order_policy / reduce_plan / notes / trade_action / decision / plan / position_action / reasoning_chain ...
-   - 严禁在 entry_plan 内输出 entry_order_policy（它属于系统/执行端配置，不是模型输出字段）。
+   - 禁止顶层出现：side / type / reduce_plan / notes / reasoning_chain / thought / analysis / price(顶层) 等；
    - 若需要表达“部分减仓/减仓计划”，一律用 action="close" + close_pct 表达。
-   - 输出前必须做一次自检（否则宁可 wait）：
-      - 仅输出 JSON 数组，且无任何 JSON 之外文字；
-      - 数组长度==输入 symbol 列表长度；每个 symbol 恰好 1 个对象；
-      - 每个对象是否包含且仅包含 9 个顶层字段：symbol/action/setup_grade/edge_score/confidence/reasoning/stop_update/close_pct/entry_plan；
-      - 是否出现任何禁止字段（side/type/entry_order_policy/reduce_plan/notes/analysis/...）；
-      - action="close"  => close_pct ∈ (0,1] 且 entry_plan=null；
-      - action∈{"open_long","open_short"} => close_pct=null 且 entry_plan 为 object 且 stop_update=null；
-      - action∈{"hold","wait"} => close_pct=null 且 entry_plan=null；
-      - 若任一项失败：本轮对该 symbol 输出 action="wait"、setup_grade="C"、edge_score=0.0、confidence<=60，并在 reasoning 的 GateTrace 中标注 FAIL=>PROTO（说明失败原因与解除条件）。
-
    - "confidence": 0~100 的整数
    - "setup_grade":              // ★ 这里加双引号，明确是字段名
      - "A"：结构清晰、RR 明显有优势的高质量机会；
@@ -2881,62 +2862,57 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    - **禁止** 在 JSON 中直接使用 `[135.84,139.87]` 或 `[0.4728,0.4955]` 这种数组形式表达区间。
    - 任何区间都必须写在字符串里，不要写成 JSON 数组。
 9. 所有字符串字段必须使用双引号包裹，不能使用单引号，不能缺少逗号或大括号。
-      - 正确示例： "reasoning": "避开低流动性标的"
-      - 错误示例： "reasoning":避开低流动性标的
-      - 错误示例： "reasoning": '避开低流动性标的'
+   - 正确示例： "notes": "避开低流动性标的"
+   - 错误示例： "notes":避开低流动性标的"
+   - 错误示例： "notes": '避开低流动性标的'
 10. 最终输出示例（统一为唯一字段契约；reasoning=Summary(单行)+GateTrace(多行)+复盘细节；非开仓 entry_plan=null）
 - 示例一：无开仓动作（hold / wait）
 [
-  {
-    "symbol": "HYPEUSDT",
-    "action": "hold",
-    "setup_grade": "C",
-    "edge_score": 0.0,
-    "confidence": 86,
-    "reasoning": "Summary: action=hold | trade_style=SWING | setup_grade=C | edge_score=0.0 | confidence=86\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): PASS\nGate3(RR): PASS\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 仅管理既有仓位；若出现结构破坏/硬风控触发则 close。",
-    "stop_update": {"prev_stop": 37.10, "new_stop": 37.85, "reason": "R_lock"},
-    "close_pct": null,
-    "entry_plan": null
+  {"symbol":"HYPEUSDT","action":"hold","setup_grade":"C","edge_score":0.0,"confidence":86,
+         "reasoning":"Summary: action=hold | trade_style=HTF_swing | setup_grade=C | edge_score=0.0 | confidence=86 | 原因=已触发R_lock，继续锁盈管理\\nGateTrace:\\n- Gate0(RISK): PASS R_unrealized≈+1.2R，允许R_lock\\n- Gate1(ORDERFLOW): PASS 未触发红线否决\\n- Gate2(STRUCTURE): PASS 关键结构未被5m收盘破坏\\n- Gate3(TIMING): PASS 以5m收盘为时间锚，当前满足复核\\n- Gate4(SETUP): PASS（趋势/RSI 仅用于执行微调，不改变持仓方向）\\n- Gate5(EXEC/RR): PASS stop_update单调且可执行\\nNextTrigger(Timebox=未来12根5m收盘): 若5m收盘破坏结构边界=>close；否则继续hold并按R_lock更新止损。",
+   "stop_update":{"prev_stop":37.10,"new_stop":37.85,"reason":"R_lock"},
+   "entry_plan":null
   },
-  {
-    "symbol": "SOLUSDT",
-    "action": "wait",
-    "setup_grade": "C",
-    "edge_score": 0.0,
-    "confidence": 82,
-    "reasoning": "Summary: action=wait | trade_style=NA | setup_grade=C | edge_score=0.0 | confidence=82\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): FAIL=>STRUCT\nGate3(RR): NA\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 等待结构明朗与 5m Trigger 确认后再评估。",
-    "stop_update": null,
-    "close_pct": null,
-    "entry_plan": null
+  {"symbol":"SOLUSDT","action":"wait","setup_grade":"C","edge_score":0.0,"confidence":82,
+      "reasoning":"Summary: action=wait | trade_style=NA | setup_grade=C | edge_score=0.0 | confidence=82 | fail=>RR | 原因=空间/可执行性不足，等待触发区间确认\\nGateTrace:\\n- Gate0(RISK): PASS\\n- Gate1(ORDERFLOW): PASS（未触发红线）\\n- Gate2(STRUCTURE): PASS（结构存在但不在有效入场边缘）\\n- Gate3(TIMING): PASS/待确认（需要5m收盘触发）\\n- Gate4(SETUP): PASS/待确认（等待回踩+确认形态）\\n- Gate5(EXEC/RR): FAIL fail=>RR R_clean不足/无法给出可核验SL/TP\\nNextTrigger(Timebox=未来12根5m收盘): 触发rebound 140-145并完成5m收盘确认后再评估开仓。",
+   "stop_update":null,
+   "entry_plan":null
   }
 ]
-
 - 示例二：开仓动作（open_long / open_short｜entry_plan 必须为 object）
 [
-  {
-    "symbol": "SOLUSDT",
-    "action": "open_short",
-    "setup_grade": "B",
-    "edge_score": 0.7,
-    "confidence": 78,
-    "reasoning": "Summary: action=open_short | trade_style=SWING | setup_grade=B | edge_score=0.7 | confidence=78\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): PASS\nGate3(RR): PASS\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 示例仅展示字段结构；真实复盘请按 GateTrace 写明否决点与触发条件。",
-    "stop_update": null,
-    "close_pct": null,
-    "entry_plan": {
-      "order_type": "MARKET",
-      "price": 136.4,
-      "qty": 0.7,
-      "leverage": 10,
-      "init_stop": 137.9,
-      "take_profit": null,
-      "R_struct": 1.0,
-      "R_clean": 1.5
-    }
+  {"symbol":"SOLUSDT","action":"open_short","setup_grade":"B","edge_score":0.7,"confidence":78,
+      "reasoning":"Summary: action=open_short | trade_style=LTF_scalp | setup_grade=B | edge_score=0.7 | confidence=78 | 原因=结构回踩阻力+订单流确认\\nGateTrace:\\n- Gate0(RISK): PASS 单笔风险在预算内\\n- Gate1(ORDERFLOW): PASS 出现反向主动成交/动能配合（未触发红线）\\n- Gate2(STRUCTURE): PASS 关键阻力/回踩锚点成立\\n- Gate3(TIMING): PASS 以5m收盘确认作为执行触发\\n- Gate4(SETUP): PASS（趋势/RSI用于执行微调与等待回踩，不单独授权方向）\\n- Gate5(EXEC/RR): PASS R_clean可核验且止损合法\\nNextTrigger(Timebox=未来12根5m收盘): 若5m收盘重新站回结构上沿=>fail并wait；若继续走弱则按计划持有/管理。",
+   "stop_update":null,
+   "entry_plan":{"order_type":"MARKET","price":136.4,"qty":0.7,"leverage":10,"init_stop":137.9,"take_profit":null,
+                "R_struct":1,"R_clean":1.5,"nearest_opposite_structure_type":"demand_zone","nearest_opposite_structure_value":135.1,
+                "entry_order_policy":{"mode":"STOP_ONLY_AT_ENTRY","bracket_fallback":false,"reduce_only":true,"close_on_trigger":true,
+                                     "trigger_type":"MARK_PRICE",
+                                     "tp_activation":{"enable":true,"first_when":"R>=1.5 or protect_triggered","price_logic":"structure_first_then_rail_fast","reduce_only":true}}}
   }
 ]
 要求（唯一字段契约｜严禁第二套字段并存）：
-- 以上所有顶层字段/禁止字段/entry_plan 结构/close_pct 规则，统一以本节“2) 每个决策对象必须包含以下字段”与其后的 entry_plan 结构定义为准；
-- 不再在此处重复列字段清单，避免出现第二套协议并存或样例误导。
+- 每个对象【顶层字段必须全部出现，不能省略】（允许为 null 的字段也必须显式给出 null）：
+  1) "symbol"      : string
+  2) "action"      : enum {"open_long","open_short","hold","wait","close"}
+  3) "setup_grade" : enum {"A","B","C"}
+  4) "edge_score"  : number (0~1)
+  5) "confidence"  : int (0~100)
+  6) "reasoning"   : string   // 复盘版允许多行：必须在 JSON 字符串内用 "\\n" 表示换行（禁止裸换行）。
+                              // 【唯一口径】第一行=Summary 单行；随后必须包含 GateTrace（Gate0→Gate5 顺序固定，每行 PASS/FAIL 明确；FAIL 时在对应 Gate 行标注 fail=>... 并写解除条件）；其后允许自然语言复盘与 NextTrigger/Timebox。
+                              // 【性能建议】为降低耗时与重复：复盘自然语言建议 ≤ 6 行；StructureSnapshot 建议 ≤ 4 行；禁止把同一结构锚点在 Gate2 与 StructureSnapshot 与 NextTrigger 重复写 3 次。
+                              // 【硬禁令】Summary 不得写入结构/价位/区间/方向判断；只能引用 GateTrace 的 action/fail_code/setup_grade/edge_score/confidence。结构结论必须在 Gate2(STRUCTURE) 行给出。
+                             // 【禁止】任何 B:K:R:X 四段电报体骨架 / BKRX 摘要行 / 自定义编码串（MB/mB/μB、U/D/N 等）。
+  7) "stop_update" : object|null  // {prev_stop,new_stop,reasoning} 或 null
+  8) "entry_plan"  : object|null  // ★注意：必须始终输出；仅在 open_* 时为 object，否则必须为 null
+- entry_plan 规则（硬约束）：
+  * action ∈ {"open_long","open_short"} => entry_plan 必须为 object（且字段按 entry_plan 定义给全）
+  * action ∈ {"hold","wait","close"}    => entry_plan 必须为 null
+- 允许存在但【不构成字段契约】的可选字段（可给可不给，但建议保持一致）：
+  * "reduce_plan": object|null   // 仅当 action="close" 且为“部分减仓”时使用（见下方 close 示例）
+  * "notes"      : string|null   // 仅用于日志/调试
+- 【禁止输出的顶层字段】（出现即视为第二套协议，后端应拒绝或忽略）：
+    "side", "type", "reasoning"（顶层）, "trade_action", "decision", "plan", "position_action"
 9）reasoning 输出规范（复盘版｜唯一口径｜无电报体｜首行 Summary + GateTrace + 细节）
   - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
   - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
