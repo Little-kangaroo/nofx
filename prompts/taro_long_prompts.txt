@@ -1512,8 +1512,10 @@ C) confidence (微观执行置信度: 0~100)
         * 仅允许：
           · 对已有 SHORT 仓位做风险管理（close（部分平仓用 close_pct）/move_stop（stop_update）等），或
           · 等待明确反转结构出现后，再按逆势多单规则小仓尝试 LONG；
-        * 若模型仍给出 open_short 建议，风控层应强制将 action 改为 "wait" 或仅管理既有仓位，
-          并在 reasoning 中说明“处于空头尾声区，禁止顺势追空”。
+        * 若模型仍给出 open_short 建议，风控层应强制将 action 改为：
+           - 若该 symbol 无持仓：action="wait"
+           - 若该 symbol 已有持仓：action="hold"（仅允许 close/close_pct/stop_update；禁止 open_long/open_short），
+            并在 reasoning 中说明“处于空头尾声区，禁止顺势追空”。
   2）多头尾声区（BULL exhaustion）：
       - 条件（需同时满足）：
         * major_bias = BULL，且
@@ -1525,8 +1527,10 @@ C) confidence (微观执行置信度: 0~100)
         * 仅允许：
           · 对已有 LONG 仓位做风险管理（close（部分平仓用 close_pct）/move_stop（stop_update）等），或
           · 等待明确反转结构出现后，再按逆势空单规则小仓尝试 SHORT；
-        * 若模型仍给出 open_long 建议，风控层应强制将 action 改为 "wait" 或仅管理既有仓位，
-          并在 reasoning 中说明“处于多头尾声区，禁止顺势追多”。
+        * 若模型仍给出 open_long 建议，风控层应强制将 action 改为：
+          - 若该 symbol 无持仓：action="wait"
+          - 若该 symbol 已有持仓：action="hold"（仅允许 close/close_pct/stop_update；禁止 open_long/open_short）
+            并在 reasoning 中说明“处于多头尾声区，禁止顺势追多”。
 -[新增] 逆势交易特别约束 (Counter-Trend Hard Rules)
          - 针对在强趋势背景下尝试 LTF_scalp 逆势单（如牛市做空、熊市做多）的致命过滤器：
            1. 级别不对等禁止 (Asymmetric Tier Check)：
@@ -1575,7 +1579,9 @@ C) confidence (微观执行置信度: 0~100)
         price 贴近 ema20 / ema50，未形成明显的多头或空头排列；
   * 且 1h / 30m 的结构仍偏向原方向（例如原来是多头，现在只是动能减弱，但高低点结构尚未明显反转），
   * 只有 15m / 5m 出现与原方向相反的 micro_bias（例如 micro_bias=BEAR，局部阻力密集），则该场景一律视为“大级别趋势的过渡 / 犹豫区”，不适合 LTF_scalp 抢反方向：
-      - 对应方向的 LTF_scalp（例如此时做空）必须 action="wait" 或仅管理既有仓位；
+      - 对应方向的 LTF_scalp（例如此时做空）：
+        · 若该 symbol 无持仓：必须 action="wait"
+        · 若该 symbol 已有持仓：必须 action="hold"（仅管理既有仓位：close/close_pct/stop_update；禁止新开仓）
       - 禁止在此类场景中以 trade_style="LTF_scalp" 给出 open_long / open_short。
 - 小级别供需位置约束（顺势 LTF_scalp 必须尊重最近供需区）
   * 做多 LTF_scalp 顺势单：
@@ -1619,8 +1625,10 @@ C) confidence (微观执行置信度: 0~100)
       · R_clean = 从 entry_price 到最近反向结构的价格距离 / R。
     - 若 R_clean < 1.0：
       · 视为“空间不足”，默认不得作为任何新开仓信号；
-      · 对该 symbol 的 action 必须为 "wait" 或仅管理既有仓位（例如 close（部分平仓用 close_pct）），
-        禁止在当前价位新建 open_long / open_short。
+      · 对该 symbol：
+        - 若无持仓：action 必须为 "wait"
+        - 若已有持仓：action 必须为 "hold"（例如 close（部分平仓用 close_pct）/stop_update）
+        - 禁止在当前价位新建 open_long / open_short。
       · 若 trade_style="HTF_swing" 且 setup_grade="B"：
         - 该机会不得作为 HTF_swing 新开仓：
           · 要么降级为 trade_style="LTF_scalp"，按 LTF_scalp 规则重新评估是否值得小仓试单；
@@ -1893,46 +1901,55 @@ C) 聚合与单调性（tick 取整必须按方向分支）
          - 则必须在“结构外 + 单调性”的集合中，选取一个“尽量靠近 ProfitFloor/prev_stop”的价位作为 s_sf，
            可以适度放宽“与现价的最小距离”约束（stop_distance_min_ticks），
            但仍不得回到任何结构带内部，也不得降低 LONG 的止损价格或抬高 SHORT 的止损价格。
-         - 任何 TP 触发锁盈事件中，stop_update 不得为 null。
+         - TP 触发锁盈事件：原则上应输出 stop_update(object) 锁定剩余仓位利润；
+           若出现 EXEC_GAP（任何 new_stop 都会“立即触发”或只能放宽止损）⇒ 允许 stop_update:null（延后更新），并在 reasoning 标记 FAIL=>EXEC_GAP + NextTrigger。
  3) 可执行性约束与 new_stop
- - 对 LONG：
-   - 若 ProfitFloor != null：
-       s_sf = max(s_sf, ProfitFloor)
-   - 可执行性约束：
-       s_exec = min(s_sf, last_price - stop_distance_min_ticks*tick_size)
-   - 一般情况（非 TP 触发）：
-       - 若 s_exec < ProfitFloor（或 ProfitFloor 存在但无法满足）⇒ stop_update:null
-       - 否则 new_stop = max(prev_stop, floor_to_tick(s_exec))
-   - TP 触发锁盈事件（优先锁盈 + 必须可执行｜允许延后更新）：
-     1) 先计算结构/轨道得到 s_sf（软约束：结构外优先，但可牺牲）
-     2) 再做可执行性夹逼（硬约束）：
-        upper_exec = last_price - stop_distance_min_ticks*tick_size
-        lower_lock = max(prev_stop, (ProfitFloor if ProfitFloor!=null else prev_stop))
-        s_exec = min(s_sf, upper_exec)
-     3) 取整与单调性：
-        new_stop = max(lower_lock, floor_to_tick(s_exec))
-     4) 若 lower_lock > upper_exec（即任何更新都无法同时“更紧 + 可执行”）：
-        ⇒ stop_update:null（延后更新），在 reasoning 标记 FAIL=>EXEC_GAP 与 NextTrigger
+  3.0) 触发参考价与安全垫（P0｜必须统一口径，避免 -2021）
+  - 定义 ref_price_for_stop（用于判断 stop 是否会“立即触发”）：
+    · 若 trigger_type="MARK_PRICE" 且输入提供 mark_price：ref_price_for_stop = mark_price
+    · 否则：ref_price_for_stop = last_price
+  - 定义 safety_ticks = 2  // 安全垫：吸收“决策→发单”时延与 mark/last 微偏差（生产可配置）
+  - 后续所有 “last_price ± stop_distance_min_ticks*tick_size” 一律替换为：
+    “ref_price_for_stop ± (stop_distance_min_ticks + safety_ticks)*tick_size”
 
- - 对 SHORT（对称）：
-   - 若 ProfitFloor != null：
-       s_sf = min(s_sf, ProfitFloor)
-   - 可执行性约束：
-       s_exec = max(s_sf, last_price + stop_distance_min_ticks*tick_size)
-   - 一般情况（非 TP 触发）：
-       - 若 s_exec > ProfitFloor（或 ProfitFloor 存在但无法满足）⇒ stop_update:null
-       - 否则 new_stop = min(prev_stop, ceil_to_tick(s_exec))
-   - TP 触发锁盈事件（优先锁盈 + 必须可执行｜允许延后更新）：
-     1) 先计算结构/轨道得到 s_sf（软约束：结构外优先，但可牺牲）
-     2) 再做可执行性夹逼（硬约束）：
-        lower_exec = last_price + stop_distance_min_ticks*tick_size
-        upper_lock = min(prev_stop, (ProfitFloor if ProfitFloor!=null else prev_stop))
-        s_exec = max(s_sf, lower_exec)
-     3) 取整与单调性：
-        new_stop = min(upper_lock, ceil_to_tick(s_exec))
-     4) 若 lower_exec > prev_stop（即任何更新都会把止损“变差/放宽”）：
-        ⇒ stop_update:null（延后更新），在 reasoning 标记 FAIL=>EXEC_GAP 与 NextTrigger
-- 去抖与执行：仅当变动≥min_tick_move_to_update*tick_size 且 与现价距离≥stop_distance_min_ticks*tick_size 才更新；
+     - 对 LONG：
+       - 若 ProfitFloor != null：
+           s_sf = max(s_sf, ProfitFloor)
+       - 可执行性约束：
+           s_exec = min(s_sf, ref_price_for_stop - (stop_distance_min_ticks + safety_ticks)*tick_size)
+       - 一般情况（非 TP 触发）：
+           - 若 s_exec < ProfitFloor（或 ProfitFloor 存在但无法满足）⇒ stop_update:null
+           - 否则 new_stop = max(prev_stop, floor_to_tick(s_exec))
+       - TP 触发锁盈事件（优先锁盈 + 必须可执行｜允许延后更新）：
+         1) 先计算结构/轨道得到 s_sf（软约束：结构外优先，但可牺牲）
+         2) 再做可执行性夹逼（硬约束）：
+            upper_exec = ref_price_for_stop - (stop_distance_min_ticks + safety_ticks)*tick_size
+            lower_lock = max(prev_stop, (ProfitFloor if ProfitFloor!=null else prev_stop))
+            s_exec = min(s_sf, upper_exec)
+         3) 取整与单调性：
+            new_stop = max(lower_lock, floor_to_tick(s_exec))
+         4) 若 lower_lock > upper_exec（即任何更新都无法同时“更紧 + 可执行”）：
+            ⇒ stop_update:null（延后更新），在 reasoning 标记 FAIL=>EXEC_GAP 与 NextTrigger
+
+     - 对 SHORT（对称）：
+       - 若 ProfitFloor != null：
+           s_sf = min(s_sf, ProfitFloor)
+       - 可执行性约束：
+           s_exec = max(s_sf, ref_price_for_stop + (stop_distance_min_ticks + safety_ticks)*tick_size)
+       - 一般情况（非 TP 触发）：
+           - 若 s_exec > ProfitFloor（或 ProfitFloor 存在但无法满足）⇒ stop_update:null
+           - 否则 new_stop = min(prev_stop, ceil_to_tick(s_exec))
+       - TP 触发锁盈事件（优先锁盈 + 必须可执行｜允许延后更新）：
+         1) 先计算结构/轨道得到 s_sf（软约束：结构外优先，但可牺牲）
+         2) 再做可执行性夹逼（硬约束）：
+            lower_exec = ref_price_for_stop + (stop_distance_min_ticks + safety_ticks)*tick_size
+            upper_lock = min(prev_stop, (ProfitFloor if ProfitFloor!=null else prev_stop))
+            s_exec = max(s_sf, lower_exec)
+         3) 取整与单调性：
+            new_stop = min(upper_lock, ceil_to_tick(s_exec))
+         4) 若 lower_exec > prev_stop（即任何更新都会把止损“变差/放宽”）：
+            ⇒ stop_update:null（延后更新），在 reasoning 标记 FAIL=>EXEC_GAP 与 NextTrigger
+- 去抖与执行：仅当变动≥min_tick_move_to_update*tick_size 且 与触发参考价(ref_price_for_stop)距离≥(stop_distance_min_ticks + safety_ticks)*tick_size 才更新；
 - 仅 microflip 事件例外/或仅当 allow_intrabar_update=true 才允许
 D) MicroFlip 快速响应
 - LONG：触发 microflip_rules(LONG) ⇒ 把 micro_fast 纳入候选，立即更新（随后60s冷却）
@@ -2837,7 +2854,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                  · action="close" 且 close_pct ∈ (0,1) 且其触发条件源自结构性 TP1/TP2/target 成交（在 reasoning/X 段必须明确写出 "TP1_hit"/"TP2_hit"/"TP_hit" 之一）；
                  · reasoning 中明确写出“TP1/TP2 已被触发/成交，但保留部分仓位继续持有”。
                - 在该类场景下：
-                 · "stop_update" 不得为 null；
+                 · "stop_update" 原则上应为 object；若触发 FAIL=>EXEC_GAP（会立即触发/或只能放宽止损）允许为 null（必须写 FAIL=>EXEC_GAP + NextTrigger）。
                  · 必须输出一个新的 new_stop，用于锁定剩余仓位的利润；
                  · new_stop 必须满足：结构外（通过 StructureFence）、方向单调性（LONG≥prev_stop；SHORT≤prev_stop），
                    且在不违反 ProfitFloor 的前提下尽量接近 ProfitFloor / break-even。
@@ -2870,12 +2887,10 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
         · SHORT：new_stop ≥ ref_price_for_stop + stop_distance_min_ticks*tick_size
       - 若 ref_price_for_stop 不可得（缺字段/不确定）：必须输出 stop_update:null（避免生成可能立即触发的止损）
   - 若本轮为 TP 触发锁盈事件：
-    - 必须输出非 null 的 stop_update，并给出新的 new_stop：
-      · new_stop 必须满足 StructureFence 的“结构外”约束与方向单调性：
-         - LONG：new_stop ≥ max(prev_stop, ProfitFloor, break_even_with_costs)
-         - SHORT：new_stop ≤ min(prev_stop, ProfitFloor, break_even_with_costs)
-      · new_stop 与 prev_stop 的差值原则上应 ≥ min_tick_move_to_update*tick_size；
-        若略小于该门槛但仍能显著改善锁盈质量，可以适度放宽（属于 TP 强制锁盈的例外），但绝不能返回 stop_update:null。
+    - 目标：为“剩余仓位”锁定利润，原则上输出 stop_update(object)；
+    - new_stop 必须满足：StructureFence（结构外）+ 方向单调性（LONG≥prev_stop；SHORT≤prev_stop）；
+    - 若出现 EXEC_GAP（任何 new_stop 都会被交易所判定立即触发，或只能放宽止损）：
+      允许 stop_update:null（延后更新），reasoning 必须写 FAIL=>EXEC_GAP + NextTrigger（下一根 5m close 或价格回到可执行区间）。
 4. 对于「没有持仓」的 symbol（以 open_positions 列表为准）：
    - 若该 symbol 不在 open_positions 中：
      * "action" 只能是 "open_long"、"open_short" 或 "wait"；
