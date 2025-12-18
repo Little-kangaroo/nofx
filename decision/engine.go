@@ -69,21 +69,21 @@ type Context struct {
 	Performance     interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
 	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
 	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
-	
+
 	// 🔥 P0-01修复：时间锚点信息 - V13.5要求的trigger_context
-	TimeAnchor      *time.Time              `json:"-"` // 时间锚点，用于数据获取
-	TriggerContext  *TriggerContextInfo     `json:"trigger_context"` // 触发上下文信息
+	TimeAnchor     *time.Time          `json:"-"`               // 时间锚点，用于数据获取
+	TriggerContext *TriggerContextInfo `json:"trigger_context"` // 触发上下文信息
 }
 
 // TriggerContextInfo 触发上下文信息 - V13.5规范要求
 // 🔥 P0-01修复：补齐AI决策必需的时序信息，支持V13.5的紧急模式门槛
 type TriggerContextInfo struct {
-	IsKlineClosed     bool   `json:"is_kline_closed"`      // K线是否已收盘 (true=收盘触发, false=盘中触发)
-	Mode              string `json:"mode"`                 // 触发模式 ("normal", "emergency")  
-	AnchorCloseTime   int64  `json:"anchor_close_time"`    // 锚点收盘时间戳(毫秒)
-	AnchorTimeStr     string `json:"anchor_time_str"`      // 锚点时间字符串(可读)
-	TriggerType       string `json:"trigger_type"`         // 触发类型 ("5m_close", "manual", "scheduled")
-	DataConsistency   string `json:"data_consistency"`     // 数据一致性状态 ("aligned", "mixed", "uncertain")
+	IsKlineClosed   bool   `json:"is_kline_closed"`   // K线是否已收盘 (true=收盘触发, false=盘中触发)
+	Mode            string `json:"mode"`              // 触发模式 ("normal", "emergency")
+	AnchorCloseTime int64  `json:"anchor_close_time"` // 锚点收盘时间戳(毫秒)
+	AnchorTimeStr   string `json:"anchor_time_str"`   // 锚点时间字符串(可读)
+	TriggerType     string `json:"trigger_type"`      // 触发类型 ("5m_close", "manual", "scheduled")
+	DataConsistency string `json:"data_consistency"`  // 数据一致性状态 ("aligned", "mixed", "uncertain")
 }
 
 // Decision AI的交易决策
@@ -119,14 +119,14 @@ func GetFullDecisionWithTimeAnchor(ctx *Context, mcpClient *mcp.Client, anchorTi
 	// 设置时间锚点和触发上下文
 	ctx.TimeAnchor = &anchorTime
 	ctx.TriggerContext = &TriggerContextInfo{
-		IsKlineClosed:   true,  // 5m收盘触发
+		IsKlineClosed:   true, // 5m收盘触发
 		Mode:            "normal",
 		AnchorCloseTime: anchorTime.UnixMilli(),
 		AnchorTimeStr:   anchorTime.Format("15:04:05.000"),
 		TriggerType:     "5m_close",
-		DataConsistency: "aligned",  // 使用统一锚点，数据对齐
+		DataConsistency: "aligned", // 使用统一锚点，数据对齐
 	}
-	
+
 	return GetFullDecisionWithCustomPrompt(ctx, mcpClient, "", false, "")
 }
 
@@ -136,14 +136,14 @@ func GetFullDecisionWithCustomPromptAndAnchor(ctx *Context, mcpClient *mcp.Clien
 	// 设置时间锚点和触发上下文
 	ctx.TimeAnchor = &anchorTime
 	ctx.TriggerContext = &TriggerContextInfo{
-		IsKlineClosed:   true,  // 5m收盘触发
+		IsKlineClosed:   true, // 5m收盘触发
 		Mode:            "normal",
 		AnchorCloseTime: anchorTime.UnixMilli(),
 		AnchorTimeStr:   anchorTime.Format("15:04:05.000"),
 		TriggerType:     "5m_close",
-		DataConsistency: "aligned",  // 使用统一锚点，数据对齐
+		DataConsistency: "aligned", // 使用统一锚点，数据对齐
 	}
-	
+
 	return GetFullDecisionWithCustomPrompt(ctx, mcpClient, customPrompt, overrideBase, templateName)
 }
 
@@ -151,7 +151,7 @@ func GetFullDecisionWithCustomPromptAndAnchor(ctx *Context, mcpClient *mcp.Clien
 func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, customPrompt string, overrideBase bool, templateName string) (*FullDecision, error) {
 	// 📊 性能监控：总耗时开始计时
 	totalStart := time.Now()
-	
+
 	// 1. 为所有币种获取市场数据 - 📊 数据指标计算耗时统计
 	dataStart := time.Now()
 	if err := fetchMarketDataForContext(ctx); err != nil {
@@ -170,7 +170,7 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 	aiStart := time.Now()
 	aiResponse, err := mcpClient.CallWithMessages(systemPrompt, userPrompt)
 	aiTime := time.Since(aiStart)
-	
+
 	if err != nil {
 		// 📊 性能监控：即使失败也输出部分统计
 		dataTimeMs := float64(dataTime.Nanoseconds()) / 1e6
@@ -214,11 +214,11 @@ func GetFullDecisionWithCustomPrompt(ctx *Context, mcpClient *mcp.Client, custom
 	dataTimeMs := float64(dataTime.Nanoseconds()) / 1e6
 	aiTimeMs := float64(aiTime.Nanoseconds()) / 1e6
 	totalTimeMs := float64(totalTime.Nanoseconds()) / 1e6
-	
+
 	dataPercent := (dataTimeMs / totalTimeMs) * 100
 	aiPercent := (aiTimeMs / totalTimeMs) * 100
-	
-	log.Printf("⏱️ [决策性能统计] 数据指标计算: %.2fms (%.1f%%) | AI响应: %.2fms (%.1f%%) | 总耗时: %.2fms", 
+
+	log.Printf("⏱️ [决策性能统计] 数据指标计算: %.2fms (%.1f%%) | AI响应: %.2fms (%.1f%%) | 总耗时: %.2fms",
 		dataTimeMs, dataPercent, aiTimeMs, aiPercent, totalTimeMs)
 
 	decision.Timestamp = time.Now()
@@ -265,7 +265,7 @@ func fetchMarketDataForContext(ctx *Context) error {
 		log.Printf("🔍 [DEBUG] 正在获取 %s 的市场数据...", symbol)
 		// 单币种K线数据获取耗时统计
 		symbolDataStart := time.Now()
-		
+
 		// 🔥 P0-01修复：使用时间锚点获取市场数据，确保全链路时间一致性
 		var data *market.Data
 		var err error
@@ -275,7 +275,7 @@ func fetchMarketDataForContext(ctx *Context) error {
 		} else {
 			data, err = market.Get(symbol)
 		}
-		
+
 		if err != nil {
 			log.Printf("❌ [ERROR] 获取 %s 市场数据失败: %v", symbol, err)
 			continue
@@ -310,31 +310,31 @@ func fetchMarketDataForContext(ctx *Context) error {
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC && len(ctx.MarketDataMap) > 1 {
 		log.Printf("🔍 [市场上下文分析] 开始分析BTC联动性...")
 		contextStart := time.Now()
-		
+
 		// 创建市场上下文分析器
 		marketAnalyzer := market.NewMarketContextAnalyzer()
-		
+
 		// 为每个目标币种分析市场上下文
 		for targetSymbol, targetData := range ctx.MarketDataMap {
 			if targetSymbol == "BTCUSDT" {
 				continue // 跳过BTC自身
 			}
-			
+
 			// 分析目标币种与BTC的联动性
 			marketContext := marketAnalyzer.AnalyzeMarketContext(
-				targetSymbol, 
-				targetData, 
-				btcData, 
+				targetSymbol,
+				targetData,
+				btcData,
 				ctx.MarketDataMap,
 			)
-			
+
 			if marketContext != nil {
 				targetData.MarketContext = marketContext
-				log.Printf("✅ [%s] 市场上下文分析完成: BTC相关性=%.2f", 
+				log.Printf("✅ [%s] 市场上下文分析完成: BTC相关性=%.2f",
 					targetSymbol, marketContext.Correlation.BTCCorr4h)
 			}
 		}
-		
+
 		// 为BTC本身分析市场主导地位
 		btcMarketContext := marketAnalyzer.AnalyzeMarketContext(
 			"BTCUSDT",
@@ -342,13 +342,13 @@ func fetchMarketDataForContext(ctx *Context) error {
 			btcData, // BTC分析自身
 			ctx.MarketDataMap,
 		)
-		
+
 		if btcMarketContext != nil {
 			btcData.MarketContext = btcMarketContext
 		}
-		
+
 		contextDuration := time.Since(contextStart)
-		log.Printf("📊 [市场上下文分析] 完成，耗时: %v，分析币种: %d个", 
+		log.Printf("📊 [市场上下文分析] 完成，耗时: %v，分析币种: %d个",
 			contextDuration, len(ctx.MarketDataMap)-1)
 	} else {
 		log.Printf("⚠️ [市场上下文分析] 跳过：BTC数据不可用或候选币种不足")
@@ -454,12 +454,12 @@ func buildUserPrompt(ctx *Context) string {
 		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI14: %.2f\n",
 			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
 			btcData.CurrentMACD, btcData.LongerTermContext.RSI14Values[len(btcData.LongerTermContext.RSI14Values)-1]))
-		
+
 		// BTC联动性上下文分析
 		if btcData.MarketContext != nil {
 			mc := btcData.MarketContext
 			sb.WriteString("🔗 BTC联动性分析:\n")
-			
+
 			// BTC主导地位
 			if mc.BTCDominance != nil {
 				dom := mc.BTCDominance
@@ -467,7 +467,7 @@ func buildUserPrompt(ctx *Context) string {
 					dom.Current, dom.Change1h, dom.Change4h, dom.Change24h, dom.Trend, dom.TrendStrength))
 				sb.WriteString(fmt.Sprintf("  🎯 关键位: 阻力%.1f%% | 支撑%.1f%%\n", dom.NextResistance, dom.NextSupport))
 			}
-			
+
 			// 市场相关性
 			if mc.Correlation != nil {
 				corr := mc.Correlation
@@ -475,7 +475,7 @@ func buildUserPrompt(ctx *Context) string {
 					corr.BTCCorr1h, corr.BTCCorr4h, corr.BTCCorr24h, corr.CorrTrend, corr.DecouplingRisk))
 				sb.WriteString(fmt.Sprintf("  📈 Beta系数: %.2f | Alpha超额收益: %+.2f%%\n", corr.BetaCoefficient, corr.Alpha))
 			}
-			
+
 			// OI持仓分析
 			if mc.OIAnalysis != nil {
 				oi := mc.OIAnalysis
@@ -484,7 +484,7 @@ func buildUserPrompt(ctx *Context) string {
 				sb.WriteString(fmt.Sprintf("  ⚖️ 多空比: %.2f | 清算风险: %.0f%% | 与BTC OI相关: %.2f\n",
 					oi.LongShortRatio, oi.LiquidationRisk, oi.BTCOICorr))
 			}
-			
+
 			// 资金费率环境
 			if mc.FundingContext != nil {
 				fund := mc.FundingContext
@@ -492,7 +492,7 @@ func buildUserPrompt(ctx *Context) string {
 					fund.CurrentRate*100, fund.AverageRate24h*100, fund.RateVolatility, fund.MarketSentiment))
 				sb.WriteString(fmt.Sprintf("  🔥 过热风险: %.0f%% | 与BTC费率相关: %.2f\n", fund.OverheatingRisk, fund.BTCRateCorr))
 			}
-			
+
 			// 市场风险评估
 			if mc.RiskAssessment != nil {
 				risk := mc.RiskAssessment
@@ -609,13 +609,13 @@ func buildUserPrompt(ctx *Context) string {
 		var perfData PerformanceData
 		if jsonData, err := json.Marshal(ctx.Performance); err == nil {
 			if err := json.Unmarshal(jsonData, &perfData); err == nil {
-				sb.WriteString(fmt.Sprintf("## 📊 夏普比率: %.2f\n\n", perfData.SharpeRatio))
+				sb.WriteString(fmt.Sprintf("##夏普比率: %.2f\n\n", perfData.SharpeRatio))
 			}
 		}
 	}
 
 	sb.WriteString("---\n\n")
-	sb.WriteString("现在请严格按照 System Prompt 定义的协议格式，仅输出 JSON 数组；除 JSON 外禁止输出任何字符。所有依据仅写入 JSON 的 reasoning 字段，并按第12条电报体与字数上限执行；禁止输出思维链。\n")
+	sb.WriteString("现在请严格按照 System Prompt 定义的协议格式，仅输出 JSON 数组；除 JSON 外禁止输出任何字符。所有依据仅写入 JSON 的 reasoning 字段,禁止输出思维链。\n")
 
 	return sb.String()
 }
