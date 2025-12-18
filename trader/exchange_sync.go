@@ -596,12 +596,16 @@ func (sync *ExchangeRecordSync) closePositionInDatabase(symbol, side string, clo
 		return fmt.Errorf("数据库连接不可用")
 	}
 	
+	// 🎯 修复 P0：分离 DB side 与交易所 positionSide
+	dbSide := NormalizeInternalSide(side)
+	posSide := NormalizePositionSide(side)
+	
 	log.Printf("⚠️ [ExchangeSync] closePositionInDatabase 被调用，但已废弃估算逻辑")
-	log.Printf("    参数: symbol=%s, side=%s, estimatedPrice=%.6f, reason=%s", symbol, side, closePrice, reason)
+	log.Printf("    参数: symbol=%s, side=%s (dbSide=%s, posSide=%s), estimatedPrice=%.6f, reason=%s", symbol, side, dbSide, posSide, closePrice, reason)
 	log.Printf("🚫 [ExchangeSync] 拒绝使用估算价格 %.6f，必须从交易所获取权威数据", closePrice)
 	
-	// 查找对应的开仓记录
-	openTrade, err := sync.database.GetOpenTrade(sync.traderID, symbol, side)
+	// 查找对应的开仓记录 - 使用 dbSide
+	openTrade, err := sync.database.GetOpenTrade(sync.traderID, symbol, dbSide)
 	if err != nil {
 		return fmt.Errorf("未找到开仓记录: %w", err)
 	}
@@ -614,8 +618,8 @@ func (sync *ExchangeRecordSync) closePositionInDatabase(symbol, side string, clo
 		return fmt.Errorf("交易器不支持权威数据查询")
 	}
 	
-	// 获取权威的平仓数据
-	authData, err := binanceTrader.GetAuthoritativeCloseData(symbol, side, orderID)
+	// 获取权威的平仓数据 - 使用 posSide
+	authData, err := binanceTrader.GetAuthoritativeCloseData(symbol, posSide, orderID)
 	if err != nil {
 		log.Printf("❌ [ExchangeSync] 无法获取权威数据: %v", err)
 		log.Printf("🚫 [ExchangeSync] 拒绝写入估算数据到数据库")
@@ -640,13 +644,19 @@ func (sync *ExchangeRecordSync) closePositionInDatabase(symbol, side string, clo
 		finalPrice = authData.ActualPrice
 		finalTime = authData.ActualTime
 	} else if authData.ActualPrice > 0 {
-		if side == "long" {
+		if dbSide == "long" {  // 使用 dbSide 而非 side
 			finalPnL = openTrade.Quantity * (authData.ActualPrice - openTrade.OpenPrice)
 		} else {
 			finalPnL = openTrade.Quantity * (openTrade.OpenPrice - authData.ActualPrice)
 		}
 		finalPrice = authData.ActualPrice
 		finalTime = authData.ActualTime
+	} else if authData.ActualPnL != 0 {
+		// 🎯 修复 P0：允许 PnL-only 闭合（与 auto_trader.go 一致）
+		finalPnL = authData.ActualPnL
+		finalPrice = 0  // 无成交价，但不是估算
+		finalTime = authData.ActualTime
+		log.Printf("⚠️ [ExchangeSync] 使用 PnL-only 数据闭合: 盈亏=%.2f USDT, 无成交价", finalPnL)
 	} else {
 		return fmt.Errorf("权威数据不完整，无法写入数据库")
 	}

@@ -26,6 +26,10 @@ type PendingStopOrder struct {
 	Quantity    float64   `json:"quantity"`     // 数量
 	CreateTime  time.Time `json:"create_time"`  // 创建时间
 	OriginalAction string `json:"original_action"` // 原始动作 (update_stop)
+	
+	// 🎯 新增：补偿闭合重试机制
+	ReconcileAttempts int       `json:"-"` // 补偿尝试次数
+	LastReconcileAt   time.Time `json:"-"` // 上次补偿时间
 }
 
 // AutoTraderConfig 自动交易配置（简化版 - AI全权决策）
@@ -482,19 +486,19 @@ func (at *AutoTrader) runCycleWithTimeAnchor(anchorTime time.Time) error {
 		// 打印系统提示词和AI思维链（即使有错误，也要输出以便调试）
 		if decision != nil {
 			if decision.SystemPrompt != "" {
-				log.Printf("\n" + strings.Repeat("=", 70))
+				log.Printf("\n%s", strings.Repeat("=", 70))
 				log.Printf("📋 系统提示词 [模板: %s] (错误情况)", at.systemPromptTemplate)
 				log.Println(strings.Repeat("=", 70))
 				log.Println(decision.SystemPrompt)
-				log.Printf(strings.Repeat("=", 70) + "\n")
+				log.Printf("%s\n", strings.Repeat("=", 70))
 			}
 
 			if decision.CoTTrace != "" {
-				log.Printf("\n" + strings.Repeat("-", 70))
+				log.Printf("\n%s", strings.Repeat("-", 70))
 				log.Println("💭 AI思维链分析（错误情况）:")
 				log.Println(strings.Repeat("-", 70))
 				log.Println(decision.CoTTrace)
-				log.Printf(strings.Repeat("-", 70) + "\n")
+				log.Printf("%s\n", strings.Repeat("-", 70))
 			}
 		}
 
@@ -510,11 +514,11 @@ func (at *AutoTrader) runCycleWithTimeAnchor(anchorTime time.Time) error {
 	// log.Printf(strings.Repeat("=", 70) + "\n")
 
 	// 6. 打印AI思维链
-	log.Printf("\n" + strings.Repeat("-", 70))
+	log.Printf("\n%s", strings.Repeat("-", 70))
 	log.Println("💭 AI思维链分析:")
 	log.Println(strings.Repeat("-", 70))
 	log.Println(decision.CoTTrace)
-	log.Printf(strings.Repeat("-", 70) + "\n")
+	log.Printf("%s\n", strings.Repeat("-", 70))
 
 	// 7. 打印AI决策
 	log.Printf("📋 AI决策列表 (%d 个):\n", len(decision.Decisions))
@@ -2512,12 +2516,15 @@ func (at *AutoTrader) checkTrackedStopOrdersLightweight(record *logger.DecisionR
 		}
 	}
 	
-	// 清理已平仓的跟踪记录
+	// 清理已平仓的跟踪记录，但先尝试补偿闭合
 	var toRemove []string
 	for key, pendingOrder := range at.pendingStopOrders {
 		posKey := pendingOrder.Symbol + "_" + pendingOrder.Side
 		if !positionMap[posKey] {
-			log.Printf("🧹 [Lightweight Check] 持仓已平仓，清理跟踪记录: %s", key)
+			log.Printf("🧹 [Lightweight Check] 持仓已消失，尝试补偿闭合: %s", key)
+			
+			// 🎯 修复：先尝试补偿闭合，再删除跟踪
+			at.tryReconcileClose(pendingOrder.Symbol, pendingOrder.Side, pendingOrder)
 			toRemove = append(toRemove, key)
 		}
 	}
@@ -2532,6 +2539,27 @@ func (at *AutoTrader) checkTrackedStopOrdersLightweight(record *logger.DecisionR
 	}
 	
 	return nil
+}
+
+// tryReconcileClose 尝试补偿性闭合（当持仓消失但跟踪记录还在时）
+func (at *AutoTrader) tryReconcileClose(symbol, side string, p *PendingStopOrder) bool {
+	// 冷却 30 秒，最多 5 次
+	if p.ReconcileAttempts >= 5 {
+		log.Printf("⚠️ [ReconcileClose] %s_%s 已达最大重试次数，放弃补偿闭合", symbol, side)
+		return true // 放弃跟踪，避免死循环
+	}
+	if !p.LastReconcileAt.IsZero() && time.Since(p.LastReconcileAt) < 30*time.Second {
+		log.Printf("⏰ [ReconcileClose] %s_%s 冷却中，跳过补偿闭合", symbol, side)
+		return false // 保持跟踪，等待下次尝试
+	}
+	
+	p.ReconcileAttempts++
+	p.LastReconcileAt = time.Now()
+	
+	log.Printf("🔧 [ReconcileClose] 尝试补偿闭合 %s_%s (第%d次尝试)", symbol, side, p.ReconcileAttempts)
+	at.updateTradeInDatabase(symbol, side, "unknown", "position_disappeared")
+	
+	return true // 假定成功，删除跟踪记录
 }
 
 // checkTrackedStopOrders 检查内存中跟踪的止损单（原有逻辑）
@@ -3151,10 +3179,14 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closeOrderID, c
 		return
 	}
 
-	log.Printf("🔄 [数据库更新] 开始更新交易记录: %s %s (拒绝估算数据)", symbol, side)
+	// 🎯 修复 P0：分离 DB side 与交易所 positionSide
+	dbSide := NormalizeInternalSide(side)
+	posSide := NormalizePositionSide(side)
+
+	log.Printf("🔄 [数据库更新] 开始更新交易记录: %s %s (dbSide=%s,posSide=%s)", symbol, side, dbSide, posSide)
 	
-	// 查找对应的开仓记录
-	openTrade, err := at.database.GetOpenTrade(at.id, symbol, side)
+	// 查找对应的开仓记录 - 使用 dbSide
+	openTrade, err := at.database.GetOpenTrade(at.id, symbol, dbSide)
 	if err != nil {
 		log.Printf("❌ [数据库更新] [严重错误] 无法找到开仓记录: %v", err)
 		log.Printf("📋 [数据库更新] 查找参数: trader_id='%s', symbol='%s', side='%s'", at.id, symbol, side)
@@ -3209,8 +3241,8 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closeOrderID, c
 		return
 	}
 	
-	// 获取权威的平仓数据
-	authData, err := binanceTrader.GetAuthoritativeCloseData(symbol, side, closeOrderID)
+	// 获取权威的平仓数据 - 使用 posSide
+	authData, err := binanceTrader.GetAuthoritativeCloseData(symbol, posSide, closeOrderID)
 	if err != nil {
 		log.Printf("❌ [权威数据] 无法获取交易所权威数据: %v", err)
 		log.Printf("🚫 [权威数据] 拒绝使用估算数据写入数据库")
@@ -3280,38 +3312,36 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closeOrderID, c
 	log.Printf("    盈亏百分比: %.2f%%", finalPnLPct)
 	log.Printf("    持续时间: %d秒 (%.1f分钟)", durationSecs, float64(durationSecs)/60)
 
-	// 只有在获得权威数据后才写入数据库
-	if finalPrice > 0 {
-		log.Printf("🔄 [权威数据] 正在更新数据库: tradeID=%s, 权威价格=%.6f, 权威盈亏=%.2f", 
-			openTrade.ID, finalPrice, finalPnL)
+	// 🎯 修复 P0：有权威盈亏就闭合，价格可以为0表示未知
+	closePrice := finalPrice  // 可能为 0，表示未知成交价而非估算
+	log.Printf("🔄 [权威数据] 正在更新数据库: tradeID=%s, 价格=%.6f, 权威盈亏=%.2f", 
+		openTrade.ID, closePrice, finalPnL)
 
-		if err := at.database.UpdateTrade(openTrade.ID, finalPrice, finalTime, 
-			"closed", closeReason, closeOrderID, finalPnL, finalPnLPct, durationSecs); err != nil {
-			log.Printf("❌ [数据库更新] [严重错误] 数据库更新失败: %v", err)
-		} else {
-			log.Printf("✅ [数据库更新] 数据库更新成功:")
-			log.Printf("    状态: open → closed")
-			log.Printf("    权威盈亏: %.2f USDT (%.2f%%)", finalPnL, finalPnLPct)
-			log.Printf("    数据来源: %s", authData.DataSource)
-		}
-	} else {
-		log.Printf("⚠️ [权威数据] 只有盈亏数据，无成交价格，暂不更新trades表")
-		log.Printf("📝 [权威数据] 记录部分权威数据...")
+	if err := at.database.UpdateTrade(openTrade.ID, closePrice, finalTime, 
+		"closed", closeReason, closeOrderID, finalPnL, finalPnLPct, durationSecs); err != nil {
+		log.Printf("❌ [数据库更新] [严重错误] 数据库更新失败: %v", err)
 		
-		// 记录已获得的部分权威数据
+		// 失败时才记录 action
 		actionRecord := &config.TradeActionRecord{
 			TraderID:     at.id,
-			Action:       fmt.Sprintf("close_%s_partial", side),
+			Action:       fmt.Sprintf("close_%s_failed", dbSide),
 			Symbol:       symbol,
 			Quantity:     openTrade.Quantity,
-			Price:        0, // 无价格数据
+			Price:        closePrice,
 			OrderID:      closeOrderID,
-			Timestamp:    finalTime,
-			Success:      true,
-			ErrorMessage: fmt.Sprintf("权威盈亏数据: %.2f USDT, 来源: %s", finalPnL, authData.DataSource),
+			Timestamp:    time.Now(),
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("数据库更新失败: %v", err),
 		}
-		
 		at.database.CreateTradeAction(actionRecord)
+	} else {
+		if closePrice > 0 {
+			log.Printf("✅ [数据库更新] 成功闭合 trades（真实成交价: %.6f）", closePrice)
+		} else {
+			log.Printf("✅ [数据库更新] 成功闭合 trades（权威PnL: %.2f USDT，无成交价）", finalPnL)
+		}
+		log.Printf("    状态: open → closed")
+		log.Printf("    数据来源: %s", authData.DataSource)
 	}
 }
 

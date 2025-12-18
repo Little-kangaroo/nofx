@@ -1869,6 +1869,9 @@ func (t *FuturesTrader) aggregateOrderTrades(trades []OrderTradeDetail, position
 
 // findMatchingCloseTrade 在成交历史中查找匹配的平仓交易
 func (t *FuturesTrader) findMatchingCloseTrade(trades []OrderTradeDetail, symbol, positionSide string) *AuthoritativeCloseData {
+	// 🎯 修复 P0：归一化 positionSide，确保兼容 long/short 输入
+	positionSide = NormalizePositionSide(positionSide)
+	
 	log.Printf("🔍 [findMatchingCloseTrade] 在 %d 条成交记录中查找 %s %s 的平仓交易", 
 		len(trades), symbol, positionSide)
 	
@@ -1912,26 +1915,67 @@ func (t *FuturesTrader) findMatchingCloseTrade(trades []OrderTradeDetail, symbol
 // deriveFromIncomeHistory 从资金流水推导平仓数据
 func (t *FuturesTrader) deriveFromIncomeHistory(incomes []IncomeRecord, symbol, positionSide string) (*AuthoritativeCloseData, error) {
 	log.Printf("🔍 [deriveFromIncomeHistory] 从 %d 条资金流水中推导平仓数据", len(incomes))
+	positionSide = NormalizePositionSide(positionSide)
 	
 	// 找到最近的已实现盈亏记录
 	for _, income := range incomes {
-		if income.Symbol == symbol && income.IncomeType == "REALIZED_PNL" && income.Income != 0 {
-			log.Printf("✅ [deriveFromIncomeHistory] 找到已实现盈亏记录: %.2f USDT, 时间=%s", 
-				income.Income, income.Time.Format("15:04:05"))
-			
-			// 注意：从Income无法获取成交价格，但可以获取准确的盈亏
-			return &AuthoritativeCloseData{
-				ActualPrice:    0, // 无法从Income获取价格
-				ActualTime:     income.Time,
-				ActualQuantity: 0, // 无法从Income获取数量
-				ActualPnL:      income.Income,
-				ActualPnLPct:   0,
-				Duration:       0,
-				Commission:     0,
-				DataSource:     "INCOME_HISTORY",
-				OrderID:        income.TradeID,
-			}, nil
+		if income.Symbol != symbol || income.IncomeType != "REALIZED_PNL" || income.Income == 0 {
+			continue
 		}
+
+		// 🎯 增强：优先通过 TradeID 反查成交，补齐价格/数量
+		if income.TradeID != "" {
+			if tradeID, err := strconv.ParseInt(income.TradeID, 10, 64); err == nil {
+				trades, err := t.GetRecentTrades(symbol, 200)
+				if err == nil {
+					for _, tr := range trades {
+						if tr.Symbol != symbol {
+							continue
+						}
+						if tr.TradeID != tradeID {
+							continue
+						}
+
+						// 通过 trade side 推断是否为平仓成交（兜底校验）
+						isClose := false
+						if positionSide == "LONG" && tr.Side == "SELL" {
+							isClose = true
+						} else if positionSide == "SHORT" && tr.Side == "BUY" {
+							isClose = true
+						}
+
+						if isClose {
+							log.Printf("✅ [deriveFromIncomeHistory] TradeID 命中成交: tradeID=%d, price=%.6f, qty=%.6f", tr.TradeID, tr.Price, tr.Quantity)
+							return &AuthoritativeCloseData{
+								ActualPrice:    tr.Price,
+								ActualTime:     income.Time, // 以 income 时间作为平仓时间锚点
+								ActualQuantity: tr.Quantity,
+								ActualPnL:      income.Income,
+								ActualPnLPct:   0,
+								Duration:       0,
+								Commission:     tr.Commission,
+								DataSource:     "INCOME_HISTORY+TRADE_MATCH",
+								OrderID:        fmt.Sprintf("%d", tr.OrderID),
+							}, nil
+						}
+					}
+				}
+			}
+		}
+
+		// 退化：只有 PnL（无价格）
+		log.Printf("✅ [deriveFromIncomeHistory] 找到已实现盈亏记录: %.2f USDT, 时间=%s (无成交价格)", income.Income, income.Time.Format("15:04:05"))
+		return &AuthoritativeCloseData{
+			ActualPrice:    0, // 无法从Income获取价格，但不是估算
+			ActualTime:     income.Time,
+			ActualQuantity: 0, // 无法从Income获取数量
+			ActualPnL:      income.Income,
+			ActualPnLPct:   0,
+			Duration:       0,
+			Commission:     0,
+			DataSource:     "INCOME_HISTORY",
+			OrderID:        income.TradeID,
+		}, nil
 	}
 	
 	return nil, fmt.Errorf("未在资金流水中找到相关的已实现盈亏记录")
