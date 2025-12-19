@@ -281,7 +281,7 @@
           * 若 `宏观资金趋势.trend_alignment` 与开仓方向一致 (如做多且 bullish_aligned)：
             -> confidence 可加成 +15（封顶 100）；
             -> 该加成仅用于“信心表达/排序”，不得作为 open_* 的必要或充分条件；
-            -> 不得用该加成绕过 Gate2~Gate5 的 PASS 要求；最终 action 必须服从 derived_action。
+            -> 不得用该加成绕过 Gate2~Gate5 的 PASS 要求；最终顶层 action 必须等于 reasoning.actionDerivation 行导出的 derived_action 值（但 derived_action 严禁作为顶层字段输出）。
     4. **后端信号参考**:
       * 若 `AI决策建议.primary_signal` 与你的技术分析方向**严重冲突**（示例：你计划 open_long，但后端为 STRONG SELL；或你计划 open_short，但后端为 STRONG BUY）：不再一票否决；改为触发【降级交易通道】（多空对称）：
            A) 强制降级：
@@ -481,8 +481,10 @@
                 * 止损价 sl 必须放在该供需区的相反边界外侧若干 tick / ATR，而不是区间内部；
                 * 通过 Gate5（R_clean 空间门槛）检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求（含默认/例外规则）。
                 【EDGE 进场确认（5m Rejection｜硬要求）】：
-                - 若 MarketSnapshot.5m 缺失 open/high/low/close/close_time/x，或 x!=true,本条不可验证 ⇒ action="wait"（禁止开仓）。
-                - 特权情况（SNIPE变体）：...
+                - 若 MarketSnapshot.5m 缺失（或无法计算 anchor / 没有 ctx）导致 EDGE 条件不可验证：
+                  - 若 has_position=0：action="wait"（仅表示“禁止以 EDGE 新开仓”，等待数据恢复后再评估）
+                  - 若 has_position=1：action ∈ {"hold","close"}（仅管理既有仓位；禁止把持仓强制改成 wait，也禁止以 EDGE 逻辑新开/加码）
+                - 特权情况（SNIPE变体）：【当前版本禁用】一律按“普通情况”处理；严禁模型自行定义/发明 SNIPE 条件与额外规则。
                 - 普通情况：若不满足特权条件，必须满足以下任一确认（多空对称）：
                   · SHORT（依托 supply 上沿试空）：需要出现“5m 拒绝确认”后才允许 open_short：
                     - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：high ≥ supply_high 且 close ≤ supply_high（向上刺破但收回到供给区内/下方）；
@@ -1327,18 +1329,41 @@
      - cost_bps = taker_fee_bps + slippage_bps_minor (+ 资金费率/额外成本如可得)
      - LONG：BE_with_costs  = entry_price * (1 + cost_bps/10000) + stop_distance_min_ticks*tick_size
      - SHORT：BE_with_costs = entry_price * (1 - cost_bps/10000) - stop_distance_min_ticks*tick_size
-  1) ROI 净锁盈（10x + 浮盈 5% 开始锁盈）：
-     - 若 roi_unrealized ≥ roi_lock_trigger 且 持仓时间 ≥ protect_trigger.time_min：
-       * 定义 ProfitFloor（确保“锁净利润”，不是只推到 BE）：
-         - LONG：ProfitFloor  = max(BE_with_costs, entry_price * (1 + floor_price_bps/10000))
-         - SHORT：ProfitFloor = min(BE_with_costs, entry_price * (1 - floor_price_bps/10000))
-       * 若输出 stop_update，则 new_stop 必须至少到达 ProfitFloor（并遵守单调性）：
-         - LONG：new_stop  = max(prev_stop, ProfitFloor)
-         - SHORT：new_stop = min(prev_stop, ProfitFloor)
-       * 同时必须通过“可执行性约束”（避免 stop 贴到当前价触发噪音/无法挂单）：
-         - LONG：new_stop ≤ last_price - stop_distance_min_ticks*tick_size
-         - SHORT：new_stop ≥ last_price + stop_distance_min_ticks*tick_size
-       * 若无法满足可执行性约束 ⇒ stop_update:null
+  1) ROI 净锁盈（浮盈达标即推入“净盈利区”，避免大幅回吐）：
+    * 统一定义 roi_unrealized（多空对称，默认 leverage=10；若上游提供 leverage 则用上游值）：
+      - LONG：roi_unrealized = ((last_price - entry_price) / entry_price) * leverage
+      - SHORT：roi_unrealized = ((entry_price - last_price) / entry_price) * leverage
+
+    * ROI 锁盈门槛（统一以 roi_unrealized=杠杆 ROI 口径）：
+      - roi_lock_trigger      = 0.05   // 浮盈(含杠杆) ≥ 5% 才开始锁盈
+      - roi_lock_fast_trigger = 0.10   // 浮盈(含杠杆) ≥ 10% 允许跳过 time_min 立即锁盈（防回吐）
+      - floor_price_bps       = 20     // 价格地板：+20bps=0.20%
+
+    * 若 roi_unrealized < roi_lock_trigger：
+      - 继续 HOLD，不得把止损推到开仓价以上（不得“锁盈”）
+
+    * 若 roi_unrealized ≥ roi_lock_trigger，且满足以下任一条件：
+      A) 持仓时间 ≥ protect_trigger.time_min（如 ≥3min）
+      B) roi_unrealized ≥ roi_lock_fast_trigger（高浮盈快速锁盈旁路）
+      则必须启用“净锁盈”止损（优先级高于 break-even 禁止条款）：
+
+      先定义 BE_with_costs（多空对称）：
+      - 记 cost_bps = taker_fee_bps + slippage_bps_minor   // 从输入 ExchangeMeta 取值
+      - LONG：BE_with_costs = entry_price * (1 + cost_bps/10000) + stop_distance_min_ticks * tick_size
+      - SHORT：BE_with_costs = entry_price * (1 - cost_bps/10000) - stop_distance_min_ticks * tick_size
+
+      再定义 ProfitFloor（确保“锁净利润”，不是只推到 BE）：
+      - LONG：ProfitFloor = max(BE_with_costs, entry_price * (1 + floor_price_bps/10000))
+      - SHORT：ProfitFloor = min(BE_with_costs, entry_price * (1 - floor_price_bps/10000))
+
+      然后更新止损（单调性必须遵守；且不得停留在亏损区）：
+      - LONG：new_stop = max(prev_stop, ProfitFloor)
+      - SHORT：new_stop = min(prev_stop, ProfitFloor)
+
+      输出硬约束（用于后端校验）：
+      - 若 action="update_stop"：stop_update 必须非空，且必须严格改善（LONG: stop_update>prev_stop；SHORT: stop_update<prev_stop）
+      - 若触发锁盈但不可执行（EXEC_GAP）：stop_update:null 且 action 必须为 "hold"，在 reasoning 标记 FAIL=>EXEC_GAP + NextTrigger
+
   2) 非 ROI 锁盈场景：早期（R_unrealized < break_even_trigger_R）——【死区锁定规则】
        - 核心原则：在浮盈微薄的“噪音区”，必须给予行情呼吸空间，禁止过早收紧止损。
        - 若 R_unrealized < 0.3R（死区）：
@@ -1576,7 +1601,8 @@ C) confidence (微观执行置信度: 0~100)
        2. 拒绝“横盘摸顶/抄底” (Hovering is Continuation)：
           - 若价格在阻力位（做空时）或支撑位（做多时）附近，连续 ≥3 根 15m K 线收盘价变化幅度很小（横盘震荡），且未出现明确的反向吞没/大K线脱离：
           - 视为“空中加油/中继形态” (Absorption)；
-          - action 强制为 "wait"，严禁在此类“滞涨/滞跌”状态下逆势开仓，必须等待明确的结构破坏信号。
+          - 若 has_position=0：action="wait"（仅表示“不新开仓”）；严禁在此类“滞涨/滞跌”状态下逆势开仓，必须等待明确的结构破坏信号。
+          - 若 has_position=1：action ∈ {"hold","close"}（仅管理既有仓位；该条款不覆盖止损/锁盈/平仓模块；严禁把持仓强制改成 wait）
        3. 逆势 RSI 门槛 (RSI Hard Cap)：
           - 在顺势背景下做逆势回调单（LTF_scalp），必须满足更极端的动能条件：
             * 逆势开空（牛市中）：要求 1h RSI > 75 或 5m RSI > 80，或出现明显顶背离。若 RSI 仅在 60-70 之间，视为“多头健康区”，禁止开空。
@@ -2816,8 +2842,8 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
          - 若 has_position=1：action="hold"（仅管理既有仓位；严禁输出 wait；如确有离场需求只能用 action="close" + close_pct）
          - setup_grade="C"、edge_score=0.0、confidence<=60
          - 字段归零约束（防止后端误执行）：
-           * action="wait"/"hold" => entry_plan=null 且 stop_update=null 且 close_pct=null
-           * action="close"       => entry_plan=null 且 close_pct∈(0,1]（stop_update 允许为 null；如需改止损应走 stop_update 但必须自洽）
+           - action="wait" => entry_plan=null 且 stop_update=null 且 close_pct=null
+           - action="hold" => entry_plan=null 且 close_pct=null；stop_update 允许为 null 或 object（用于移动止损）
          - 并在 reasoning 中：
            1) Summary 写 fail=>PROTO_<REASON>（REASON 必须全大写+下划线；说明失败原因与解除条件）；
            2) GateTrace 仍按 Gate0→Gate5 输出，但应以 DIAG(EVAL_ONLY) 为主（不得给可执行明细）；
