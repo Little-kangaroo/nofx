@@ -498,6 +498,13 @@ func (sync *ExchangeRecordSync) estimateCloseDetails(symbol, side string) (float
 func (sync *ExchangeRecordSync) getRealClosePriceFromTradeHistory(symbol, side string) (float64, int64) {
 	log.Printf("🔍 [Trade History] 查询 %s %s 的成交历史...", symbol, side)
 	
+	// 获取开仓记录的时间，用于匹配最近的平仓
+	openTrade, err := sync.database.GetOpenTrade(sync.traderID, symbol, side)
+	if err != nil {
+		log.Printf("⚠️ [Trade History] 无法获取开仓记录: %v", err)
+		return 0, 0
+	}
+	
 	// 获取最近100条成交历史
 	trades, err := sync.trader.GetTradeHistory(symbol, 100)
 	if err != nil {
@@ -505,9 +512,18 @@ func (sync *ExchangeRecordSync) getRealClosePriceFromTradeHistory(symbol, side s
 		return 0, 0
 	}
 	
-	log.Printf("📋 [Trade History] 获得 %d 条成交记录", len(trades))
+	log.Printf("📋 [Trade History] 获得 %d 条成交记录，开仓时间: %s", len(trades), openTrade.OpenTime.Format("2006-01-02 15:04:05"))
 	
-	// 按时间倒序查找最近的平仓交易
+	var bestMatch struct {
+		price     float64
+		time      int64
+		timeDiff  int64
+		found     bool
+	}
+	
+	openTimeUnix := openTrade.OpenTime.Unix() * 1000 // 转换为毫秒
+	
+	// 查找时间最接近且在开仓之后的平仓交易
 	for _, trade := range trades {
 		positionSide, _ := trade["positionSide"].(string)
 		tradeSide, _ := trade["side"].(string)
@@ -527,12 +543,32 @@ func (sync *ExchangeRecordSync) getRealClosePriceFromTradeHistory(symbol, side s
 						tradeTime = int64(timeFloat)
 					}
 					
-					log.Printf("✅ [Trade History] 找到匹配平仓: %s %s->%s, 价格=%s, 盈亏=%s, 时间=%d", 
-						symbol, positionSide, tradeSide, priceStr, realizedPnlStr, tradeTime)
-					return price, tradeTime
+					// 🎯 关键修复：只考虑在开仓时间之后的交易
+					if tradeTime > openTimeUnix {
+						timeDiff := tradeTime - openTimeUnix
+						
+						// 找到时间最接近的交易（第一个或者更接近的）
+						if !bestMatch.found || timeDiff < bestMatch.timeDiff {
+							bestMatch = struct {
+								price     float64
+								time      int64
+								timeDiff  int64
+								found     bool
+							}{price, tradeTime, timeDiff, true}
+							
+							log.Printf("🔍 [Trade History] 发现候选平仓: %s %s->%s, 价格=%s, 盈亏=%s, 时间=%d, 距开仓=%d秒", 
+								symbol, positionSide, tradeSide, priceStr, realizedPnlStr, tradeTime, timeDiff/1000)
+						}
+					}
 				}
 			}
 		}
+	}
+	
+	if bestMatch.found {
+		log.Printf("✅ [Trade History] 找到最佳匹配平仓: 价格=%.6f, 时间=%d, 距开仓=%d秒", 
+			bestMatch.price, bestMatch.time, bestMatch.timeDiff/1000)
+		return bestMatch.price, bestMatch.time
 	}
 	
 	log.Printf("❌ [Trade History] 未找到匹配的平仓交易")
