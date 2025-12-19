@@ -2994,6 +2994,25 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
               * Summary 的 fail=> 必须写为 fail=>PROTO_BACKTRACK（覆盖其它 fail=>）；
               * reasoning 末尾额外追加一行：fail=>PROTO_BACKTRACK（便于日志检索）；
               * 违规后仍需按规则输出 GateTrace（Gate2~Gate5 用 DIAG(EVAL_ONLY)），但禁止为了解释而在 Summary/StructureSnapshot 里新增结构信息。
+        -【动作一致性｜ActionDerivation（强制，P0）】
+        目的：禁止出现“GateTrace 显示 FAIL，但顶层 action 仍为 open_* / 或持仓时输出 wait”的协议违例。
+        规则：
+        1) 在 GateTrace 完整输出之后，必须额外输出 1 行：
+         ActionDerivation: derived_action=<...> | has_position=<0/1> | veto=<最高优先级否决点>
+        2) derived_action 必须严格按以下表计算（不得发明例外）：
+         - 若 Gate0(RISK)=FAIL -> derived_action="wait"（或 has_position=1 时为 "close"/"hold"，按 Gate0 规则要求）
+         - 否则若 Gate1(ORDERFLOW)=FAIL -> derived_action="wait"（或 has_position=1 时为 "hold"/"close"；禁止 open_*）
+         - 否则若 Gate3(TIMING)=FAIL 或 fail=>xF -> derived_action="wait"（或 has_position=1 时为 "hold"；禁止 open_*）
+         - 否则若 has_position=1 -> derived_action ∈ {"hold","close"}（绝对禁止 "open_long/open_short/wait"）
+         - 否则（has_position=0）：
+             * 仅当 Gate2~Gate5 全部 PASS 才允许 derived_action ∈ {"open_long","open_short"}
+             * 任何一个为 FAIL -> derived_action="wait"
+        3) 顶层 action 必须与 derived_action 完全一致；否则视为协议违规：
+         - fail=>PROTO_ACTION_MISMATCH
+         - 顶层 action 必须立刻改为 "wait"
+         - entry_plan / stop_update / close_pct 必须全部输出 null（以保证后端绝不执行危险动作）
+         - reasoning 末尾追加一行：fail=>PROTO_ACTION_MISMATCH
+
   - 允许：GateTrace 之后追加任意多行自然语言复盘（不设字符上限），建议结构：
       A) 持仓/风险：R_unrealized、R_lock/protect、stop_update 触发与 new_stop 单调性
       B) 多周期依据：用 4h/1h/30m/15m/5m 正常语义描述动能/趋势/背离（禁止 MB/mB/μB、U/D/N 等自定义编码）
