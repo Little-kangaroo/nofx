@@ -2786,10 +2786,6 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 ------------------------------------------------
 # 输出格式要求（必须严格遵守）
 0. 你最终的回复 **只能** 是一个 JSON 数组，根元素为多个决策对象，不允许出现任何 JSON 之外的文字。
-0A. JSON 紧凑输出（仅减少 token，不改变任何字段/规则）：
-   - 禁止 pretty print：禁止缩进、禁止对齐、禁止额外空格与空行；
-   - 数组/对象本体不得人为换行；除 reasoning 字符串内部允许用 "\\n" 表示换行外，其余位置不得加入换行；
-   - 后端若需要美观展示，请在后端 prettify；模型侧只负责最短合法 JSON。
 1. 数组长度与 symbol 域约束（非常重要）：
    - 输入中会给出一个 symbol 列表（例如 ["BTCUSDT","ETHUSDT",...,"HYPEUSDT"]）；
    - 本次输出的 JSON 数组长度，**必须与该 symbol 列表长度完全一致**：
@@ -2895,9 +2891,8 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
           - 结构锚点的唯一“落点”是 Gate2(STRUCTURE) 行：必须给出 ≥2 个结构锚点（含价位/区间+ctx强度/状态）与方向偏置（LONG/SHORT/NEUTRAL）。
           - 无论 Gate1(ORDERFLOW) PASS/FAIL：Gate2(STRUCTURE) 均必须输出（PASS 或 DIAG(EVAL_ONLY)）；不得写 N/A/跳过。
           - StructureSnapshot 为【可选】（默认省略以降低耗时）：
-           * 若输出：严格 1 行（禁止 2 行），且只能引用/复述 Gate2(STRUCTURE) 行已出现的 Anchor1/Anchor2；
-            建议格式：StructureSnapshot: Position=<edge|mid> | A1=<复述Anchor1> | A2=<复述Anchor2>
-           * 严禁在此新增：新价位/新区间/新指标结论/新方向判断（禁止二次推导）。
+            * 若输出：最多 1~2 行，只能引用/复述 Gate2(STRUCTURE) 行已出现的结构锚点；
+            * 严禁在此新增：新价位/新区间/新指标结论/新方向判断（禁止二次推导）。
           - 无论是否输出 StructureSnapshot：不得据此绕过 Gate1 否决、不得改变本次 action。
         4. 为何选择当前 action（open_long/open_short/close/hold/wait）而不是其他；若为“部分减仓”，仍输出 action="close"，并额外给出 close_pct（0~1）说明是部分平仓；
         5. 若是开仓（open_long/open_short），需在开头显式写明本次决策采用的模式：
@@ -3095,26 +3090,6 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
               - Gate3(TIMING): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>TIME 或 fail=>xF 可选] 证据（5m收盘锚点/触发窗口/数据是否闭合）
               - Gate4(SETUP): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>SETUP 可选] 证据（趋势动能/RSI/形态确认/入场触发质量；RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向）
               - Gate5(EXEC/RR): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>RR 可选] 证据（可执行性/滑点追价/成本；R_clean 必须给可核验算式）
-              -【Token Budget｜GateTrace 最小证据集（不改变 Gate 判定，只压缩表达）】
-                - 对 action="wait" 且 has_position=0 的标的：每个 Gate 行只保留“最小可核验证据集”，禁止复述输入大段字段。
-                  * Gate0(RISK)：只输出 1 个账户侧关键数值 + 1 个结论即可。
-                  * Gate1(ORDERFLOW)：只保留 2 项：
-                      (1) 红线相关：spoofing_risk 与阈值（或明确“未触发 fake_pump/fake_dump”其一）
-                      (2) 方向结论：bias=<bull/bear/neutral> 或 regime/trend_alignment 二选一（禁止三者全写）
-                  * Gate2(STRUCTURE)：只允许 1 句位置结论 + 必须给出 Anchor1/Anchor2（见下方结构锚点收敛规则）；禁止枚举 3 个以上结构簇/区间。
-                  * Gate3(TIMING)：只输出 5m_close=<true/false> 或 fail=>xF 的关键字段，不写长句。
-                  * Gate4(SETUP)：只保留 2 项：
-                      (1) 触发形态：pattern∈{EDGE/BO_RETEST/MOMENTUM_BREAK/SFP/Engulf} 的“有/无”
-                      (2) 多周期一致性：trend=<aligned/mixed>（或给 1 个主周期结论，如 4h 偏空/震荡）
-                    RSI 仅在“极端且影响执行方式”时给 1 个值；否则不展开。
-                  * Gate5(EXEC/RR)：若非开仓（open_*），允许用 1 句 DIAG(EVAL_ONLY)：原因三选一（无干净SL/反向结构过近/成本过高）+（如有）R_clean<1 结论；禁止列 TP/SL 多个候选区间。
-                - 对 action ∈ {open_long/open_short/hold/close}：允许比 wait 更详细，但仍优先“最小证据集”，避免长段复述。
-              -【数值精度（省 token，不影响判定）】
-                - 小数位默认上限：
-                  * 比例/风险值（如 spoofing_risk）：保留 2 位小数（例 0.5771 → 0.58）
-                  * 价格区间：按交易所 tick 取整或最多 1 位小数（例 88107；或 0.1）
-                  * 资金/净值：最多 1 位小数
-                - 仅当“阈值极近、需要证明越界/未越界”时，允许额外多保留 1 位小数。
               -【结构锚点写法（复盘友好｜可检索｜省 token）】
                 * 要求：Gate2(STRUCTURE) 行里必须给出 ≥2 个结构锚点；每个锚点建议 1 行；禁止使用“|”管道符
                 * 推荐格式（可被后端检索 Anchor1/Anchor2 前缀）：
@@ -3122,12 +3097,6 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                           角色=<支撑/阻力>；状态=<fresh/retest/broken/invalid/weak/strong>；强度=<ctx_strength_z 的解释性表达>
                   Anchor2：……（同上）
                 * 说明：为节省 token，“强度”可以写成一句话，例如“强度：偏强（z-score>0）/偏弱（z-score<0）”，禁止只写“z=…/role=…”这类难读缩写
-              -【结构锚点收敛规则（省 token｜不改变“≥2锚点”硬要求）】
-                  - Gate2(STRUCTURE) 默认只输出 2 个锚点：Anchor1 与 Anchor2（必须带价位/区间）。
-                    * Anchor1：选择“最近、最决定性的下方需求/支撑/VAL/FVG/通道下沿”之一
-                    * Anchor2：选择“最近、最决定性的上方供给/阻力/VAH/POC 边界/通道上沿”之一
-                  - 若输入存在 VPVR：优先用 VPVR-VAL/VPVR-VAH/POC边界 作为其中一个锚点（但总计仍只保留 2 个锚点）。
-                  - 禁止在 Gate2 枚举第 3/4/5 个结构簇；其余结构信息一律不写（避免 token 爆炸）。
             -【禁回溯｜禁新增】Summary/StructureSnapshot 不得引入任何 GateTrace 尚未出现的新结构信息。
             - 若需要结构结论，必须写在 Gate2(STRUCTURE) 行；Summary 只能引用 GateTrace 的结论字段（action/fail=>/setup_grade/edge_score/confidence）。
             -【违规处理｜fail=>PROTO_BACKTRACK】若触发“禁回溯｜禁新增”：
