@@ -345,19 +345,21 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 			// 自定义API（通常是OpenAI兼容）- 支持GPT-5.1参数
 			requestBody["max_completion_tokens"] = maxTokens
 
-			// GPT-5.1专用参数
+			// GPT-5.1专用参数（Prompt Caching）
 			if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5.2") {
 				requestBody["reasoning_effort"] = "low"
 				requestBody["prompt_cache_retention"] = "24h"
+				requestBody["prompt_cache_key"] = "nofx:v16.1:prod" // 🔥 缓存键，确保模板版本一致性
 			}
 		default:
 			// 默认使用新格式，支持GPT-5.1参数
 			requestBody["max_completion_tokens"] = maxTokens
 
-			// GPT-5.1专用参数
+			// GPT-5.1专用参数（Prompt Caching）
 			if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
 				requestBody["reasoning_effort"] = "low"
 				requestBody["prompt_cache_retention"] = "24h"
+				requestBody["prompt_cache_key"] = "nofx:v16.1:prod" // 🔥 缓存键，确保模板版本一致性
 			}
 		}
 
@@ -399,6 +401,9 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		}
 		if cacheRetention, hasCache := requestBody["prompt_cache_retention"]; hasCache {
 			log.Printf("   Prompt Cache Retention: %v", cacheRetention)
+		}
+		if cacheKey, hasCacheKey := requestBody["prompt_cache_key"]; hasCacheKey {
+			log.Printf("   Prompt Cache Key: %v", cacheKey)
 		}
 
 		log.Printf("   Messages Count: %d", len(messages))
@@ -557,6 +562,15 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 
 		responseContent = result.Choices[0].Message.Content
 
+		// 🔍 调试：检查 usage 字段是否存在
+		hasUsage := result.Usage.PromptTokens > 0 || result.Usage.CompletionTokens > 0 || result.Usage.TotalTokens > 0
+		log.Printf("🔍 [AI_RESPONSE_DEBUG] req_id=AI_REQUEST has_usage=%v", hasUsage)
+
+		// 🔍 调试：打印原始 usage JSON
+		if usageJSON, err := json.Marshal(result.Usage); err == nil {
+			log.Printf("🔍 [AI_RESPONSE_DEBUG] req_id=AI_REQUEST usage_json=%s", string(usageJSON))
+		}
+
 		// 🔥 Prompt Caching Usage 观测：打印 usage 信息
 		logUsage(&result.Usage, "AI_REQUEST")
 
@@ -693,10 +707,23 @@ func logUsage(usage *Usage, reqID string) {
 	completionTokens := usage.CompletionTokens
 	totalTokens := usage.TotalTokens
 
+	// 🔍 调试：检查API响应结构
+	hasPromptDetails := usage.PromptDetails != nil
+	hasCachedTokensField := false
+	if hasPromptDetails {
+		hasCachedTokensField = true // 如果PromptDetails存在，说明结构中有cached_tokens字段定义
+	}
+
+	log.Printf("🔍 [AI_USAGE_DEBUG] req_id=%s has_prompt_tokens_details=%v has_cached_tokens_field=%v",
+		reqID, hasPromptDetails, hasCachedTokensField)
+
 	// 提取 cached_tokens（可能为空）
 	cachedTokens := 0
 	if usage.PromptDetails != nil {
 		cachedTokens = usage.PromptDetails.CachedTokens
+		log.Printf("🔍 [AI_USAGE_DEBUG] req_id=%s PromptDetails.CachedTokens=%d", reqID, cachedTokens)
+	} else {
+		log.Printf("🔍 [AI_USAGE_DEBUG] req_id=%s PromptDetails=nil（API未返回prompt_tokens_details字段）", reqID)
 	}
 
 	// 计算缓存命中比例
