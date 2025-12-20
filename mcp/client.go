@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -20,6 +21,33 @@ const (
 	ProviderQwen     Provider = "qwen"
 	ProviderCustom   Provider = "custom"
 )
+
+// === Prompt Caching Usage 观测相关结构体 ===
+
+// PromptTokensDetail usage.prompt_tokens_details 结构
+type PromptTokensDetail struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+// Usage API响应中的usage字段
+type Usage struct {
+	PromptTokens     int                 `json:"prompt_tokens"`
+	CompletionTokens int                 `json:"completion_tokens"`
+	TotalTokens      int                 `json:"total_tokens"`
+	PromptDetails    *PromptTokensDetail `json:"prompt_tokens_details,omitempty"`
+}
+
+// ChatCompletionResponse OpenAI兼容API响应结构（用于解析usage）
+type ChatCompletionResponse struct {
+	Usage   Usage `json:"usage"`
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+// === 原有代码继续 ===
 
 // Client AI API配置
 type Client struct {
@@ -517,13 +545,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		log.Printf("📥 [MCP] Anthropic响应解析成功: %d个内容块", len(anthropicResult.Content))
 	} else {
 		// OpenAI兼容API响应格式（默认）
-		var result struct {
-			Choices []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
+		var result ChatCompletionResponse
 
 		if err := json.Unmarshal(body, &result); err != nil {
 			return "", fmt.Errorf("解析OpenAI响应失败: %w", err)
@@ -534,6 +556,10 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		}
 
 		responseContent = result.Choices[0].Message.Content
+
+		// 🔥 Prompt Caching Usage 观测：打印 usage 信息
+		logUsage(&result.Usage, "AI_REQUEST")
+
 		log.Printf("📥 [MCP] OpenAI响应解析成功: %d个choices", len(result.Choices))
 	}
 
@@ -650,4 +676,53 @@ func writeSimpleAPILog(requestJSON []byte, responseContent string, client *Clien
 	fmt.Fprintf(file, "%s\n", responseContent)
 
 	log.Printf("📝 AI请求响应已写入文件: %s", filename)
+}
+
+// logUsage 打印 Prompt Caching Usage 信息
+// 🔥 关键指标：
+// - prompt_tokens: 本次输入tokens（system + user）
+// - cached_tokens: 命中缓存的tokens数（首次为0，后续应>0）
+// - cached_ratio: 缓存命中比例（0~1），模板越长比例越高
+func logUsage(usage *Usage, reqID string) {
+	if usage == nil {
+		log.Printf("⚠️ [AI_USAGE] req_id=%s usage=nil（响应中无usage字段）", reqID)
+		return
+	}
+
+	promptTokens := usage.PromptTokens
+	completionTokens := usage.CompletionTokens
+	totalTokens := usage.TotalTokens
+
+	// 提取 cached_tokens（可能为空）
+	cachedTokens := 0
+	if usage.PromptDetails != nil {
+		cachedTokens = usage.PromptDetails.CachedTokens
+	}
+
+	// 计算缓存命中比例
+	ratio := 0.0
+	if promptTokens > 0 {
+		ratio = float64(cachedTokens) / float64(promptTokens)
+		// 防止NaN或Inf
+		if math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+			ratio = 0
+		}
+	}
+
+	// 打印核心指标（使用固定格式便于日志分析）
+	log.Printf("📊 [AI_USAGE] req_id=%s prompt_tokens=%d cached_tokens=%d cached_ratio=%.4f completion_tokens=%d total_tokens=%d",
+		reqID, promptTokens, cachedTokens, ratio, completionTokens, totalTokens)
+
+	// 额外提示：如果cached_tokens始终为0，说明缓存未生效
+	if cachedTokens == 0 && promptTokens >= 1024 {
+		log.Printf("⚠️ [AI_USAGE] cached_tokens=0，prompt_tokens=%d >= 1024，缓存未生效！请检查：", promptTokens)
+		log.Printf("   1. 模板SHA-256指纹是否每次一致")
+		log.Printf("   2. prompt_cache_retention参数是否正确设置")
+		log.Printf("   3. 首次请求缓存为0是正常的，第二次请求应>0")
+	}
+
+	// 额外提示：如果缓存命中率很高，说明缓存工作正常
+	if ratio > 0.7 {
+		log.Printf("✅ [AI_USAGE] 缓存命中率%.1f%%，Prompt Caching工作正常", ratio*100)
+	}
 }

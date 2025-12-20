@@ -3,6 +3,7 @@ package decision
 import (
 	"fmt"
 	"log"
+	"nofx/mcp"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,8 +12,9 @@ import (
 
 // PromptTemplate 系统提示词模板
 type PromptTemplate struct {
-	Name    string // 模板名称（文件名，不含扩展名）
-	Content string // 模板内容
+	Name    string             // 模板名称（文件名，不含扩展名）
+	Content string             // 模板内容（兼容性保留）
+	Bundle  *mcp.TemplateBundle // 🔥 新增：带SHA-256指纹的模板包
 }
 
 // PromptManager 提示词管理器
@@ -68,8 +70,8 @@ func (pm *PromptManager) LoadTemplates(dir string) error {
 
 	// 加载每个模板文件
 	for _, file := range files {
-		// 读取文件内容
-		content, err := os.ReadFile(file)
+		// 🔥 使用mcp.LoadSystemTemplate加载模板（带SHA-256指纹校验）
+		bundle, err := mcp.LoadSystemTemplate(file)
 		if err != nil {
 			log.Printf("⚠️  读取提示词文件失败 %s: %v", file, err)
 			continue
@@ -82,10 +84,11 @@ func (pm *PromptManager) LoadTemplates(dir string) error {
 		// 存储模板
 		pm.templates[templateName] = &PromptTemplate{
 			Name:    templateName,
-			Content: string(content),
+			Content: bundle.SystemTemplate, // 保持兼容性
+			Bundle:  bundle,                 // 🔥 新增：存储完整的Bundle（包含SHA-256指纹）
 		}
 
-		log.Printf("  📄 加载提示词模板: %s (%s)", templateName, fileName)
+		log.Printf("  📄 加载提示词模板: %s (SHA-256: %s)", templateName, bundle.HashSHA256[:16]+"...")
 	}
 
 	return nil

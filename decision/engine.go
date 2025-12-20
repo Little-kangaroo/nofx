@@ -433,6 +433,12 @@ func buildSystemPrompt(templateName string) string {
 		}
 	}
 
+	// 🔥 Prompt Caching观测：每次使用模板前打印SHA-256指纹
+	// 用于验证模板一致性，确保Prompt Caching有效
+	if template.Bundle != nil {
+		template.Bundle.LogTemplateUse("AI_REQUEST")
+	}
+
 	// 只返回固定的模板内容，不包含任何动态变量
 	return template.Content
 }
