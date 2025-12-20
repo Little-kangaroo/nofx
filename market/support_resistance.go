@@ -126,6 +126,10 @@ func (sra *SupportResistanceAnalyzer) Analyze(klines []Kline) *SupportResistance
 	// 2. 🔥 新增：识别SR Flip转换线
 	srFlips := sra.identifySRFlips(levels, klines)
 
+	// 🔥 Token优化：筛选SR Flip（2上2下距离优先）
+	currentPrice := klines[len(klines)-1].Close
+	validatedFlips := sra.validateSRFlips(srFlips, klines, currentPrice)
+
 	// 3. 计算统计信息
 	statistics := sra.calculateStatistics(levels)
 
@@ -134,7 +138,7 @@ func (sra *SupportResistanceAnalyzer) Analyze(klines []Kline) *SupportResistance
 
 	return &SupportResistanceData{
 		KeyLevels:    activeLevels,
-		SRFlips:      srFlips, // 🔥 新增：包含SR Flip数据
+		SRFlips:      validatedFlips, // 🔥 Token优化：返回筛选后的SR Flip（最多4条）
 		Statistics:   statistics,
 		Config:       &sra.config,
 		LastAnalysis: time.Now().UnixMilli(),
