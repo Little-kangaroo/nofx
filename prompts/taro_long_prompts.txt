@@ -161,6 +161,14 @@
    - 若 has_position=0：action="wait"
    - 若 has_position=1：action ∈ {"hold","close"}（严禁输出 wait；默认 hold；如出现风控恶化/保护线触发/需要止损退出才 close）
    - Gate3(TIMING) 行必须：FAIL + fail=>TIME（或 fail=>xF），并写“何时恢复可评估”（NextTrigger+Timebox）。
+   - NextTrigger/Timebox 输出必须采用“短模板”（单行优先）以降低重复与 token：
+      * 默认合并为 1 行，并把 Timebox 内嵌在 NextTrigger(...)：
+        NextTrigger(Timebox=未来N根5m收盘): [clearOF=<解除条件>; ](触及Anchor1且5m出T)或(触及Anchor2且5m出T)->重评{STYLE}
+      * 预算与约束（不改规则，只收敛写法）：
+        - clearOF：仅当 Gate1=FAIL fail=>OF 时出现；且只写“解除条件”，不得复述证据链；
+        - 结构锚点：仅允许引用 Gate2(STRUCTURE) 行已出现的信息；优先 Anchor1/Anchor2；最多 2 个锚点；
+        - 触发 T：只允许 1 组 5m Trigger（如 SFP/Engulfing/IBO/MomentumIgnition/BO_RETEST）；禁止枚举长列表；
+        - 禁止在 NextTrigger 重复解释 Gate2/Gate4；禁止新增第 3 个价位/区间。
 5) Gate4（SETUP）只能在综合条件不足时否决开仓；其中 RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向：
    - 若综合不足（仅否决“新开仓”）：has_position=0 -> action="wait"；has_position=1 -> action ∈ {"hold","close"}（仅管理既有仓位；严禁输出 wait）。
      Gate4(SETUP) 行标注 FAIL + fail=>SETUP，并写缺失项（趋势动能/确认形态/触发质量等）。
@@ -1827,7 +1835,12 @@ A) 仓位 sizing（基于R的风险等额）
     - Gate5(EXEC/RR): DIAG(EVAL_ONLY) <R_clean大概率是否达标/主要缺口项（不输出具体SL/TP价位）>
       actionDerivation: derived_action=<.> | has_position=<0/1> | veto=<最高优先级否决点>
     - StructureSnapshot（最多 1~2 行；仅允许引用 Gate2(STRUCTURE) 行已出现的结构锚点；禁止新增结论/价位/区间）：仅用于“快速扫读”，不得在此进行二次结构推导。
-    NextTrigger(Timebox=未来12根5m收盘): <解除 Gate1 红线 + 结构/触发确认条件>
+    - NextTrigger(Timebox=未来N根5m收盘): 解除=<1条最高优先级解除条件>; 触发=<1条5m触发或“下一根5m收盘复评”>
+      -【短 NextTrigger 规则（省 token｜不改 Gate/字段/动作集合）】
+        1) 必须仅 1 行；最多用 2 个短语，用分号“;”分隔；禁止解释性长句。
+        2) 只允许引用 GateTrace 已出现的 1~2 个结构锚点价位/区间；禁止额外枚举 zones/gaps/lines 列表。
+        3) “解除”只写最高优先级否决点的解除条件（OF 红线解除 / 数据补齐 / 价格回到关键锚点 三选一）。
+        4) “触发”只写 1 个 5m Trigger 名称（如 SFP/吞没/BO_RETEST/MOMENTUM_BREAK），或写“出现 5m 有效触发”。
 B) 候选止损价（对称写法）
 1. BE_with_costs：将手续费/滑点/资金费率换算为价差，并基于方向加减到 entry
 2. R_lock：浮盈≥kR 后，对应锁盈价（LONG 向上、SHORT 向下）
