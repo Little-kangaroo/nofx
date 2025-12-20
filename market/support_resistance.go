@@ -679,8 +679,8 @@ func (sra *SupportResistanceAnalyzer) identifySRFlips(levels []*SRLevel, klines 
 		}
 	}
 	
-	// 🔥 步骤2：验证和过滤SR Flip（确保质量）
-	validatedFlips := sra.validateSRFlips(srFlips, klines)
+	// 🔥 步骤2：验证和过滤SR Flip（确保质量）- 传入当前价格用于距离筛选
+	validatedFlips := sra.validateSRFlips(srFlips, klines, currentPrice)
 	
 	return validatedFlips
 }
@@ -1032,50 +1032,99 @@ func (sra *SupportResistanceAnalyzer) calculatePrePostFlipTouches(interactions [
 	return preFlipTouches, postFlipTouches
 }
 
-// validateSRFlips 验证和过滤SR Flip
-func (sra *SupportResistanceAnalyzer) validateSRFlips(srFlips []*SRFlip, klines []Kline) []*SRFlip {
+// validateSRFlips 验证和过滤SR Flip（使用2上2下距离优先策略）
+func (sra *SupportResistanceAnalyzer) validateSRFlips(srFlips []*SRFlip, klines []Kline, currentPrice float64) []*SRFlip {
 	var validatedFlips []*SRFlip
-	
+
 	for _, flip := range srFlips {
 		// 验证条件1：转换强度足够
 		if flip.FlipStrength < 45.0 {
 			continue
 		}
-		
+
 		// 验证条件2：交互次数足够
 		if flip.PreFlipTouches < 2 || flip.PostFlipTouches < 1 {
 			continue
 		}
-		
+
 		// 验证条件3：转换是有意义的
 		if flip.OriginalType == flip.FlippedType {
 			continue
 		}
-		
+
 		// 验证条件4：上下文质量检查
 		if flip.FlipContext.FlipQuality == "weak" && flip.FlipStrength < 60.0 {
 			continue
 		}
-		
+
 		validatedFlips = append(validatedFlips, flip)
 	}
-	
-	// 按转换强度排序，保留最优的转换
-	for i := 0; i < len(validatedFlips)-1; i++ {
-		for j := i + 1; j < len(validatedFlips); j++ {
-			if validatedFlips[j].FlipStrength > validatedFlips[i].FlipStrength {
-				validatedFlips[i], validatedFlips[j] = validatedFlips[j], validatedFlips[i]
-			}
+
+	// 🔥 新增：按距离分组并排序 - 2上2下距离优先策略
+	var aboveFlips []*SRFlip // 价格上方的SR Flip
+	var belowFlips []*SRFlip // 价格下方的SR Flip
+
+	for _, flip := range validatedFlips {
+		if flip.FlipPrice > currentPrice {
+			// SR Flip在当前价格上方
+			aboveFlips = append(aboveFlips, flip)
+		} else if flip.FlipPrice < currentPrice {
+			// SR Flip在当前价格下方
+			belowFlips = append(belowFlips, flip)
+		} else {
+			// SR Flip恰好在当前价格，同时加入上下两个列表
+			aboveFlips = append(aboveFlips, flip)
+			belowFlips = append(belowFlips, flip)
 		}
 	}
-	
-	// 限制数量，避免过多噪音
-	maxFlips := 5
-	if len(validatedFlips) > maxFlips {
-		validatedFlips = validatedFlips[:maxFlips]
+
+	// 按距离排序（从近到远）
+	sort.Slice(aboveFlips, func(i, j int) bool {
+		distI := aboveFlips[i].FlipPrice - currentPrice
+		distJ := aboveFlips[j].FlipPrice - currentPrice
+		return distI < distJ
+	})
+
+	sort.Slice(belowFlips, func(i, j int) bool {
+		distI := currentPrice - belowFlips[i].FlipPrice
+		distJ := currentPrice - belowFlips[j].FlipPrice
+		return distI < distJ
+	})
+
+	// 选择最近的2上2下
+	var result []*SRFlip
+
+	topCount := 2
+	if len(aboveFlips) < topCount {
+		topCount = len(aboveFlips)
 	}
-	
-	return validatedFlips
+	result = append(result, aboveFlips[:topCount]...)
+
+	bottomCount := 2
+	if len(belowFlips) < bottomCount {
+		bottomCount = len(belowFlips)
+	}
+	result = append(result, belowFlips[:bottomCount]...)
+
+	// 去重（如果SR Flip同时出现在上方和下方列表中）
+	result = deduplicateSRFlips(result)
+
+	return result
+}
+
+// deduplicateSRFlips 去重SR Flip列表（基于ID）
+func deduplicateSRFlips(flips []*SRFlip) []*SRFlip {
+	seen := make(map[string]bool)
+	var result []*SRFlip
+
+	for _, flip := range flips {
+		if !seen[flip.ID] {
+			seen[flip.ID] = true
+			result = append(result, flip)
+		}
+	}
+
+	return result
 }
 
 // calculateAdaptiveClusterTolerance 计算自适应聚类容差（基于ATR的稳定边界）

@@ -717,15 +717,12 @@ func (fvg *FVGAnalyzer) filterActiveFVGs(gaps []*FairValueGap) []*FairValueGap {
 	return activeFVGs
 }
 
-// filterActiveFVGsWithContext 使用上下文信息筛选活跃FVG - "时间框架独立Top 3"策略
+// filterActiveFVGsWithContext 使用上下文信息筛选活跃FVG - "2上2下距离优先"策略
 func (fvg *FVGAnalyzer) filterActiveFVGsWithContext(gaps []*FairValueGap, currentPrice float64, atr float64, klines []Kline) []*FairValueGap {
 	if len(gaps) == 0 {
 		return gaps
 	}
 
-	// 推断时间框架
-	timeframe := inferTimeframe(klines)
-	
 	var candidates []*FairValueGap
 
 	// 第一阶段：硬截断 - 基础过滤
@@ -751,23 +748,74 @@ func (fvg *FVGAnalyzer) filterActiveFVGsWithContext(gaps []*FairValueGap, curren
 		candidates = append(candidates, gap)
 	}
 
-	// 第二阶段：综合评分排序
-	for i := range candidates {
-		candidates[i].Score = fvg.calculateFVGScore(candidates[i], currentPrice, atr, klines)
+	// 第二阶段：按距离分组并排序
+	var aboveFVGs []*FairValueGap // 价格上方的FVG
+	var belowFVGs []*FairValueGap // 价格下方的FVG
+
+	for _, gap := range candidates {
+		// 判断FVG相对于当前价格的位置
+		if gap.LowerBound > currentPrice {
+			// FVG在当前价格上方
+			aboveFVGs = append(aboveFVGs, gap)
+		} else if gap.UpperBound < currentPrice {
+			// FVG在当前价格下方
+			belowFVGs = append(belowFVGs, gap)
+		} else {
+			// FVG包含当前价格，既算上方也算下方（优先级最高）
+			aboveFVGs = append(aboveFVGs, gap)
+			belowFVGs = append(belowFVGs, gap)
+		}
 	}
 
-	// 按评分降序排序
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Score > candidates[j].Score
+	// 按距离排序（从近到远）
+	sort.Slice(aboveFVGs, func(i, j int) bool {
+		distI := aboveFVGs[i].LowerBound - currentPrice
+		distJ := aboveFVGs[j].LowerBound - currentPrice
+		return distI < distJ
 	})
 
-	// 第三阶段：时间框架独立Top 3限制
-	maxFVGs := getMaxFVGsForTimeframe(timeframe)
-	if len(candidates) > maxFVGs {
-		candidates = candidates[:maxFVGs]
+	sort.Slice(belowFVGs, func(i, j int) bool {
+		distI := currentPrice - belowFVGs[i].UpperBound
+		distJ := currentPrice - belowFVGs[j].UpperBound
+		return distI < distJ
+	})
+
+	// 第三阶段：选择最近的2上2下
+	var result []*FairValueGap
+
+	// 取上方最近的2个
+	topCount := 2
+	if len(aboveFVGs) < topCount {
+		topCount = len(aboveFVGs)
+	}
+	result = append(result, aboveFVGs[:topCount]...)
+
+	// 取下方最近的2个
+	bottomCount := 2
+	if len(belowFVGs) < bottomCount {
+		bottomCount = len(belowFVGs)
+	}
+	result = append(result, belowFVGs[:bottomCount]...)
+
+	// 去重（如果FVG同时出现在上方和下方列表中）
+	result = deduplicateFVGs(result)
+
+	return result
+}
+
+// deduplicateFVGs 去重FVG列表（基于ID）
+func deduplicateFVGs(fvgs []*FairValueGap) []*FairValueGap {
+	seen := make(map[string]bool)
+	var result []*FairValueGap
+
+	for _, fvg := range fvgs {
+		if !seen[fvg.ID] {
+			seen[fvg.ID] = true
+			result = append(result, fvg)
+		}
 	}
 
-	return candidates
+	return result
 }
 
 // calculateFVGStrength 计算FVG强度

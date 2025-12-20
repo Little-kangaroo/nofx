@@ -34,12 +34,22 @@ func (fa *FibonacciAnalyzer) Analyze(klines []Kline) *FibonacciData {
 
 	// 识别趋势和关键摆动点
 	swingPoints := fa.identifySwingPoints(klines)
-	
+
 	// 计算斐波纳契回调
 	retracements := fa.calculateRetracements(swingPoints, klines)
-	
+
+	// 🔥 Token优化：筛选回调中的关键水平线（只保留0.382, 0.5, 0.618, 0.786）
+	for i := range retracements {
+		retracements[i].Levels = filterKeyFibLevels(retracements[i].Levels)
+	}
+
 	// 计算斐波纳契扩展
 	extensions := fa.calculateExtensions(swingPoints, klines)
+
+	// 🔥 Token优化：筛选扩展中的关键水平线（只保留0.382, 0.5, 0.618, 0.786）
+	for i := range extensions {
+		extensions[i].Levels = filterKeyFibLevels(extensions[i].Levels)
+	}
 	
 	// 识别斐波聚集区
 	clusters := fa.identifyFibClusters(retracements, extensions)
@@ -2145,4 +2155,29 @@ func (fa *FibonacciAnalyzer) checkVolumeConfirmation(retracement *FibRetracement
 	// 要求趋势期间成交量至少是历史平均的80%
 	volumeRatio := avgTrendVolume / avgHistoricalVolume
 	return volumeRatio >= 0.8
+}
+
+// filterKeyFibLevels 筛选关键斐波那契水平线（只保留4个关键位：0.382, 0.5, 0.618, 0.786）
+// 🔥 Token优化：减少AI输入数据量，只保留最重要的斐波那契比率
+func filterKeyFibLevels(levels []FibLevel) []FibLevel {
+	keyRatios := map[float64]bool{
+		0.382: true,
+		0.5:   true,
+		0.618: true,
+		0.786: true,
+	}
+
+	var filtered []FibLevel
+	for _, level := range levels {
+		// 使用小的epsilon值来处理浮点数比较
+		epsilon := 0.001
+		for keyRatio := range keyRatios {
+			if math.Abs(level.Ratio-keyRatio) < epsilon {
+				filtered = append(filtered, level)
+				break
+			}
+		}
+	}
+
+	return filtered
 }

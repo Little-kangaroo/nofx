@@ -1,6 +1,7 @@
 package market
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"sort"
@@ -108,19 +109,23 @@ func (va *VPVRAnalyzer) Analyze(klines []Kline) *VolumeProfile {
 	// 🔥 P0级新修复：为VPVR添加Context计算，解决StrengthZ和VolRatio为null的问题
 	context := va.calculateVPVRContext(levels, stats, poc, vah, val)
 
+	// 🔥 Token优化：筛选关键价格级别（混合策略：POC/VAH/VAL + Top6 volume + Near price 3个）
+	currentPrice := klines[len(klines)-1].Close
+	filteredLevels := va.filterKeyPriceLevels(levels, poc, vah, val, currentPrice)
+
 	// 🔥 P0-04修复：构建VolumeProfile时添加配置标注，便于复盘和一致性校验
 	volumeProfile := &VolumeProfile{
 		POC:       poc,
 		VAH:       vah,
 		VAL:       val,
 		ValueArea: valueArea,
-		Levels:    levels,
+		Levels:    filteredLevels, // 使用筛选后的levels
 		Config:    &va.config,
 		Stats:     stats,
-		Context:   context,  // 🔥 添加Context字段
+		Context:   context, // 🔥 添加Context字段
 		// 🔥 P0-04修复：明确标注实际使用的配置参数
-		UsedTimeFrame: va.config.TimeFrame,        // 实际使用的时间框架
-		UsedTickSize:  stabilizedTickSize,         // 实际使用的tick_size（可能经过动态调整）
+		UsedTimeFrame: va.config.TimeFrame,  // 实际使用的时间框架
+		UsedTickSize:  stabilizedTickSize,   // 实际使用的tick_size（可能经过动态调整）
 	}
 
 	return volumeProfile
@@ -3000,8 +3005,120 @@ func (va *VPVRAnalyzer) calculateVPVRContext(levels []*PriceLevel, stats *Volume
 		RankPct:    rankPct,
 	}
 
-	log.Printf("🔍 [VPVR Context] 计算完成: StrengthZ=%.4f, WidthATR=%.4f, VolRatio=%.4f, POCDensity=%.4f", 
+	log.Printf("🔍 [VPVR Context] 计算完成: StrengthZ=%.4f, WidthATR=%.4f, VolRatio=%.4f, POCDensity=%.4f",
 		strengthZ, widthATR, volRatio, pocDensity)
 
 	return context
+}
+
+// filterKeyPriceLevels 筛选关键价格级别（混合策略）
+// 🔥 Token优化：POC/VAH/VAL + Top6 volume + Near price 3个 = 最多12个bins
+func (va *VPVRAnalyzer) filterKeyPriceLevels(levels []*PriceLevel, poc *PriceLevel, vah, val, currentPrice float64) []*PriceLevel {
+	if len(levels) == 0 {
+		return levels
+	}
+
+	// 使用map去重，key是价格（使用一定精度避免浮点数问题）
+	selectedLevels := make(map[string]*PriceLevel)
+
+	// 辅助函数：生成价格key
+	priceKey := func(price float64) string {
+		return fmt.Sprintf("%.8f", price)
+	}
+
+	// 1. 添加POC对应的level
+	if poc != nil {
+		selectedLevels[priceKey(poc.Price)] = poc
+		log.Printf("🎯 [VPVR筛选] POC: %.2f (Volume: %.2f)", poc.Price, poc.Volume)
+	}
+
+	// 2. 添加VAH对应的level（找到最接近VAH价格的level）
+	vahLevel := va.findClosestLevel(levels, vah)
+	if vahLevel != nil {
+		selectedLevels[priceKey(vahLevel.Price)] = vahLevel
+		log.Printf("🎯 [VPVR筛选] VAH: %.2f (Volume: %.2f)", vahLevel.Price, vahLevel.Volume)
+	}
+
+	// 3. 添加VAL对应的level（找到最接近VAL价格的level）
+	valLevel := va.findClosestLevel(levels, val)
+	if valLevel != nil {
+		selectedLevels[priceKey(valLevel.Price)] = valLevel
+		log.Printf("🎯 [VPVR筛选] VAL: %.2f (Volume: %.2f)", valLevel.Price, valLevel.Volume)
+	}
+
+	// 4. 添加Top 6 volume levels
+	volumeSorted := make([]*PriceLevel, len(levels))
+	copy(volumeSorted, levels)
+	sort.Slice(volumeSorted, func(i, j int) bool {
+		return volumeSorted[i].Volume > volumeSorted[j].Volume
+	})
+
+	topVolumeCount := 6
+	if len(volumeSorted) < topVolumeCount {
+		topVolumeCount = len(volumeSorted)
+	}
+
+	log.Printf("🎯 [VPVR筛选] Top %d Volume levels:", topVolumeCount)
+	for i := 0; i < topVolumeCount; i++ {
+		level := volumeSorted[i]
+		selectedLevels[priceKey(level.Price)] = level
+		log.Printf("   #%d: %.2f (Volume: %.2f)", i+1, level.Price, level.Volume)
+	}
+
+	// 5. 添加距离当前价格最近的3个levels
+	distanceSorted := make([]*PriceLevel, len(levels))
+	copy(distanceSorted, levels)
+	sort.Slice(distanceSorted, func(i, j int) bool {
+		distI := math.Abs(distanceSorted[i].Price - currentPrice)
+		distJ := math.Abs(distanceSorted[j].Price - currentPrice)
+		return distI < distJ
+	})
+
+	nearPriceCount := 3
+	if len(distanceSorted) < nearPriceCount {
+		nearPriceCount = len(distanceSorted)
+	}
+
+	log.Printf("🎯 [VPVR筛选] Near Price (current: %.2f) 最近%d个:", currentPrice, nearPriceCount)
+	for i := 0; i < nearPriceCount; i++ {
+		level := distanceSorted[i]
+		selectedLevels[priceKey(level.Price)] = level
+		distance := math.Abs(level.Price - currentPrice)
+		log.Printf("   #%d: %.2f (Distance: %.2f, Volume: %.2f)", i+1, level.Price, distance, level.Volume)
+	}
+
+	// 转换map为slice
+	result := make([]*PriceLevel, 0, len(selectedLevels))
+	for _, level := range selectedLevels {
+		result = append(result, level)
+	}
+
+	// 按价格排序（保持原有顺序）
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Price < result[j].Price
+	})
+
+	log.Printf("📊 [VPVR筛选] 原始%d个bins，筛选后%d个bins（去重后）", len(levels), len(result))
+
+	return result
+}
+
+// findClosestLevel 找到最接近指定价格的level
+func (va *VPVRAnalyzer) findClosestLevel(levels []*PriceLevel, targetPrice float64) *PriceLevel {
+	if len(levels) == 0 {
+		return nil
+	}
+
+	var closest *PriceLevel
+	minDistance := math.MaxFloat64
+
+	for _, level := range levels {
+		distance := math.Abs(level.Price - targetPrice)
+		if distance < minDistance {
+			minDistance = distance
+			closest = level
+		}
+	}
+
+	return closest
 }

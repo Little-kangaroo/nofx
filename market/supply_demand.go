@@ -97,8 +97,9 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 	allZones := append(supplyZones, demandZones...)
 	sda.updateZoneStatuses(allZones, klines)
 
-	// 筛选活跃区域
-	activeZones := sda.filterActiveZones(allZones)
+	// 筛选活跃区域（传入当前价格用于距离筛选）
+	currentPrice := klines[len(klines)-1].Close
+	activeZones := sda.filterActiveZones(allZones, currentPrice)
 
 	// 如果复杂模式识别没有找到足够的区域，使用简单的高低点方法作为补充
 	// 修复备用机��悖论：不管主算法找到多少个，都启用备用机制增强识别
@@ -169,7 +170,7 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 		Statistics:   stats,
 		LastAnalysis: time.Now().UnixMilli(),
 	})
-	
+
 	return result
 }
 
@@ -1309,7 +1310,7 @@ func (sda *SupplyDemandAnalyzer) analyzePriceAction(klines []Kline, start, end i
 }
 
 // filterActiveZones 筛选活跃区域（修复数据层稳定性）
-func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone) []*SupplyDemandZone {
+func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone, currentPrice float64) []*SupplyDemandZone {
 	var active []*SupplyDemandZone
 
 	for _, zone := range zones {
@@ -1342,7 +1343,71 @@ func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone) []
 	}
 
 	log.Printf("📊 [ActiveZones过滤] 总区域%d个，保留活跃区域%d个", len(zones), len(active))
-	return active
+
+	// 🔥 新增：按距离筛选 - 供应区2上 + 需求区2下
+	result := sda.selectTopSupplyDemandZones(active, currentPrice)
+
+	log.Printf("📊 [距离筛选] 活跃区域%d个，筛选后%d个（供应区2上+需求区2下）", len(active), len(result))
+	return result
+}
+
+// selectTopSupplyDemandZones 选择最近的供应区和需求区（2上2下）
+func (sda *SupplyDemandAnalyzer) selectTopSupplyDemandZones(zones []*SupplyDemandZone, currentPrice float64) []*SupplyDemandZone {
+	var supplyZones []*SupplyDemandZone // 供应区（价格上方）
+	var demandZones []*SupplyDemandZone // 需求区（价格下方）
+
+	// 按类型分组
+	for _, zone := range zones {
+		if zone.Type == SupplyZone {
+			// 供应区通常在价格上方（但也可能包含当前价格）
+			if zone.LowerBound > currentPrice {
+				// 完全在上方
+				supplyZones = append(supplyZones, zone)
+			} else if zone.UpperBound >= currentPrice && zone.LowerBound <= currentPrice {
+				// 包含当前价格，也算供应区
+				supplyZones = append(supplyZones, zone)
+			}
+		} else if zone.Type == DemandZone {
+			// 需求区通常在价格下方（但也可能包含当前价格）
+			if zone.UpperBound < currentPrice {
+				// 完全在下方
+				demandZones = append(demandZones, zone)
+			} else if zone.UpperBound >= currentPrice && zone.LowerBound <= currentPrice {
+				// 包含当前价格，也算需求区
+				demandZones = append(demandZones, zone)
+			}
+		}
+	}
+
+	// 按距离排序（从近到远）
+	sort.Slice(supplyZones, func(i, j int) bool {
+		distI := supplyZones[i].LowerBound - currentPrice
+		distJ := supplyZones[j].LowerBound - currentPrice
+		return distI < distJ
+	})
+
+	sort.Slice(demandZones, func(i, j int) bool {
+		distI := currentPrice - demandZones[i].UpperBound
+		distJ := currentPrice - demandZones[j].UpperBound
+		return distI < distJ
+	})
+
+	// 选择最近的2个供应区和2个需求区
+	var result []*SupplyDemandZone
+
+	topSupplyCount := 2
+	if len(supplyZones) < topSupplyCount {
+		topSupplyCount = len(supplyZones)
+	}
+	result = append(result, supplyZones[:topSupplyCount]...)
+
+	topDemandCount := 2
+	if len(demandZones) < topDemandCount {
+		topDemandCount = len(demandZones)
+	}
+	result = append(result, demandZones[:topDemandCount]...)
+
+	return result
 }
 
 // isRecentZone 判断是否为近期创建的区域（2小时内）
@@ -1911,20 +1976,20 @@ func (sda *SupplyDemandAnalyzer) inferSymbolTimeframe(klines []Kline) (string, s
 func (sda *SupplyDemandAnalyzer) validateZonePosition(zone *SupplyDemandZone, currentPrice float64, atr float64) bool {
 	maxDistanceATR := 5.0 // 最大距离为5倍ATR
 	bufferDistance := maxDistanceATR * atr
-	
+
 	// 计算区域中心到当前价格的距离
 	zoneCenterPrice := (zone.UpperBound + zone.LowerBound) / 2
 	distance := math.Abs(currentPrice - zoneCenterPrice)
-	
+
 	// 距离验证：区域距离当前价格不能超过5倍ATR
 	isWithinRange := distance <= bufferDistance
-	
+
 	if !isWithinRange {
 		// 🔧 优化：移除冗余的位置验证失败日志，静默处理
 		// log.Printf("🚫 [距离验证失败] 区域%.2f-%.2f距离当前价格%.2f过远(%.2f > %.2f ATR)",
 		//	zone.LowerBound, zone.UpperBound, currentPrice, distance/atr, maxDistanceATR)
 	}
-	
+
 	return isWithinRange
 }
 
