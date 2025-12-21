@@ -1889,10 +1889,19 @@ func (t *FuturesTrader) findMatchingCloseTrade(trades []OrderTradeDetail, symbol
 		} else if positionSide == "SHORT" && trade.Side == "BUY" {
 			isCloseTrade = true
 		}
-		
+
+		// 🔧 增强：增加时间窗口过滤，只匹配最近30秒内的交易，避免误匹配
 		if isCloseTrade && trade.RealizedPnL != 0 {
-			log.Printf("✅ [findMatchingCloseTrade] 找到匹配的平仓交易: TradeID=%d, 价格=%.6f, 盈亏=%.2f", 
-				trade.TradeID, trade.Price, trade.RealizedPnL)
+			// 检查交易时间是否在30秒内
+			timeSinceTradeSeconds := time.Since(trade.TradeTime).Seconds()
+			if timeSinceTradeSeconds > 30 {
+				log.Printf("  ⏰ [findMatchingCloseTrade] 跳过旧交易: TradeID=%d, 时间差=%.1f秒 (超过30秒阈值)",
+					trade.TradeID, timeSinceTradeSeconds)
+				continue
+			}
+
+			log.Printf("✅ [findMatchingCloseTrade] 找到匹配的平仓交易: TradeID=%d, 价格=%.6f, 盈亏=%.2f, 时间差=%.1f秒",
+				trade.TradeID, trade.Price, trade.RealizedPnL, timeSinceTradeSeconds)
 			
 			return &AuthoritativeCloseData{
 				ActualPrice:    trade.Price,
@@ -1977,6 +1986,157 @@ func (t *FuturesTrader) deriveFromIncomeHistory(incomes []IncomeRecord, symbol, 
 			OrderID:        income.TradeID,
 		}, nil
 	}
-	
+
 	return nil, fmt.Errorf("未在资金流水中找到相关的已实现盈亏记录")
+}
+
+// GetAuthoritativeOpenData 获取权威的开仓数据（确保与交易所记录一致）
+// 通过订单ID查询真实成交明细，计算加权平均开仓价
+func (t *FuturesTrader) GetAuthoritativeOpenData(symbol string, orderID int64) (*AuthoritativeOpenData, error) {
+	log.Printf("🎯 [GetAuthoritativeOpenData] 获取权威开仓数据: 币种=%s, 订单ID=%d", symbol, orderID)
+
+	// 方法1: 通过订单ID查询成交明细（最准确）
+	if orderID > 0 {
+		trades, err := t.GetOrderTrades(symbol, orderID)
+		if err == nil && len(trades) > 0 {
+			return t.aggregateOpenOrderTrades(trades, "ORDER_TRADES")
+		}
+		log.Printf("⚠️ [GetAuthoritativeOpenData] 订单成交查询失败，尝试其他方法: %v", err)
+	}
+
+	// 方法2: 从最近成交历史中查找（fallback）
+	trades, err := t.GetRecentTrades(symbol, 50)
+	if err == nil {
+		if openData := t.findMatchingOpenTrade(trades, symbol, orderID); openData != nil {
+			return openData, nil
+		}
+		log.Printf("⚠️ [GetAuthoritativeOpenData] 未在成交历史中找到匹配的开仓交易")
+	}
+
+	// 方法3: 从持仓信息中获取（最后的fallback，准确度较低）
+	log.Printf("⚠️ [GetAuthoritativeOpenData] 所有方法失败，尝试从持仓信息获取")
+	positions, err := t.GetPositions()
+	if err == nil {
+		for _, pos := range positions {
+			if pos["symbol"] == symbol {
+				if entryPriceStr, ok := pos["entryPrice"].(string); ok {
+					if entryPrice, err := strconv.ParseFloat(entryPriceStr, 64); err == nil && entryPrice > 0 {
+						log.Printf("✅ [GetAuthoritativeOpenData] 从持仓信息获取开仓价: %.6f (准确度较低)", entryPrice)
+						return &AuthoritativeOpenData{
+							ActualPrice:    entryPrice,
+							ActualTime:     time.Now(),
+							ActualQuantity: 0, // 从持仓无法获取准确的开仓数量
+							Commission:     0,
+							DataSource:     "POSITION_ENTRY_PRICE",
+							OrderID:        fmt.Sprintf("%d", orderID),
+							IsMaker:        false,
+						}, nil
+					}
+				}
+			}
+		}
+	}
+
+	// 所有方法都失败
+	return nil, fmt.Errorf("无法获取 %s 订单 %d 的权威开仓数据", symbol, orderID)
+}
+
+// aggregateOpenOrderTrades 聚合开仓订单成交数据为权威开仓数据
+func (t *FuturesTrader) aggregateOpenOrderTrades(trades []OrderTradeDetail, dataSource string) (*AuthoritativeOpenData, error) {
+	if len(trades) == 0 {
+		return nil, fmt.Errorf("无成交记录")
+	}
+
+	// 计算加权平均价格
+	totalQty := 0.0
+	totalValue := 0.0
+	totalCommission := 0.0
+	latestTime := trades[0].TradeTime
+	isMaker := trades[0].IsMaker
+	commissionAsset := trades[0].CommissionAsset
+
+	for _, trade := range trades {
+		totalQty += trade.Quantity
+		totalValue += trade.QuoteQty
+		totalCommission += trade.Commission
+
+		if trade.TradeTime.After(latestTime) {
+			latestTime = trade.TradeTime
+		}
+	}
+
+	avgPrice := totalValue / totalQty
+
+	log.Printf("✅ [aggregateOpenOrderTrades] 聚合完成: 平均开仓价=%.6f, 总数量=%.6f, 手续费=%.4f %s",
+		avgPrice, totalQty, totalCommission, commissionAsset)
+
+	return &AuthoritativeOpenData{
+		ActualPrice:     avgPrice,
+		ActualTime:      latestTime,
+		ActualQuantity:  totalQty,
+		Commission:      totalCommission,
+		CommissionAsset: commissionAsset,
+		DataSource:      dataSource,
+		OrderID:         fmt.Sprintf("%d", trades[0].OrderID),
+		IsMaker:         isMaker,
+	}, nil
+}
+
+// findMatchingOpenTrade 在成交历史中查找匹配的开仓交易
+func (t *FuturesTrader) findMatchingOpenTrade(trades []OrderTradeDetail, symbol string, orderID int64) *AuthoritativeOpenData {
+	log.Printf("🔍 [findMatchingOpenTrade] 在 %d 条成交记录中查找 %s 订单 %d 的开仓交易",
+		len(trades), symbol, orderID)
+
+	// 优先通过订单ID精确匹配
+	if orderID > 0 {
+		for _, trade := range trades {
+			if trade.Symbol == symbol && trade.OrderID == orderID {
+				log.Printf("✅ [findMatchingOpenTrade] 通过订单ID精确匹配: TradeID=%d, 价格=%.6f",
+					trade.TradeID, trade.Price)
+
+				return &AuthoritativeOpenData{
+					ActualPrice:     trade.Price,
+					ActualTime:      trade.TradeTime,
+					ActualQuantity:  trade.Quantity,
+					Commission:      trade.Commission,
+					CommissionAsset: trade.CommissionAsset,
+					DataSource:      "RECENT_TRADES_ORDER_ID_MATCH",
+					OrderID:         fmt.Sprintf("%d", trade.OrderID),
+					IsMaker:         trade.IsMaker,
+				}
+			}
+		}
+	}
+
+	// 如果订单ID匹配失败，尝试找最近的开仓交易（30秒内）
+	for _, trade := range trades {
+		if trade.Symbol != symbol {
+			continue
+		}
+
+		// 只匹配最近30秒内的交易，避免误匹配
+		if time.Since(trade.TradeTime) > 30*time.Second {
+			continue
+		}
+
+		// 开仓交易的realizedPnL应该为0
+		if trade.RealizedPnL == 0 {
+			log.Printf("✅ [findMatchingOpenTrade] 找到最近的开仓交易: TradeID=%d, 价格=%.6f, 时间=%s",
+				trade.TradeID, trade.Price, trade.TradeTime.Format("15:04:05"))
+
+			return &AuthoritativeOpenData{
+				ActualPrice:     trade.Price,
+				ActualTime:      trade.TradeTime,
+				ActualQuantity:  trade.Quantity,
+				Commission:      trade.Commission,
+				CommissionAsset: trade.CommissionAsset,
+				DataSource:      "RECENT_TRADES_TIME_MATCH",
+				OrderID:         fmt.Sprintf("%d", trade.OrderID),
+				IsMaker:         trade.IsMaker,
+			}
+		}
+	}
+
+	log.Printf("⚠️ [findMatchingOpenTrade] 未找到匹配的开仓交易")
+	return nil
 }

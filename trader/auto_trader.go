@@ -928,15 +928,46 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 
 	log.Printf("  ✓ 开仓成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
 
-	// 🔧 重要修复：获取实际成交价格
-	// 等待订单确认后获取真实的持仓信息来确定实际成交价
-	time.Sleep(2 * time.Second) // 等待订单确认
-	actualPrice := marketData.CurrentPrice
-	if actualFillPrice := at.getActualFillPrice(decision.Symbol, "long"); actualFillPrice > 0 {
-		actualPrice = actualFillPrice
-		actionRecord.Price = actualPrice
-		log.Printf("  📊 实际开仓价格: %.4f (原请求价格: %.4f)", actualPrice, marketData.CurrentPrice)
+	// 🔧 关键修复：从交易所获取权威的开仓成交数据
+	var actualPrice float64
+	var priceDataSource string
+
+	// 获取订单ID
+	orderID, ok := order["orderId"].(int64)
+	if !ok {
+		log.Printf("  ⚠️ 无法获取订单ID，使用市场价格作为fallback")
+		actualPrice = marketData.CurrentPrice
+		priceDataSource = "MARKET_PRICE_FALLBACK"
+	} else {
+		// 等待订单确认（给交易所一些处理时间）
+		time.Sleep(2 * time.Second)
+
+		// 确保trader是FuturesTrader类型
+		binanceTrader, isBinance := at.trader.(*FuturesTrader)
+		if !isBinance {
+			log.Printf("  ⚠️ 交易器不是Binance，使用市场价格")
+			actualPrice = marketData.CurrentPrice
+			priceDataSource = "MARKET_PRICE_NON_BINANCE"
+		} else {
+			// 从交易所获取权威开仓数据
+			authData, err := binanceTrader.GetAuthoritativeOpenData(decision.Symbol, orderID)
+			if err != nil {
+				log.Printf("  ⚠️ 无法获取权威开仓数据: %v, 使用市场价格", err)
+				actualPrice = marketData.CurrentPrice
+				priceDataSource = "MARKET_PRICE_AUTH_FAILED"
+			} else {
+				actualPrice = authData.ActualPrice
+				priceDataSource = authData.DataSource
+				log.Printf("  ✅ [权威数据] 真实开仓价格: %.6f", actualPrice)
+				log.Printf("     数据来源: %s", authData.DataSource)
+				log.Printf("     成交数量: %.6f", authData.ActualQuantity)
+				log.Printf("     手续费: %.4f %s", authData.Commission, authData.CommissionAsset)
+				log.Printf("     是否挂单成交: %v", authData.IsMaker)
+			}
+		}
 	}
+
+	actionRecord.Price = actualPrice
 
 	// 记录到数据库
 	log.Printf("🔍 [调试] 准备记录开仓到数据库:")
@@ -945,7 +976,8 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	log.Printf("    side: 'long'")
 	log.Printf("    quantity: %.6f", quantity)
 	log.Printf("    leverage: %d", decision.Leverage)
-	log.Printf("    actualPrice: %.6f", actualPrice)
+	log.Printf("    actualPrice: %.6f (来源: %s)", actualPrice, priceDataSource)
+
 	
 	at.recordTradeToDatabase(decision.Symbol, "long", quantity, decision.Leverage, 
 		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_long", true)
@@ -1083,15 +1115,46 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 
 	log.Printf("  ✓ 开仓成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
 
-	// 🔧 重要修复：获取实际成交价格
-	// 等待订单确认后获取真实的持仓信息来确定实际成交价
-	time.Sleep(2 * time.Second) // 等待订单确认
-	actualPrice := marketData.CurrentPrice
-	if actualFillPrice := at.getActualFillPrice(decision.Symbol, "short"); actualFillPrice > 0 {
-		actualPrice = actualFillPrice
-		actionRecord.Price = actualPrice
-		log.Printf("  📊 实际开仓价格: %.4f (原请求价格: %.4f)", actualPrice, marketData.CurrentPrice)
+	// 🔧 关键修复：从交易所获取权威的开仓成交数据
+	var actualPrice float64
+	var priceDataSource string
+
+	// 获取订单ID
+	orderID, ok := order["orderId"].(int64)
+	if !ok {
+		log.Printf("  ⚠️ 无法获取订单ID，使用市场价格作为fallback")
+		actualPrice = marketData.CurrentPrice
+		priceDataSource = "MARKET_PRICE_FALLBACK"
+	} else {
+		// 等待订单确认（给交易所一些处理时间）
+		time.Sleep(2 * time.Second)
+
+		// 确保trader是FuturesTrader类型
+		binanceTrader, isBinance := at.trader.(*FuturesTrader)
+		if !isBinance {
+			log.Printf("  ⚠️ 交易器不是Binance，使用市场价格")
+			actualPrice = marketData.CurrentPrice
+			priceDataSource = "MARKET_PRICE_NON_BINANCE"
+		} else {
+			// 从交易所获取权威开仓数据
+			authData, err := binanceTrader.GetAuthoritativeOpenData(decision.Symbol, orderID)
+			if err != nil {
+				log.Printf("  ⚠️ 无法获取权威开仓数据: %v, 使用市场价格", err)
+				actualPrice = marketData.CurrentPrice
+				priceDataSource = "MARKET_PRICE_AUTH_FAILED"
+			} else {
+				actualPrice = authData.ActualPrice
+				priceDataSource = authData.DataSource
+				log.Printf("  ✅ [权威数据] 真实开仓价格: %.6f", actualPrice)
+				log.Printf("     数据来源: %s", authData.DataSource)
+				log.Printf("     成交数量: %.6f", authData.ActualQuantity)
+				log.Printf("     手续费: %.4f %s", authData.Commission, authData.CommissionAsset)
+				log.Printf("     是否挂单成交: %v", authData.IsMaker)
+			}
+		}
 	}
+
+	actionRecord.Price = actualPrice
 
 	// 🔧 关键修复：添加缺失的数据库记录调用
 	log.Printf("🔍 [调试] 准备记录空仓开仓到数据库:")
@@ -1100,7 +1163,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	log.Printf("    side: 'short'")
 	log.Printf("    quantity: %.6f", quantity)
 	log.Printf("    leverage: %d", decision.Leverage)
-	log.Printf("    actualPrice: %.6f", actualPrice)
+	log.Printf("    actualPrice: %.6f (来源: %s)", actualPrice, priceDataSource)
 	
 	at.recordTradeToDatabase(decision.Symbol, "short", quantity, decision.Leverage, 
 		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_short", true)
@@ -3241,10 +3304,28 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closeOrderID, c
 		return
 	}
 	
-	// 获取权威的平仓数据 - 使用 posSide
-	authData, err := binanceTrader.GetAuthoritativeCloseData(symbol, posSide, closeOrderID)
-	if err != nil {
-		log.Printf("❌ [权威数据] 无法获取交易所权威数据: %v", err)
+	// 🔧 增强：增加重试机制，最多重试3次，每次间隔2秒
+	var authData *AuthoritativeCloseData
+	maxRetries := 3
+	var retryErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if attempt > 1 {
+			log.Printf("🔄 [权威数据] 第 %d/%d 次重试...", attempt, maxRetries)
+			time.Sleep(2 * time.Second)
+		}
+
+		// 获取权威的平仓数据 - 使用 posSide
+		authData, retryErr = binanceTrader.GetAuthoritativeCloseData(symbol, posSide, closeOrderID)
+		if retryErr == nil {
+			log.Printf("✅ [权威数据] 第 %d 次尝试成功", attempt)
+			break
+		}
+
+		log.Printf("⚠️ [权威数据] 第 %d 次尝试失败: %v", attempt, retryErr)
+	}
+
+	if retryErr != nil {
+		log.Printf("❌ [权威数据] 所有重试均失败，无法获取交易所权威数据")
 		log.Printf("🚫 [权威数据] 拒绝使用估算数据写入数据库")
 		
 		// 记录失败但不写入错误的平仓数据
@@ -3257,7 +3338,7 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closeOrderID, c
 			OrderID:      closeOrderID,
 			Timestamp:    time.Now(),
 			Success:      false,
-			ErrorMessage: fmt.Sprintf("无法获取权威平仓数据: %v", err),
+			ErrorMessage: fmt.Sprintf("无法获取权威平仓数据: %v", retryErr),
 		}
 		
 		at.database.CreateTradeAction(actionRecord)
@@ -3314,8 +3395,14 @@ func (at *AutoTrader) updateTradeInDatabase(symbol, side string, closeOrderID, c
 
 	// 🎯 修复 P0：有权威盈亏就闭合，价格可以为0表示未知
 	closePrice := finalPrice  // 可能为 0，表示未知成交价而非估算
-	log.Printf("🔄 [权威数据] 正在更新数据库: tradeID=%s, 价格=%.6f, 权威盈亏=%.2f", 
+	log.Printf("🔄 [权威数据] 正在更新数据库: tradeID=%s, 价格=%.6f, 权威盈亏=%.2f",
 		openTrade.ID, closePrice, finalPnL)
+
+	// 🔧 增强：验证价格合理性
+	if err := at.validateTradePrice(symbol, side, openTrade.OpenPrice, closePrice, authData.DataSource); err != nil {
+		log.Printf("⚠️ [价格验证] 警告: %v", err)
+		// 注意：这里只是警告，不阻止数据库更新，因为我们使用的是权威数据
+	}
 
 	if err := at.database.UpdateTrade(openTrade.ID, closePrice, finalTime, 
 		"closed", closeReason, closeOrderID, finalPnL, finalPnLPct, durationSecs); err != nil {
@@ -3499,6 +3586,57 @@ func (at *AutoTrader) getOpenTradesFromDatabase() ([]*config.TradeRecord, error)
 	}
 	
 	return openTrades, nil
+}
+
+// validateTradePrice 验证交易价格的合理性
+// 用于检测数据异常，防止记录错误的价格导致盈亏统计失真
+func (at *AutoTrader) validateTradePrice(symbol, side string, openPrice, closePrice float64, dataSource string) error {
+	// 如果平仓价格为0（从Income获取的情况），跳过验证
+	if closePrice == 0 {
+		log.Printf("⚠️ [价格验证] %s %s 平仓价格为0（来源: %s），跳过验证", symbol, side, dataSource)
+		return nil
+	}
+
+	// 如果开仓价格为0，这是异常情况
+	if openPrice == 0 {
+		return fmt.Errorf("开仓价格为0，数据异常")
+	}
+
+	// 计算价格差异百分比
+	var priceDiffPct float64
+	if side == "long" {
+		priceDiffPct = ((closePrice - openPrice) / openPrice) * 100
+	} else { // short
+		priceDiffPct = ((openPrice - closePrice) / openPrice) * 100
+	}
+
+	absDiffPct := priceDiffPct
+	if absDiffPct < 0 {
+		absDiffPct = -absDiffPct
+	}
+
+	// 验证1：价格差异不应超过50%（极端情况）
+	if absDiffPct > 50 {
+		log.Printf("🚨 [价格验证] %s %s 价格差异异常: 开仓=%.6f, 平仓=%.6f, 差异=%.1f%%",
+			symbol, side, openPrice, closePrice, priceDiffPct)
+		log.Printf("    数据来源: %s", dataSource)
+		return fmt.Errorf("价格差异超过50%%，可能存在数据异常")
+	}
+
+	// 验证2：警告级别 - 价格差异超过30%
+	if absDiffPct > 30 {
+		log.Printf("⚠️ [价格验证] %s %s 价格差异较大: 开仓=%.6f, 平仓=%.6f, 差异=%.1f%%",
+			symbol, side, openPrice, closePrice, priceDiffPct)
+		log.Printf("    数据来源: %s (可能是正常的止损或爆仓)", dataSource)
+	}
+
+	// 验证3：记录价格比较信息
+	if absDiffPct > 10 {
+		log.Printf("📊 [价格验证] %s %s 价格变化: %.1f%% (开仓=%.6f, 平仓=%.6f, 来源=%s)",
+			symbol, side, priceDiffPct, openPrice, closePrice, dataSource)
+	}
+
+	return nil
 }
 
 // estimateCloseDetails 估算平仓价格和原因

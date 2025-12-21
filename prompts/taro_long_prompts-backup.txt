@@ -1805,41 +1805,19 @@ A) 仓位 sizing（基于R的风险等额）
     - 必须包含“Pos/Cap 摘要行”（便于检索与回放），但摘要行也必须是可读语义，不再使用自定义缩写：
       - Pos: 权益≈X; 保证金占用≈Y; 单笔风险占比≈Z; 当前仓位方向=<long/short/none>; 数量=<.>; 均价=<.>
       - Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<0/1>; 处理=<ok/clamp/reject>; 原因=<.>
-        - 默认输出模式：PROD_LITE（生产省 token｜强制）
-          * 除非输入中显式声明 debug_full_reasoning=true 或 OUTPUT_PROFILE=FULL，否则一律按 PROD_LITE 输出。
-          * PROD_LITE 禁止“1~12 行长复盘解释/推导过程/复述输入字段”。只允许输出“最小可核验证据集”，用于机器解析与快速扫读。
-          * REPLAY_FULL（仅调试/复盘）：允许追加解释行，但仍必须遵守 Anti-Latency 与“去重规则”（不得重复 GateTrace/锚点/NextTrigger）。
-
-        - PROD_LITE 的去重硬规则（强制，P0）
-          1) Gate2(STRUCTURE) 是“结构锚点唯一来源”：Anchor1/Anchor2 只在 Gate2 行完整出现一次；
-          2) StructureSnapshot 不得再用自然语言复述锚点价位/区间：只能引用 “Anchor1 / Anchor2” 字面量；
-          3) NextTrigger 只能引用 Anchor1/Anchor2（或“脱离POC/到达边界”这种解除条件），禁止再次解释 Gate2/Gate4。
-
-        - 严格顺序（必须按该顺序）:
-          Summary/Pos/Cap → GateTrace(Gate0→Gate5) → actionDerivation（紧随 GateTrace） → StructureSnapshot → NextTrigger/Timebox → Optional Details
-          禁止先输出完整结构总览/最终结论，再回过头补 GateTrace（避免重复组织导致 token 与延迟增加）。
-
-        - 【每 Gate 输出预算｜Anti-Latency｜PROD_LITE 强制】
-          1) GateTrace 每个 Gate 行最多 1 行，且每行≤110字符；必须使用短语或 k=v；禁止括号解释、因果长句、推导过程；
-          2) 每行最多引用 2 个价位/区间（仅 nearest/primary）；禁止枚举 zones/gaps/lines 列表；
-          3) has_position=0 且 action="wait" 时：
-             - Gate3~Gate5 只能用 DIAG(EVAL_ONLY) + 1 个“缺口短语”（如 no_trigger / trend_mixed / rr_low），禁止复述结构/趋势细节；
-          4) 若字段缺失/为空：直接写 “unknown(missing)” + 1 句影响（≤20字），不要展开。
-
-        - 【PROD_LITE 固定行模板（强制｜用于收敛写法，不改变判定规则）】
-          * Summary（1行）：原因只允许 1 个短标签（建议枚举：POC_CHOP/STRUCT_MID/NO_TRIGGER/TREND_MIXED/RR_LOW/OF_REDLINE/RISK）
-          * GateTrace 每行建议写法：
-            - Gate0(RISK): PASS/FAIL fail=>RISK key=<1个账户侧关键数值>; verdict=<ok/limit>
-            - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（二选一，禁止把 intent+regime+alignment 全写）
-            - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC_chop_zone/mid-range/edge>; Anchor1:<...>; Anchor2:<...>（见结构锚点写法）
-            - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in/out/unknown>
-            - Gate4(SETUP): PASS/DIAG(EVAL_ONLY) pattern=<none/EDGE/BO_RETEST/MOM_BREAK/SFP/Engulf>; trend=<aligned/mixed>
-            - Gate5(EXEC/RR): PASS/DIAG(EVAL_ONLY) reason=<no_clean_sl/too_close/costly/rr_low>; R_clean=<>=<th?>
-
-        - Optional Details（默认省略，省 token）
-          * 仅当 action ∈ {open_long, open_short, hold, close} 时允许；
-          * 最多 4 行；且不得重复 GateTrace/Anchor1/2/NextTrigger（否则视为违规扩写）。
-
+    - 允许在摘要行之后追加 1~12 行解释（可使用项目符号），且至少覆盖：
+      1) 本次 action 的“最高优先级否决/通过点”（对应 Gate0~Gate5）
+      2) trade_style 选择依据（用 4h/1h/30m/15m/5m 正常语义描述，不用 MB/mB/μB 编码）
+      3) 结构依据（至少 2 个结构锚点，带价位/区间 + ctx 强度信息）
+      4) 订单流结论与是否触发否决（给出解除条件）
+      5) 风险与可执行性（R_clean/R_struct、SL/TP 合法性；持仓则写 R_unrealized 与 new_stop 逻辑）
+    - 不再限制“只允许键值短语/严禁长句/严禁推导过程”。
+    - 严格顺序（必须按该顺序）: Summary/Pos/Cap → GateTrace(Gate0→Gate5) → actionDerivation（紧随 GateTrace，明确 derived_action 与 PROTO_CHECK） → StructureSnapshot → NextTrigger/Timebox → Optional Details
+      禁止先输出完整结构总览/最终结论，再回过头补 GateTrace（避免重复组织导致耗时增加）。
+    - 【每 Gate 输出预算｜Anti-Latency】
+      1) GateTrace 每个 Gate 行最多 1 行；最多引用 3 个关键字段/价位/区间；
+      2) 禁止枚举数组/列表：zones/gaps/lines 等只允许写 nearest/primary 1~2 项；
+      3) 若字段缺失/为空：直接写 “unknown(missing)” 并说明对结论的影响（不要展开推导）。
     - 【上层否决后的 DIAG 范围约束】
       当 Gate0 或 Gate1 为 FAIL 时：
       - Gate2~Gate5 仍需输出 DIAG(EVAL_ONLY)，但不得计算或输出可执行明细（如 entry_plan/具体 SL/TP 价位/完整 RR 推导）；
@@ -3150,22 +3128,15 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                   * 价格区间：按交易所 tick 取整或最多 1 位小数（例 88107；或 0.1）
                   * 资金/净值：最多 1 位小数
                 - 仅当“阈值极近、需要证明越界/未越界”时，允许额外多保留 1 位小数。
-                  -【结构锚点写法（可检索｜PROD_LITE 优先｜省 token）】
-                    * 硬要求（P0）：Gate2(STRUCTURE) 行内必须给出 ≥2 个结构锚点；仅允许 Anchor1/Anchor2 两个；不得另起多行；不得写自然语言长句。
-                    * 统一紧凑格式（单行可控，可被后端检索 Anchor1/Anchor2 前缀）：
-                      Anchor1:<TF>/<Type>/<Role>/<State>/<Str>@<low>-<high>
-                      Anchor2:<TF>/<Type>/<Role>/<State>/<Str>@<low>-<high>
-                      - 字段约束：
-                        TF ∈ {4h,1h,30m,15m,5m}
-                        Type ∈ {DZ,SZ,VPVR_POC,VAH,VAL,FVG,SR,FIB,CH,DS,ST}
-                        Role ∈ {S,R}               // 支撑/阻力
-                        State ∈ {fresh,retest,chop,broken,weak,strong}
-                        Str ∈ {W,M,S}              // 弱/中/强（禁止写 z=...）
-                    * 示例（仅示意编码，不额外解释）：
-                      Anchor1:15m/VPVR_POC/R/chop/M@88060-88090; Anchor2:15m/SZ/R/fresh/M@88551-88866
-
-                  -【结构锚点收敛规则（省 token｜不改变“≥2锚点”硬要求）】
-                    - 默认只输出 2 个锚点：Anchor1 与 Anchor2（必须带价位/区间）；禁止 Anchor3+；禁止枚举多个簇/区间。
+              -【结构锚点写法（复盘友好｜可检索｜省 token）】
+                * 要求：Gate2(STRUCTURE) 行里必须给出 ≥2 个结构锚点；每个锚点建议 1 行；禁止使用“|”管道符
+                * 推荐格式（可被后端检索 Anchor1/Anchor2 前缀）：
+                  Anchor1：周期=<TF>；类型=<供需区/VPVR边界/FVG/SR翻转/FIB/通道/道氏/SuperTrend>；价位=<单价或区间[low-high]>；
+                          角色=<支撑/阻力>；状态=<fresh/retest/broken/invalid/weak/strong>；强度=<ctx_strength_z 的解释性表达>
+                  Anchor2：……（同上）
+                * 说明：为节省 token，“强度”可以写成一句话，例如“强度：偏强（z-score>0）/偏弱（z-score<0）”，禁止只写“z=…/role=…”这类难读缩写
+              -【结构锚点收敛规则（省 token｜不改变“≥2锚点”硬要求）】
+                  - Gate2(STRUCTURE) 默认只输出 2 个锚点：Anchor1 与 Anchor2（必须带价位/区间）。
                     * Anchor1：选择“最近、最决定性的下方需求/支撑/VAL/FVG/通道下沿”之一
                     * Anchor2：选择“最近、最决定性的上方供给/阻力/VAH/POC 边界/通道上沿”之一
                   - 若输入存在 VPVR：优先用 VPVR-VAL/VPVR-VAH/POC边界 作为其中一个锚点（但总计仍只保留 2 个锚点）。

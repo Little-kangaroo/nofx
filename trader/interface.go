@@ -31,6 +31,18 @@ type IncomeRecord struct {
 	TradeID    string    `json:"trade_id"`    // 相关成交ID（可能为空）
 }
 
+// AuthoritativeOpenData 权威开仓数据（从交易所获取的真实数据）
+type AuthoritativeOpenData struct {
+	ActualPrice    float64   `json:"actual_price"`     // 真实成交价格
+	ActualTime     time.Time `json:"actual_time"`      // 真实成交时间
+	ActualQuantity float64   `json:"actual_quantity"`  // 真实成交数量
+	Commission     float64   `json:"commission"`       // 手续费
+	CommissionAsset string   `json:"commission_asset"` // 手续费币种
+	DataSource     string    `json:"data_source"`      // 数据来源标识
+	OrderID        string    `json:"order_id"`         // 相关订单ID
+	IsMaker        bool      `json:"is_maker"`         // 是否为挂单方
+}
+
 // AuthoritativeCloseData 权威平仓数据（从交易所获取的真实数据）
 type AuthoritativeCloseData struct {
 	ActualPrice    float64   `json:"actual_price"`     // 真实成交价格
