@@ -95,12 +95,25 @@
          * 若为 false 且未显式启用 INTRABAR_ENABLE（且满足其生效条件），则本轮禁止新开仓（open_long/open_short），action 只能为 "wait"/"hold"/"close"。
        - 数据完整性熔断（fail=>xF）：
          * 若关键字段缺失/为空/矛盾（例如：ohlc_last_closed.x!=true、close_time 缺失、结构锚点价位缺失、订单流关键枚举缺失），则 Gate3=FAIL fail=>xF（表示“禁开新仓”）；顶层 action/derived_action 一律交由 actionDerivation 按 has_position 分支导出：has_position=0 -> "wait"；has_position=1 -> "hold"/"close"（严禁输出 "wait"；严禁 open_long/open_short）。
-       - 触发窗口（Trigger Window｜见《【微观触发器（5m Trigger - The "Go" Signal）】》）：
-         * 只有当存在“可执行触发器”且处于其有效时间窗内，Gate3 才可 PASS；
-         * 否则 Gate3=FAIL fail=>TIME，并在 reasoning 的 NextTrigger + Timebox 写明“何时恢复可评估”。
+       - 触发窗口（Trigger Window｜由 trigger_context.trigger_flags 定义，禁止模型“看K线猜触发器”）：
+         * 若 trigger_context 缺失，或 trigger_flags 为空/不存在：window=no_trigger ⇒ Gate3=FAIL fail=>TIME（仅禁新开仓；仍需 DIAG 复盘与 NextTrigger）。
+         * 若 trigger_flags 非空且 is_kline_closed=true：window=in ⇒ Gate3 可 PASS（是否开仓继续交由 Gate4/Gate5）。
+         * 若 is_kline_closed=false：除非明确启用 INTRABAR_ENABLE 且满足其生效条件，否则 window=intrabar_forbidden ⇒ Gate3=FAIL fail=>TIME。
+         * Gate3/NextTrigger 只引用 trigger_primary（或 flags 中 1 项）；禁止罗列形态细节与多条候选。
        - 本层回答：“现在这个时点/这份数据，允许做决策并允许执行吗？”
     4）开仓条件与执行方式门槛（Setup Gate｜Gate4(SETUP)）
        - 本层综合：多周期趋势/动能 + RSI 状态 + 形态确认 + 触发质量，决定“能不能开、怎么开（挂单/市价/回踩/缩仓）”。
+       - TriggerFlags 选择制（P0｜必须遵守｜降低 token + 提升可复现性）：
+         * 触发器识别仅允许使用 trigger_context.trigger_flags / trigger_primary / trigger_quality；
+           严禁在 reasoning 中“根据K线/指标再推断一个未给出的触发器/形态”。
+         * 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，并在 Gate4 行写 trigger=NONE。
+         * 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择 trigger_primary（缺失则选 quality 最高者）作为 trigger，
+           并按以下映射输出 pattern：
+             - trigger ∈ {SFP_*, ENGULF_*} => pattern=EDGE
+             - trigger ∈ {IBB_*, MOMO_*}  => pattern=MOMENTUM_BREAK
+             - pattern=BO_RETEST 仅在 Gate2 已给出“有效突破后回踩关键位”的结构证据时允许（并说明 retest_anchor=...）；否则不得输出 BO_RETEST。
+         * Gate4 行建议短格式（避免复述形态细节）：
+           - Gate4(SETUP): <PASS/FAIL/DIAG> ... pattern=<.>; trigger=<trigger>; q=<0~1>; key=<trigger_key_level 可选>
        - 趋势与动能（Trend & Momentum）：
          * 综合 4h/1h、30m/15m、5m 的趋势与动能（EMA 排列、MACD、SuperTrend 等）：
            - 若计划方向与 4h/1h、30m/15m 大体同向：顺势场景，允许按 trade_style 执行；
@@ -167,7 +180,7 @@
       * 预算与约束（不改规则，只收敛写法）：
         - clearOF：仅当 Gate1=FAIL fail=>OF 时出现；且只写“解除条件”，不得复述证据链；
         - 结构锚点：仅允许引用 Gate2(STRUCTURE) 行已出现的信息；优先 Anchor1/Anchor2；最多 2 个锚点；
-        - 触发 T：只允许 1 组 5m Trigger（如 SFP/Engulfing/IBO/MomentumIgnition/BO_RETEST）；禁止枚举长列表；
+        - 触发 T：只允许 1 项触发器短码：优先 trigger_primary（或从 trigger_flags 取 1 项）；建议用枚举码（SFP_*/ENGULF_*/IBB_*/MOMO_*）；禁止枚举长列表或复述形态细节；
         - 禁止在 NextTrigger 重复解释 Gate2/Gate4；禁止新增第 3 个价位/区间。
 5) Gate4（SETUP）只能在综合条件不足时否决开仓；其中 RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向：
    - 若综合不足（仅否决“新开仓”）：has_position=0 -> action="wait"；has_position=1 -> action ∈ {"hold","close"}（仅管理既有仓位；严禁输出 wait）。
@@ -451,6 +464,10 @@
          (a) 满足上文【Tier 1.5: 单强结构 + 强触发】的全部条件（仅 LTF_scalp + 半风险）；
          (b) pattern=MOMENTUM_BREAK 且同时满足：5m Trigger 确认 + Gate5 可执行（含 R_clean/止损合法性），并在 reasoning 明确写出触发证据链。
     C) 微观触发器 (5m Trigger - The "Go" Signal)：
+   【P0｜触发器来源（重要）】
+   - 本轮触发器识别由后端预计算并写入 trigger_context.trigger_flags / trigger_primary / trigger_quality；
+     模型不得从蜡烛图/指标“推断是否出现 SFP/Engulf/IBB/MOMO”来替代 trigger_flags。
+   - 当 trigger_flags 非空：优先使用 trigger_primary；若缺失则选 quality 最高者；并在 Gate4 行用 trigger=<枚举码> 引用即可（不要复述形态细节）。
        即使满足了上述结构共振，必须在 5m 级别看到以下任一信号才扣动扳机：
        1. **SFP (Swing Failure Pattern)**:
           - 价格瞬间刺破结构边界（猎杀止损）后，5m 收盘价迅速收回结构内部。
@@ -957,17 +974,33 @@
           "signal_strength": "强"
         }
     }
-2.3) 触发上下文 (Trigger Context - 仅在哨兵唤醒时存在)
+2.3) 触发上下文 (Trigger Context - 后端预计算｜每次请求可存在)
     "trigger_context": {
-        "is_kline_closed": false,             // false = 盘中突发模式
-        "trigger_type": "MOMENTUM_IGNITION",  // 触发类型: MOMENTUM_IGNITION | SPOT_RUSH | SPOOFING_FLIP
-        "trigger_reasoning": "Vol Z-Score > 3.0",
-        "statistical_significance": {         // 统计学特征 (Z-Score)
+        "is_kline_closed": true,              // true=5m 收盘评估; false=盘中哨兵/突发（需 INTRABAR_ENABLE 才允许盘中开新仓）
+        "trigger_type": "BAR_CLOSE",          // 触发源: BAR_CLOSE | SENTINEL | MOMENTUM_IGNITION | SPOT_RUSH | SPOOFING_FLIP ...
+        "trigger_reasoning": "backend_scan",  // 触发原因（人类可读；短句）
+        "statistical_significance": {         // 统计学特征 (Z-Score，可选)
             "price_velocity_z": 3.4,
             "volume_z": 4.2,
             "spot_cvd_z": 2.1
-        }
+        },
+
+        // —— 新增：后端触发器枚举（5m Trigger Flags）——
+        "trigger_tf": "5m",                   // 检测所用 TF（默认 5m）
+        "trigger_flags": ["SFP_BEAR","ENGULF_BEAR"],  // 候选触发器列表（最多3项）；空数组=本轮无触发器
+        "trigger_primary": "SFP_BEAR",        // 后端推荐主触发器；无则 "NONE"
+        "trigger_quality": {                  // 质量评分 0~1（可缺省）
+            "SFP_BEAR": 0.72,
+            "ENGULF_BEAR": 0.61
+        },
+
+        "trigger_key_level": 88448.0,         // 可选：触发器绑定的关键位（SR/VAH/VAL/swing 等）
+        "trigger_key_level_type": "4h_SR_R"   // 可选：关键位类型短码
     }
+    约定：
+      - 建议每次请求都提供 trigger_context；若缺失，则等价于 trigger_flags=[]（无触发器）。
+      - 触发器枚举（MVP）：SFP_BULL/SFP_BEAR, ENGULF_BULL/ENGULF_BEAR, IBB_BULL/IBB_BEAR, MOMO_BULL/MOMO_BEAR
+
 3) 交易环境（ExchangeMeta）
 {
   "tick_size": 0.1,
@@ -3139,7 +3172,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                   * Gate2(STRUCTURE)：只允许 1 句位置结论 + 必须给出 Anchor1/Anchor2（见下方结构锚点收敛规则）；禁止枚举 3 个以上结构簇/区间。
                   * Gate3(TIMING)：只输出 5m_close=<true/false> 或 fail=>xF 的关键字段，不写长句。
                   * Gate4(SETUP)：只保留 2 项：
-                      (1) 触发形态：pattern∈{EDGE/BO_RETEST/MOMENTUM_BREAK/SFP/Engulf} 的“有/无”
+                      (1) 触发形态：pattern∈{EDGE/BO_RETEST/MOMENTUM_BREAK/none} 的“有/无”，并在同一行附带 trigger=<trigger_primary>（来自 trigger_flags）
                       (2) 多周期一致性：trend=<aligned/mixed>（或给 1 个主周期结论，如 4h 偏空/震荡）
                     RSI 仅在“极端且影响执行方式”时给 1 个值；否则不展开。
                   * Gate5(EXEC/RR)：若非开仓（open_*），允许用 1 句 DIAG(EVAL_ONLY)：原因三选一（无干净SL/反向结构过近/成本过高）+（如有）R_clean<1 结论；禁止列 TP/SL 多个候选区间。
