@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"nofx/microstructure"
+	"nofx/triggers"
 	"strconv"
 	"strings"
 	"time"
@@ -824,6 +825,7 @@ func FormatAsCompactData(data *Data) string {
 			"基础指标":       calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
 			"订单流分析":     GetOrderFlowDataForAIV2(data.Symbol),
+			"触发器检测":     getTriggerContextForAI(data.Symbol, timeframeKlines),
 			//"Gate2结构聚合":  buildGate2CompactOutput(data),
 		},
 	}
@@ -3615,3 +3617,82 @@ func buildAnchorScoreBreakdown(gate2 *StructureGate2) map[string]interface{} {
 
 	return result
 }
+
+// ===== 触发器检测数据集成 =====
+
+// getTriggerContextForAI 获取指定币种的触发器检测数据（供AI使用）
+// symbol: 币种符号
+// timeframeKlines: 缓存的K线数据
+func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) map[string]interface{} {
+	// 错误恢复处理
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️ 触发器检测数据获取失败 %s: %v", symbol, r)
+		}
+	}()
+
+	// 1. 获取5m K线数据
+	klines5m, exists := timeframeKlines["5m"]
+	if !exists || len(klines5m) < 3 {
+		return buildEmptyTriggerContext("K线数据不足")
+	}
+
+	// 2. 转换Kline格式（market.Kline -> triggers.Kline）
+	triggerKlines := make([]triggers.Kline, len(klines5m))
+	for i, k := range klines5m {
+		triggerKlines[i] = triggers.Kline{
+			OpenTime:  k.OpenTime,
+			Open:      k.Open,
+			High:      k.High,
+			Low:       k.Low,
+			Close:     k.Close,
+			Volume:    k.Volume,
+			CloseTime: k.CloseTime,
+		}
+	}
+
+	// 3. 计算ATR（使用14周期）
+	atr5m := triggers.CalculateATR(triggerKlines, 14)
+	if atr5m <= 0 {
+		return buildEmptyTriggerContext("ATR计算失败")
+	}
+
+	// 4. 计算量能Z分数（使用20周期）
+	currentVolume := klines5m[len(klines5m)-1].Volume
+	volZ := triggers.CalculateVolumeZScore(currentVolume, triggerKlines, 20)
+
+	// 5. 执行触发器检测
+	cfg := triggers.DefaultConfig()
+	result := triggers.DetectTriggers(triggerKlines, atr5m, volZ, cfg)
+
+	// 6. 构建返回数据
+	return map[string]interface{}{
+		"状态":           "正常",
+		"tf":           result.TF,
+		"flags":        result.Flags,
+		"primary":      result.Primary,
+		"quality":      result.Quality,
+		"key_level":    FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
+		"key_type":     result.KeyType,
+		"atr_5m":       FormatByDataTypeAndSymbol(atr5m, "price", symbol),
+		"volume_z":     FormatByDataTypeAndSymbol(volZ, "ratio", symbol),
+		"klines_count": len(triggerKlines),
+	}
+}
+
+// buildEmptyTriggerContext 构建空的触发器上下文（数据不可用时）
+func buildEmptyTriggerContext(reason string) map[string]interface{} {
+	return map[string]interface{}{
+		"状态":           reason,
+		"tf":           "5m",
+		"flags":        []string{},
+		"primary":      triggers.FlagNone,
+		"quality":      map[string]float64{},
+		"key_level":    0,
+		"key_type":     "",
+		"atr_5m":       0,
+		"volume_z":     0,
+		"klines_count": 0,
+	}
+}
+
