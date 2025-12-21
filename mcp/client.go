@@ -736,9 +736,23 @@ func logUsage(usage *Usage, reqID string) {
 		}
 	}
 
+	// 💰 计算成本（按每百万token的价格）
+	// 缓存token: $0.125 per 1M tokens
+	// 新token: $1.25 per 1M tokens
+	// 输出token: $10 per 1M tokens
+	newTokens := promptTokens - cachedTokens
+	cachedCost := (float64(cachedTokens) / 1_000_000.0) * 0.125
+	newTokensCost := (float64(newTokens) / 1_000_000.0) * 1.25
+	completionCost := (float64(completionTokens) / 1_000_000.0) * 10.0
+	totalCost := cachedCost + newTokensCost + completionCost
+
 	// 打印核心指标（使用固定格式便于日志分析）
 	log.Printf("📊 [AI_USAGE] req_id=%s prompt_tokens=%d cached_tokens=%d cached_ratio=%.4f completion_tokens=%d total_tokens=%d",
 		reqID, promptTokens, cachedTokens, ratio, completionTokens, totalTokens)
+
+	// 💰 打印成本信息
+	log.Printf("💰 [AI_COST] req_id=%s new_tokens=%d cached_cost=$%.6f new_tokens_cost=$%.6f completion_cost=$%.6f total_cost=$%.6f",
+		reqID, newTokens, cachedCost, newTokensCost, completionCost, totalCost)
 
 	// 额外提示：如果cached_tokens始终为0，说明缓存未生效
 	if cachedTokens == 0 && promptTokens >= 1024 {
