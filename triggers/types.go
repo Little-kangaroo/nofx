@@ -45,6 +45,15 @@ type TriggerScanResult struct {
 	// 🔥 P0-新增：原始数据（PostProcess前），用于诊断和Gate3触发窗口
 	RawFlags   []string           `json:"raw_flags,omitempty"`   // PostProcess前的所有触发器
 	RawQuality map[string]float64 `json:"raw_quality,omitempty"` // PostProcess前的所有质量评分
+
+	// 🔥 P0-2新增：分层输出数据（raw/ai/strict三层质量过滤）
+	// AI层：轻过滤（BorderlineMin），用于Gate3触发窗口（提高召回率）
+	AIFlags   []string           `json:"ai_flags,omitempty"`    // AI层触发器（BorderlineMin过滤）
+	AIQuality map[string]float64 `json:"ai_quality,omitempty"`  // AI层质量评分
+
+	// Strict层：严格过滤（QualityMin），用于内部统计和分析（保证精度）
+	StrictFlags   []string           `json:"strict_flags,omitempty"`   // Strict层触发器（QualityMin过滤）
+	StrictQuality map[string]float64 `json:"strict_quality,omitempty"` // Strict层质量评分
 }
 
 // SwingLevels Swing高低点

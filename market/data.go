@@ -3683,7 +3683,13 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 	}
 
 	cfg = triggers.VolatilityAdjustedConfig(cfg, volRegime)
-	result := triggers.DetectTriggers(triggerKlines, atr5m, volZ, cfg)
+
+	// 🔥 P1-1修复：使用最近N根窗口检测（N=3），提高触发命中率
+	// 回看最近3根K线，优先age小的，次优quality高的
+	resultWithAge := triggers.DetectTriggersRecentDefault(triggerKlines, atr5m, volZ, cfg)
+	result := resultWithAge.Result
+	ageBars := resultWithAge.AgeBars
+	barCloseTimeMs := resultWithAge.BarCloseTimeMs
 
 	// 🔥 P0-新增：契约自洽校验（防御性编程）
 	// 如果 trigger_flags 为空，则 quality 必须为空，primary 必须为 NONE
@@ -3700,28 +3706,42 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 	}
 
 	// 6. 构建返回数据（V-16.4协议对齐）
+	// 🔥 P0-2修复：分层输出 - AI层（ai_flags）用于Gate3触发窗口，提高召回率
+	// 🔥 P1-1修复：添加窗口检测字段（trigger_age_bars、trigger_bar_close_time_ms）
+	// 🔥 P1-2修复：添加 pattern hint 字段（trigger_pattern_hint）
 	return map[string]interface{}{
 		// V-16.4 标准字段
 		"is_kline_closed":   true, // 5m收盘触发
 		"trigger_tf":        result.TF,
-		"trigger_flags":     result.RawFlags, // 🔥 P0-修复：使用 raw_flags（未过滤）用于 Gate3 触发窗口
-		"trigger_primary":   result.Primary,
-		"trigger_quality":   result.Quality,
+		"trigger_flags":     result.AIFlags,   // 🔥 P0-2修复：使用 ai_flags（BorderlineMin过滤）用于Gate3窗口
+		"trigger_primary":   result.Primary,   // 保持使用strict层的primary（向后兼容）
+		"trigger_quality":   result.AIQuality, // 🔥 P0-2修复：使用 ai_quality（对应ai_flags的质量评分）
 		"trigger_key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
 		"trigger_key_level_type": result.KeyType,
 		"statistical_significance": map[string]interface{}{
 			"volume_z": FormatByDataTypeAndSymbol(volZ, "ratio", symbol),
 			"atr_5m":   FormatByDataTypeAndSymbol(atr5m, "price", symbol),
 		},
+		// 🔥 P1-1新增：窗口检测字段
+		"trigger_age_bars":          ageBars,                                     // 触发器年龄（0=当前bar，1=上一根，2=上上根，-1=无触发）
+		"trigger_bar_close_time_ms": barCloseTimeMs,                              // 触发器所在K线的收盘时间（毫秒时间戳）
+		// 🔥 P1-2新增：pattern hint 字段
+		"trigger_pattern_hint": triggers.GetPatternHintFromFlags(result.AIFlags), // 触发器pattern类型提示（"SFP", "Engulf", "MOM_BREAK", ""）
 		// 元数据
 		"klines_count": len(triggerKlines),
 		"状态":          "正常",
-		// 🔥 P0-新增：调试数据（用于诊断触发器过滤情况）
+		// 🔥 P0-2修复：增强调试数据（包含分层输出信息）
 		"_debug": map[string]interface{}{
-			"raw_flags":   result.RawFlags,   // PostProcess前的所有触发器（与trigger_flags相同）
-			"raw_quality": result.RawQuality, // PostProcess前的所有质量评分
-			"kept_flags":  result.Flags,      // PostProcess后的触发器（经QualityMin过滤）
-			"quality_min": cfg.QualityMin,    // 当前使用的质量阈值
+			"raw_flags":      result.RawFlags,        // PostProcess前的所有触发器
+			"raw_quality":    result.RawQuality,      // PostProcess前的所有质量评分
+			"ai_flags":       result.AIFlags,         // AI层过滤后的触发器（BorderlineMin）
+			"ai_quality":     result.AIQuality,       // AI层质量评分
+			"strict_flags":   result.StrictFlags,     // Strict层过滤后的触发器（QualityMin）
+			"strict_quality": result.StrictQuality,   // Strict层质量评分
+			"quality_min":    cfg.QualityMin,         // 当前使用的Strict质量阈值
+			"borderline_min": cfg.BorderlineMin,      // 当前使用的AI质量阈值
+			"age_bars":       ageBars,                // 🔥 P1-1新增：触发器年龄（用于诊断窗口检测）
+			"bar_close_time": barCloseTimeMs,         // 🔥 P1-1新增：触发器所在K线收盘时间
 		},
 	}
 }

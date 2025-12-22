@@ -1,0 +1,124 @@
+package triggers
+
+import "sort"
+
+// TriggerWithAge 带年龄标记的触发器扫描结果
+// 🔥 P1-1新增：支持最近N根K线窗口检测
+type TriggerWithAge struct {
+	Result         TriggerScanResult // 触发器扫描结果
+	AgeBars        int               // K线年龄（0=当前bar，1=上一根，2=上上根）
+	BarCloseTimeMs int64             // 触发器所在K线的收盘时间（毫秒时间戳）
+}
+
+// DetectTriggersRecent 最近N根K线窗口触发器检测
+// klines: K线数据（至少需要3根，建议200+根用于Swing检测）
+// atr5m: 5分钟ATR（必须）
+// volZ: 量能Z分数（<0表示不使用量能过滤）
+// cfg: 触发器配置
+// windowSize: 回看窗口大小（默认3，表示检测最近3根K线）
+// 返回: 最佳触发器结果（按age优先、quality次优排序）
+// 🔥 P1-1新增：Gate3触发窗口扩展，避免单根K线检测的时间敏感性
+func DetectTriggersRecent(klines []Kline, atr5m float64, volZ float64, cfg TriggerConfig, windowSize int) TriggerWithAge {
+	// 参数验证
+	if windowSize <= 0 {
+		windowSize = 3 // 默认回看3根
+	}
+	if len(klines) < windowSize {
+		// K线数量不足，降级到可用数量
+		windowSize = len(klines)
+	}
+	if windowSize < 1 {
+		// 完全没有K线，返回空结果
+		return TriggerWithAge{
+			Result: TriggerScanResult{
+				TF:      "5m",
+				Flags:   []string{},
+				Primary: FlagNone,
+				Quality: map[string]float64{},
+			},
+			AgeBars:        -1,
+			BarCloseTimeMs: 0,
+		}
+	}
+
+	// 收集所有候选触发器
+	candidates := make([]TriggerWithAge, 0, windowSize)
+
+	// 逐根K线检测（从最新到最旧）
+	for age := 0; age < windowSize; age++ {
+		// 构建截止到当前age的K线切片
+		endIdx := len(klines) - age
+		if endIdx <= 0 {
+			break
+		}
+		partialKlines := klines[:endIdx]
+
+		// 执行触发器检测
+		result := DetectTriggers(partialKlines, atr5m, volZ, cfg)
+
+		// 🔥 P1-1修复：使用 ai_flags（而不是 strict_flags），与Gate3窗口对齐
+		// 只有ai_flags非空才认为检测到触发器
+		if len(result.AIFlags) > 0 {
+			candidates = append(candidates, TriggerWithAge{
+				Result:         result,
+				AgeBars:        age,
+				BarCloseTimeMs: partialKlines[endIdx-1].CloseTime,
+			})
+		}
+	}
+
+	// 如果没有任何候选，返回空结果
+	if len(candidates) == 0 {
+		return TriggerWithAge{
+			Result: TriggerScanResult{
+				TF:      "5m",
+				Flags:   []string{},
+				Primary: FlagNone,
+				Quality: map[string]float64{},
+			},
+			AgeBars:        -1,
+			BarCloseTimeMs: 0,
+		}
+	}
+
+	// 排序：age越小越优先，age相同时quality越高越优先
+	// 🔥 P1-1注：使用 ai_flags 的 primary 和 ai_quality 进行排序
+	sort.SliceStable(candidates, func(i, j int) bool {
+		// 优先级1: age越小越优先
+		if candidates[i].AgeBars != candidates[j].AgeBars {
+			return candidates[i].AgeBars < candidates[j].AgeBars
+		}
+
+		// 优先级2: quality越高越优先（使用ai_quality中的primary质量）
+		qI := getAIPrimaryQuality(candidates[i].Result)
+		qJ := getAIPrimaryQuality(candidates[j].Result)
+		return qI > qJ
+	})
+
+	// 返回最佳候选（排序后的第一个）
+	return candidates[0]
+}
+
+// getAIPrimaryQuality 获取AI层primary触发器的质量评分
+// 🔥 P1-1辅助函数：用于排序时比较quality
+func getAIPrimaryQuality(result TriggerScanResult) float64 {
+	if len(result.AIFlags) == 0 {
+		return 0
+	}
+	// 使用第一个ai_flag作为primary（因为ai_flags已经按quality排序）
+	primary := result.AIFlags[0]
+	if q, exists := result.AIQuality[primary]; exists {
+		return q
+	}
+	return 0
+}
+
+// DetectTriggersRecentDefault 使用默认窗口大小（3根）的最近K线检测
+// klines: K线数据
+// atr5m: 5分钟ATR
+// volZ: 量能Z分数
+// cfg: 配置
+// 返回: 最佳触发器结果
+func DetectTriggersRecentDefault(klines []Kline, atr5m float64, volZ float64, cfg TriggerConfig) TriggerWithAge {
+	return DetectTriggersRecent(klines, atr5m, volZ, cfg, 3)
+}

@@ -23,11 +23,8 @@ func DetectMomoBull(k Kline, atr5m float64, volZ float64, cfg TriggerConfig) (fl
 		return 0, false
 	}
 
-	// 2. 量能放大（可选）
-	// 🔥 P1-01修复：仅在 volZ>=0 时启用量能门槛，volZ<0 表示不可用/不使用
-	if volZ >= 0 && volZ < cfg.VolZMin {
-		return 0, false
-	}
+	// 🔥 P0-1修复：移除量能hard-fail，改为软惩罚/加成
+	// （MOMO触发成功仅依赖价格行为，量能作为质量调节因子）
 
 	// 3. 收盘靠近高点
 	// (k.high - k.close) / range_ <= CloseNearExtreme
@@ -41,7 +38,9 @@ func DetectMomoBull(k Kline, atr5m float64, volZ float64, cfg TriggerConfig) (fl
 	rangeScore := normalizeScore(rangeAtr, cfg.RangeAtrMin, cfg.RangeAtrMax)
 
 	// 子项2: Volume Score (权重0.35)
-	// 🔥 P1-01修复：处理 volZ<0 的情况（不可用时给中性分0.5）
+	// 🔥 P0-1修复：volZ作为加权因子，不再是veto条件
+	// - volZ < 0：不可用，给中性分0.5
+	// - volZ >= 0：根据实际值计算
 	volScore := 0.5
 	if volZ >= 0 {
 		volScore = normalizeScore(volZ, cfg.VolZMin, cfg.VolZMin*3.0) // 假设最大3倍
@@ -53,6 +52,19 @@ func DetectMomoBull(k Kline, atr5m float64, volZ float64, cfg TriggerConfig) (fl
 
 	// 总分
 	totalScore := 0.45*rangeScore + 0.35*volScore + 0.20*closePosScore
+
+	// 🔥 P0-1修复：量能软惩罚/加成机制（应用于最终总分）
+	if volZ >= 0 {
+		if volZ >= cfg.VolZMin*1.5 {
+			// 高量能加成
+			totalScore = min(1.0, totalScore*1.05)
+		} else if volZ < cfg.VolZMin {
+			// 低量能惩罚
+			totalScore *= 0.90
+		}
+		// cfg.VolZMin <= volZ < cfg.VolZMin*1.5：保持原分数，不惩罚不加成
+	}
+	// volZ < 0（不可用）：不惩罚不加成
 
 	return clamp(totalScore, 0, 1), true
 }
@@ -80,11 +92,8 @@ func DetectMomoBear(k Kline, atr5m float64, volZ float64, cfg TriggerConfig) (fl
 		return 0, false
 	}
 
-	// 2. 量能放大（可选）
-	// 🔥 P1-01修复：仅在 volZ>=0 时启用量能门槛，volZ<0 表示不可用/不使用
-	if volZ >= 0 && volZ < cfg.VolZMin {
-		return 0, false
-	}
+	// 🔥 P0-1修复：移除量能hard-fail，改为软惩罚/加成
+	// （MOMO触发成功仅依赖价格行为，量能作为质量调节因子）
 
 	// 3. 收盘靠近低点
 	// (k.close - k.low) / range_ <= CloseNearExtreme
@@ -98,7 +107,9 @@ func DetectMomoBear(k Kline, atr5m float64, volZ float64, cfg TriggerConfig) (fl
 	rangeScore := normalizeScore(rangeAtr, cfg.RangeAtrMin, cfg.RangeAtrMax)
 
 	// 子项2: Volume Score (权重0.35)
-	// 🔥 P1-01修复：处理 volZ<0 的情况（不可用时给中性分0.5）
+	// 🔥 P0-1修复：volZ作为加权因子，不再是veto条件
+	// - volZ < 0：不可用，给中性分0.5
+	// - volZ >= 0：根据实际值计算
 	volScore := 0.5
 	if volZ >= 0 {
 		volScore = normalizeScore(volZ, cfg.VolZMin, cfg.VolZMin*3.0)
@@ -109,6 +120,19 @@ func DetectMomoBear(k Kline, atr5m float64, volZ float64, cfg TriggerConfig) (fl
 
 	// 总分
 	totalScore := 0.45*rangeScore + 0.35*volScore + 0.20*closePosScore
+
+	// 🔥 P0-1修复：量能软惩罚/加成机制（应用于最终总分）
+	if volZ >= 0 {
+		if volZ >= cfg.VolZMin*1.5 {
+			// 高量能加成
+			totalScore = min(1.0, totalScore*1.05)
+		} else if volZ < cfg.VolZMin {
+			// 低量能惩罚
+			totalScore *= 0.90
+		}
+		// cfg.VolZMin <= volZ < cfg.VolZMin*1.5：保持原分数，不惩罚不加成
+	}
+	// volZ < 0（不可用）：不惩罚不加成
 
 	return clamp(totalScore, 0, 1), true
 }

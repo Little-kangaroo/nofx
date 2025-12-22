@@ -69,10 +69,12 @@ func DefaultConfig() TriggerConfig {
 		VolZMin: 0.8,
 
 		// 输出控制
-		// 🔥 P1-02修复：QualityMin 从 0.55 降低到 0.50，提高触发命中率
+		// 🔥 P0-3修复：重标定质量阈值（V16.4提频修复）
+		// - QualityMin=0.55（Strict层，保证精度）
+		// - BorderlineMin=0.20（AI层，提高召回率用于Gate3触发窗口）
 		MaxFlagsPerBar: 3,
-		QualityMin:     0.50,
-		BorderlineMin:  0.50,
+		QualityMin:     0.55,
+		BorderlineMin:  0.20,
 	}
 }
 
