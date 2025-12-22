@@ -3620,6 +3620,54 @@ func buildAnchorScoreBreakdown(gate2 *StructureGate2) map[string]interface{} {
 
 // ===== 触发器检测数据集成 =====
 
+// normalizeNilCollections 标准化 trigger_context 中的所有 slice/map 字段，确保非 nil（避免 JSON 序列化为 null）
+// 🔥 P0-修复：最后兜底，确保所有字段都是 [] 或 {} 而不是 null
+func normalizeNilCollections(tc map[string]interface{}) {
+	// 顶层字段
+	if tc["trigger_flags"] == nil {
+		tc["trigger_flags"] = []string{}
+	}
+	if tc["trigger_quality"] == nil {
+		tc["trigger_quality"] = map[string]float64{}
+	}
+
+	// _debug 字段
+	dbg, ok := tc["_debug"].(map[string]interface{})
+	if !ok || dbg == nil {
+		// 如果 _debug 不存在或为 nil，创建一个空的
+		tc["_debug"] = map[string]interface{}{
+			"raw_flags":      []string{},
+			"raw_quality":    map[string]float64{},
+			"strict_flags":   []string{},
+			"strict_quality": map[string]float64{},
+			"ai_flags":       []string{},
+			"ai_quality":     map[string]float64{},
+		}
+		return
+	}
+
+	// 规范化 _debug 中的字段
+	if dbg["raw_flags"] == nil {
+		dbg["raw_flags"] = []string{}
+	}
+	if dbg["strict_flags"] == nil {
+		dbg["strict_flags"] = []string{}
+	}
+	if dbg["ai_flags"] == nil {
+		dbg["ai_flags"] = []string{}
+	}
+
+	if dbg["raw_quality"] == nil {
+		dbg["raw_quality"] = map[string]float64{}
+	}
+	if dbg["strict_quality"] == nil {
+		dbg["strict_quality"] = map[string]float64{}
+	}
+	if dbg["ai_quality"] == nil {
+		dbg["ai_quality"] = map[string]float64{}
+	}
+}
+
 // getTriggerContextForAI 获取指定币种的触发器检测数据（供AI使用）
 // symbol: 币种符号
 // timeframeKlines: 缓存的K线数据
@@ -3709,7 +3757,7 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 	// 🔥 P0-2修复：分层输出 - AI层（ai_flags）用于Gate3触发窗口，提高召回率
 	// 🔥 P1-1修复：添加窗口检测字段（trigger_age_bars、trigger_bar_close_time_ms）
 	// 🔥 P1-2修复：添加 pattern hint 字段（trigger_pattern_hint）
-	return map[string]interface{}{
+	triggerContext := map[string]interface{}{
 		// V-16.4 标准字段
 		"is_kline_closed":   true, // 5m收盘触发
 		"trigger_tf":        result.TF,
@@ -3744,11 +3792,17 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 			"bar_close_time": barCloseTimeMs,         // 🔥 P1-1新增：触发器所在K线收盘时间
 		},
 	}
+
+	// 🔥 P0-修复：最后兜底 - 规范化所有 slice/map 字段，确保非 nil（避免 JSON 序列化为 null）
+	normalizeNilCollections(triggerContext)
+
+	return triggerContext
 }
 
 // buildEmptyTriggerContext 构建空的触发器上下文（数据不可用时）
+// 🔥 P0-修复：确保所有字段都与正常输出保持一致，避免字段缺失
 func buildEmptyTriggerContext(reason string) map[string]interface{} {
-	return map[string]interface{}{
+	emptyContext := map[string]interface{}{
 		// V-16.4 标准字段
 		"is_kline_closed":        true,
 		"trigger_tf":             "5m",
@@ -3761,9 +3815,32 @@ func buildEmptyTriggerContext(reason string) map[string]interface{} {
 			"volume_z": 0,
 			"atr_5m":   0,
 		},
+		// 🔥 P1-1：窗口检测字段（保持一致性）
+		"trigger_age_bars":          -1, // -1 表示无触发器
+		"trigger_bar_close_time_ms": 0,  // 0 表示数据不可用
+		// 🔥 P1-2：pattern hint 字段
+		"trigger_pattern_hint": "",
 		// 元数据
 		"klines_count": 0,
 		"状态":          reason,
+		// 🔥 P0-修复：添加 _debug 字段，确保与正常输出保持一致
+		"_debug": map[string]interface{}{
+			"raw_flags":      []string{},
+			"raw_quality":    map[string]float64{},
+			"ai_flags":       []string{},
+			"ai_quality":     map[string]float64{},
+			"strict_flags":   []string{},
+			"strict_quality": map[string]float64{},
+			"quality_min":    0.55, // 默认值
+			"borderline_min": 0.20, // 默认值
+			"age_bars":       -1,
+			"bar_close_time": 0,
+		},
 	}
+
+	// 🔥 P0-修复：最后兜底 - 规范化所有 slice/map 字段
+	normalizeNilCollections(emptyContext)
+
+	return emptyContext
 }
 

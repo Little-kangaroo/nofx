@@ -10,6 +10,23 @@ type TriggerWithAge struct {
 	BarCloseTimeMs int64             // 触发器所在K线的收盘时间（毫秒时间戳）
 }
 
+// createEmptyTriggerScanResult 创建正确初始化的空 TriggerScanResult（避免 nil 字段）
+// 🔥 P0-修复：确保所有 slice/map 字段都是空集合而非 nil，避免 JSON 序列化为 null
+func createEmptyTriggerScanResult() TriggerScanResult {
+	return TriggerScanResult{
+		TF:            "5m",
+		Flags:         make([]string, 0),
+		Primary:       FlagNone,
+		Quality:       map[string]float64{},
+		RawFlags:      make([]string, 0),
+		RawQuality:    map[string]float64{},
+		AIFlags:       make([]string, 0),
+		AIQuality:     map[string]float64{},
+		StrictFlags:   make([]string, 0),
+		StrictQuality: map[string]float64{},
+	}
+}
+
 // DetectTriggersRecent 最近N根K线窗口触发器检测
 // klines: K线数据（至少需要3根，建议200+根用于Swing检测）
 // atr5m: 5分钟ATR（必须）
@@ -29,13 +46,9 @@ func DetectTriggersRecent(klines []Kline, atr5m float64, volZ float64, cfg Trigg
 	}
 	if windowSize < 1 {
 		// 完全没有K线，返回空结果
+		// 🔥 P0-修复：使用 createEmptyTriggerScanResult 确保所有字段正确初始化
 		return TriggerWithAge{
-			Result: TriggerScanResult{
-				TF:      "5m",
-				Flags:   []string{},
-				Primary: FlagNone,
-				Quality: map[string]float64{},
-			},
+			Result:         createEmptyTriggerScanResult(),
 			AgeBars:        -1,
 			BarCloseTimeMs: 0,
 		}
@@ -68,16 +81,12 @@ func DetectTriggersRecent(klines []Kline, atr5m float64, volZ float64, cfg Trigg
 	}
 
 	// 如果没有任何候选，返回空结果
+	// 🔥 P0-修复：即使无触发器也要返回当前 K 线的 close_time（而不是 0）
 	if len(candidates) == 0 {
 		return TriggerWithAge{
-			Result: TriggerScanResult{
-				TF:      "5m",
-				Flags:   []string{},
-				Primary: FlagNone,
-				Quality: map[string]float64{},
-			},
+			Result:         createEmptyTriggerScanResult(),
 			AgeBars:        -1,
-			BarCloseTimeMs: 0,
+			BarCloseTimeMs: klines[len(klines)-1].CloseTime, // 使用最后一根K线的收盘时间
 		}
 	}
 

@@ -9,11 +9,20 @@ import "sort"
 // cfg: 触发器配置
 // 返回: 触发器扫描结果
 func DetectTriggers(klines []Kline, atr5m float64, volZ float64, cfg TriggerConfig) TriggerScanResult {
+	// 🔥 P0-修复：确保所有 slice/map 字段初始化为空但非 nil，避免 JSON 序列化为 null
 	res := TriggerScanResult{
 		TF:      "5m",
 		Flags:   make([]string, 0, 3),
 		Primary: FlagNone,
 		Quality: map[string]float64{},
+
+		// 🔥 初始化所有分层字段为空集合（非 nil）
+		RawFlags:      make([]string, 0),
+		RawQuality:    map[string]float64{},
+		AIFlags:       make([]string, 0),
+		AIQuality:     map[string]float64{},
+		StrictFlags:   make([]string, 0),
+		StrictQuality: map[string]float64{},
 	}
 
 	// 前置检查
