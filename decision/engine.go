@@ -7,7 +7,6 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/pool"
-	"nofx/triggers"
 	"strconv"
 	"strings"
 	"time"
@@ -71,29 +70,8 @@ type Context struct {
 	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
 	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
 
-	// 🔥 P0-01修复：时间锚点信息 - V13.5要求的trigger_context
-	TimeAnchor     *time.Time          `json:"-"`               // 时间锚点，用于数据获取
-	TriggerContext *TriggerContextInfo `json:"trigger_context"` // 触发上下文信息
-}
-
-// TriggerContextInfo 触发上下文信息 - V13.5规范要求
-// 🔥 P0-01修复：补齐AI决策必需的时序信息，支持V13.5的紧急模式门槛
-// 🔥 Trigger Flags改造：新增后端触发器检测字段，Gate4选择制
-type TriggerContextInfo struct {
-	IsKlineClosed   bool   `json:"is_kline_closed"`   // K线是否已收盘 (true=收盘触发, false=盘中触发)
-	Mode            string `json:"mode"`              // 触发模式 ("normal", "emergency")
-	AnchorCloseTime int64  `json:"anchor_close_time"` // 锚点收盘时间戳(毫秒)
-	AnchorTimeStr   string `json:"anchor_time_str"`   // 锚点时间字符串(可读)
-	TriggerType     string `json:"trigger_type"`      // 触发类型 ("5m_close", "manual", "scheduled")
-	DataConsistency string `json:"data_consistency"`  // 数据一致性状态 ("aligned", "mixed", "uncertain")
-
-	// 🔥 新增：后端触发器检测结果（向后兼容，仅在trigger_context内扩展）
-	TriggerTF      string             `json:"trigger_tf,omitempty"`      // 触发器检测时间框架（固定"5m"）
-	TriggerFlags   []string           `json:"trigger_flags,omitempty"`   // 候选触发器列表（最多3个）
-	TriggerPrimary string             `json:"trigger_primary,omitempty"` // 推荐主触发器（quality最高）
-	TriggerQuality map[string]float64 `json:"trigger_quality,omitempty"` // 各触发器质量评分（0~1）
-	TriggerKeyLevel     float64       `json:"trigger_key_level,omitempty"`      // 触发器关联关键价位
-	TriggerKeyLevelType string        `json:"trigger_key_level_type,omitempty"` // 关键位类型
+	// 🔥 P0-01修复：时间锚点信息
+	TimeAnchor *time.Time `json:"-"` // 时间锚点，用于数据获取
 }
 
 // Decision AI的交易决策
@@ -125,46 +103,18 @@ func GetFullDecision(ctx *Context, mcpClient *mcp.Client) (*FullDecision, error)
 
 // GetFullDecisionWithTimeAnchor 获取AI的完整交易决策（支持时间锚点）
 // 🔥 P0-01修复：传递时间锚点到市场数据获取，确保全链路时间一致性
-// 🔥 Trigger Flags改造：后端触发器检测集成
 func GetFullDecisionWithTimeAnchor(ctx *Context, mcpClient *mcp.Client, anchorTime time.Time) (*FullDecision, error) {
-	// 设置时间锚点和触发上下文
+	// 设置时间锚点
 	ctx.TimeAnchor = &anchorTime
-	ctx.TriggerContext = &TriggerContextInfo{
-		IsKlineClosed:   true, // 5m收盘触发
-		Mode:            "normal",
-		AnchorCloseTime: anchorTime.UnixMilli(),
-		AnchorTimeStr:   anchorTime.Format("15:04:05.000"),
-		TriggerType:     "5m_close",
-		DataConsistency: "aligned", // 使用统一锚点，数据对齐
-	}
-
-	// 🔥 新增：后端触发器检测（使用BTCUSDT作为市场代表）
-	if err := enrichTriggerContextWithBackendDetection(ctx, "BTCUSDT"); err != nil {
-		log.Printf("⚠️ [Trigger检测] 触发器检测失败: %v（不影响决策继续）", err)
-	}
 
 	return GetFullDecisionWithCustomPrompt(ctx, mcpClient, "", false, "")
 }
 
 // GetFullDecisionWithCustomPromptAndAnchor 获取AI的完整交易决策（支持自定义prompt和时间锚点）
 // 🔥 P0-01修复：完整版本，同时支持自定义prompt和时间锚点
-// 🔥 Trigger Flags改造：后端触发器检测集成
 func GetFullDecisionWithCustomPromptAndAnchor(ctx *Context, mcpClient *mcp.Client, customPrompt string, overrideBase bool, templateName string, anchorTime time.Time) (*FullDecision, error) {
-	// 设置时间锚点和触发上下文
+	// 设置时间锚点
 	ctx.TimeAnchor = &anchorTime
-	ctx.TriggerContext = &TriggerContextInfo{
-		IsKlineClosed:   true, // 5m收盘触发
-		Mode:            "normal",
-		AnchorCloseTime: anchorTime.UnixMilli(),
-		AnchorTimeStr:   anchorTime.Format("15:04:05.000"),
-		TriggerType:     "5m_close",
-		DataConsistency: "aligned", // 使用统一锚点，数据对齐
-	}
-
-	// 🔥 新增：后端触发器检测（使用BTCUSDT作为市场代表）
-	if err := enrichTriggerContextWithBackendDetection(ctx, "BTCUSDT"); err != nil {
-		log.Printf("⚠️ [Trigger检测] 触发器检测失败: %v（不影响决策继续）", err)
-	}
 
 	return GetFullDecisionWithCustomPrompt(ctx, mcpClient, customPrompt, overrideBase, templateName)
 }
@@ -2121,93 +2071,4 @@ func enhanceDecisionsWithTaroFields(jsonContent string, decisions []Decision) []
 
 	log.Printf("🔧 [调试] 决策增强完成")
 	return decisions
-}
-
-// ========================================
-// 🔥 Trigger Flags改造：后端触发器检测集成
-// ========================================
-
-// enrichTriggerContextWithBackendDetection 使用后端触发器检测填充TriggerContext
-// 🔥 功能：在5m close时调用triggers.DetectTriggers，将结果写入trigger_context
-// ctx: 决策上下文（需要已有TriggerContext和TimeAnchor）
-// symbol: 用于触发器检测的币种（建议使用BTCUSDT作为市场代表）
-func enrichTriggerContextWithBackendDetection(ctx *Context, symbol string) error {
-	if ctx.TriggerContext == nil {
-		return fmt.Errorf("TriggerContext未初始化")
-	}
-	if ctx.TimeAnchor == nil {
-		return fmt.Errorf("TimeAnchor未设置")
-	}
-
-	// 1. 获取K线数据（用于触发器检测，建议至少200根）
-	klines5m, err := market.WSMonitorCli.GetCurrentKlines(symbol, "5m")
-	if err != nil {
-		log.Printf("⚠️ [Trigger检测] 获取%s K线失败: %v，跳过触发器检测", symbol, err)
-		// 失败时设置为空（向后兼容，不阻塞决策）
-		ctx.TriggerContext.TriggerTF = "5m"
-		ctx.TriggerContext.TriggerFlags = []string{}
-		ctx.TriggerContext.TriggerPrimary = triggers.FlagNone
-		ctx.TriggerContext.TriggerQuality = map[string]float64{}
-		return nil
-	}
-
-	// 2. 裁剪K线到时间锚点之前（确保时间一致性）
-	anchorCloseTimeMs := ctx.TimeAnchor.UnixMilli()
-	filteredKlines := make([]triggers.Kline, 0, len(klines5m))
-	for _, k := range klines5m {
-		if k.CloseTime <= anchorCloseTimeMs {
-			// 转换market.Kline到triggers.Kline
-			filteredKlines = append(filteredKlines, triggers.Kline{
-				OpenTime:  k.OpenTime,
-				Open:      k.Open,
-				High:      k.High,
-				Low:       k.Low,
-				Close:     k.Close,
-				Volume:    k.Volume,
-				CloseTime: k.CloseTime,
-			})
-		}
-	}
-
-	if len(filteredKlines) < 3 {
-		log.Printf("⚠️ [Trigger检测] %s K线数量不足(%d)，跳过触发器检测", symbol, len(filteredKlines))
-		ctx.TriggerContext.TriggerTF = "5m"
-		ctx.TriggerContext.TriggerFlags = []string{}
-		ctx.TriggerContext.TriggerPrimary = triggers.FlagNone
-		ctx.TriggerContext.TriggerQuality = map[string]float64{}
-		return nil
-	}
-
-	// 3. 计算ATR（使用triggers包的工具函数）
-	atr5m := triggers.CalculateATR(filteredKlines, 14)
-	if atr5m <= 0 {
-		log.Printf("⚠️ [Trigger检测] %s ATR计算失败或为0，跳过触发器检测", symbol)
-		ctx.TriggerContext.TriggerTF = "5m"
-		ctx.TriggerContext.TriggerFlags = []string{}
-		ctx.TriggerContext.TriggerPrimary = triggers.FlagNone
-		ctx.TriggerContext.TriggerQuality = map[string]float64{}
-		return nil
-	}
-
-	// 4. 计算量能Z分数（可选）
-	currentVolume := filteredKlines[len(filteredKlines)-1].Volume
-	volZ := triggers.CalculateVolumeZScore(currentVolume, filteredKlines, 20)
-
-	// 5. 调用触发器检测
-	cfg := triggers.DefaultConfig()
-	result := triggers.DetectTriggers(filteredKlines, atr5m, volZ, cfg)
-
-	// 6. 填充TriggerContext
-	ctx.TriggerContext.TriggerTF = result.TF
-	ctx.TriggerContext.TriggerFlags = result.Flags
-	ctx.TriggerContext.TriggerPrimary = result.Primary
-	ctx.TriggerContext.TriggerQuality = result.Quality
-	ctx.TriggerContext.TriggerKeyLevel = result.KeyLevel
-	ctx.TriggerContext.TriggerKeyLevelType = result.KeyType
-
-	// 7. 日志输出
-	log.Printf("✅ [Trigger检测] %s | Flags=%v | Primary=%s | Quality=%v | KeyLevel=%.2f(%s)",
-		symbol, result.Flags, result.Primary, result.Quality, result.KeyLevel, result.KeyType)
-
-	return nil
 }
