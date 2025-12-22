@@ -116,9 +116,10 @@ func CalculateATR(klines []Kline, period int) float64 {
 // currentVolume: 当前成交量
 // klines: 历史K线（用于计算均值和标准差）
 // lookback: 回看周期（建议20）
+// 🔥 P0-03修复：样本不足或stdDev==0时返回-1（表示不可用），与detect.go语义一致
 func CalculateVolumeZScore(currentVolume float64, klines []Kline, lookback int) float64 {
 	if len(klines) < lookback {
-		return 0
+		return -1 // 样本不足，返回-1表示不可用
 	}
 
 	// 取最近lookback根K线计算统计量
@@ -145,7 +146,7 @@ func CalculateVolumeZScore(currentVolume float64, klines []Kline, lookback int) 
 
 	// 计算Z-Score
 	if stdDev == 0 {
-		return 0
+		return -1 // 标准差为0（无波动），返回-1表示不可用
 	}
 	return (currentVolume - mean) / stdDev
 }

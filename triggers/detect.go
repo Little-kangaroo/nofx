@@ -29,6 +29,9 @@ func DetectTriggers(klines []Kline, atr5m float64, volZ float64, cfg TriggerConf
 	// 查找Swing High/Low
 	swingLevels := FindSwingLevels(klines, cfg)
 
+	// 🔥 P0-04修复：引入 bestKeyQ 变量，避免使用 res.Primary 比较（此时 Primary 尚未选出）
+	bestKeyQ := -1.0
+
 	// === 1. SFP 检测 ===
 	if swingLevels.SwingHigh > 0 {
 		if q, ok := DetectSfpBear(k, swingLevels.SwingHigh, atr5m, volZ, cfg); ok {
@@ -36,6 +39,7 @@ func DetectTriggers(klines []Kline, atr5m float64, volZ float64, cfg TriggerConf
 			res.Quality[FlagSfpBear] = q
 			res.KeyLevel = swingLevels.SwingHigh
 			res.KeyType = KeyLevelSwingHigh
+			bestKeyQ = q
 		}
 	}
 
@@ -44,9 +48,10 @@ func DetectTriggers(klines []Kline, atr5m float64, volZ float64, cfg TriggerConf
 			res.Flags = append(res.Flags, FlagSfpBull)
 			res.Quality[FlagSfpBull] = q
 			// 如果还没有KeyLevel，或者质量更高，则更新
-			if res.KeyLevel == 0 || q > res.Quality[res.Primary] {
+			if res.KeyLevel == 0 || q > bestKeyQ {
 				res.KeyLevel = swingLevels.SwingLow
 				res.KeyType = KeyLevelSwingLow
+				bestKeyQ = q
 			}
 		}
 	}

@@ -40,7 +40,8 @@ type TriggerConfig struct {
 func DefaultConfig() TriggerConfig {
 	return TriggerConfig{
 		// Swing配置
-		SwingLookback: 20,
+		// 🔥 P1-02修复：SwingLookback 从 20 提升到 120，避免趋势行情中找不到Swing点
+		SwingLookback: 120,
 		SwingLeft:     2,
 		SwingRight:    2,
 
@@ -68,8 +69,9 @@ func DefaultConfig() TriggerConfig {
 		VolZMin: 0.8,
 
 		// 输出控制
+		// 🔥 P1-02修复：QualityMin 从 0.55 降低到 0.50，提高触发命中率
 		MaxFlagsPerBar: 3,
-		QualityMin:     0.55,
+		QualityMin:     0.50,
 		BorderlineMin:  0.50,
 	}
 }

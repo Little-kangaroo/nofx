@@ -23,8 +23,9 @@ func DetectMomoBull(k Kline, atr5m float64, volZ float64, cfg TriggerConfig) (fl
 		return 0, false
 	}
 
-	// 2. 量能放大（必须）
-	if volZ < cfg.VolZMin {
+	// 2. 量能放大（可选）
+	// 🔥 P1-01修复：仅在 volZ>=0 时启用量能门槛，volZ<0 表示不可用/不使用
+	if volZ >= 0 && volZ < cfg.VolZMin {
 		return 0, false
 	}
 
@@ -40,7 +41,11 @@ func DetectMomoBull(k Kline, atr5m float64, volZ float64, cfg TriggerConfig) (fl
 	rangeScore := normalizeScore(rangeAtr, cfg.RangeAtrMin, cfg.RangeAtrMax)
 
 	// 子项2: Volume Score (权重0.35)
-	volScore := normalizeScore(volZ, cfg.VolZMin, cfg.VolZMin*3.0) // 假设最大3倍
+	// 🔥 P1-01修复：处理 volZ<0 的情况（不可用时给中性分0.5）
+	volScore := 0.5
+	if volZ >= 0 {
+		volScore = normalizeScore(volZ, cfg.VolZMin, cfg.VolZMin*3.0) // 假设最大3倍
+	}
 
 	// 子项3: Close Position Score (权重0.20)
 	// closeToHighRatio越小（越靠近高点），分数越高
@@ -75,8 +80,9 @@ func DetectMomoBear(k Kline, atr5m float64, volZ float64, cfg TriggerConfig) (fl
 		return 0, false
 	}
 
-	// 2. 量能放大（必须）
-	if volZ < cfg.VolZMin {
+	// 2. 量能放大（可选）
+	// 🔥 P1-01修复：仅在 volZ>=0 时启用量能门槛，volZ<0 表示不可用/不使用
+	if volZ >= 0 && volZ < cfg.VolZMin {
 		return 0, false
 	}
 
@@ -92,7 +98,11 @@ func DetectMomoBear(k Kline, atr5m float64, volZ float64, cfg TriggerConfig) (fl
 	rangeScore := normalizeScore(rangeAtr, cfg.RangeAtrMin, cfg.RangeAtrMax)
 
 	// 子项2: Volume Score (权重0.35)
-	volScore := normalizeScore(volZ, cfg.VolZMin, cfg.VolZMin*3.0)
+	// 🔥 P1-01修复：处理 volZ<0 的情况（不可用时给中性分0.5）
+	volScore := 0.5
+	if volZ >= 0 {
+		volScore = normalizeScore(volZ, cfg.VolZMin, cfg.VolZMin*3.0)
+	}
 
 	// 子项3: Close Position Score (权重0.20)
 	closePosScore := 1.0 - normalizeScore(closeToLowRatio, 0, cfg.CloseNearExtreme)

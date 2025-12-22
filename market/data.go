@@ -820,12 +820,15 @@ func FormatAsCompactData(data *Data) string {
 	// 直接使用缓存的K线数据，避免二次网络请求导致的数据漂移
 	timeframeKlines := data.KlineCache
 
+	// 🔥 P0-01修复：获取触发器上下文（V-16.4协议对齐）
+	tc := getTriggerContextForAI(data.Symbol, timeframeKlines)
+
 	result := map[string]interface{}{
 		data.Symbol: map[string]interface{}{
-			"基础指标":       calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
-			"多时间框架分析": extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
-			"订单流分析":     GetOrderFlowDataForAIV2(data.Symbol),
-			"触发器检测":     getTriggerContextForAI(data.Symbol, timeframeKlines),
+			"基础指标":         calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
+			"多时间框架分析":   extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
+			"订单流分析":       GetOrderFlowDataForAIV2(data.Symbol),
+			"trigger_context": tc,       // 供模型消费（V-16.4协议）
 			//"Gate2结构聚合":  buildGate2CompactOutput(data),
 		},
 	}
@@ -3658,41 +3661,93 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 	}
 
 	// 4. 计算量能Z分数（使用20周期）
+	// 🔥 P0-02修复：排除当前bar，避免自污染（用历史样本计算均值和标准差）
 	currentVolume := klines5m[len(klines5m)-1].Volume
-	volZ := triggers.CalculateVolumeZScore(currentVolume, triggerKlines, 20)
+	historyKlines := triggerKlines
+	if len(historyKlines) > 0 {
+		historyKlines = historyKlines[:len(historyKlines)-1] // 排除当前bar
+	}
+	volZ := triggers.CalculateVolumeZScore(currentVolume, historyKlines, 20)
 
 	// 5. 执行触发器检测
+	// 🔥 P1-03修复：使用 VolatilityAdjustedConfig 根据波动率调整配置
 	cfg := triggers.DefaultConfig()
+
+	// 估计波动状态（使用 atr5m/lastClose）
+	lastClose := klines5m[len(klines5m)-1].Close
+	volPct := atr5m / lastClose
+
+	volRegime := "normal"
+	switch {
+	case volPct >= 0.0025: // 高波动（ATR >= 0.25%）
+		volRegime = "high"
+	case volPct <= 0.0010: // 低波动（ATR <= 0.10%）
+		volRegime = "low"
+	}
+
+	cfg = triggers.VolatilityAdjustedConfig(cfg, volRegime)
 	result := triggers.DetectTriggers(triggerKlines, atr5m, volZ, cfg)
 
-	// 6. 构建返回数据
+	// 6. 构建返回数据（V-16.4协议对齐）
 	return map[string]interface{}{
-		"状态":           "正常",
-		"tf":           result.TF,
-		"flags":        result.Flags,
-		"primary":      result.Primary,
-		"quality":      result.Quality,
-		"key_level":    FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
-		"key_type":     result.KeyType,
-		"atr_5m":       FormatByDataTypeAndSymbol(atr5m, "price", symbol),
-		"volume_z":     FormatByDataTypeAndSymbol(volZ, "ratio", symbol),
+		// V-16.4 标准字段
+		"is_kline_closed":   true, // 5m收盘触发
+		"trigger_tf":        result.TF,
+		"trigger_flags":     result.Flags,
+		"trigger_primary":   result.Primary,
+		"trigger_quality":   result.Quality,
+		"trigger_key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
+		"trigger_key_level_type": result.KeyType,
+		"statistical_significance": map[string]interface{}{
+			"volume_z": FormatByDataTypeAndSymbol(volZ, "ratio", symbol),
+			"atr_5m":   FormatByDataTypeAndSymbol(atr5m, "price", symbol),
+		},
+		// 元数据
 		"klines_count": len(triggerKlines),
+		"状态":          "正常",
+		// 兼容字段（便于日志查看，后续可移除）
+		"_compat": map[string]interface{}{
+			"tf":        result.TF,
+			"flags":     result.Flags,
+			"primary":   result.Primary,
+			"quality":   result.Quality,
+			"key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
+			"key_type":  result.KeyType,
+			"volume_z":  FormatByDataTypeAndSymbol(volZ, "ratio", symbol),
+			"atr_5m":    FormatByDataTypeAndSymbol(atr5m, "price", symbol),
+		},
 	}
 }
 
 // buildEmptyTriggerContext 构建空的触发器上下文（数据不可用时）
 func buildEmptyTriggerContext(reason string) map[string]interface{} {
 	return map[string]interface{}{
-		"状态":           reason,
-		"tf":           "5m",
-		"flags":        []string{},
-		"primary":      triggers.FlagNone,
-		"quality":      map[string]float64{},
-		"key_level":    0,
-		"key_type":     "",
-		"atr_5m":       0,
-		"volume_z":     0,
+		// V-16.4 标准字段
+		"is_kline_closed":        true,
+		"trigger_tf":             "5m",
+		"trigger_flags":          []string{},
+		"trigger_primary":        triggers.FlagNone,
+		"trigger_quality":        map[string]float64{},
+		"trigger_key_level":      0,
+		"trigger_key_level_type": "",
+		"statistical_significance": map[string]interface{}{
+			"volume_z": 0,
+			"atr_5m":   0,
+		},
+		// 元数据
 		"klines_count": 0,
+		"状态":          reason,
+		// 兼容字段
+		"_compat": map[string]interface{}{
+			"tf":        "5m",
+			"flags":     []string{},
+			"primary":   triggers.FlagNone,
+			"quality":   map[string]float64{},
+			"key_level": 0,
+			"key_type":  "",
+			"volume_z":  0,
+			"atr_5m":    0,
+		},
 	}
 }
 
