@@ -50,7 +50,8 @@ func DetectEngulfBear(k Kline, prev Kline, atr5m float64, cfg TriggerConfig) (fl
 
 	// 子项2: Close Position Score (权重0.20)
 	// closePos越小（越靠近低点），分数越高
-	closePosScore := 1.0 - normalizeScore(closePos, 0, cfg.ClosePosMax)
+	// 🔥 P0-修复：clamp 防止 closePos 超出范围导致负分
+	closePosScore := clamp(1.0-normalizeScore(closePos, 0, cfg.ClosePosMax), 0, 1)
 
 	// 子项3: Overlap Score (权重0.20)
 	// 计算实体覆盖比例（吞没程度）
@@ -121,7 +122,8 @@ func DetectEngulfBull(k Kline, prev Kline, atr5m float64, cfg TriggerConfig) (fl
 
 	// 子项2: Close Position Score (权重0.20)
 	// closePos越小（越靠近高点），分数越高
-	closePosScore := 1.0 - normalizeScore(closePos, 0, cfg.ClosePosMax)
+	// 🔥 P0-修复：clamp 防止 closePos 超出范围导致负分
+	closePosScore := clamp(1.0-normalizeScore(closePos, 0, cfg.ClosePosMax), 0, 1)
 
 	// 子项3: Overlap Score (权重0.20)
 	prevBody := abs(prev.Close - prev.Open)

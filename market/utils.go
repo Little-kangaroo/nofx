@@ -43,6 +43,16 @@ func abs(x float64) float64 {
 	return x
 }
 
+// containsString 检查字符串切片中是否包含指定字符串
+func containsString(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
 // 格式化辅助函数 - 获取各种枚举的中文名称（统一管理）
 // VolumeDistribution和PricePosition相关函数暂时移除，等类型定义完善后再添加
 

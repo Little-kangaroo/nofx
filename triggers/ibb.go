@@ -54,8 +54,9 @@ func DetectIbbBull(k Kline, prev Kline, prev2 Kline, atr5m float64, volZ float64
 	rangeScore := normalizeScore(rangeAtr, 0.5, 2.5) // 假设合理范围0.5~2.5 ATR
 
 	// 子项3: Close Position Score (权重0.20) - 收盘靠近高点
+	// 🔥 P0-修复：clamp 防止 closePos 超出范围导致负分
 	closePos := safeDiv(k.High-k.Close, range_)
-	closePosScore := 1.0 - normalizeScore(closePos, 0, 0.3)
+	closePosScore := clamp(1.0-normalizeScore(closePos, 0, 0.3), 0, 1)
 
 	// 总分
 	totalScore := 0.45*breakScore + 0.35*rangeScore + 0.20*closePosScore
@@ -125,8 +126,9 @@ func DetectIbbBear(k Kline, prev Kline, prev2 Kline, atr5m float64, volZ float64
 	rangeScore := normalizeScore(rangeAtr, 0.5, 2.5)
 
 	// 子项3: Close Position Score (权重0.20) - 收盘靠近低点
+	// 🔥 P0-修复：clamp 防止 closePos 超出范围导致负分
 	closePos := safeDiv(k.Close-k.Low, range_)
-	closePosScore := 1.0 - normalizeScore(closePos, 0, 0.3)
+	closePosScore := clamp(1.0-normalizeScore(closePos, 0, 0.3), 0, 1)
 
 	// 总分
 	totalScore := 0.45*breakScore + 0.35*rangeScore + 0.20*closePosScore

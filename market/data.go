@@ -3685,12 +3685,26 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 	cfg = triggers.VolatilityAdjustedConfig(cfg, volRegime)
 	result := triggers.DetectTriggers(triggerKlines, atr5m, volZ, cfg)
 
+	// 🔥 P0-新增：契约自洽校验（防御性编程）
+	// 如果 trigger_flags 为空，则 quality 必须为空，primary 必须为 NONE
+	if len(result.RawFlags) == 0 {
+		result.Quality = map[string]float64{}
+		result.Primary = triggers.FlagNone
+	}
+	// 如果 trigger_flags 非空，则 primary 必须在 flags 中且不为 NONE
+	if len(result.RawFlags) > 0 {
+		if result.Primary == triggers.FlagNone || !containsString(result.RawFlags, result.Primary) {
+			// 修复：选择第一个 raw_flag 作为 primary
+			result.Primary = result.RawFlags[0]
+		}
+	}
+
 	// 6. 构建返回数据（V-16.4协议对齐）
 	return map[string]interface{}{
 		// V-16.4 标准字段
 		"is_kline_closed":   true, // 5m收盘触发
 		"trigger_tf":        result.TF,
-		"trigger_flags":     result.Flags,
+		"trigger_flags":     result.RawFlags, // 🔥 P0-修复：使用 raw_flags（未过滤）用于 Gate3 触发窗口
 		"trigger_primary":   result.Primary,
 		"trigger_quality":   result.Quality,
 		"trigger_key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
@@ -3704,9 +3718,9 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 		"状态":          "正常",
 		// 🔥 P0-新增：调试数据（用于诊断触发器过滤情况）
 		"_debug": map[string]interface{}{
-			"raw_flags":   result.RawFlags,   // PostProcess前的所有触发器
+			"raw_flags":   result.RawFlags,   // PostProcess前的所有触发器（与trigger_flags相同）
 			"raw_quality": result.RawQuality, // PostProcess前的所有质量评分
-			"kept_flags":  result.Flags,      // PostProcess后的触发器（与trigger_flags相同）
+			"kept_flags":  result.Flags,      // PostProcess后的触发器（经QualityMin过滤）
 			"quality_min": cfg.QualityMin,    // 当前使用的质量阈值
 		},
 	}
