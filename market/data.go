@@ -3702,16 +3702,12 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 		// 元数据
 		"klines_count": len(triggerKlines),
 		"状态":          "正常",
-		// 兼容字段（便于日志查看，后续可移除）
-		"_compat": map[string]interface{}{
-			"tf":        result.TF,
-			"flags":     result.Flags,
-			"primary":   result.Primary,
-			"quality":   result.Quality,
-			"key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
-			"key_type":  result.KeyType,
-			"volume_z":  FormatByDataTypeAndSymbol(volZ, "ratio", symbol),
-			"atr_5m":    FormatByDataTypeAndSymbol(atr5m, "price", symbol),
+		// 🔥 P0-新增：调试数据（用于诊断触发器过滤情况）
+		"_debug": map[string]interface{}{
+			"raw_flags":   result.RawFlags,   // PostProcess前的所有触发器
+			"raw_quality": result.RawQuality, // PostProcess前的所有质量评分
+			"kept_flags":  result.Flags,      // PostProcess后的触发器（与trigger_flags相同）
+			"quality_min": cfg.QualityMin,    // 当前使用的质量阈值
 		},
 	}
 }
@@ -3734,17 +3730,6 @@ func buildEmptyTriggerContext(reason string) map[string]interface{} {
 		// 元数据
 		"klines_count": 0,
 		"状态":          reason,
-		// 兼容字段
-		"_compat": map[string]interface{}{
-			"tf":        "5m",
-			"flags":     []string{},
-			"primary":   triggers.FlagNone,
-			"quality":   map[string]float64{},
-			"key_level": 0,
-			"key_type":  "",
-			"volume_z":  0,
-			"atr_5m":    0,
-		},
 	}
 }
 

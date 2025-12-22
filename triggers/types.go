@@ -36,11 +36,15 @@ type Kline struct {
 // TriggerScanResult 触发器扫描结果
 type TriggerScanResult struct {
 	TF       string             `json:"trigger_tf"`       // 时间框架（固定"5m"）
-	Flags    []string           `json:"trigger_flags"`    // 候选触发器列表（最多3个）
+	Flags    []string           `json:"trigger_flags"`    // 候选触发器列表（最多3个，PostProcess后）
 	Primary  string             `json:"trigger_primary"`  // 推荐主触发器（quality最高的）
-	Quality  map[string]float64 `json:"trigger_quality"`  // 各触发器质量评分（0~1）
+	Quality  map[string]float64 `json:"trigger_quality"`  // 各触发器质量评分（0~1，PostProcess后）
 	KeyLevel float64            `json:"trigger_key_level,omitempty"` // 触发器关联的关键价位
 	KeyType  string             `json:"trigger_key_level_type,omitempty"` // 关键位类型
+
+	// 🔥 P0-新增：原始数据（PostProcess前），用于诊断和Gate3触发窗口
+	RawFlags   []string           `json:"raw_flags,omitempty"`   // PostProcess前的所有触发器
+	RawQuality map[string]float64 `json:"raw_quality,omitempty"` // PostProcess前的所有质量评分
 }
 
 // SwingLevels Swing高低点

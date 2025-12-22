@@ -89,6 +89,14 @@ func DetectTriggers(klines []Kline, atr5m float64, volZ float64, cfg TriggerConf
 		res.Quality[FlagMomoBear] = q
 	}
 
+	// 🔥 P0-新增：在PostProcess前保存原始数据（用于诊断和Gate3触发窗口）
+	res.RawFlags = make([]string, len(res.Flags))
+	copy(res.RawFlags, res.Flags)
+	res.RawQuality = make(map[string]float64, len(res.Quality))
+	for k, v := range res.Quality {
+		res.RawQuality[k] = v
+	}
+
 	// === 后处理：过滤质量、去重、选择Primary ===
 	res.Flags, res.Primary = PostProcessFlags(res.Flags, res.Quality, cfg)
 
