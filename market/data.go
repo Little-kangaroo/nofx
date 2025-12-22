@@ -820,15 +820,12 @@ func FormatAsCompactData(data *Data) string {
 	// 直接使用缓存的K线数据，避免二次网络请求导致的数据漂移
 	timeframeKlines := data.KlineCache
 
-	// 🔥 P0-01修复：获取触发器上下文（V-16.4协议对齐）
-	tc := getTriggerContextForAI(data.Symbol, timeframeKlines)
-
 	result := map[string]interface{}{
 		data.Symbol: map[string]interface{}{
 			"基础指标":         calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析":   extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
 			"订单流分析":       GetOrderFlowDataForAIV2(data.Symbol),
-			"trigger_context": tc,       // 供模型消费（V-16.4协议）
+			"trigger_context": getTriggerContextForAI(data.Symbol, timeframeKlines),
 			//"Gate2结构聚合":  buildGate2CompactOutput(data),
 		},
 	}
