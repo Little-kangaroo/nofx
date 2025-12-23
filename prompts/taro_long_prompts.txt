@@ -49,6 +49,22 @@
          has_position=1 -> 仅允许 action ∈ {"hold","close"}（优先考虑减仓/止损/退出，而非观望式 wait）。
      - 这一层回答的问题是：“现在这个环境，值得在这个方向上参与博弈吗？”
        如果答案是否定的，后面的结构 / RSI 再漂亮也只能 wait。
+     【P0-divergent_mixed 降级规则｜不再一票否决｜多空对称】
+       - 定义：trend_alignment=divergent_mixed 表示“订单流方向不确定/混杂”，属于 Soft Flag（降级项），不是 Hard Red Line。
+       - 执行口径（必须按此执行）：
+         1) 仅因 divergent_mixed 不得直接判 Gate1=FAIL；
+         2) 但必须触发“降级约束”（否则等同于否决新开仓）：
+            a) 新开仓仅允许 LTF_scalp；HTF_swing 一律视为不满足（默认 wait）；
+            b) 必须风险降级：risk_down ≥ 0.5（在 GateTrace/Exception 中写明），不得满仓/满风险；
+            c) 必须强化确认（满足其一）：
+               - 触发器质量更高：trigger_quality ≥ quality_min + 0.10 且 vol_ratio ≥ 1.2；
+               - 或者处于 VA 边缘的 Range MR（见【P0-Range MR 分支】），且触发器为 SFP/ENGULF；
+            d) 不得与任何 Gate1 硬红线叠加：若同时出现 spoofing_risk>0.8、或明显反向强意图且无法给出 HTF exhaustion 反例，则按原规则禁止新开仓（has_position=0→wait）。
+         3) 写法要求：
+            - Gate1(ORDERFLOW) 行若为 divergent_mixed：必须写 “DIAG/SoftFlag: divergent_mixed; downgrade=on”
+            - 若仍决定开仓（仅 LTF_scalp 允许）：必须在 GateTrace 后追加：
+              Exception: divergent_mixed_downgrade; risk_down=0.5; need_confirm=<...>; invalidation=<...>
+
     【P0-Intent 分类澄清｜多空对称｜防止误判一票否决】
     将 candle_intent 分为三类（必须按此执行）：
     A) Hard Red Lines（硬红线｜一票否决｜仅管理已有仓位）
@@ -61,7 +77,7 @@
     - 仍必须继续走完 Gate2~Gate5，由 struct_state_* + 5m Trigger + R_clean 决定是否能开仓
     偏置规则（LONG/SHORT 对称）：
     1) distribution：
-    - 优先做空：仅当 struct_state_short ∈ {SHORT_FAVORABLE} 且 trend_alignment 不为 divergent_mixed 才允许 open_short
+    - 优先做空：仅当 struct_state_short ∈ {SHORT_FAVORABLE} 且（trend_alignment≠divergent_mixed 或满足【P0-divergent_mixed 降级规则】）才允许 open_short；若触发降级则仅允许 LTF_scalp + risk_down≥0.5
     - 做多更苛刻：只有 struct_state_long=LONG_FAVORABLE 且价格脱离关键 supply/VAH 压制并出现 5m 多头 Trigger 才允许 open_long，否则默认 wait
     2) accumulation：
     - 优先做多（对称于 distribution）：open_long 条件放宽到常规门槛；open_short 条件更苛刻
@@ -2247,15 +2263,48 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
             - LONG：至少连续 2 根已收盘 5m close 站上 VAH（或关键上边界）；
             - SHORT：至少连续 2 根已收盘 5m close 跌破 VAL（或关键下边界）；
          2) vol_ratio ≥ 1.2，且不得出现“突破后立即反向吞没”；
-         3) 订单流 trend_alignment 不为 divergent_mixed，且与方向一致更优先；
+         3) 订单流 trend_alignment 若为 divergent_mixed：不再一票否决，但必须满足【P0-divergent_mixed 降级规则】（仅 LTF_scalp + risk_down≥0.5 + 强化确认）；若 trend_alignment 与方向一致则优先级更高；
          4) 仍需通过 Gate5：R_clean ≥ 0.8（LTF_scalp）或 ≥1.0（HTF_swing 默认）。
             不满足则：最终动作必须服从 actionDerivation（has_position=0→action="wait"；has_position=1→action∈{"hold","close"}，仅管理既有仓位且严禁输出 action="wait"）。
+   【P0-Range MR 分支｜Value-Area Mean Reversion｜多空对称｜仅用于震荡环境提频】
+     - 核心理念：
+       * POC_chop_zone 仍是“入场死区”（禁止在 POC 附近开新仓）；
+       * 但在“明确震荡/价值区交易”环境下，允许在 VA 边缘做均值回归（从边缘回归到 POC/VA 中轴），以提升开仓频率；
+       * 该分支仅允许 LTF_scalp（短线），并强制风险降级（在 GateTrace/Exception 中写清 risk_down 比例），不得用于 HTF_swing。
+     - 适用前置条件（必须同时满足）：
+       1) Regime/结构：major_bias=NEUTRAL 或明确处于 consolidation/range（以你输入的 regime_flags/intent/结构判断为准）；
+       2) VPVR：存在稳定 Value Area（VAH/VAL 有意义，且 VA 宽度非极窄；若 VA 过窄则宁可不做）；
+       3) 位置：必须在 VA 边缘带（edge band），不得在 POC_chop_zone：
+          - LONG_MR：last_price ∈ [VAL - 0.25*ATR14_5m, VAL + 0.25*ATR14_5m]
+          - SHORT_MR：last_price ∈ [VAH - 0.25*ATR14_5m, VAH + 0.25*ATR14_5m]
+          - 若 last_price 落在 POC_chop_zone：一律禁止新开仓（保持原规则）。
+       4) 订单流红线：不得触发 Gate1 Hard Red Lines（spoofing_risk>0.8 等）；
+          - 若 trend_alignment=divergent_mixed：不再一票否决，但必须按【P0-divergent_mixed 降级规则】执行。
+     - 触发器要求（必须满足其一，且只能从 trigger_context 取值）：
+       * LONG_MR：trigger_primary ∈ {SFP_BULL, ENGULF_BULL} 或 trigger_flags 中存在其一；
+       * SHORT_MR：trigger_primary ∈ {SFP_BEAR, ENGULF_BEAR} 或 trigger_flags 中存在其一；
+       * 若仅有 BO_RETEST/MOMENTUM_BREAK 而位置在 VA 边缘：可作为“次优”参考，但仍须有回归逻辑（不是追突破）。
+     - 执行与风控（必须写入 GateTrace/Exception，不新增 JSON 字段）：
+       1) trade_style：强制 LTF_scalp；
+       2) 风险降级：必须 risk_down ≥ 0.5（例如 0.5R 风险预算），并在 GateTrace 后追加：
+          Exception: RangeMR; risk_down=0.5; entry_edge=<VAL/VAH>; target=<POC_or_midVA>; invalidation=<edge_break>
+       3) 止损（invalidation）必须清晰且“靠边”：
+          - LONG_MR：sl 必须在 VAL 外侧或 demand_low 外侧（不得放在 VA 内部随意位置）；
+          - SHORT_MR：sl 必须在 VAH 外侧或 supply_high 外侧；
+       4) 止盈（不写入 JSON 新字段，仅用于 reasoning 说明与执行计划）：
+          - 允许以 POC/VA 中轴为第一目标（均值回归目标）；
+          - 若无法给出明确目标（POC/中轴不清晰）或 Real_R 明显不足：按 Gate5 规则禁开新仓。
+     - GateTrace 书写要求（强制）：
+       - Gate2(STRUCTURE) 若走 Range MR：应标记为 PASS，并将 pos 写为 edge（而非 mid-range/POC_chop_zone），并给出 Anchor：
+         Gate2(STRUCTURE): PASS pos=edge; Anchor1=<VAL_edge/VAH_edge>; Anchor2=<POC_or_midVA>
+       - Gate4(SETUP) pattern 必须是上述 MR 允许集合之一（SFP/ENGULF 优先）。
+
        【P0-VPVR 边界追单否决（Value Edge Chase Veto）】
        - 目的：避免在 VAH/VAL 附近发生均值回归反抽，导致“刚开就被扫止损”。
        1) 若计划 open_short 且价格处于 5m VPVR 的 VAL 附近（定义：last_price ≤ VAL + 0.3*ATR14_5m）：
           - 默认 action="wait"，除非同时满足：
             a) 最近连续 2 根已收盘 5m 的 close 都显著低于 VAL（每根至少低于 0.2*ATR14_5m），显示“有效跌破而非贴边”；
-            b) 且订单流 trend_alignment 明确支持做空（非 divergent_mixed）。
+            b) 且订单流 trend_alignment 支持做空；若 trend_alignment=divergent_mixed 则必须按【P0-divergent_mixed 降级规则】执行（仅 LTF_scalp + risk_down≥0.5 + 强化确认），否则不在 VAL 贴边追空。
           - 若不满足以上条件：宁可错过，不在 VAL 贴边追空。
        2) 若计划 open_long 且价格处于 VAH 附近：对称处理。
    (e) FVG (公允价值缺口) —— 磁力与支撑
@@ -2507,19 +2556,29 @@ C. 方向一致性与评分 (Bias & Score)
          - has_position=1：action ∈ {"hold","close"}（默认 "hold"；仅在风控/保护线/止损需要退出时 "close"）
   C7) 评分准入 (Score Threshold)
       - 检查：`setup_grade` 和 `edge_score` 是否达标？
-           - 熔断：
-             * 若 `edge_score < 0.6`（期望值过低）：
-               -> 顶层 action 按 has_position：
-                  - has_position=0：action="wait"
-                  - has_position=1：action ∈ {"hold","close"}（默认 "hold"）
-             * 若 `setup_grade` = "C"（质量太差）：
-               -> 顶层 action 按 has_position：
-                  - has_position=0：action="wait"
-                  - has_position=1：action ∈ {"hold","close"}（默认 "hold"）
-             * 若 `confidence < 75`（微观信号不足）：
-               -> 顶层 action 按 has_position：
-                  - has_position=0：action="wait"
-                  - has_position=1：action ∈ {"hold","close"}（默认 "hold"）
+       - 熔断：
+         * 若 `edge_score < 0.6`（期望值过低）：
+           -> 顶层 action 按 has_position：
+              - has_position=0：action="wait"
+              - has_position=1：action ∈ {"hold","close"}（默认 "hold"）
+         * 若 `setup_grade` = "C"（质量太差）：
+           -> 顶层 action 按 has_position：
+              - has_position=0：action="wait"
+              - has_position=1：action ∈ {"hold","close"}（默认 "hold"）
+         * 若 `confidence < 70`（微观信号明显不足｜仍属硬熔断）：
+            -> 顶层 action 按 has_position：
+               - has_position=0：action="wait"
+               - has_position=1：action ∈ {"hold","close"}（默认 "hold"）
+          * 若 `70 ≤ confidence < 75`（边缘信号｜允许“降级试单”，不再一票否决）：
+            - has_position=1：action ∈ {"hold","close"}（默认 "hold"；按风控需要可 close；严禁 wait）
+            - has_position=0：默认 action="wait"，除非同时满足以下“降级开仓”条件（否则视为不满足）：
+              a) trade_style 必须为 LTF_scalp（HTF_swing 一律不允许开新仓）；
+              b) 必须风险降级：risk_down ≥ 0.5（在 GateTrace/Exception 明确写明）；
+              c) Gate5(EXEC/RR)=PASS 且 R_clean 达该风格默认门槛（不降低 Gate5 的算术自检口径）；
+              d) 触发器必须明确：pattern≠none 且来自 trigger_context；且 trigger_quality ≥ quality_min + 0.10；
+              e) 若 trend_alignment=divergent_mixed：必须同时满足【P0-divergent_mixed 降级规则】；
+            - 若满足以上条件并决定开仓：必须在 GateTrace 后追加：
+              Exception: low_confidence_downgrade; risk_down=0.5; need_confirm=<...>; invalidation=<...>
 D. 风险与资金安全 (Risk & Safety)
   -【D8) 空间与盈亏比算术自检（Space/RR Math Check）】
     目的：仅用于“开新仓可执行性”验证（即 open_long/open_short 的准入门槛），不得覆盖持仓管理动作。
