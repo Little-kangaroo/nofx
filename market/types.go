@@ -209,13 +209,28 @@ type ExchangeInfo struct {
 }
 
 type SymbolInfo struct {
-	Symbol            string `json:"symbol"`
-	Status            string `json:"status"`
-	BaseAsset         string `json:"baseAsset"`
-	QuoteAsset        string `json:"quoteAsset"`
-	ContractType      string `json:"contractType"`
-	PricePrecision    int    `json:"pricePrecision"`
-	QuantityPrecision int    `json:"quantityPrecision"`
+	Symbol            string   `json:"symbol"`
+	Status            string   `json:"status"`
+	BaseAsset         string   `json:"baseAsset"`
+	QuoteAsset        string   `json:"quoteAsset"`
+	ContractType      string   `json:"contractType"`
+	PricePrecision    int      `json:"pricePrecision"`
+	QuantityPrecision int      `json:"quantityPrecision"`
+	Filters           []Filter `json:"filters"` // 🔥 P0-2新增：用于解析tick_size和lot_size
+}
+
+// Filter Binance交易对过滤器
+// 🔥 P0-2新增：支持从exchangeInfo解析PRICE_FILTER和LOT_SIZE
+type Filter struct {
+	FilterType string `json:"filterType"`
+	// PRICE_FILTER字段
+	MinPrice string `json:"minPrice,omitempty"`
+	MaxPrice string `json:"maxPrice,omitempty"`
+	TickSize string `json:"tickSize,omitempty"`
+	// LOT_SIZE字段
+	MinQty   string `json:"minQty,omitempty"`
+	MaxQty   string `json:"maxQty,omitempty"`
+	StepSize string `json:"stepSize,omitempty"`
 }
 
 type Kline struct {

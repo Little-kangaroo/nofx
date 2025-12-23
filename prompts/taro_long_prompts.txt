@@ -77,7 +77,13 @@
     - 仍必须继续走完 Gate2~Gate5，由 struct_state_* + 5m Trigger + R_clean 决定是否能开仓
     偏置规则（LONG/SHORT 对称）：
     1) distribution：
-    - 优先做空：仅当 struct_state_short ∈ {SHORT_FAVORABLE} 且（trend_alignment≠divergent_mixed 或满足【P0-divergent_mixed 降级规则】）才允许 open_short；若触发降级则仅允许 LTF_scalp + risk_down≥0.5
+    - 优先做空（distribution）：struct_state_short ∈ {SHORT_FAVORABLE} 时优先评估 open_short；
+      若 trend_alignment=divergent_mixed：不得直接否决，必须“降级而非熔断”：
+        * setup_grade 至少降 1 档（A→B，B→C）
+        * order_type=LIMIT（禁止追价）
+        * 风险降级：position_risk_pct *= 0.5（或 qty *= 0.5）
+        * 需要更强触发质量：trigger_quality ≥ 0.30 且 pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}
+      若 trend_alignment≠divergent_mixed：按常规门槛执行。
     - 做多更苛刻：只有 struct_state_long=LONG_FAVORABLE 且价格脱离关键 supply/VAH 压制并出现 5m 多头 Trigger 才允许 open_long，否则默认 wait
     2) accumulation：
     - 优先做多（对称于 distribution）：open_long 条件放宽到常规门槛；open_short 条件更苛刻
@@ -700,7 +706,10 @@
                 2) pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}；
                 3) 必须出现 5m Trigger（SFP/Engulfing/InsideBarBreakout/MomentumIgnition 任一）；
                 4) R_clean ≥ 0.8（比常规更紧的空间门槛，防止 NEUTRAL 里硬做）；
-                5) edge_score ≥ 0.65 且 confidence ≥ 70；
+                5) edge_score ≥ 0.65 且：
+                   - confidence ≥ 70：通过；
+                   - confidence ∈ [60,70)：允许但降级（risk_pct=常规的 1/3，且必须 LIMIT）；
+                   - confidence < 60：不通过；
                 6) 风险控制：risk_pct = 常规的一半（必须在 entry_plan 中写明“NEUTRAL-B 档减半风险”）。
               - 若任一条件不满足：action="wait"。
            5）LONG 方向与上述规则完全对称：
@@ -834,7 +843,8 @@
                 即可视为通过“空间检查”，不再强行要求 ≥ 2R；
               * 这样可以让 LTF_scalp 真正承担“短线补充”的角色，而不是被 2R 硬规则全部否决。
             - 所有风格下均要求：
-              * edge_score ≥ 0.7，confidence ≥ 70；
+              * edge_score ≥ 0.7 为硬门槛；
+                confidence：≥70 常规通过；∈[60,70) 允许但必须降级（risk_pct*=0.5，LIMIT，setup_grade 降 1 档）；<60 不通过。
             - 若结构模糊、你对 edge 本身都没有足够把握，应：
               * 优先考虑：trade_style="LTF_scalp" 的小仓试单（明确写出是“机会一般，仅做试探”），或
               * 直接 action="wait"，将风险预算留给质量更高的 HTF_swing 机会。
@@ -1056,13 +1066,20 @@
   2. 根据开仓方向和 init_stop 计算“每单位持仓的风险点数”：
      - 多单：risk_points = entry_price - init_stop
      - 空单：risk_points = init_stop - entry_price
-  3.将 risk_points 换算为“止损触发的亏损金额”（必须使用 qty）：
-      - loss_usdt = risk_points * qty
-        其中 qty 必须取自 entry_plan.qty（若本轮还未给 qty，则先完成 sizing 再回到本节校验）。
-  4.单笔风险占比（唯一口径）：
-      - risk_equity_pct = (loss_usdt / equity) * 100
-      - 要求：risk_equity_pct ≤ 1.0%
-      - 若超限：必须先缩小 qty（或提高 R_clean / 缩短止损距离），否则 action="wait"。
+   3.将 risk_points 换算为“止损触发的亏损金额”（允许先算 qty 再写入 entry_plan）：
+    - 若本轮已能给出 qty（来自 entry_plan.qty）：loss_usdt = risk_points * qty
+    - 若本轮尚未给出 qty：必须在本节先完成“风险上限反推 sizing”，不得因为“还未给 qty”直接退出：
+        a) max_loss_usdt = equity * 1.0%
+        b) qty_risk_cap = max_loss_usdt / risk_points
+        c) 若已提供 lot_size：qty = floor(qty_risk_cap / lot_size) * lot_size
+           若未提供 lot_size：qty = qty_risk_cap（先用连续值；执行端再做最小步进取整）
+        d) 计算 loss_usdt = risk_points * qty，并将 qty 写入 entry_plan.qty
+    4.单笔风险占比（唯一口径）：
+    - risk_equity_pct = (loss_usdt / equity) * 100
+    - 要求：risk_equity_pct ≤ 1.0%
+    - 若 risk_equity_pct > 1.0%：
+        * 必须继续下调 qty（重复 3-c 的 round/floor 过程），直到 risk_equity_pct ≤ 1.0%
+        * 若在最小 lot_size 取整后仍无法压到 ≤ 1.0%：本次机会放弃，action="wait"（并说明：risk_cap 约束导致放弃）
 - 模型必须在内部推理中显式评估「risk_equity_pct 是否 ≤ 1%」：
   - 若估算结果明显 > 1%，必须在动作选择阶段做出以下之一：
     a. 主动收紧 init_stop（例如向更近的结构/保护性价位内收），
@@ -1091,6 +1108,17 @@
     - 若执行上述惩罚后计算出的 `R_clean < 1.5`，**action 必须强制为 "wait"**。
     - (宁可错过，不做弱防守的交易)。
 - 止损锚点映射表（根据 Entry 依托的主要结构，选择最硬的盾牌）：
+   0) 依托【触发器失效位】(Trigger Invalidation｜强兜底｜优先于所有结构)
+    - 适用：当 trigger_context 中存在“失效位”类型（例如 *invalid_low / *invalid_high）：
+      * trigger_key_level_type ∈ {sfp_invalid_low, sfp_invalid_high, engulf_invalid_low, engulf_invalid_high, ibb_invalid_low, ibb_invalid_high, momo_invalid_low, momo_invalid_high ...}
+      * 且 trigger_key_level 为有效数值（≠0）
+    - 规则（多空对称）：
+      * LONG：init_stop = trigger_key_level - Buffer_trig
+      * SHORT：init_stop = trigger_key_level + Buffer_trig
+      * Buffer_trig = max(0.30 * ATR("5m"), 2 * tick_size)；若 tick_size 缺失：Buffer_trig = 0.10 * ATR("5m")
+    - 禁止：
+      * 不得因为“no_demand_near / no_supply_near / no_clean_sl”直接否决；
+        必须回退到 Trigger Invalidation 生成 init_stop（这是强制兜底路径）。
   1) 依托【区域/实体结构】 (最强防守)
      * 供需区 (Supply/Demand):
        - LONG: SL < Demand_Zone.Low
@@ -2263,7 +2291,9 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
             - LONG：至少连续 2 根已收盘 5m close 站上 VAH（或关键上边界）；
             - SHORT：至少连续 2 根已收盘 5m close 跌破 VAL（或关键下边界）；
          2) vol_ratio ≥ 1.2，且不得出现“突破后立即反向吞没”；
-         3) 订单流 trend_alignment 若为 divergent_mixed：不再一票否决，但必须满足【P0-divergent_mixed 降级规则】（仅 LTF_scalp + risk_down≥0.5 + 强化确认）；若 trend_alignment 与方向一致则优先级更高；
+         3) 订单流 trend_alignment 若为 divergent_mixed：不得直接否决，改为降级门槛：
+            - setup_grade 至少降 1 档；风险减半；仅 LIMIT；并要求额外确认（连续 2 根 5m 实体收盘脱离 POC 区 + 无立即反向吞没）。
+            trend_alignment 若不为 divergent_mixed：与方向一致更优先（常规门槛）。
          4) 仍需通过 Gate5：R_clean ≥ 0.8（LTF_scalp）或 ≥1.0（HTF_swing 默认）。
             不满足则：最终动作必须服从 actionDerivation（has_position=0→action="wait"；has_position=1→action∈{"hold","close"}，仅管理既有仓位且严禁输出 action="wait"）。
    【P0-Range MR 分支｜Value-Area Mean Reversion｜多空对称｜仅用于震荡环境提频】
@@ -2727,8 +2757,24 @@ B5) 智能障碍识别与空间计算 (Smart Space Calculation)
       - rsi_state ∈ {TREND_OVEREXTENDED, TREND_OVERSOLD/OVERBOUGHT} 且
       - pattern ∈ {EDGE, BO_RETEST} 且
       - 5m Confirm-1/2 已满足 且
-      - edge_score ≥ 0.65 且 confidence ≥ 70
+      - edge_score ≥ 0.65 且 confidence ≥ 70（常规 PASS）
+              若 confidence ∈ [60,70) ：允许但必须降级（risk_pct*=0.5 且 LIMIT 且 setup_grade 降 1 档）
+              若 confidence < 60 ：不允许例外开仓（action="wait"）
     * 若 R_clean < 0.5：无条件禁止开仓（action="wait"）。
+第三步：障碍聚集/路径不干净（Obstacle Cluster）— 降级而非直接否决
+  - 定义：在 entry→目标方向上，存在 ≥2 个“Respect”级别障碍（HTF 结构 / POC / strength_z>1.5）且它们之间的间距 < 0.5R，
+          使得无法给出“干净的一条清晰路径”。
+  - 动作（必须做“保守R”的计算，不得写 R_clean=unknown）：
+    1) 取最近的一个 Respect 障碍作为 TP1（第一止盈/第一减仓目标），并据此计算 Conservative_R_clean：
+       Conservative_R_clean = (TP1 - Entry) / (Entry - SL) （LONG；SHORT 对称）
+    2) 若 Conservative_R_clean 仍满足门槛：允许 PASS，但必须降级执行：
+       - setup_grade 至少降 1 档（A→B，B→C）
+       - position_risk_pct *= 0.5（或 qty *= 0.5）
+       - order_type 强制为 LIMIT（禁止追价 Market）
+       - take_profit 先给 TP1；更远 TP2/TP3 仅在“障碍被消化后”再考虑（写入 NextTrigger）
+    3) 若 Conservative_R_clean 不满足门槛：
+       - 不直接 FAIL；Gate5 标记 DIAG(EVAL_ONLY) + reason=RR_low_cluster
+       - action="wait"，并给出解除条件：需要价格脱离障碍簇 / 障碍被实体收盘突破 / 回踩确认等（写 NextTrigger）
 B6) 执行时效与反延迟闸门 (Execution Timeliness & Anti-Latency Guard)
   - 核心目的：确保决策基于“最新、有效、未失效”的市场状态。
   - 问：在生成最终 JSON 的这一刻，以下 3 个子闸门是否全部通过？

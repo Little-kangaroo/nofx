@@ -176,11 +176,17 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 	log.Printf("📊 [%s-OHLC提取] 耗时: %v (5m+4h级别)", symbol, ohlcExtractionDuration)
 
 	// 🔥 P0-04修复：填充ExchangeMeta字段，支持动态VPVR配置
+	// 🔥 P0-2修复：从缓存获取真实的tick_size和lot_size，替换硬编码值
 	// 根据symbol推断交易所元数据（tick_size、lot_size等）
-	exchangeMeta = &ExchangeMeta{
-		Symbol:   symbol,
-		TickSize: getSmartTickSizeBySymbol(symbol), // 智能推断tick_size
-		LotSize:  1.0,                              // 默认lot_size为1.0，实际可根据交易所规则调整
+	cache := GetGlobalExchangeMetaCache()
+	exchangeMeta, err = cache.GetExchangeMeta(symbol)
+	if err != nil {
+		log.Printf("⚠️ [ExchangeMeta] 获取失败，使用fallback: %v", err)
+		exchangeMeta = &ExchangeMeta{
+			Symbol:   symbol,
+			TickSize: getSmartTickSizeBySymbol(symbol), // 智能推断tick_size
+			LotSize:  1.0,                              // 默认lot_size为1.0
+		}
 	}
 
 	data := &Data{
@@ -807,6 +813,34 @@ func FormatAsStructuredData(data *Data) string {
 	return string(jsonData)
 }
 
+// extractExchangeMetaForAI 提取交易所元数据供AI使用
+// 🔥 P0-1新增：解决 ctxNA_lot_size / ctxNA_execution_params 问题
+func extractExchangeMetaForAI(data *Data) map[string]interface{} {
+	if data == nil || data.ExchangeMeta == nil {
+		return map[string]interface{}{}
+	}
+	em := data.ExchangeMeta
+	out := map[string]interface{}{
+		"symbol":    em.Symbol,
+		"tick_size": em.TickSize,
+		"lot_size":  em.LotSize,
+	}
+	// 可选字段：输出价格和数量限制（如果有值）
+	if em.MinPrice > 0 {
+		out["min_price"] = em.MinPrice
+	}
+	if em.MaxPrice > 0 {
+		out["max_price"] = em.MaxPrice
+	}
+	if em.MinQty > 0 {
+		out["min_qty"] = em.MinQty
+	}
+	if em.MaxQty > 0 {
+		out["max_qty"] = em.MaxQty
+	}
+	return out
+}
+
 // FormatAsCompactData 精简版市场数据格式化（供AI交易员使用）
 // 只包含计算出的关键指标结果，不包含原始K线数据和详细序列
 // 🔥 P0-03修复：FormatAsCompactData 消除同请求内K线数据漂移
@@ -827,6 +861,8 @@ func FormatAsCompactData(data *Data) string {
 			"多时间框架分析":   extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
 			"订单流分析":       GetOrderFlowDataForAIV2(data.Symbol),
 			"trigger_context": getTriggerContextForAI(data.Symbol, timeframeKlines),
+			// 🔥 P0-1新增：输出交易所元数据，解决 ctxNA_lot_size / ctxNA_execution_params
+			"ExchangeMeta": extractExchangeMetaForAI(data),
 			//"Gate2结构聚合":  buildGate2CompactOutput(data),
 		},
 	}
