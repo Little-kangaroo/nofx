@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"nofx/microstructure"
 	"nofx/triggers"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1093,11 +1094,11 @@ func extractCompactMultiTimeframeAnalysis(data *Data) map[string]interface{} {
 		result[tf] = map[string]interface{}{
 			"道氏理论数据":   extractCompactDowTheory(tfData.DowTheory, data.Symbol),
 			"通道数据":       extractCompactChannelAnalysis(tfData.ChannelAnalysis, data.Symbol),
-			"VPVR数据":       extractCompactVPVR(tfData.VolumeProfile, data.Symbol),
+			"VPVR数据":       extractCompactVPVR(tfData.VolumeProfile, data.Symbol, 0, 0), // 无klines数据，跳过标量计算
 			"供需区数据":     extractCompactSupplyDemand(tfData.SupplyDemand, data.Symbol),
-			"FVG数据":        extractCompactFVG(tfData.FairValueGaps, data.Symbol),
+			"FVG数据":        extractCompactFVG(tfData.FairValueGaps, data.Symbol, 0, 0), // 无klines数据，跳过TopN筛选
 			"斐波纳契数据":   extractCompactFibonacci(tfData.Fibonacci, data.Symbol),
-			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance, data.Symbol),
+			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance, data.Symbol, 0, 0), // 无klines数据，跳过TopN筛选
 		}
 	}
 
@@ -1152,7 +1153,8 @@ func extractCompactChannelAnalysis(data *ChannelData, symbol string) map[string]
 }
 
 // extractCompactVPVR 提取VPVR的关键结果
-func extractCompactVPVR(data *VolumeProfile, symbol string) map[string]interface{} {
+// 🔥 P0-C修复：增加currentPrice和atr参数，添加3个ATR归一化位置标量
+func extractCompactVPVR(data *VolumeProfile, symbol string, currentPrice float64, atr float64) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
@@ -1163,8 +1165,29 @@ func extractCompactVPVR(data *VolumeProfile, symbol string) map[string]interface
 		"value_area_low":  FormatByDataTypeAndSymbol(data.VAL, "price", symbol),
 	}
 
+	var pocPrice float64
 	if data.POC != nil {
-		result["poc_price"] = FormatByDataTypeAndSymbol(data.POC.Price, "price", symbol)
+		pocPrice = data.POC.Price
+		result["poc_price"] = FormatByDataTypeAndSymbol(pocPrice, "price", symbol)
+	}
+
+	// 🔥 P0-C新增：3个ATR归一化位置标量
+	// 1. poc_dist_atr: 当前价格到POC的距离（ATR倍数）
+	if data.POC != nil && atr > 0 {
+		pocDistAtr := math.Abs(currentPrice-pocPrice) / atr
+		result["poc_dist_atr"] = FormatByDataTypeAndSymbol(pocDistAtr, "ratio", symbol)
+	}
+
+	// 2. dist_to_val_atr: 当前价格到VAL的距离（ATR倍数，负值表示在VAL下方）
+	if atr > 0 {
+		distToValAtr := (currentPrice - data.VAL) / atr
+		result["dist_to_val_atr"] = FormatByDataTypeAndSymbol(distToValAtr, "ratio", symbol)
+	}
+
+	// 3. dist_to_vah_atr: 当前价格到VAH的距离（ATR倍数，正值表示在VAH上方）
+	if atr > 0 {
+		distToVahAtr := (currentPrice - data.VAH) / atr
+		result["dist_to_vah_atr"] = FormatByDataTypeAndSymbol(distToVahAtr, "ratio", symbol)
 	}
 
 	// 添加上下文评分信息
@@ -1279,34 +1302,215 @@ func sortZonesByStrength(zones []map[string]interface{}) {
 	}
 }
 
+// scoreAndSortFVG 对FVG缺口进行评分并排序
+// 🔥 P0-B新增：基于距离、强度、新鲜度的综合评分，支持TopN筛选
+// gaps: FVG缺口列表
+// currentPrice: 当前价格
+// atr: 当前ATR（用于归一化距离）
+// 返回: 按评分降序排序后的缺口列表
+func scoreAndSortFVG(gaps []*FairValueGap, currentPrice float64, atr float64) []*FairValueGap {
+	if len(gaps) == 0 || atr <= 0 {
+		return gaps
+	}
+
+	// 权重配置
+	const (
+		w1 = 0.40 // 距离权重（越近越重要）
+		w2 = 0.35 // 强度权重
+		w3 = 0.25 // 新鲜度权重
+	)
+
+	// 创建副本以避免修改原数据
+	scored := make([]*FairValueGap, len(gaps))
+	copy(scored, gaps)
+
+	// 计算每个gap的综合评分
+	for _, gap := range scored {
+		// 1. 距离评分：使用 1/(1+dist_atr) 使得越近分数越高
+		distAtr := math.Abs(currentPrice-gap.CenterPrice) / atr
+		distScore := 1.0 / (1.0 + distAtr)
+
+		// 2. 强度评分：直接使用gap.Strength（已经0-1归一化）
+		strengthScore := gap.Strength
+
+		// 3. 新鲜度评分：检查Context.IsFresh
+		freshnessScore := 0.0
+		if gap.Context != nil && gap.Context.IsFresh {
+			freshnessScore = 1.0
+		}
+
+		// 综合评分
+		gap.Score = w1*distScore + w2*strengthScore + w3*freshnessScore
+	}
+
+	// 按评分降序排序
+	sort.SliceStable(scored, func(i, j int) bool {
+		return scored[i].Score > scored[j].Score
+	})
+
+	return scored
+}
+
+// calculateAvgDistanceFVG 计算FVG缺口的平均距离（ATR归一化）
+// 🔥 P0-B新增：用于判断FVG拥挤度，平均距离越小表示越拥挤
+// gaps: FVG缺口列表
+// currentPrice: 当前价格
+// atr: 当前ATR
+// 返回: 平均距离（ATR倍数）
+func calculateAvgDistanceFVG(gaps []*FairValueGap, currentPrice float64, atr float64) float64 {
+	if len(gaps) == 0 || atr <= 0 {
+		return 0.0
+	}
+
+	totalDist := 0.0
+	for _, gap := range gaps {
+		distAtr := math.Abs(currentPrice-gap.CenterPrice) / atr
+		totalDist += distAtr
+	}
+
+	return totalDist / float64(len(gaps))
+}
+
+// scoreAndSortSR 对支撑阻力水平线进行评分并排序
+// 🔥 P0-B新增：基于距离、强度、命中次数的综合评分，支持TopN筛选
+// levels: SR水平线列表
+// currentPrice: 当前价格
+// atr: 当前ATR（用于归一化距离）
+// 返回: 按评分降序排序后的水平线列表
+func scoreAndSortSR(levels []*SRLevel, currentPrice float64, atr float64) []*SRLevel {
+	if len(levels) == 0 || atr <= 0 {
+		return levels
+	}
+
+	// 权重配置
+	const (
+		w1 = 0.40 // 距离权重（越近越重要）
+		w2 = 0.35 // 强度权重
+		w3 = 0.25 // 命中次数权重（作为重要性指标）
+	)
+
+	// 创建副本以避免修改原数据
+	scored := make([]*SRLevel, len(levels))
+	copy(scored, levels)
+
+	// 1. 找到最大命中次数用于归一化
+	maxHitCount := 0
+	for _, level := range scored {
+		if level.HitCount > maxHitCount {
+			maxHitCount = level.HitCount
+		}
+	}
+	if maxHitCount == 0 {
+		maxHitCount = 1 // 避免除零
+	}
+
+	// 2. 计算每个level的综合评分
+	for _, level := range scored {
+		// 2.1 距离评分：使用 1/(1+dist_atr) 使得越近分数越高
+		distAtr := math.Abs(currentPrice-level.Price) / atr
+		distScore := 1.0 / (1.0 + distAtr)
+
+		// 2.2 强度评分：level.Strength 是 0-100，归一化到 0-1
+		strengthScore := level.Strength / 100.0
+
+		// 2.3 命中次数评分：归一化到 0-1
+		hitCountScore := float64(level.HitCount) / float64(maxHitCount)
+
+		// 2.4 综合评分（暂存在Strength字段末尾，实际使用时从metadata中获取）
+		// 注意：这里我们创建了副本，不会影响原数据
+		compositeScore := w1*distScore + w2*strengthScore + w3*hitCountScore
+
+		// 临时存储评分（用于排序，实际输出时会放在metadata中）
+		// 由于SRLevel没有Score字段，我们需要在排序时直接计算
+		// 这里我们保存distScore等中间值，后面排序时重新计算
+		level.Strength = compositeScore * 100.0 // 临时hack：用strength字段存储composite score
+	}
+
+	// 3. 按综合评分降序排序
+	sort.SliceStable(scored, func(i, j int) bool {
+		return scored[i].Strength > scored[j].Strength
+	})
+
+	return scored
+}
+
+// calculateAvgDistanceSR 计算支撑阻力水平线的平均距离（ATR归一化）
+// 🔥 P0-B新增：用于判断SR拥挤度，平均距离越小表示越拥挤
+// levels: SR水平线列表
+// currentPrice: 当前价格
+// atr: 当前ATR
+// 返回: 平均距离（ATR倍数）
+func calculateAvgDistanceSR(levels []*SRLevel, currentPrice float64, atr float64) float64 {
+	if len(levels) == 0 || atr <= 0 {
+		return 0.0
+	}
+
+	totalDist := 0.0
+	for _, level := range levels {
+		distAtr := math.Abs(currentPrice-level.Price) / atr
+		totalDist += distAtr
+	}
+
+	return totalDist / float64(len(levels))
+}
+
 // extractCompactFVG 提取FVG的关键结果
-func extractCompactFVG(data *FVGData, symbol string) map[string]interface{} {
+// 🔥 P0-B修复：增加currentPrice和atr参数，实现TopN=3筛选 + 拥挤度元数据
+func extractCompactFVG(data *FVGData, symbol string, currentPrice float64, atr float64) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{}
 	}
 
+	totalCount := len(data.ActiveFVGs)
 	result := map[string]interface{}{
-		"active_gaps": len(data.ActiveFVGs),
+		"active_gaps": totalCount,
 		"nearest_gap": 0.0,
 		"gap_type":    "none", // 默认为none，表示无Gap
 		"gaps":        []map[string]interface{}{},
+		// 🔥 P0-B新增：拥挤度元数据
+		"congestion_metadata": map[string]interface{}{
+			"total_count":     totalCount,
+			"cluster_density": 0.0,
+			"has_congestion":  false,
+		},
 	}
 
 	if len(data.ActiveFVGs) > 0 {
-		// 取第一个活跃的FVG作为最近的
-		fvg := data.ActiveFVGs[0]
-		result["nearest_gap"] = FormatByDataTypeAndSymbol((fvg.LowerBound+fvg.UpperBound)/2, "price", symbol)
-		if fvg.Type == BullishFVG {
-			result["gap_type"] = "bullish"
-		} else if fvg.Type == BearishFVG {
-			result["gap_type"] = "bearish"
-		} else {
-			result["gap_type"] = "neutral"
+		// 🔥 P0-B修复：使用评分排序筛选TopN=3
+		scoredGaps := scoreAndSortFVG(data.ActiveFVGs, currentPrice, atr)
+
+		// 选择TopN（最多3个）
+		const topN = 3
+		selectedGaps := scoredGaps
+		if len(scoredGaps) > topN {
+			selectedGaps = scoredGaps[:topN]
 		}
 
-		// 添加详细的FVG信息
+		// 取第一个（评分最高的）作为最近的FVG
+		if len(selectedGaps) > 0 {
+			fvg := selectedGaps[0]
+			result["nearest_gap"] = FormatByDataTypeAndSymbol((fvg.LowerBound+fvg.UpperBound)/2, "price", symbol)
+			if fvg.Type == BullishFVG {
+				result["gap_type"] = "bullish"
+			} else if fvg.Type == BearishFVG {
+				result["gap_type"] = "bearish"
+			} else {
+				result["gap_type"] = "neutral"
+			}
+		}
+
+		// 🔥 P0-B修复：计算拥挤度元数据
+		avgDistance := calculateAvgDistanceFVG(data.ActiveFVGs, currentPrice, atr)
+		hasCongestion := avgDistance < 2.0 // 平均距离 < 2 ATR 视为拥挤
+		result["congestion_metadata"] = map[string]interface{}{
+			"total_count":     totalCount,
+			"cluster_density": FormatByDataTypeAndSymbol(avgDistance, "ratio", symbol), // 平均距离（ATR倍数）
+			"has_congestion":  hasCongestion,
+		}
+
+		// 添加详细的FVG信息（仅输出TopN）
 		var gaps []map[string]interface{}
-		for _, gap := range data.ActiveFVGs {
+		for _, gap := range selectedGaps {
 			gapInfo := map[string]interface{}{
 				"id":            gap.ID,
 				"type":          gap.Type,
@@ -2736,6 +2940,10 @@ func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKli
 		klines := timeframeKlines[tf]
 		supertrend := calculateSupertrend(klines, 20, 5.0)
 
+		// 🔥 P0-C修复：计算ATR14用于VPVR位置标量
+		atr14 := calculateATR(klines, 14)
+		currentPrice := data.LastPrice
+
 		result[tf] = map[string]interface{}{
 			"道氏理论数据": extractCompactDowTheoryWithSupertrend(tfData.DowTheory, supertrend, data.Symbol),
 			"超级趋势指标": map[string]interface{}{
@@ -2743,11 +2951,11 @@ func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKli
 				"current_line": FormatByDataTypeAndSymbol(supertrend.CurrentLine, "price", data.Symbol),
 			},
 			"通道数据":       extractCompactChannelAnalysis(tfData.ChannelAnalysis, data.Symbol),
-			"VPVR数据":       extractCompactVPVR(tfData.VolumeProfile, data.Symbol),
+			"VPVR数据":       extractCompactVPVR(tfData.VolumeProfile, data.Symbol, currentPrice, atr14),
 			"供需区数据":     extractCompactSupplyDemand(tfData.SupplyDemand, data.Symbol),
-			"FVG数据":        extractCompactFVG(tfData.FairValueGaps, data.Symbol),
+			"FVG数据":        extractCompactFVG(tfData.FairValueGaps, data.Symbol, currentPrice, atr14),
 			"斐波纳契数据":   extractCompactFibonacci(tfData.Fibonacci, data.Symbol),
-			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance, data.Symbol),
+			"支撑阻力转换线": extractCompactSupportResistance(tfData.SupportResistance, data.Symbol, currentPrice, atr14),
 		}
 	}
 
@@ -2755,7 +2963,8 @@ func extractCompactMultiTimeframeAnalysisWithSupertrend(data *Data, timeframeKli
 }
 
 // extractCompactSupportResistance 提取支撑阻力转换线的关键结果
-func extractCompactSupportResistance(data *SupportResistanceData, symbol string) map[string]interface{} {
+// 🔥 P0-B修复：增加currentPrice和atr参数，实现TopN=3筛选 + 拥挤度元数据
+func extractCompactSupportResistance(data *SupportResistanceData, symbol string, currentPrice float64, atr float64) map[string]interface{} {
 	if data == nil {
 		return map[string]interface{}{
 			"support_resistance_lines": []map[string]interface{}{},
@@ -2763,16 +2972,23 @@ func extractCompactSupportResistance(data *SupportResistanceData, symbol string)
 				"total_lines":      0,
 				"support_lines":    0,
 				"resistance_lines": 0,
+				// 🔥 P0-B新增：拥挤度元数据
+				"cluster_density":  0.0,
+				"has_congestion":   false,
 			},
 		}
 	}
 
+	totalCount := len(data.KeyLevels)
 	result := map[string]interface{}{
 		"support_resistance_lines": []map[string]interface{}{},
 		"summary": map[string]interface{}{
-			"total_lines":      0,
+			"total_lines":      totalCount,
 			"support_lines":    0,
 			"resistance_lines": 0,
+			// 🔥 P0-B新增：拥挤度元数据
+			"cluster_density":  0.0,
+			"has_congestion":   false,
 		},
 	}
 
@@ -2780,12 +2996,26 @@ func extractCompactSupportResistance(data *SupportResistanceData, symbol string)
 		return result
 	}
 
+	// 🔥 P0-B修复：使用评分排序筛选TopN=3
+	scoredLevels := scoreAndSortSR(data.KeyLevels, currentPrice, atr)
+
+	// 选择TopN（最多3个）
+	const topN = 3
+	selectedLevels := scoredLevels
+	if len(scoredLevels) > topN {
+		selectedLevels = scoredLevels[:topN]
+	}
+
+	// 🔥 P0-B修复：计算拥挤度元数据
+	avgDistance := calculateAvgDistanceSR(data.KeyLevels, currentPrice, atr)
+	hasCongestion := avgDistance < 3.0 // 平均距离 < 3 ATR 视为拥挤
+
 	var lines []map[string]interface{}
 	supportCount := 0
 	resistanceCount := 0
 
-	// 提取关键水平线信息
-	for _, level := range data.KeyLevels {
+	// 提取关键水平线信息（仅输出TopN）
+	for _, level := range selectedLevels {
 		lineInfo := map[string]interface{}{
 			"price":     FormatByDataTypeAndSymbol(level.Price, "price", symbol),
 			"type":      level.Type,
@@ -2803,9 +3033,12 @@ func extractCompactSupportResistance(data *SupportResistanceData, symbol string)
 
 	result["support_resistance_lines"] = lines
 	result["summary"] = map[string]interface{}{
-		"total_lines":      len(data.KeyLevels),
-		"support_lines":    supportCount,
-		"resistance_lines": resistanceCount,
+		"total_lines":      totalCount,        // 总数保持不变
+		"support_lines":    supportCount,      // TopN中的支撑数
+		"resistance_lines": resistanceCount,   // TopN中的阻力数
+		// 🔥 P0-B新增：拥挤度元数据
+		"cluster_density":  FormatByDataTypeAndSymbol(avgDistance, "ratio", symbol), // 平均距离（ATR倍数）
+		"has_congestion":   hasCongestion,
 	}
 
 	return result

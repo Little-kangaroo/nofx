@@ -81,4 +81,12 @@ const (
 	KeyLevelSwingLow  = "swing_low"  // Swing低点
 	KeyLevel4hSR      = "4h_SR"      // 4小时支撑/阻力（可选，未来扩展）
 	KeyLevel1hSR      = "1h_SR"      // 1小时支撑/阻力（可选，未来扩展）
+
+	// 🔥 P0-A新增：IBB/Engulf/Momo触发器关键位类型
+	KeyLevelIbbBreakHigh      = "ibb_break_high"      // IBB向上突破的母bar高点
+	KeyLevelIbbBreakLow       = "ibb_break_low"       // IBB向下突破的母bar低点
+	KeyLevelEngulfInvalidHigh = "engulf_invalid_high" // Engulf失效的前bar高点
+	KeyLevelEngulfInvalidLow  = "engulf_invalid_low"  // Engulf失效的前bar低点
+	KeyLevelMomoInvalidHigh   = "momo_invalid_high"   // Momo失效的点火bar高点
+	KeyLevelMomoInvalidLow    = "momo_invalid_low"    // Momo失效的点火bar低点
 )

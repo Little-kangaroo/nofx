@@ -69,33 +69,75 @@ func DetectTriggers(klines []Kline, atr5m float64, volZ float64, cfg TriggerConf
 	if q, ok := DetectEngulfBear(k, prev, atr5m, cfg); ok {
 		res.Flags = append(res.Flags, FlagEngulfBear)
 		res.Quality[FlagEngulfBear] = q
+		// 🔥 P0-A新增：填充Engulf触发器的关键位
+		// ENGULF_BEAR: 前一根K线高点为失效位（价格突破此位则形态失效）
+		if res.KeyLevel == 0 || q > bestKeyQ {
+			res.KeyLevel = prev.High
+			res.KeyType = KeyLevelEngulfInvalidHigh
+			bestKeyQ = q
+		}
 	}
 
 	if q, ok := DetectEngulfBull(k, prev, atr5m, cfg); ok {
 		res.Flags = append(res.Flags, FlagEngulfBull)
 		res.Quality[FlagEngulfBull] = q
+		// 🔥 P0-A新增：填充Engulf触发器的关键位
+		// ENGULF_BULL: 前一根K线低点为失效位（价格跌破此位则形态失效）
+		if res.KeyLevel == 0 || q > bestKeyQ {
+			res.KeyLevel = prev.Low
+			res.KeyType = KeyLevelEngulfInvalidLow
+			bestKeyQ = q
+		}
 	}
 
 	// === 3. IBB 检测 ===
 	if q, ok := DetectIbbBull(k, prev, prev2, atr5m, volZ, cfg); ok {
 		res.Flags = append(res.Flags, FlagIbbBull)
 		res.Quality[FlagIbbBull] = q
+		// 🔥 P0-A新增：填充IBB触发器的关键位
+		// IBB_BULL: 向上突破母bar高点为关键位
+		if res.KeyLevel == 0 || q > bestKeyQ {
+			res.KeyLevel = prev2.High
+			res.KeyType = KeyLevelIbbBreakHigh
+			bestKeyQ = q
+		}
 	}
 
 	if q, ok := DetectIbbBear(k, prev, prev2, atr5m, volZ, cfg); ok {
 		res.Flags = append(res.Flags, FlagIbbBear)
 		res.Quality[FlagIbbBear] = q
+		// 🔥 P0-A新增：填充IBB触发器的关键位
+		// IBB_BEAR: 向下突破母bar低点为关键位
+		if res.KeyLevel == 0 || q > bestKeyQ {
+			res.KeyLevel = prev2.Low
+			res.KeyType = KeyLevelIbbBreakLow
+			bestKeyQ = q
+		}
 	}
 
 	// === 4. Momentum Ignition 检测 ===
 	if q, ok := DetectMomoBull(k, atr5m, volZ, cfg); ok {
 		res.Flags = append(res.Flags, FlagMomoBull)
 		res.Quality[FlagMomoBull] = q
+		// 🔥 P0-A新增：填充Momo触发器的关键位
+		// MOMO_BULL: 当前点火bar低点为失效位（价格跌破此位则动能失效）
+		if res.KeyLevel == 0 || q > bestKeyQ {
+			res.KeyLevel = k.Low
+			res.KeyType = KeyLevelMomoInvalidLow
+			bestKeyQ = q
+		}
 	}
 
 	if q, ok := DetectMomoBear(k, atr5m, volZ, cfg); ok {
 		res.Flags = append(res.Flags, FlagMomoBear)
 		res.Quality[FlagMomoBear] = q
+		// 🔥 P0-A新增：填充Momo触发器的关键位
+		// MOMO_BEAR: 当前点火bar高点为失效位（价格突破此位则动能失效）
+		if res.KeyLevel == 0 || q > bestKeyQ {
+			res.KeyLevel = k.High
+			res.KeyType = KeyLevelMomoInvalidHigh
+			bestKeyQ = q
+		}
 	}
 
 	// 🔥 P0-新增：在PostProcess前保存原始数据（用于诊断和Gate3触发窗口）
