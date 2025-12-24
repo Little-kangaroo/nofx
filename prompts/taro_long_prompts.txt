@@ -2635,7 +2635,9 @@ D. 风险与资金安全 (Risk & Safety)
         目的：仅用于“开新仓可执行性”验证（即 open_long/open_short 的准入门槛），不得覆盖持仓管理动作。
         - 定义：
           * Real_R：按当前 entry/stop/first_target 计算得到的“实际可达 R”（方向对称）
-          * R_clean：基于结构合法 stop + 最近可兑现目标的“干净 R”（若输入已给则直接引用；若无法计算必须说明原因）
+          * R_clean：基于结构合法 stop + 最近反向结构（可兑现结构目标）的“干净 R”；
+            目标锚点必须来自供需区/摆动点/SR/VPVR边界/Fib 等“结构类目标”；
+            订单簿墙仅当 stability_score>0.6 且 flicker_count<5 时可作为目标锚点，否则在 R_clean 计算中必须忽略（见 Gate1）。
         - 分层口径（避免把 MR 机会全部否决）：
           1) 若 Real_R < 0.5：
              -> Gate5(EXEC/RR)=FAIL fail=>RR_LOW_HARD（空间极小）
@@ -2652,8 +2654,23 @@ D. 风险与资金安全 (Risk & Safety)
                    - 必须设置 TP1：目标 >= +0.5R 或最近 Anchor/VPVR 边界；TP1 close_pct ≥ 0.5
                    - 剩余仓位：默认不加仓；必须启用更紧 stop / 锁盈（写明触发条件）
                    - GateTrace/Exception 必须写：Exception: rr_low_downgrade; Real_R=<..>; TP1=<..>; close_pct=<..>
-          3) 若 Real_R ≥ 1.0：
-             -> Gate5(EXEC/RR)=PASS（常规）
+          3) - 分层口径（避免把 MR 机会全部否决，同时保持 HTF_swing 的 2R 硬约束）：
+               1) 若 Real_R < 0.5：
+                  -> Gate5(EXEC/RR)=FAIL fail=>RR_LOW_HARD（空间极小）
+                  -> 禁止 open_long/open_short；action 按 has_position 分支输出
+               2) 若 0.5 ≤ Real_R < 1.0：
+                  a) 若 trade_style=HTF_swing：
+                     -> Gate5(EXEC/RR)=FAIL fail=>RR（保持严格：HTF 不做小空间）
+                  b) 若 trade_style=LTF_scalp：
+                     -> Gate5(EXEC/RR)=PASS（downgrade_on；允许“区间边缘 MR / 小空间试单”）
+                     -> 必须强制降级约束（否则回退 FAIL）：risk_down≥0.5 + LIMIT + TP1 快速兑现(≥+0.5R或最近边界; close_pct≥0.5) + 禁止追价/加仓
+               3) 若 1.0 ≤ Real_R < 2.0：
+                  a) 若 trade_style=HTF_swing：
+                     -> Gate5(EXEC/RR)=FAIL fail=>RR（与“TP1≥2R”一致：HTF 不做 1R~2R 目标）
+                  b) 若 trade_style=LTF_scalp：
+                     -> Gate5(EXEC/RR)=PASS（常规，但仍需遵守 R_clean 门槛与执行约束）
+               4) 若 Real_R ≥ 2.0：
+                  -> Gate5(EXEC/RR)=PASS（HTF_swing 常规；LTF_scalp 亦可）
         - 若 Real_R / R_clean 无法计算（例如 ctxNA_lot_size / no_clean_path_between_anchors / no_R_clean_calc_without_qty 等）：
           -> Gate5(EXEC/RR)=DIAG(EVAL_ONLY) fail=>RR_CTX_MISSING
           -> action 按 has_position 分支输出；并在 NextTrigger 写明“恢复可计算”的最小条件（例如：必须给 qty 或必须给合法 stop_anchor 与 target_anchor）
@@ -3117,24 +3134,21 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
          - 给出该距离的点数和折算后的 R 值（记为 R_clean）：
            · 例如："最近反向结构为 15m supply 87200-87500，entry→supply_low≈0.8R"；
          - 若 R_clean < 1.0：
-             · 视为“空间不足”，默认不得作为常规模型的新开仓信号；
-             · 但对 trade_style="LTF_scalp" 允许更细分的门槛（用于提升短线开仓频率，同时保留质量约束）：
-               (a) 若 trade_style="LTF_scalp" 且 R_clean < 0.5：
-                   - 仍视为“空间严重不足”，禁止新建 open_long/open_short：
-                     · 若 has_position=0：action="wait"
-                     · 若 has_position=1：action 仅允许 ∈ {"hold","close"}（仅管理既有仓位）
-               (b) 若 trade_style="LTF_scalp" 且 R_clean ∈ [0.5, 1.0)：
-                   - 仅允许在“趋势尾声反转型 LTF_scalp”例外场景下小仓试单（见 C7 一致性闸门的例外条件），
-                     且必须满足：pattern∈{EDGE, BO_RETEST, MOMENTUM_BREAK} + 5m Confirm-1/2 + edge_score ≥ 0.65 + confidence ≥ 70；否则：仅在 has_position=0 时 action="wait"；若 has_position=1 则 action 仅允许 ∈ {"hold","close"}（严禁输出 wait；仅管理既有仓位）。
-                     当 pattern="MOMENTUM_BREAK" 且 R_clean ∈ [0.5,1.0) 时（LONG/SHORT 对称）：
-                     - 必须满足更严格确认：
-                       a) 突破必须为“实体收盘突破”（wick 不算），且 vol_ratio ≥ 1.2，ctx.strength_z > 0.5；
-                       b) 突破后下一根不得立即反向吞没（拒绝回归）；
-                       c) 必须在 5m K线收盘后进场，严禁跳动中追单；
-                      否则：仅在 has_position=0 时 action="wait"；若 has_position=1 则 action 仅允许 ∈ {"hold","close"}（严禁输出 wait）。
-               (c) 若 trade_style="HTF_swing"：
-                   - 仍按原逻辑：R_clean < 1.0 默认不得开仓；
-                   - 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚）。
+           · 视为“空间不足”，默认不得作为常规模型的新开仓信号；
+           · 但对 trade_style="LTF_scalp" 允许更细分门槛（仅用于提频；必须显式降级）：
+             (a) 若 trade_style="LTF_scalp" 且 R_clean < 0.5：
+                 - 空间严重不足，禁止新建 open_long/open_short（保持原口径）。
+             (b) 若 trade_style="LTF_scalp" 且 R_clean ∈ [0.5, 0.8)：
+                 - 仅允许在“趋势尾声反转型 LTF_scalp”例外场景下小仓试单；
+                 - 必须同时满足：pattern∈{EDGE, BO_RETEST, MOMENTUM_BREAK} + 5m Confirm-1/2 + edge_score ≥ 0.65 + confidence ≥ 70；
+                 - 且必须强制降级：risk_down ≥ 0.5；order_type=LIMIT；必须设置 TP1 快速兑现（≥+0.5R 或最近 Anchor/VPVR 边界，close_pct ≥0.5）；
+                 - 否则：has_position=0 -> action="wait"；has_position=1 -> 仅允许 {"hold","close"}（仅管理仓位；严禁输出 wait）。
+             (c) 若 trade_style="LTF_scalp" 且 R_clean ∈ [0.8, 1.0)：
+                 - 允许作为 LTF_scalp 降级单进入候选，但必须强制降级（同上：risk_down≥0.5 + LIMIT + TP1 快速兑现 + 禁止追价/加仓）。
+           · 若 trade_style="HTF_swing"：
+             - 仍按原逻辑：R_clean < 1.0 默认不得开仓；
+             - 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚），否则 action="wait"。
+
          【P0-Gate5｜R_clean 强制算式与自证】
          - 只要 action ∈ {"open_long","open_short"}：
            1) 必须在 reasoning 中给出一行“算式展示”，格式如下（必须含数字）：
@@ -3144,8 +3158,11 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
               - 视为“不可执行/不可托管”，若 has_position=0：action 强制为 "wait"（fail=>RCALC）；若 has_position=1：action 仅允许 ∈ {"hold","close"}（严禁输出 wait；仅管理既有仓位）。
            3) 若 R_clean < 1.0：
            - 默认不得开仓；
-           - 仅允许你模板已定义的极少数 LTF_scalp 例外，并必须满足：pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK} 且 R_clean ≥ 0.8（LTF_scalp）；
-           - 若不满足上述“例外集合 + 阈值”：视为 Gate5 未通过，最终动作必须服从 actionDerivation（has_position 分支；持仓时严禁输出 action="wait"）。
+           - 仅允许模板已定义的 LTF_scalp 例外，并按以下阈值裁决（与“第6条：最近反向结构与可用空间”一致）：
+             a) R_clean < 0.5：绝对禁止；
+             b) R_clean ∈ [0.5, 0.8)：仅允许“趋势尾声反转型 LTF_scalp”且满足强确认 + 强降级约束；
+             c) R_clean ∈ [0.8, 1.0)：允许 LTF_scalp 进入候选，但必须强制降级（risk_down≥0.5 + LIMIT + TP1 快速兑现 + 禁止追价/加仓）。
+           - 若不满足上述“例外集合 + 对应阈值”：视为 Gate5 未通过，最终动作必须服从 actionDerivation（has_position 分支；持仓时严禁输出 action="wait"）。
         7. 若是开仓（open_long/open_short），还需明确说明本次止损 sl_struct 依托的结构：
           - 对多单：例如“sl_struct 设在最近 15m demand 区下沿 2.065，再下方留出 ≈0.2*ATR 作为缓冲”；
           - 对空单：例如“sl_struct 设在最近 30m supply 区上沿 0.1459，上方留出若干 tick 作为缓冲”；
