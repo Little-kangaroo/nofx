@@ -393,6 +393,7 @@
        * **SuperTrend**: 价格是否回踩了 SuperTrend 趋势线且未跌破？
        * **Channel**: 价格是否接触通道下轨(做多)或上轨(做空)？
        * **Dow**: 是否是 Higher Low (做多) 或 Lower High (做空) 的预期位置？
+       - 【计数口径（P0）】DZ/SZ、FVG、VPVR(POC/VAH/VAL)、SR Flip、FIB、ST、CH、DS：每一类各计为 1 个结构；同一类出现多个点位只取“最近且最强/最新鲜”的那个计入，避免堆砌。
     A-Extra) 周期级别对齐 (Timeframe Alignment Rules) —— 拒绝“小马拉大车”
        - 核心原则：环境越极端（超买/超卖），对支撑/阻力的级别要求越高。
        - 规则：
@@ -432,30 +433,47 @@
          - SHORT：Anchor 必须是“在价格上方可做阻力”的结构（或跌破后回踩成为阻力的结构）。
          - 若候选结构与方向不一致：直接丢弃，不参与排序。
          【优先级排序（从高到低；同级再比 AnchorScore）】
-         P1) HTF 供需区（4h/1h Demand/Supply，且满足：is_fresh=true，ctx.strength_z 不得 < -0.5）
-         P2) HTF VPVR 边界（4h/1h VAH/VAL）—— 仅允许“有效突破后的回踩锚点”（不得在 VAH/VAL 贴边追单）
-         P3) HTF SR Flip / 关键 SR 线（4h/1h 支撑阻力转换或关键水平）
-         P4) MTF 供需区（30m/15m Demand/Supply，fresh/strong 优先，弱结构不得作为唯一锚点）
-         P5) LTF VPVR 边界（15m/5m VAH/VAL）—— 同 P2：只允许“突破后回踩锚点”
-         P6) FVG（15m/5m，必须是与方向一致的 gap，且 status=fresh 优先）
-         P7) Fibonacci（0.618/0.786 OTE 或关键扩展位）—— 仅作“最后兜底锚点”，单独依托默认视为弱（更偏 Tier3）
+         【优先级排序（从高到低；同级再比 AnchorScore）】
+         P1) HTF 供需区（4h/1h DZ/SZ）
+         P2) HTF VPVR 边界（4h/1h VAH/VAL/POC）
+         P3) HTF SR Flip（4h/1h）
+         P3.5) HTF 趋势护航线（4h/1h SuperTrend(ST) / ChannelRail(CH) / DowSwing(DS)）
+              - 仅允许“回踩/反抽确认(BO_RETEST/MOMENTUM_BREAK)”作为锚点；禁止离线追价作为锚点
+         P4) MTF 供需区（30m/15m DZ/SZ）
+         P5) LTF/MTF VPVR 边界（30m/15m/5m VAH/VAL/POC）
+         P5.5) MTF 趋势护航线（30m/15m ST/CH/DS；同上仅回踩确认）
+         P6) FVG 缺口（4h/1h/30m/15m/5m）
+         P7) Fibonacci（cluster / GP / ext）
+
          【AnchorScore（同优先级内用于决胜；可计算且可解释）】
          - 计算方式（0~100，越高越强）：
            AnchorScore =
              Base(type) + TF_bonus + Fresh_bonus + Strength_bonus + Vol_bonus
              - Aging_penalty - Weak_penalty - Proximity_penalty
-         1) Base(type)：
-            - HTF 供需区：55
-            - VPVR 边界（VAH/VAL 回踩）：50
-            - HTF SR Flip：48
-            - 30m/15m 供需区：42
-            - FVG：38
-            - Fib：30
+        1) Base(type)：
+        Base(type)={
+          DZ/SZ:55,
+          VPVR_POC/VAH/VAL:50,
+          HTF SR Flip:48,
+          HTF ST:46,
+          HTF CH:44,
+          HTF DS:44,
+          30m/15m 供需区:42,
+          30m/15m VPVR 边界:38,
+          30m/15m ST/CH/DS:36,
+          FVG:38,
+          Fibonacci:30,
+          others:20
+        }
          2) TF_bonus（若能确定周期则加；更高周期更稳）：
             - 4h:+20, 1h:+16, 30m:+12, 15m:+9, 5m:+6
          3) Fresh_bonus：
             - is_fresh=true 或 status="fresh"：+12
             - 否则：+0
+            （补充｜线性结构 ST/CH/DS 的 fresh 等价判定）
+            - 对于 ST/CH/DS：若当前价到线的距离满足 Buffer ≤ 0.3%（与 Vacuum 动态豁免一致），则视同“fresh”给 +12；否则 Fresh_bonus=0。
+            - 线性结构的 touches/status 若输入缺失：不额外加分、不额外扣分（仅按距离与 Gate4 触发、Gate5 可执行性决定是否可用）。
+
          4) Strength_bonus（使用 ctx.strength_z；若该结构无 strength_z 则本项=0）：
             - strength_z ≥ 1.5：+15
             - 1.0~1.5：+10
@@ -525,10 +543,15 @@
         - 定义 vacuum_band_pct = clamp( max(0.35%, 0.8 * ATR14_5m / last_price), 0.35%, 1.2% )
           其中 last_price 使用本次 5m ohlc_last_closed.close（或等价的可核验收盘价）。
         - 若当前价格上下 vacuum_band_pct 范围内，找不到上述任何 **第1类 (实体)** 或 **第2类 (价值)** 结构：视为“价格悬空 (Floating)”，action 必须为 "wait"。
-      * **【新增】动态趋势豁免 (Dynamic Trend Exception)**：
+      * 【新增】动态趋势豁免 (Dynamic Trend Exception)：
         - 若当前形态判定为 `BO_RETEST` (突破回踩) 或 `MOMENTUM_BREAK` (动能突破)：
         - **豁免真空检查**。
-        - **替代依托**：将 5m/15m 的 **EMA20** 视为有效的“动态结构支撑/阻力”。
+        - **替代依托**：以下任一满足即可视为有效“动态结构支撑/阻力”：
+            (a) 5m/15m EMA20
+            (b) SuperTrend 线（Type=ST；顺势方向的 st_line）
+            (c) 趋势通道上下轨（Type=CH；多用下轨、空用上轨）
+            (d) 道氏 Swing 关键位（Type=DS；多用最近 swing_low/HL，空用最近 swing_high/LH）
+        - 只要价格回踩上述依托附近（统一 Buffer < 0.3%）且未有效跌破/突破，即可视为“有结构依托”，**允许开仓**。
         - 只要价格回踩 EMA20 附近（Buffer < 0.3%）且未有效跌破，即可视为“有结构依托”，**允许开仓**，不必非要踩在 Demand Zone 上。
         2.2）LTF_scalp 允许的形态类型（EDGE / BO_RETEST / MOMENTUM_BREAK）
             - 为避免“半空中追单”，LTF_scalp 开仓只允许以下三类结构形态：

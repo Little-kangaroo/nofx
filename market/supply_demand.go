@@ -195,10 +195,8 @@ func (sda *SupplyDemandAnalyzer) identifySupplyZones(klines []Kline, symbol, tim
 		}
 	}
 
-	// 过滤和优化区域
-	zones = sda.filterOverlappingZones(zones)
-
-	// 计算区域强度和质量
+	// 🔥 P0-1修复：先计算区域强度和质量，再过滤重叠区域
+	// 原因：filterOverlappingZones 依赖 Strength 排序，必须先计算 Strength
 	for _, zone := range zones {
 		if symbol != "" && timeframe != "" {
 			sda.calculateZoneStrengthWithSymbol(zone, klines, symbol, timeframe)
@@ -207,6 +205,9 @@ func (sda *SupplyDemandAnalyzer) identifySupplyZones(klines []Kline, symbol, tim
 		}
 		sda.assessZoneQuality(zone)
 	}
+
+	// 过滤和优化区域（此时 Strength 已计算，排序结果确定性）
+	zones = sda.filterOverlappingZones(zones)
 
 	return zones
 }
@@ -233,10 +234,8 @@ func (sda *SupplyDemandAnalyzer) identifyDemandZones(klines []Kline, symbol, tim
 		}
 	}
 
-	// 过滤和优化区域
-	zones = sda.filterOverlappingZones(zones)
-
-	// 计算区域强度和质量
+	// 🔥 P0-1修复：先计算区域强度和质量，再过滤重叠区域
+	// 原因：filterOverlappingZones 依赖 Strength 排序，必须先计算 Strength
 	for _, zone := range zones {
 		if symbol != "" && timeframe != "" {
 			sda.calculateZoneStrengthWithSymbol(zone, klines, symbol, timeframe)
@@ -245,6 +244,9 @@ func (sda *SupplyDemandAnalyzer) identifyDemandZones(klines []Kline, symbol, tim
 		}
 		sda.assessZoneQuality(zone)
 	}
+
+	// 过滤和优化区域（此时 Strength 已计算，排序结果确定性）
+	zones = sda.filterOverlappingZones(zones)
 
 	return zones
 }
@@ -255,8 +257,11 @@ func (sda *SupplyDemandAnalyzer) identifyDropBaseDrop(klines []Kline, centerInde
 		return nil
 	}
 
+	// 🔥 P1-1修复：计算ATR用于Base区域识别
+	atr := sda.calculateATR(klines, 14)
+
 	// 寻找整理区域
-	baseStart, baseEnd := sda.findBaseArea(klines, centerIndex, false)
+	baseStart, baseEnd := sda.findBaseArea(klines, centerIndex, false, atr)
 	if baseStart == -1 || baseEnd == -1 {
 		return nil
 	}
@@ -313,8 +318,11 @@ func (sda *SupplyDemandAnalyzer) identifyRallyBaseRally(klines []Kline, centerIn
 		return nil
 	}
 
+	// 🔥 P1-1修复：计算ATR用于Base区域识别
+	atr := sda.calculateATR(klines, 14)
+
 	// 寻找整理区域
-	baseStart, baseEnd := sda.findBaseArea(klines, centerIndex, true)
+	baseStart, baseEnd := sda.findBaseArea(klines, centerIndex, true, atr)
 	if baseStart == -1 || baseEnd == -1 {
 		return nil
 	}
@@ -371,8 +379,11 @@ func (sda *SupplyDemandAnalyzer) identifyRallyBaseDrop(klines []Kline, centerInd
 		return nil
 	}
 
+	// 🔥 P1-1修复：计算ATR用于Base区域识别
+	atr := sda.calculateATR(klines, 14)
+
 	// 寻找整理区域
-	baseStart, baseEnd := sda.findBaseArea(klines, centerIndex, false)
+	baseStart, baseEnd := sda.findBaseArea(klines, centerIndex, false, atr)
 	if baseStart == -1 || baseEnd == -1 {
 		return nil
 	}
@@ -429,8 +440,11 @@ func (sda *SupplyDemandAnalyzer) identifyDropBaseRally(klines []Kline, centerInd
 		return nil
 	}
 
+	// 🔥 P1-1修复：计算ATR用于Base区域识别
+	atr := sda.calculateATR(klines, 14)
+
 	// 寻找整理区域
-	baseStart, baseEnd := sda.findBaseArea(klines, centerIndex, true)
+	baseStart, baseEnd := sda.findBaseArea(klines, centerIndex, true, atr)
 	if baseStart == -1 || baseEnd == -1 {
 		return nil
 	}
@@ -577,7 +591,8 @@ func (sda *SupplyDemandAnalyzer) identifyFreshDemand(klines []Kline, index int) 
 
 // findBaseArea 寻找整理区域
 // findBaseArea 寻找整理区域 (大幅简化版：适应真实市场形态)
-func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, isRally bool) (int, int) {
+// 🔥 P1-1修复：引入ATR参数，用ATR归一化替代硬编码8%阈值
+func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, isRally bool, atr float64) (int, int) {
 	// 简化版：固定窗口搜索，不要求完美平整
 	maxLookback := 8 // 最多向左右各看8根（对5m周期约40分钟）
 	minBase := 2     // 最少2根K线形成Base
@@ -590,12 +605,16 @@ func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, i
 	baseStart := centerIndex - 2 // 默认向左2根
 	baseEnd := centerIndex + 2   // 默认向右2根
 
+	// 🔥 P1-1修复：使用ATR归一化阈值替代固定8%百分比
+	// ATR倍数k=1.0，允许波幅在1倍ATR以内的K线纳入Base区域
+	// 这样能适应不同波动率环境（高波动时Base宽度更大，低波动时更紧）
+	baseRangeThreshold := 1.0 * atr // k=1.0倍ATR作为Base区域单根K线波幅上限
+
 	// 扩展Base范围：允许更宽松的条件
 	for i := centerIndex - 1; i >= centerIndex-maxLookback && i >= 0; i-- {
-		// 简单条件：如果价格变化不是极端波动，就包含
+		// 🔥 P1-1修复：改用ATR归一化判断（单根K线波幅 <= 1.0*ATR）
 		currentRange := klines[i].High - klines[i].Low
-		avgPrice := (klines[i].High + klines[i].Low) / 2
-		if avgPrice > 0 && currentRange/avgPrice < 0.08 { // 8%以内的波动都认为是Base
+		if currentRange <= baseRangeThreshold {
 			baseStart = i
 		} else {
 			break // 遇到大波动停止
@@ -604,8 +623,7 @@ func (sda *SupplyDemandAnalyzer) findBaseArea(klines []Kline, centerIndex int, i
 
 	for i := centerIndex + 1; i <= centerIndex+maxLookback && i < len(klines); i++ {
 		currentRange := klines[i].High - klines[i].Low
-		avgPrice := (klines[i].High + klines[i].Low) / 2
-		if avgPrice > 0 && currentRange/avgPrice < 0.08 {
+		if currentRange <= baseRangeThreshold {
 			baseEnd = i
 		} else {
 			break
@@ -852,9 +870,39 @@ func (sda *SupplyDemandAnalyzer) filterOverlappingZones(zones []*SupplyDemandZon
 	return filtered
 }
 
-// zonesOverlap 检查两个区域是否重叠
+// 🔥 P0-2修复：引入 overlap_ratio，避免层级结构被过度互斥
+// calculateOverlapRatio 计算两个区域的交集比例（相对于较窄区域的宽度）
+func (sda *SupplyDemandAnalyzer) calculateOverlapRatio(zone1, zone2 *SupplyDemandZone) float64 {
+	// 计算交集
+	intersection := math.Max(0, math.Min(zone1.UpperBound, zone2.UpperBound)-math.Max(zone1.LowerBound, zone2.LowerBound))
+
+	// 计算较窄区域的宽度
+	width1 := zone1.UpperBound - zone1.LowerBound
+	width2 := zone2.UpperBound - zone2.LowerBound
+	minWidth := math.Min(width1, width2)
+
+	if minWidth <= 0 {
+		return 0
+	}
+
+	return intersection / minWidth
+}
+
+// zonesOverlap 检查两个区域是否重叠（使用 overlap_ratio 阈值）
+// 只有当交集比例超过阈值（默认0.7）时才认为是强重叠，需要互斥
 func (sda *SupplyDemandAnalyzer) zonesOverlap(zone1, zone2 *SupplyDemandZone) bool {
-	return !(zone1.UpperBound < zone2.LowerBound || zone2.UpperBound < zone1.LowerBound)
+	const overlapRatioThreshold = 0.7 // 交集占较窄区域的70%以上才互斥
+
+	// 首先判断是否有任何交集
+	if zone1.UpperBound < zone2.LowerBound || zone2.UpperBound < zone1.LowerBound {
+		return false // 无交集
+	}
+
+	// 计算交集比例
+	ratio := sda.calculateOverlapRatio(zone1, zone2)
+
+	// 只有交集比例超过阈值才认为是强重叠
+	return ratio >= overlapRatioThreshold
 }
 
 // calculateZoneStrength 计算区域强度 (集成Z-Score标准化)
@@ -1911,20 +1959,30 @@ func (sda *SupplyDemandAnalyzer) inferSymbolTimeframe(klines []Kline) (string, s
 func (sda *SupplyDemandAnalyzer) validateZonePosition(zone *SupplyDemandZone, currentPrice float64, atr float64) bool {
 	maxDistanceATR := 5.0 // 最大距离为5倍ATR
 	bufferDistance := maxDistanceATR * atr
-	
-	// 计算区域中心到当前价格的距离
-	zoneCenterPrice := (zone.UpperBound + zone.LowerBound) / 2
-	distance := math.Abs(currentPrice - zoneCenterPrice)
-	
-	// 距离验证：区域距离当前价格不能超过5倍ATR
+
+	// 🔥 P1-2修复：改为计算到最近边界的距离（而非中心点距离）
+	// 这样可以保留边界贴近但中心较远的宽区
+	var distance float64
+	if currentPrice >= zone.LowerBound && currentPrice <= zone.UpperBound {
+		// 价格在区域内，距离为0
+		distance = 0
+	} else {
+		// 计算到最近边界的距离
+		distance = math.Min(
+			math.Abs(currentPrice-zone.LowerBound),
+			math.Abs(currentPrice-zone.UpperBound),
+		)
+	}
+
+	// 距离验证：区域最近边界距离当前价格不能超过5倍ATR
 	isWithinRange := distance <= bufferDistance
-	
+
 	if !isWithinRange {
 		// 🔧 优化：移除冗余的位置验证失败日志，静默处理
 		// log.Printf("🚫 [距离验证失败] 区域%.2f-%.2f距离当前价格%.2f过远(%.2f > %.2f ATR)",
 		//	zone.LowerBound, zone.UpperBound, currentPrice, distance/atr, maxDistanceATR)
 	}
-	
+
 	return isWithinRange
 }
 

@@ -25,6 +25,9 @@ type CleaningConfig struct {
 	VolRatioMax       float64 `json:"vol_ratio_max"`        // 最大vol_ratio阈值
 	VolRatioIQRFactor float64 `json:"vol_ratio_iqr_factor"` // IQR异常值检测系数
 
+	// 🔥 P2新增：清洗模式配置
+	Mode string `json:"mode"` // 清洗模式: "soft"(限幅模式，默认) 或 "hard"(过滤模式)
+
 	// 通用配置
 	EnableLogging   bool    `json:"enable_logging"`    // 是否启用详细日志
 	EnableIQRFilter bool    `json:"enable_iqr_filter"` // ��否启用IQR异常值过滤
@@ -39,6 +42,11 @@ type CleaningStats struct {
 	VolRatioOutliers int     `json:"vol_ratio_outliers"`
 	FilterRate       float64 `json:"filter_rate"`
 	QualityScore     float64 `json:"quality_score"` // 清洗后数据质量评分
+
+	// 🔥 P2新增：分桶统计（透明化清洗原因）
+	FilterReasonBuckets map[string]int `json:"filter_reason_buckets"` // 过滤原因统计: "width_atr_low", "width_atr_high", "vol_ratio_low", "vol_ratio_high", "missing_context"
+	ClampedZones        int            `json:"clamped_zones"`          // soft模式下限幅的区域数量
+	ClampedFieldsCount  int            `json:"clamped_fields_count"`   // soft模式下限幅的字段总数
 }
 
 // OutlierInfo 异常值信息
@@ -60,6 +68,9 @@ var defaultCleaningConfig = CleaningConfig{
 	VolRatioMin:       0.2,  // 小于0.2认为成交量过低，缺乏市场参与
 	VolRatioMax:       15.0, // 大于15认为成交量异常，可能是数据错误
 	VolRatioIQRFactor: 2.0,  // 2.0倍IQR用于检测极端异常值
+
+	// 🔥 P2修复：默认使用soft模式（限幅而非drop）
+	Mode: "soft", // soft: 限幅模式（保留数据但修正异常值），hard: 过滤模式（直接删除异常数据）
 
 	EnableLogging:   true,
 	EnableIQRFilter: true,
@@ -86,20 +97,36 @@ func (dc *DataCleaner) CleanSupplyDemandData(sdData *SupplyDemandData) (*SupplyD
 		return sdData, &CleaningStats{}
 	}
 
-	log.Printf("🧹 [P2数据清洗] 开始清洗供需区数据，原始区域数量: %d", len(sdData.ActiveZones))
+	log.Printf("🧹 [P2数据清洗] 开始清洗供需区数据，原始区域数量: %d, 模式: %s", len(sdData.ActiveZones), dc.config.Mode)
 
 	stats := &CleaningStats{
-		TotalZones: len(sdData.ActiveZones),
+		TotalZones:          len(sdData.ActiveZones),
+		FilterReasonBuckets: make(map[string]int), // 🔥 P2新增：初始化分桶统计
 	}
 
-	// 清洗活跃区域
-	cleanActiveZones, activeOutliers := dc.cleanZoneList(sdData.ActiveZones, "ActiveZones")
+	// 🔥 P2修复：清洗活跃区域（使用新的返回值结构）
+	cleanActiveZones, activeOutliers, activeBuckets, activeClampedZones, activeClampedFields := dc.cleanZoneList(sdData.ActiveZones, "ActiveZones")
 
 	// 清洗供给区
-	cleanSupplyZones, supplyOutliers := dc.cleanZoneList(sdData.SupplyZones, "SupplyZones")
+	cleanSupplyZones, supplyOutliers, supplyBuckets, supplyClampedZones, supplyClampedFields := dc.cleanZoneList(sdData.SupplyZones, "SupplyZones")
 
 	// 清洗需求区
-	cleanDemandZones, demandOutliers := dc.cleanZoneList(sdData.DemandZones, "DemandZones")
+	cleanDemandZones, demandOutliers, demandBuckets, demandClampedZones, demandClampedFields := dc.cleanZoneList(sdData.DemandZones, "DemandZones")
+
+	// 🔥 P2新增：合并分桶统计
+	for reason, count := range activeBuckets {
+		stats.FilterReasonBuckets[reason] += count
+	}
+	for reason, count := range supplyBuckets {
+		stats.FilterReasonBuckets[reason] += count
+	}
+	for reason, count := range demandBuckets {
+		stats.FilterReasonBuckets[reason] += count
+	}
+
+	// 🔥 P2新增：汇总clamp统计
+	stats.ClampedZones = activeClampedZones + supplyClampedZones + demandClampedZones
+	stats.ClampedFieldsCount = activeClampedFields + supplyClampedFields + demandClampedFields
 
 	// 汇总统计信息
 	allOutliers := append(activeOutliers, append(supplyOutliers, demandOutliers...)...)
@@ -170,14 +197,18 @@ func (dc *DataCleaner) CleanSupplyDemandData(sdData *SupplyDemandData) (*SupplyD
 	return cleanedData, stats
 }
 
-// cleanZoneList 清洗区域列表
-func (dc *DataCleaner) cleanZoneList(zones []*SupplyDemandZone, zoneType string) ([]*SupplyDemandZone, []OutlierInfo) {
+// 🔥 P2修复：cleanZoneList 清洗区域列表（支持soft/hard模式 + 分桶统计）
+// 返回：清洗后的区域列表，异常信息列表，分桶统计，clamp统计
+func (dc *DataCleaner) cleanZoneList(zones []*SupplyDemandZone, zoneType string) ([]*SupplyDemandZone, []OutlierInfo, map[string]int, int, int) {
 	if len(zones) == 0 {
-		return zones, nil
+		return zones, nil, make(map[string]int), 0, 0
 	}
 
 	var cleanZones []*SupplyDemandZone
 	var outliers []OutlierInfo
+	filterReasonBuckets := make(map[string]int)
+	clampedZonesCount := 0
+	clampedFieldsTotal := 0
 
 	// 提取所有上下文数据用于统计分析
 	widthATRValues := make([]float64, 0)
@@ -194,29 +225,59 @@ func (dc *DataCleaner) cleanZoneList(zones []*SupplyDemandZone, zoneType string)
 	widthATRStats := dc.calculateStatistics(widthATRValues)
 	volRatioStats := dc.calculateStatistics(volRatioValues)
 
+	// 🔥 P2新增：计算P99阈值（soft模式用于限幅上限）
+	widthATRP99 := dc.calculateP99(widthATRValues)
+	volRatioP99 := dc.calculateP99(volRatioValues)
+
+	// 🔥 P2新增：根据Mode决定处理方式
+	isSoftMode := dc.config.Mode == "soft"
+
 	// 逐个检查区域
 	for _, zone := range zones {
+		// 检查是否缺少Context
+		if zone.Context == nil {
+			filterReasonBuckets["missing_context"]++
+			continue // 缺少Context直接跳过
+		}
+
 		outlierInfos := dc.detectZoneOutliers(zone, widthATRStats, volRatioStats)
 
 		if len(outlierInfos) == 0 {
 			// 无异常，保留
 			cleanZones = append(cleanZones, zone)
 		} else {
-			// 发现异常，根据严重程度决定是否保留
-			shouldKeep := dc.shouldKeepZone(zone, outlierInfos)
+			if isSoftMode {
+				// 🔥 Soft模式：限幅异常值而非删除
+				wasClamped, clampedFields := dc.clampZoneContext(zone, widthATRP99, volRatioP99)
+				cleanZones = append(cleanZones, zone) // soft模式总是保留
 
-			if shouldKeep {
-				// 保留但记录异常
-				cleanZones = append(cleanZones, zone)
-				if dc.config.EnableLogging {
-					//log.Printf("⚠️ [保留异常区域] %s %s: 异常类型=%d个但决定保留",
-					//	zoneType, zone.ID, len(outlierInfos))
+				if wasClamped {
+					clampedZonesCount++
+					clampedFieldsTotal += clampedFields
+				}
+
+				// 统计异常类型（用于分析）
+				for _, outlier := range outlierInfos {
+					reason := outlier.Type + "_" + outlier.Severity
+					filterReasonBuckets[reason]++
 				}
 			} else {
-				// 过滤掉
-				if dc.config.EnableLogging {
-					//log.Printf("🗑️ [过滤异常区域] %s %s: 过滤原因=%s",
-					//	zoneType, zone.ID, dc.formatOutlierReasons(outlierInfos))
+				// 🔥 Hard模式：根据严重程度决定是否删除
+				shouldKeep := dc.shouldKeepZone(zone, outlierInfos)
+
+				if shouldKeep {
+					cleanZones = append(cleanZones, zone)
+				} else {
+					// 🔥 P2新增：记录过滤原因到分桶
+					for _, outlier := range outlierInfos {
+						if outlier.Severity == "severe" {
+							if outlier.Value < dc.config.WidthATRMin || outlier.Value < dc.config.VolRatioMin {
+								filterReasonBuckets[outlier.Type+"_low"]++
+							} else {
+								filterReasonBuckets[outlier.Type+"_high"]++
+							}
+						}
+					}
 				}
 			}
 
@@ -224,7 +285,7 @@ func (dc *DataCleaner) cleanZoneList(zones []*SupplyDemandZone, zoneType string)
 		}
 	}
 
-	return cleanZones, outliers
+	return cleanZones, outliers, filterReasonBuckets, clampedZonesCount, clampedFieldsTotal
 }
 
 // detectZoneOutliers 检测区域异常值
@@ -431,6 +492,83 @@ func (dc *DataCleaner) calculateStatistics(values []float64) StatisticalSummary 
 	}
 }
 
+// 🔥 P2新增：calculateP99 计算P99百分位数（用于soft clamp上限）
+func (dc *DataCleaner) calculateP99(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+
+	sorted := make([]float64, len(values))
+	copy(sorted, values)
+	sort.Float64s(sorted)
+
+	// P99位置 = 99% * (n-1)
+	n := len(sorted)
+	p99Index := int(0.99 * float64(n-1))
+	if p99Index >= n {
+		p99Index = n - 1
+	}
+
+	return sorted[p99Index]
+}
+
+// 🔥 P2新增：clampValue 限幅单个值到指定范围
+func clampValue(value, min, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+// 🔥 P2新增：clampZoneContext soft模式下对zone的Context字段进行限幅处理
+// 返回：是否进行了限幅，限幅的字段数量
+func (dc *DataCleaner) clampZoneContext(zone *SupplyDemandZone, widthATRP99, volRatioP99 float64) (bool, int) {
+	if zone.Context == nil {
+		return false, 0
+	}
+
+	clamped := false
+	clampedFields := 0
+
+	originalWidthATR := zone.Context.WidthATR
+	originalVolRatio := zone.Context.VolRatio
+
+	// 限幅width_atr：Min保持配置值，Max使用P99
+	widthATRMax := math.Min(dc.config.WidthATRMax, widthATRP99)
+	if zone.Context.WidthATR < dc.config.WidthATRMin {
+		zone.Context.WidthATR = dc.config.WidthATRMin
+		clamped = true
+		clampedFields++
+	} else if zone.Context.WidthATR > widthATRMax {
+		zone.Context.WidthATR = widthATRMax
+		clamped = true
+		clampedFields++
+	}
+
+	// 限幅vol_ratio：Min保持配置值，Max使用P99
+	volRatioMax := math.Min(dc.config.VolRatioMax, volRatioP99)
+	if zone.Context.VolRatio < dc.config.VolRatioMin {
+		zone.Context.VolRatio = dc.config.VolRatioMin
+		clamped = true
+		clampedFields++
+	} else if zone.Context.VolRatio > volRatioMax {
+		zone.Context.VolRatio = volRatioMax
+		clamped = true
+		clampedFields++
+	}
+
+	// 记录限幅操作（调试用）
+	if clamped && dc.config.EnableLogging {
+		log.Printf("🔧 [Soft Clamp] Zone %s: width_atr %.2f→%.2f, vol_ratio %.2f→%.2f",
+			zone.ID, originalWidthATR, zone.Context.WidthATR, originalVolRatio, zone.Context.VolRatio)
+	}
+
+	return clamped, clampedFields
+}
+
 // calculateQualityScore 计算数据质量评分
 func (dc *DataCleaner) calculateQualityScore(zones []*SupplyDemandZone) float64 {
 	if len(zones) == 0 {
@@ -504,13 +642,29 @@ func (dc *DataCleaner) formatOutlierReasons(outliers []OutlierInfo) string {
 	return strings.Join(reasons, ", ")
 }
 
-// logCleaningResults 记录清洗结果
+// logCleaningResults 记录清洗结果（🔥 P2增强：显示分桶统计和clamp统计）
 func (dc *DataCleaner) logCleaningResults(stats *CleaningStats, outliers []OutlierInfo) {
 	log.Printf("✅ [P2数据清洗完成] 处理%d个区域，过滤%d个(%.1f%%), 数据质量评分%.1f",
 		stats.TotalZones, stats.FilteredZones, stats.FilterRate, stats.QualityScore)
 
 	log.Printf("📊 [异常统计] width_atr异常:%d个, vol_ratio异常:%d个",
 		stats.WidthATROutliers, stats.VolRatioOutliers)
+
+	// 🔥 P2新增：显示Soft模式的clamp统计
+	if dc.config.Mode == "soft" && (stats.ClampedZones > 0 || stats.ClampedFieldsCount > 0) {
+		log.Printf("🔧 [Soft Clamp统计] 限幅区域:%d个, 限幅字段:%d个 (模式: soft)",
+			stats.ClampedZones, stats.ClampedFieldsCount)
+	}
+
+	// 🔥 P2新增：显示分桶统计（透明化过滤/限幅原因）
+	if len(stats.FilterReasonBuckets) > 0 {
+		log.Printf("🗂️ [分桶统计] 异常原因分布:")
+		for reason, count := range stats.FilterReasonBuckets {
+			if count > 0 {
+				log.Printf("   - %s: %d个", reason, count)
+			}
+		}
+	}
 
 	if len(outliers) > 0 && dc.config.EnableLogging {
 		log.Printf("🔍 [异常详情] 前5个异常值:")
@@ -635,7 +789,45 @@ func (dc *DataCleaner) CleanFVGData(fvgData *FVGData) (*FVGData, *CleaningStats)
 	return result, stats
 }
 
-// cleanFVGList 清洗FVG列表
+// 🔥 P2新增：clampFVGContext soft模式下对FVG的Context字段进行限幅处理
+func (dc *DataCleaner) clampFVGContext(fvg *FairValueGap, widthATRP99, volRatioP99 float64) (bool, int) {
+	if fvg.Context == nil {
+		return false, 0
+	}
+
+	clamped := false
+	clampedFields := 0
+
+	// FVG的width_atr标准：允许更宽
+	fvgWidthATRMin := dc.config.WidthATRMin * 0.5
+	fvgWidthATRMax := math.Min(dc.config.WidthATRMax*1.8, widthATRP99)
+
+	if fvg.Context.WidthATR < fvgWidthATRMin {
+		fvg.Context.WidthATR = fvgWidthATRMin
+		clamped = true
+		clampedFields++
+	} else if fvg.Context.WidthATR > fvgWidthATRMax {
+		fvg.Context.WidthATR = fvgWidthATRMax
+		clamped = true
+		clampedFields++
+	}
+
+	// 限幅vol_ratio
+	volRatioMax := math.Min(dc.config.VolRatioMax, volRatioP99)
+	if fvg.Context.VolRatio < dc.config.VolRatioMin {
+		fvg.Context.VolRatio = dc.config.VolRatioMin
+		clamped = true
+		clampedFields++
+	} else if fvg.Context.VolRatio > volRatioMax {
+		fvg.Context.VolRatio = volRatioMax
+		clamped = true
+		clampedFields++
+	}
+
+	return clamped, clampedFields
+}
+
+// 🔥 P2修复：cleanFVGList 清洗FVG列表（支持soft/hard模式）
 func (dc *DataCleaner) cleanFVGList(fvgs []*FairValueGap, fvgType string) ([]*FairValueGap, []OutlierInfo) {
 	if len(fvgs) == 0 {
 		return fvgs, nil
@@ -659,29 +851,34 @@ func (dc *DataCleaner) cleanFVGList(fvgs []*FairValueGap, fvgType string) ([]*Fa
 	widthATRStats := dc.calculateStatistics(widthATRValues)
 	volRatioStats := dc.calculateStatistics(volRatioValues)
 
+	// 🔥 P2新增：计算P99阈值
+	widthATRP99 := dc.calculateP99(widthATRValues)
+	volRatioP99 := dc.calculateP99(volRatioValues)
+
+	isSoftMode := dc.config.Mode == "soft"
+
 	// 逐个检查FVG
 	for _, fvg := range fvgs {
+		if fvg.Context == nil {
+			continue
+		}
+
 		outlierInfos := dc.detectFVGOutliers(fvg, widthATRStats, volRatioStats)
 
 		if len(outlierInfos) == 0 {
 			// 无异常，保留
 			cleanFVGs = append(cleanFVGs, fvg)
 		} else {
-			// 发现异常，根据严重程度决定是否保留
-			shouldKeep := dc.shouldKeepFVG(fvg, outlierInfos)
-
-			if shouldKeep {
-				// 保留但记录异常
+			if isSoftMode {
+				// 🔥 Soft模式：限幅异常值
+				dc.clampFVGContext(fvg, widthATRP99, volRatioP99)
 				cleanFVGs = append(cleanFVGs, fvg)
-				if dc.config.EnableLogging {
-					log.Printf("⚠️ [保留异常FVG] %s %s: 异常类型=%d个但决定保留",
-						fvgType, fvg.ID, len(outlierInfos))
-				}
 			} else {
-				// 过滤掉
-				if dc.config.EnableLogging {
-					log.Printf("🗑️ [过滤异常FVG] %s %s: 过滤原因=%s",
-						fvgType, fvg.ID, dc.formatOutlierReasons(outlierInfos))
+				// 🔥 Hard模式：根据严重程度决定是否删除
+				shouldKeep := dc.shouldKeepFVG(fvg, outlierInfos)
+
+				if shouldKeep {
+					cleanFVGs = append(cleanFVGs, fvg)
 				}
 			}
 

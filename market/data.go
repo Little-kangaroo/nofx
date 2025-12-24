@@ -749,8 +749,13 @@ func Format(data *Data) string {
 	}
 
 	// 供需区分析
+	// 🔥 P0-3修复：传入currentPrice和ATR用于排序和距离计算
 	if data.SupplyDemand != nil {
-		sb.WriteString(formatSupplyDemandData(data.SupplyDemand))
+		atr := 0.0
+		if data.LongerTermContext != nil {
+			atr = data.LongerTermContext.ATR14
+		}
+		sb.WriteString(formatSupplyDemandData(data.SupplyDemand, data.CurrentPrice, atr))
 	}
 
 	// FVG分析
@@ -1803,12 +1808,22 @@ func formatVPVRData(data *VolumeProfile) string {
 		}
 	}
 
-	// Key levels
+	// 🔥 P0-4修复：HVN输出改为真正的Top3 by volume（而非按价格顺序扫描）
 	if len(data.Levels) > 0 {
-		sb.WriteString("  High Volume Nodes:\n")
+		// 按 VolumePercent 降序排序
+		sortedLevels := make([]*PriceLevel, len(data.Levels))
+		copy(sortedLevels, data.Levels)
+		sort.Slice(sortedLevels, func(i, j int) bool {
+			return sortedLevels[i].VolumePercent > sortedLevels[j].VolumePercent
+		})
+
+		sb.WriteString("  High Volume Nodes (Top 3 by volume):\n")
 		count := 0
-		for _, level := range data.Levels {
-			if level.VolumePercent > 5.0 && count < 3 { // Top 3 high volume levels
+		for _, level := range sortedLevels {
+			if count >= 3 {
+				break
+			}
+			if level.VolumePercent > 0 { // 只要有成交量就输出
 				sb.WriteString(fmt.Sprintf("    %.4f (%.1f%% volume)\n",
 					level.Price, level.VolumePercent))
 				count++
@@ -1820,8 +1835,101 @@ func formatVPVRData(data *VolumeProfile) string {
 	return sb.String()
 }
 
+// 🔥 P0-3新增：selectKeyZones 选择关键供需区（排序+强制最近边界）
+func selectKeyZones(zones []*SupplyDemandZone, currentPrice float64, atr float64) []*SupplyDemandZone {
+	if len(zones) == 0 {
+		return zones
+	}
+
+	// 计算每个zone的KeyScore
+	type zoneWithScore struct {
+		zone  *SupplyDemandZone
+		score float64
+	}
+
+	scored := make([]zoneWithScore, 0, len(zones))
+	for _, zone := range zones {
+		// 计算到最近边界的距离
+		var distATR float64
+		if currentPrice >= zone.LowerBound && currentPrice <= zone.UpperBound {
+			distATR = 0
+		} else {
+			distRaw := math.Min(math.Abs(currentPrice-zone.LowerBound), math.Abs(currentPrice-zone.UpperBound))
+			if atr > 0 {
+				distATR = distRaw / atr
+			}
+		}
+
+		// KeyScore = wS*Strength + wD*(1/(1+distATR)) + wF*freshness
+		// 默认权重：强度0.45, 距离0.45, 新鲜度0.10
+		freshness := 0.5
+		if zone.Status == "fresh" {
+			freshness = 1.0
+		} else if zone.Status == "testing" {
+			freshness = 0.7
+		}
+
+		score := 0.45*zone.Strength + 0.45*(1.0/(1.0+distATR)) + 0.10*freshness*100
+		scored = append(scored, zoneWithScore{zone: zone, score: score})
+	}
+
+	// 按score排序
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+
+	// 强制包含最近上方supply和最近下方demand
+	var nearestSupplyAbove *SupplyDemandZone
+	var nearestDemandBelow *SupplyDemandZone
+	minSupplyDist := math.MaxFloat64
+	minDemandDist := math.MaxFloat64
+
+	for _, zone := range zones {
+		if zone.Type == SupplyZone && zone.LowerBound > currentPrice {
+			dist := zone.LowerBound - currentPrice
+			if dist < minSupplyDist {
+				minSupplyDist = dist
+				nearestSupplyAbove = zone
+			}
+		} else if zone.Type == DemandZone && zone.UpperBound < currentPrice {
+			dist := currentPrice - zone.UpperBound
+			if dist < minDemandDist {
+				minDemandDist = dist
+				nearestDemandBelow = zone
+			}
+		}
+	}
+
+	// 选择Top6（或TopN）
+	topN := 6
+	if len(scored) < topN {
+		topN = len(scored)
+	}
+
+	selected := make(map[*SupplyDemandZone]bool)
+	result := make([]*SupplyDemandZone, 0, topN+2)
+
+	// 添加Top6
+	for i := 0; i < topN; i++ {
+		result = append(result, scored[i].zone)
+		selected[scored[i].zone] = true
+	}
+
+	// 强制添加最近上方supply（如果不在Top6中）
+	if nearestSupplyAbove != nil && !selected[nearestSupplyAbove] {
+		result = append(result, nearestSupplyAbove)
+	}
+
+	// 强制添加最近下方demand（如果不在Top6中）
+	if nearestDemandBelow != nil && !selected[nearestDemandBelow] {
+		result = append(result, nearestDemandBelow)
+	}
+
+	return result
+}
+
 // formatSupplyDemandData 格式化供需区数据
-func formatSupplyDemandData(data *SupplyDemandData) string {
+func formatSupplyDemandData(data *SupplyDemandData, currentPrice float64, atr float64) string {
 	if data == nil {
 		return "Supply/Demand Zones Analysis: No data available\n\n"
 	}
@@ -1843,20 +1951,29 @@ func formatSupplyDemandData(data *SupplyDemandData) string {
 		sb.WriteString(fmt.Sprintf("  Active Zones: %d total (%d supply, %d demand)\n",
 			len(data.ActiveZones), supplyCount, demandCount))
 
-		// Show top zones by strength
-		sb.WriteString("  Key Zones:\n")
-		count := 0
-		for _, zone := range data.ActiveZones {
-			if count >= 3 { // Show top 3 zones
-				break
-			}
+		// 🔥 P0-3修复：Key Zones 输出排序+强制最近上下边界
+		keyZones := selectKeyZones(data.ActiveZones, currentPrice, atr)
+
+		sb.WriteString("  Key Zones (sorted by relevance):\n")
+		for _, zone := range keyZones {
 			zoneType := "Demand"
 			if zone.Type == SupplyZone {
 				zoneType = "Supply"
 			}
-			sb.WriteString(fmt.Sprintf("    %s Zone: %.4f-%.4f (Strength: %.1f, Touches: %d)\n",
-				zoneType, zone.LowerBound, zone.UpperBound, zone.Strength, zone.TouchCount))
-			count++
+
+			// 计算距离（ATR标准化）
+			var distATR float64
+			if currentPrice >= zone.LowerBound && currentPrice <= zone.UpperBound {
+				distATR = 0 // 价格在区域内
+			} else {
+				distRaw := math.Min(math.Abs(currentPrice-zone.LowerBound), math.Abs(currentPrice-zone.UpperBound))
+				if atr > 0 {
+					distATR = distRaw / atr
+				}
+			}
+
+			sb.WriteString(fmt.Sprintf("    %s Zone: %.4f-%.4f (Str: %.1f, Dist: %.2fATR, Status: %s, Touches: %d)\n",
+				zoneType, zone.LowerBound, zone.UpperBound, zone.Strength, distATR, zone.Status, zone.TouchCount))
 		}
 	}
 
