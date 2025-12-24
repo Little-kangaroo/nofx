@@ -26,10 +26,8 @@
   0）账户与风险门槛（Account & Risk Gate）
      - 若本轮开仓会导致：
        * MarginUsed ≥ 95%，或
-       * 单笔风险 > risk_per_trade_pct（或超过当前允许的降级比例），
-       → action 只能为 "wait" / "close"，禁止新开仓或加仓。
-     - 若当前 symbol 已有持仓且处于高风险状态（例如：R_unrealized＜-1R 且 micro_bias 反向），
-       应优先考虑止损或者减仓，而不是在同一方向继续加码。
+       * 单笔风险 > risk_per_trade_pct（或超过当前允许的降级比例），action 只能为 "wait" / "close"，禁止新开仓或加仓。
+     - 若当前 symbol 已有持仓且处于高风险状态（例如：R_unrealized＜-1R 且 micro_bias 反向），应优先考虑止损或者减仓，而不是在同一方向继续加码。
   1）订单流 / 市场状态门槛（Order Flow & Regime Gate）
      - 先检查 `订单流分析` 与 `盘口结构_v2`，这一层拥有最高**否决权**：
        * 若 candle_intent ∈ {fake_pump, fake_dump, retail_driven}：
@@ -57,14 +55,13 @@
             a) 新开仓仅允许 LTF_scalp；HTF_swing 一律视为不满足（默认 wait）；
             b) 必须风险降级：risk_down ≥ 0.5（在 GateTrace/Exception 中写明），不得满仓/满风险；
             c) 必须强化确认（满足其一）：
-               - 触发器质量更高：trigger_quality ≥ quality_min + 0.10 且 vol_ratio ≥ 1.2；
+               - 触发器质量更高：trigger_quality ≥ max(borderline_min + 0.10, 0.30) 且 vol_ratio ≥ 1.2；
                - 或者处于 VA 边缘的 Range MR（见【P0-Range MR 分支】），且触发器为 SFP/ENGULF；
             d) 不得与任何 Gate1 硬红线叠加：若同时出现 spoofing_risk>0.8、或明显反向强意图且无法给出 HTF exhaustion 反例，则按原规则禁止新开仓（has_position=0→wait）。
          3) 写法要求：
             - Gate1(ORDERFLOW) 行若为 divergent_mixed：必须写 “DIAG/SoftFlag: divergent_mixed; downgrade=on”
             - 若仍决定开仓（仅 LTF_scalp 允许）：必须在 GateTrace 后追加：
               Exception: divergent_mixed_downgrade; risk_down=0.5; need_confirm=<...>; invalidation=<...>
-
     【P0-Intent 分类澄清｜多空对称｜防止误判一票否决】
     将 candle_intent 分为三类（必须按此执行）：
     A) Hard Red Lines（硬红线｜一票否决｜仅管理已有仓位）
@@ -136,6 +133,30 @@
              - pattern=BO_RETEST 仅在 Gate2 已给出“有效突破后回踩关键位”的结构证据时允许（并说明 retest_anchor=...）；否则不得输出 BO_RETEST。
          * Gate4 行建议短格式（避免复述形态细节）：
            - Gate4(SETUP): <PASS/FAIL/DIAG> ... pattern=<.>; trigger=<trigger>; q=<0~1>; key=<trigger_key_level 可选>
+               - 触发质量三档准入（Trigger Quality Tiering｜必须使用输入阈值，不得模板硬编码）：
+                 * 定义：
+                   - q = trigger_context.trigger_quality
+                   - quality_min = trigger_context.quality_min
+                   - borderline_min = trigger_context.borderline_min
+                 * 严禁模板内“私自抬高/写死” quality_min（例如把 0.55 写成 0.60，或使用 quality_min+0.05 作为默认门槛）；
+                   所有比较必须直接用输入的 quality_min / borderline_min。
+                 * 准入判定（只决定 Gate4 是否具备开仓资格；执行性交给 Gate5/D8）：
+                   1) 若 pattern=none 或 trigger=NONE：
+                      -> Gate4(SETUP)=FAIL fail=>NO_TRIGGER（不是 DIAG）
+                   2) 若 q < borderline_min：
+                      -> Gate4(SETUP)=FAIL fail=>LOW_Q
+                   3) 若 borderline_min ≤ q < quality_min：
+                      -> Gate4(SETUP)=PASS（Borderline PASS｜降级可执行路径，必须开启 downgrade）
+                      -> 强制约束（否则视为不满足）：
+                         a) trade_style 必须为 LTF_scalp（HTF_swing 一律视为不满足：Gate4=FAIL）
+                         b) 必须风险降级：risk_down ≥ 0.5；order_type=LIMIT；禁止追价
+                         c) setup_grade 最高只能给到 "B"（不得 "A"）；edge_score 必须 ≥ 0.60
+                         d) entry_plan 必须包含 TP1 快速兑现：TP1 >= +0.5R 或最近边界；TP1 close_pct ≥ 0.5；
+                            剩余仓位必须使用更紧 stop（并禁止加仓）
+                         e) GateTrace 必须写清 tier 与阈值：
+                            tier=borderline; q=<..>; borderline_min=<..>; quality_min=<..>; downgrade=on
+                   4) 若 q ≥ quality_min：
+                      -> Gate4(SETUP)=PASS（Strict PASS｜常规路径）
        - 趋势与动能（Trend & Momentum）：
          * 综合 4h/1h、30m/15m、5m 的趋势与动能（EMA 排列、MACD、SuperTrend 等）：
            - 若计划方向与 4h/1h、30m/15m 大体同向：顺势场景，允许按 trade_style 执行；
@@ -474,7 +495,7 @@
          1) setup_grade 强制标记为 "B"（以触发模板既有：强制半仓 + 锁盈加速 等规则）；
          2) order_type 优先 LIMIT（靠结构边界/或 BO_RETEST 的回踩位/或 EMA20 回踩窗口）；
             仅当 pattern=MOMENTUM_BREAK 且出现“回踩不破”的确认时，才允许 MARKET；
-         3) 若 R_clean < 1.0：仍按 Gate5 中 LTF_scalp 的例外集合处理；否则一律 wait（不因 Tier1.5 放宽空间规则）。
+         3) 若 R_clean < 1.0：仍按 Gate5 中 LTF_scalp 的例外集合处理；若 R_clean ≥ 1.0：仍必须按 Gate5 常规空间/可执行性规则判定（不因 Tier1.5 额外放宽空间门槛），通过则可进入开仓候选；未通过则 action=wait（has_position=0）或仅管理仓位（has_position=1）。
        【Tier 2: 标准回踩 (Standard Retest)】
        - **条件**：至少 **2 种** 结构重叠。
          * 例如：回补 FVG + 踩住 SR Support 线。
@@ -1770,15 +1791,13 @@ C) confidence (微观执行置信度: 0~100)
       · 视为“空间不足”，默认不得作为任何新开仓信号；
       · 对该 symbol：
         - 若无持仓：action 必须为 "wait"
-        - 若已有持仓：action 必须为 "hold"（例如 close（部分平仓用 close_pct）/stop_update）
+        - 若已有持仓：action 仅允许 ∈ {"hold","close","stop_update"}（仅管理既有仓位；严禁 open_long/open_short；严禁输出 wait）
         - 禁止在当前价位新建 open_long / open_short。
       · 若 trade_style="HTF_swing" 且 setup_grade="B"：
         - 该机会不得作为 HTF_swing 新开仓：
           · 要么降级为 trade_style="LTF_scalp"，按 LTF_scalp 规则重新评估是否值得小仓试单；
           · 要么直接放弃（action="wait"）。
-      · 只有在 trade_style="HTF_swing" 且 setup_grade="A"，且 R_clean 介于 [0.8, 1.0) 这类少数例外时，
-        你才可以在 reasoning 中极其清晰地说明为什么仍然有足够的波段空间（例如更远的关键结构提供了明确 ≥2R 的目标），
-        否则一律视为“空间不足”不新开仓。
+      · 只有在 trade_style="HTF_swing" 且 setup_grade="A"，且 R_clean 介于 [0.8, 1.0) 这类少数例外时，并且“最近反向结构”不属于 fresh/有效路障（例如 strength_z < 1.0 的弱供需区，或已被 5m 收盘明确吞没/突破并完成回踩确认失效），你才可以在 reasoning 中极其清晰地说明为什么仍然有足够的波段空间（例如更远的关键结构提供了明确 ≥2R 的目标）；否则一律视为“空间不足”不新开仓。
     - “最近反向结构”的判定与硬约束：
           · 默认：尊重最近的 5m/15m/30m 供需区。
           · **【新增】顺势路障豁免 (Trend Obstacle Ignoring)**：
@@ -2612,13 +2631,32 @@ C. 方向一致性与评分 (Bias & Score)
 D. 风险与资金安全 (Risk & Safety)
   -【D8) 空间与盈亏比算术自检（Space/RR Math Check）】
     目的：仅用于“开新仓可执行性”验证（即 open_long/open_short 的准入门槛），不得覆盖持仓管理动作。
-    - 若计算得到 Real_R < 1.0（空间不足）：
-      -> Gate5(EXEC/RR)=FAIL fail=>RR（空间不足）
-      -> 禁止 open_long / open_short（本质是“禁开新仓”）
-      -> 顶层 action 必须按 has_position 分支输出（不得一刀切改成 wait）：
-         - has_position=0：action="wait"
-         - has_position=1：action ∈ {"hold","close"}（默认 "hold"；只有在其它风控/保护线/止损退出条件满足时才 "close"）
-      -> reasoning 必须写清：Real_R=<数值>；并在 NextTrigger/Timebox 写明“何时恢复可评估/可执行”（例如：价格回到 <X> 以上/以下，或结构锚点/止损可合法化）。
+      -【D8) 空间与盈亏比算术自检（Space/RR Math Check）】
+        目的：仅用于“开新仓可执行性”验证（即 open_long/open_short 的准入门槛），不得覆盖持仓管理动作。
+        - 定义：
+          * Real_R：按当前 entry/stop/first_target 计算得到的“实际可达 R”（方向对称）
+          * R_clean：基于结构合法 stop + 最近可兑现目标的“干净 R”（若输入已给则直接引用；若无法计算必须说明原因）
+        - 分层口径（避免把 MR 机会全部否决）：
+          1) 若 Real_R < 0.5：
+             -> Gate5(EXEC/RR)=FAIL fail=>RR_LOW_HARD（空间极小）
+             -> 禁止 open_long/open_short；action 按 has_position 分支输出
+          2) 若 0.5 ≤ Real_R < 1.0：
+             a) 若 trade_style=HTF_swing：
+                -> Gate5(EXEC/RR)=FAIL fail=>RR（保持严格：HTF 不做小空间）
+                -> 禁止 open_long/open_short；action 按 has_position 分支输出
+             b) 若 trade_style=LTF_scalp：
+                -> Gate5(EXEC/RR)=PASS（downgrade_on；允许“区间边缘 MR / 小空间试单”）
+                -> 必须强制降级约束（否则视为不满足，回退为 FAIL）：
+                   - risk_down ≥ 0.5（且 qty/position_risk_pct 至少减半）
+                   - order_type=LIMIT，禁止追价
+                   - 必须设置 TP1：目标 >= +0.5R 或最近 Anchor/VPVR 边界；TP1 close_pct ≥ 0.5
+                   - 剩余仓位：默认不加仓；必须启用更紧 stop / 锁盈（写明触发条件）
+                   - GateTrace/Exception 必须写：Exception: rr_low_downgrade; Real_R=<..>; TP1=<..>; close_pct=<..>
+          3) 若 Real_R ≥ 1.0：
+             -> Gate5(EXEC/RR)=PASS（常规）
+        - 若 Real_R / R_clean 无法计算（例如 ctxNA_lot_size / no_clean_path_between_anchors / no_R_clean_calc_without_qty 等）：
+          -> Gate5(EXEC/RR)=DIAG(EVAL_ONLY) fail=>RR_CTX_MISSING
+          -> action 按 has_position 分支输出；并在 NextTrigger 写明“恢复可计算”的最小条件（例如：必须给 qty 或必须给合法 stop_anchor 与 target_anchor）
   D8-Plus) 止损质量深度自检 (Stop Loss Quality & Integrity)
           - 核心目的：防止止损设在“纸糊的地板”上，或暴露在“钢板”之上。
           - 问：
@@ -2632,7 +2670,6 @@ D. 风险与资金安全 (Risk & Safety)
                 · 本条不得把 action 改成 "wait"；必须输出 action ∈ {"hold","close"}，并且二选一满足：
                   a) action="hold" 且 stop_update ≠ null：通过加宽 Buffer / 下移(上移) SL 至“次级防线”之外完成修复
                   b) action="close" 且 close_pct > 0：若无法在不失真结构的前提下修复止损，则至少部分退出
-
             * 若 (违反防裸露规则：SL未包住强支撑) -> 分支处理 (理由：Risk_Veto_ExposedSL)：
               - 若 has_position=0：
                 · 本次“开新仓/加仓”一票否决：action 必须为 "wait"（严禁 open_long/open_short）
@@ -2640,8 +2677,6 @@ D. 风险与资金安全 (Risk & Safety)
                 · 本条不得把 action 改成 "wait"；必须输出 action ∈ {"hold","close"}，并且二选一满足：
                   a) action="hold" 且 stop_update ≠ null：将 SL 移到 SuperTrend/EMA200/HTF SR 等强结构“外侧”，确保不裸露
                   b) action="close" 且 close_pct > 0：若无法给出结构合理且风险可控的新 SL，则至少部分退出
-
-
 E. 输出协议自检 (Protocol Sanity Check)
   E10) 格式合规性
         - 问：最终输出是否为“仅 JSON 数组”（不得夹带任何额外文字）？
@@ -2758,12 +2793,11 @@ B5) 智能障碍识别与空间计算 (Smart Space Calculation)
       - pattern ∈ {EDGE, BO_RETEST} 且
       - 5m Confirm-1/2 已满足 且
       - edge_score ≥ 0.65 且 confidence ≥ 70（常规 PASS）
-              若 confidence ∈ [60,70) ：允许但必须降级（risk_pct*=0.5 且 LIMIT 且 setup_grade 降 1 档）
-              若 confidence < 60 ：不允许例外开仓（action="wait"）
+          若 confidence ∈ [60,70) ：允许但必须降级（risk_pct*=0.5 且 LIMIT 且 setup_grade 降 1 档）
+          若 confidence < 60 ：不允许例外开仓（action="wait"）
     * 若 R_clean < 0.5：无条件禁止开仓（action="wait"）。
 第三步：障碍聚集/路径不干净（Obstacle Cluster）— 降级而非直接否决
-  - 定义：在 entry→目标方向上，存在 ≥2 个“Respect”级别障碍（HTF 结构 / POC / strength_z>1.5）且它们之间的间距 < 0.5R，
-          使得无法给出“干净的一条清晰路径”。
+  - 定义：在 entry→目标方向上，存在 ≥2 个“Respect”级别障碍（HTF 结构 / POC / strength_z>1.5）且它们之间的间距 < 0.5R，使得无法给出“干净的一条清晰路径”。
   - 动作（必须做“保守R”的计算，不得写 R_clean=unknown）：
     1) 取最近的一个 Respect 障碍作为 TP1（第一止盈/第一减仓目标），并据此计算 Conservative_R_clean：
        Conservative_R_clean = (TP1 - Entry) / (Entry - SL) （LONG；SHORT 对称）

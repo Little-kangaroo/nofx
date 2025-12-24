@@ -438,7 +438,7 @@ export const translations = {
 
     // Footer
     footerTitle: 'AI交易系统',
-    footerWarning: '⚠️ 交易有风险，请谨慎使用。',
+    footerWarning: '交易有风险，请谨慎使用。',
 
     // Stats Cards
     totalEquity: '总净值',

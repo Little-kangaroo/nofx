@@ -52,28 +52,31 @@ func DefaultConfig() TriggerConfig {
 		SweepAtrMax:  2.0,
 
 		// Engulf配置
+		// 🔥 P0修复：BodyAtrMax 5.0→1.8（解决质量刻度压扁问题）
 		BodyAtrMin:  0.30,
-		BodyAtrMax:  5.0,
+		BodyAtrMax:  1.8,
 		ClosePosMax: 0.35,
 
 		// IBB配置
+		// 🔥 P0修复：BreakAtrMax 3.0→1.2（让 breakScore 回到可用区间）
 		BreakAtrMin: 0.15,
-		BreakAtrMax: 3.0,
+		BreakAtrMax: 1.2,
 
 		// MomoIgnition配置
+		// 🔥 P0修复：RangeAtrMax 5.0→2.8（保留强动量定义，但避免分数过低）
 		RangeAtrMin:      1.2,
-		RangeAtrMax:      5.0,
+		RangeAtrMax:      2.8,
 		CloseNearExtreme: 0.20,
 
 		// 量能配置
 		VolZMin: 0.8,
 
 		// 输出控制
-		// 🔥 P0-3修复：重标定质量阈值（V16.4提频修复）
-		// - QualityMin=0.55（Strict层，保证精度）
-		// - BorderlineMin=0.20（AI层，提高召回率用于Gate3触发窗口）
+		// 🔥 P0修复：QualityMin 0.55→0.50（让 Gate4 有机会 PASS）
+		// - QualityMin=0.50（Strict层，降低门槛让 q 能进入可用区间）
+		// - BorderlineMin=0.20（AI层，提高召回率用于Gate3触发窗口，保持不变）
 		MaxFlagsPerBar: 3,
-		QualityMin:     0.55,
+		QualityMin:     0.50,
 		BorderlineMin:  0.20,
 	}
 }
@@ -84,18 +87,20 @@ func VolatilityAdjustedConfig(baseConfig TriggerConfig, volRegime string) Trigge
 
 	switch volRegime {
 	case "low":
+		// 🔥 P0修复：低波动 QualityMin 0.60→0.52（防止 strict 层长期为空）
 		// 低波动：提高阈值，减少噪声触发
 		cfg.BodyAtrMin *= 1.2
 		cfg.BreakAtrMin *= 1.2
 		cfg.RangeAtrMin *= 1.1
-		cfg.QualityMin = 0.60
+		cfg.QualityMin = 0.52
 
 	case "high":
+		// 🔥 P0修复：高波动 QualityMin 0.50→0.48（保持更宽容）
 		// 高波动：降低阈值，避免完全无触发
 		cfg.BodyAtrMin *= 0.8
 		cfg.BreakAtrMin *= 0.8
 		cfg.RangeAtrMin *= 0.9
-		cfg.QualityMin = 0.50
+		cfg.QualityMin = 0.48
 
 	case "normal":
 		// 正常波动：使用默认配置

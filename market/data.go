@@ -4026,12 +4026,31 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 	// 🔥 P0-2修复：分层输出 - AI层（ai_flags）用于Gate3触发窗口，提高召回率
 	// 🔥 P1-1修复：添加窗口检测字段（trigger_age_bars、trigger_bar_close_time_ms）
 	// 🔥 P1-2修复：添加 pattern hint 字段（trigger_pattern_hint）
+	// 🔥 P1-3修复：让 trigger_primary 与 AIFlags/AIQuality 对齐（避免契约不自洽）
+
+	// 选择 primary：从 AIFlags 中选质量最高的，若 AIFlags 为空则 fallback 到 strict 层的 Primary
+	primary := triggers.FlagNone
+	if len(result.AIFlags) > 0 {
+		// 从 AIFlags 中选择质量最高的作为 primary
+		primary = result.AIFlags[0]
+		bestQ := -1.0
+		for _, flag := range result.AIFlags {
+			if q, ok := result.AIQuality[flag]; ok && q > bestQ {
+				bestQ = q
+				primary = flag
+			}
+		}
+	} else {
+		// AIFlags 为空，fallback 到 strict 层的 Primary
+		primary = result.Primary
+	}
+
 	triggerContext := map[string]interface{}{
 		// V-16.4 标准字段
 		"is_kline_closed":   true, // 5m收盘触发
 		"trigger_tf":        result.TF,
 		"trigger_flags":     result.AIFlags,   // 🔥 P0-2修复：使用 ai_flags（BorderlineMin过滤）用于Gate3窗口
-		"trigger_primary":   result.Primary,   // 保持使用strict层的primary（向后兼容）
+		"trigger_primary":   primary,          // 🔥 P1-3修复：从 AIFlags 中选质量最高（与 flags/quality 对齐）
 		"trigger_quality":   result.AIQuality, // 🔥 P0-2修复：使用 ai_quality（对应ai_flags的质量评分）
 		"trigger_key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
 		"trigger_key_level_type": result.KeyType,
