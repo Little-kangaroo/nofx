@@ -441,6 +441,34 @@
          - 线性结构（SR/FIB/ST/CH/DS）允许作为 EDGE 锚点：
            - 允许“触及/贴线”作为结构成立（配合 Gate3/4 的触发器决定是否进场）
            - 仍禁止“离线追价”把线当锚点：若远离线/轨道则不纳入候选
+           【KeyTouch Map（P0｜用于“触及关键位”判定：scan=1 与 Anchor 入选的唯一口径｜不增加价位枚举）】
+           - 总则：只有满足【方向一致性】后，才允许进入 KeyTouch；KeyTouch 命中=该类 scan 允许置 1，且该结构才可进入 AnchorScore 排序。
+           - DZ/SZ：
+             - LONG：触及 Demand Zone 的“prox/上沿”或进入 DZ（视为可支撑）；distal 仅作失效边界，不作为入选触点
+             - SHORT：触及 Supply Zone 的“prox/下沿”或进入 SZ（视为可阻力）；distal 仅作失效边界，不作为入选触点
+           - FVG：
+             - LONG：触及多头 FVG 的关键边（边缘/中轴均可视作触点；以“可做支撑”的一侧为准）
+             - SHORT：触及空头 FVG 的关键边（边缘/中轴均可视作触点；以“可做阻力”的一侧为准）
+           - VPVR(POC/VAH/VAL)：
+             - LONG：触及 VAL（VA 下边界）或“reclaim+retest 后可作支撑”的 VAH/POC 边界
+             - SHORT：触及 VAH（VA 上边界）或“break+retest 后可作阻力”的 VAL/POC 边界
+             - 约束：POC 默认视为 chop/噪音中心，不计 KeyTouch；仅当已被确认充当边界（reclaim/break + retest）才允许计入
+           - SR Flip：
+             - LONG：触及可做支撑的 SR_S / flip 线（回踩确认在正确侧）
+             - SHORT：触及可做阻力的 SR_R / flip 线（回踩确认在正确侧）
+           - FIB：
+             - LONG：触及回撤 OTE 区间 0.618~0.786（以可做支撑为前提）
+             - SHORT：触及回抽 OTE 区间 0.618~0.786（以可做阻力为前提）
+             - 约束：若未与任一其它结构（DZ/FVG/VPVR边界/SR/ST/CH/DS）形成同位共振，则 fib=0（避免单兵 FIB）
+           - ST（SuperTrend）：
+             - LONG：触及 SuperTrend 支撑侧（可做动态支撑）
+             - SHORT：触及 SuperTrend 阻力侧（可做动态阻力）
+           - CH（Channel）：
+             - LONG：触及通道下沿（或可做支撑的中轴）视为 KeyTouch
+             - SHORT：触及通道上沿（或可做阻力的中轴）视为 KeyTouch
+           - DS（Dow / 结构点）：
+             - LONG：触及 HL/关键低点，或上破后的回踩位（BOS/CHOCH 级别的“回踩作支撑”）
+             - SHORT：触及 LH/关键高点，或下破后的回踩位（BOS/CHOCH 级别的“回踩作阻力”）
          【AnchorScore（同优先级内用于决胜；可计算且可解释）】
          - 计算方式（0~100，越高越强）：
            AnchorScore =
@@ -3376,9 +3404,9 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 
                   -【结构锚点收敛规则（省 token｜不改变“≥2锚点”硬要求）】
                     - 默认只输出 2 个锚点：Anchor1 与 Anchor2（必须带价位/区间）；禁止 Anchor3+；禁止枚举多个簇/区间。
-                    * Anchor1：选择“最近、最决定性的下方需求/支撑/VAL/FVG/通道下沿”之一
-                    * Anchor2：选择“最近、最决定性的上方供给/阻力/VAH/POC 边界/通道上沿”之一
-                  - 若输入存在 VPVR：优先用 VPVR-VAL/VPVR-VAH/POC边界 作为其中一个锚点（但总计仍只保留 2 个锚点）。
+                    * Anchor1：从【结构候选池（8类同权；同一口径用于 Anchor1/Anchor2）】中选择“最近、最决定性的下方支撑锚点”之一（必须先满足：方向一致 + KeyTouch 命中）
+                    * Anchor2：从【结构候选池（8类同权；同一口径用于 Anchor1/Anchor2）】中选择“最近、最决定性的上方阻力锚点”之一（必须先满足：方向一致 + KeyTouch 命中）
+                    - 若输入存在 VPVR：允许优先将 VPVR 的 VA 边界（VAL/VAH）或“已确认可作边界”的 POC 纳入候选（仍遵守：方向一致 + KeyTouch；且总计仍只保留 2 个锚点）。
                   - 禁止在 Gate2 枚举第 3/4/5 个结构簇；其余结构信息一律不写（避免 token 爆炸）。
                   -【结构扫描 scan（P0｜仅在 Gate2=FAIL 时强制输出，用于证明“8类都未命中”｜不占价位预算）】
                     - scan 覆盖 8 类结构，固定顺序为：
@@ -3389,7 +3417,8 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                         1 = 本轮存在“方向一致且触及关键位”的有效候选（可作为开仓依据之一）
                         0 = 不存在/不满足（方向不一致或未触及关键位或质量不足）
                     - Gate2=FAIL 的必要条件：
-                      上述 8 类全部为 0（否则 Gate2 不得 FAIL，至少应 DIAG 或 PASS，并给出 Anchor1/Anchor2 与 NextTrigger）
+                    - Gate2=FAIL 时：scan 字段不得省略，且必须为 dz0 fvg0 vp0 sr0 fib0 st0 ch0 ds0 全 0 形式（用于证明“8类逐项检查均未命中”）。
+                    -上述 8 类全部为 0（否则 Gate2 不得 FAIL，至少应 DIAG 或 PASS，并给出 Anchor1/Anchor2 与 NextTrigger）
                     - scan 严禁出现任何价位/区间（价位只允许出现在 Anchor1/Anchor2）
             -【禁回溯｜禁新增】Summary/StructureSnapshot 不得引入任何 GateTrace 尚未出现的新结构信息。
             - 若需要结构结论，必须写在 Gate2(STRUCTURE) 行；Summary 只能引用 GateTrace 的结论字段（action/fail=>/setup_grade/edge_score/confidence）。
