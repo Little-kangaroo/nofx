@@ -112,8 +112,20 @@
     3）时机与数据完整性门槛（Timing & Data-Integrity Gate｜Gate3(TIMING)）
        - 以 5m 收盘事件为全链路时间锚点：trigger_context.is_kline_closed 必须为 true。
          * 若为 false 且未显式启用 INTRABAR_ENABLE（且满足其生效条件），则本轮禁止新开仓（open_long/open_short），action 只能为 "wait"/"hold"/"close"。
+       【P0｜Token-Lite 5m 收盘别名映射（Candle Alias Map｜不改规则，仅改数据来源）】
+       - 为节省 token，本版本允许后端不再提供「基础指标/MarketSnapshot」中的 ohlc_last_closed / ohlc_prev_closed（所有TF均可省略）。
+       - 模板后续所有出现的下列引用，统一改为“从 trigger_context 取值”的别名（Single Source）：
+         * ohlc_last_closed.x            := trigger_context.is_kline_closed
+         * ohlc_last_closed.close_time   := trigger_context.trigger_bar_close_time_ms
+         * ohlc_last_closed.close        := trigger_context.trigger_bar_close_price        （新增，必填）
+         * last_price / price            := trigger_context.last_price                      （新增，必填）
+       - 解释约束：
+         1) 任何章节若写“MarketSnapshot.5m 缺失则不可验证”，在 Token-Lite 模式下等价于：
+            “trigger_context 中上述 4 个字段任一缺失/为空/矛盾则不可验证”；
+         2) 不得因为 MarketSnapshot/基础指标里没有 ohlc 字段就判定缺失；只以 trigger_context 为准。
+
        - 数据完整性熔断（fail=>xF）：
-         * 若关键字段缺失/为空/矛盾（例如：ohlc_last_closed.x!=true、close_time 缺失、结构锚点价位缺失、订单流关键枚举缺失），则 Gate3=FAIL fail=>xF（表示“禁开新仓”）；顶层 action/derived_action 一律交由 actionDerivation 按 has_position 分支导出：has_position=0 -> "wait"；has_position=1 -> "hold"/"close"（严禁输出 "wait"；严禁 open_long/open_short）。
+         * 若关键字段缺失/为空/矛盾（例如：trigger_context.is_kline_closed!=true、trigger_bar_close_time_ms 缺失、trigger_bar_close_price 缺失、last_price 缺失、结构锚点价位缺失、订单流关键枚举缺失），则 Gate3=FAIL fail=>xF（表示“禁开新仓”）；顶层 action/derived_action 一律交由 actionDerivation 按 has_position 分支导出：has_position=0 -> "wait"；has_position=1 -> "hold"/"close"（严禁输出 "wait"；严禁 open_long/open_short）。
        - 触发窗口（Trigger Window｜由 trigger_context.trigger_flags 定义，禁止模型“看K线猜触发器”）：
          * 若 trigger_context 缺失，或 trigger_flags 为空/不存在：window=no_trigger ⇒ Gate3=FAIL fail=>TIME（仅禁新开仓；仍需 DIAG 复盘与 NextTrigger）。
          * 若 trigger_flags 非空且 is_kline_closed=true：window=in ⇒ Gate3 可 PASS（是否开仓继续交由 Gate4/Gate5）。
@@ -593,23 +605,14 @@
                 * 止损价 sl 必须放在该供需区的相反边界外侧若干 tick / ATR，而不是区间内部；
                 * 通过 Gate5（R_clean 空间门槛）检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求（含默认/例外规则）。
                 【EDGE 进场确认（5m Rejection｜硬要求）】：
-                - 若 MarketSnapshot.5m 缺失（或无法计算 anchor / 没有 ctx）导致 EDGE 条件不可验证：
+                - 若 5m 收盘锚点不可验证（Token-Lite 口径：trigger_context.is_kline_closed / trigger_bar_close_time_ms / trigger_bar_close_price / last_price 任一缺失或矛盾）：
                   - 若 has_position=0：action="wait"（仅表示“禁止以 EDGE 新开仓”，等待数据恢复后再评估）
                   - 若 has_position=1：action ∈ {"hold","close"}（仅管理既有仓位；禁止把持仓强制改成 wait，也禁止以 EDGE 逻辑新开/加码）
                 - 特权情况（SNIPE变体）：【当前版本禁用】一律按“普通情况”处理；严禁模型自行定义/发明 SNIPE 条件与额外规则。
-                - 普通情况：若不满足特权条件，必须满足以下任一确认（多空对称）：
-                  · SHORT（依托 supply 上沿试空）：需要出现“5m 拒绝确认”后才允许 open_short：
-                    - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：high ≥ supply_high 且 close ≤ supply_high（向上刺破但收回到供给区内/下方）；
-                    - Rejection-B（备选）：最近 1~2 根已收盘 5m K 中，至少有 1 根满足：
-                      * close < open（收阴）；
-                      * 且（RSI7 ≤ 60 或 MACD ≤ 0）；
-                      * 且收盘价仍位于 supply 的上 40% 区间（不允许跌回 zone 中部）。
-                  · LONG（依托 demand 下沿试多）：需要出现“5m 拒绝确认”后才允许 open_long：
-                    - Rejection-A（优先）：最近 1 根已收盘 5m K 线满足：low ≤ demand_low 且 close ≥ demand_low（向下刺破但收回到需求区内/上方）；
-                    - Rejection-B（备选）：最近 1~2 根已收盘 5m K 中，至少有 1 根满足：
-                      * close > open（收阳）；
-                      * 且（RSI7 ≥ 40 或 MACD ≥ 0）；
-                      * 且收盘价仍位于 demand 的下 40% 区间（不允许拉回 zone 中部）。
+                - 普通情况（P0｜触发器口径验收｜不改“必须 Rejection 确认”的本体规则）：
+                  · SHORT（依托 supply 上沿试空）：必须满足 trigger_primary ∈ {SFP_BEAR, ENGULF_BEAR} 且 is_kline_closed=true；
+                  · LONG（依托 demand 下沿试多）：必须满足 trigger_primary ∈ {SFP_BULL, ENGULF_BULL} 且 is_kline_closed=true；
+                  · 若 trigger_primary 不属于 EDGE 类（非 SFP_*/ENGULF_*）：禁止以 EDGE-Rejection 新开仓（has_position=0→wait；has_position=1→hold/close）。
                 - 若无法给出上述任一 “5m 拒绝确认”，则本次 EDGE 必须降级为 setup_grade="C"：
                   · 若该 symbol 当前无持仓（has_position=0）：action="wait"（禁止以 EDGE 新开仓）。
                   · 若该 symbol 当前已有持仓（has_position=1）：action 仅允许 ∈ {"hold","close"}（仅管理既有仓位；禁止以 EDGE 逻辑新开/加码）。

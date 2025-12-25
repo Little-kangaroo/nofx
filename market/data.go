@@ -865,7 +865,7 @@ func FormatAsCompactData(data *Data) string {
 			"基础指标":         calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析":   extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
 			"订单流分析":       GetOrderFlowDataForAIV2(data.Symbol),
-			"trigger_context": getTriggerContextForAI(data.Symbol, timeframeKlines),
+			"trigger_context": getTriggerContextForAI(data.Symbol, data.LastPrice, timeframeKlines),
 			// 🔥 P0-1新增：输出交易所元数据，解决 ctxNA_lot_size / ctxNA_execution_params
 			"ExchangeMeta": extractExchangeMetaForAI(data),
 			//"Gate2结构聚合":  buildGate2CompactOutput(data),
@@ -1043,48 +1043,49 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 			tfData["avg_volume"] = sum / float64(len(klines))
 		}
 
-		// === OHLC数据 ===
-		switch tf {
-		case "5m":
-			// 5m级别: ohlc_last_closed + ohlc_prev_closed
-			if data.OHLC5mPrevClosed != nil {
-				tfData["ohlc_last_closed"] = formatOHLCData(data.OHLC5mPrevClosed, data.Symbol)
-			}
-			if data.OHLC5mEarlierClosed != nil {
-				tfData["ohlc_prev_closed"] = formatOHLCData(data.OHLC5mEarlierClosed, data.Symbol)
-			}
-		case "15m":
-			// 15m级别: ohlc_last_closed + ohlc_prev_closed
-			if data.MediumTerm15m != nil {
-				if data.MediumTerm15m.OHLCLastClosed != nil {
-					tfData["ohlc_last_closed"] = formatOHLCData(data.MediumTerm15m.OHLCLastClosed, data.Symbol)
-				}
-				if data.MediumTerm15m.OHLCPrevClosed != nil {
-					tfData["ohlc_prev_closed"] = formatOHLCData(data.MediumTerm15m.OHLCPrevClosed, data.Symbol)
-				}
-			}
-		case "30m":
-			// 30m级别: ohlc_last_closed + ohlc_prev_closed
-			if data.MediumTerm30m != nil {
-				if data.MediumTerm30m.OHLCLastClosed != nil {
-					tfData["ohlc_last_closed"] = formatOHLCData(data.MediumTerm30m.OHLCLastClosed, data.Symbol)
-				}
-				if data.MediumTerm30m.OHLCPrevClosed != nil {
-					tfData["ohlc_prev_closed"] = formatOHLCData(data.MediumTerm30m.OHLCPrevClosed, data.Symbol)
-				}
-			}
-		case "1h":
-			// 1h级别: ohlc_last_closed only
-			if data.MediumTerm1h != nil && data.MediumTerm1h.OHLCLastClosed != nil {
-				tfData["ohlc_last_closed"] = formatOHLCData(data.MediumTerm1h.OHLCLastClosed, data.Symbol)
-			}
-		case "4h":
-			// 4h级别: ohlc_last_closed only
-			// 🔥 P0-02修复：使用OHLC4hLastClosed而不是PrevClosed，修复HTF滞后问题
-			if data.OHLC4hLastClosed != nil {
-				tfData["ohlc_last_closed"] = formatOHLCData(data.OHLC4hLastClosed, data.Symbol)
-			}
-		}
+		// === OHLC数据 - 已屏蔽，trigger_context已包含K线形态信息 ===
+		// 🔥 优化：由于trigger_context已包含完整的K线触发形态信息，原始OHLC数据不再需要输出给AI模型
+		// switch tf {
+		// case "5m":
+		// 	// 5m级别: ohlc_last_closed + ohlc_prev_closed
+		// 	if data.OHLC5mPrevClosed != nil {
+		// 		tfData["ohlc_last_closed"] = formatOHLCData(data.OHLC5mPrevClosed, data.Symbol)
+		// 	}
+		// 	if data.OHLC5mEarlierClosed != nil {
+		// 		tfData["ohlc_prev_closed"] = formatOHLCData(data.OHLC5mEarlierClosed, data.Symbol)
+		// 	}
+		// case "15m":
+		// 	// 15m级别: ohlc_last_closed + ohlc_prev_closed
+		// 	if data.MediumTerm15m != nil {
+		// 		if data.MediumTerm15m.OHLCLastClosed != nil {
+		// 			tfData["ohlc_last_closed"] = formatOHLCData(data.MediumTerm15m.OHLCLastClosed, data.Symbol)
+		// 		}
+		// 		if data.MediumTerm15m.OHLCPrevClosed != nil {
+		// 			tfData["ohlc_prev_closed"] = formatOHLCData(data.MediumTerm15m.OHLCPrevClosed, data.Symbol)
+		// 		}
+		// 	}
+		// case "30m":
+		// 	// 30m级别: ohlc_last_closed + ohlc_prev_closed
+		// 	if data.MediumTerm30m != nil {
+		// 		if data.MediumTerm30m.OHLCLastClosed != nil {
+		// 			tfData["ohlc_last_closed"] = formatOHLCData(data.MediumTerm30m.OHLCLastClosed, data.Symbol)
+		// 		}
+		// 		if data.MediumTerm30m.OHLCPrevClosed != nil {
+		// 			tfData["ohlc_prev_closed"] = formatOHLCData(data.MediumTerm30m.OHLCPrevClosed, data.Symbol)
+		// 		}
+		// 	}
+		// case "1h":
+		// 	// 1h级别: ohlc_last_closed only
+		// 	if data.MediumTerm1h != nil && data.MediumTerm1h.OHLCLastClosed != nil {
+		// 		tfData["ohlc_last_closed"] = formatOHLCData(data.MediumTerm1h.OHLCLastClosed, data.Symbol)
+		// 	}
+		// case "4h":
+		// 	// 4h级别: ohlc_last_closed only
+		// 	// 🔥 P0-02修复：使用OHLC4hLastClosed而不是PrevClosed，修复HTF滞后问题
+		// 	if data.OHLC4hLastClosed != nil {
+		// 		tfData["ohlc_last_closed"] = formatOHLCData(data.OHLC4hLastClosed, data.Symbol)
+		// 	}
+		// }
 
 		// 只有当有数据时才添加到结果中
 		if len(tfData) > 0 {
@@ -4056,8 +4057,9 @@ func normalizeNilCollections(tc map[string]interface{}) {
 
 // getTriggerContextForAI 获取指定币种的触发器检测数据（供AI使用）
 // symbol: 币种符号
+// lastPrice: 当前最新价格
 // timeframeKlines: 缓存的K线数据
-func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) map[string]interface{} {
+func getTriggerContextForAI(symbol string, lastPrice float64, timeframeKlines map[string][]Kline) map[string]interface{} {
 	// 错误恢复处理
 	defer func() {
 		if r := recover(); r != nil {
@@ -4162,13 +4164,29 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 		primary = result.Primary
 	}
 
+	// 🔥 新增：计算触发K线的收盘价（根据ageBars确定）
+	var triggerBarClosePrice float64
+	if ageBars >= 0 && ageBars < len(klines5m) {
+		// ageBars=0表示当前bar，1表示上一根，2表示上上根
+		triggerBarIndex := len(klines5m) - 1 - ageBars
+		if triggerBarIndex >= 0 && triggerBarIndex < len(klines5m) {
+			triggerBarClosePrice = klines5m[triggerBarIndex].Close
+		}
+	}
+
+	// 🔥 新增：格式化trigger_quality为2位小数
+	formattedQuality := make(map[string]float64)
+	for k, v := range result.AIQuality {
+		formattedQuality[k] = float64(int(v*100+0.5)) / 100 // 四舍五入保留2位小数
+	}
+
 	triggerContext := map[string]interface{}{
 		// V-16.4 标准字段
 		"is_kline_closed":   true, // 5m收盘触发
 		"trigger_tf":        result.TF,
 		"trigger_flags":     result.AIFlags,   // 🔥 P0-2修复：使用 ai_flags（BorderlineMin过滤）用于Gate3窗口
 		"trigger_primary":   primary,          // 🔥 P1-3修复：从 AIFlags 中选质量最高（与 flags/quality 对齐）
-		"trigger_quality":   result.AIQuality, // 🔥 P0-2修复：使用 ai_quality（对应ai_flags的质量评分）
+		"trigger_quality":   formattedQuality, // 🔥 改造：格式化为2位小数
 		"trigger_key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
 		"trigger_key_level_type": result.KeyType,
 		"statistical_significance": map[string]interface{}{
@@ -4180,6 +4198,10 @@ func getTriggerContextForAI(symbol string, timeframeKlines map[string][]Kline) m
 		"trigger_bar_close_time_ms": barCloseTimeMs,                              // 触发器所在K线的收盘时间（毫秒时间戳）
 		// 🔥 P1-2新增：pattern hint 字段
 		"trigger_pattern_hint": triggers.GetPatternHintFromFlags(result.AIFlags), // 触发器pattern类型提示（"SFP", "Engulf", "MOM_BREAK", ""）
+		// 🔥 新增：触发K线收盘价
+		"trigger_bar_close_price5m": FormatByDataTypeAndSymbol(triggerBarClosePrice, "price", symbol), // 触发K线的收盘价
+		// 🔥 新增：当前最新价格
+		"last_price": FormatByDataTypeAndSymbol(lastPrice, "price", symbol), // 当前 last price
 		// 元数据
 		"klines_count": len(triggerKlines),
 		"状态":          "正常",
@@ -4225,6 +4247,10 @@ func buildEmptyTriggerContext(reason string) map[string]interface{} {
 		"trigger_bar_close_time_ms": 0,  // 0 表示数据不可用
 		// 🔥 P1-2：pattern hint 字段
 		"trigger_pattern_hint": "",
+		// 🔥 新增：触发K线收盘价（空值）
+		"trigger_bar_close_price5m": 0,
+		// 🔥 新增：当前最新价格（空值）
+		"last_price": 0,
 		// 元数据
 		"klines_count": 0,
 		"状态":          reason,
