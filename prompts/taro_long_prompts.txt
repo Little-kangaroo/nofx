@@ -1957,7 +1957,8 @@ A) 仓位 sizing（基于R的风险等额）
           1) Gate2(STRUCTURE) 是“结构锚点唯一来源”：Anchor1/Anchor2 只在 Gate2 行完整出现一次；
           2) StructureSnapshot 不得再用自然语言复述锚点价位/区间：只能引用 “Anchor1 / Anchor2” 字面量；
           3) NextTrigger 只能引用 Anchor1/Anchor2（或“脱离POC/到达边界”这种解除条件），禁止再次解释 Gate2/Gate4。
-
+          4) （P0｜禁止数字复述）StructureSnapshot / NextTrigger / Optional Details 中严禁出现任何具体价位/区间/小数/≈/%/范围符号；
+             只允许引用 “Anchor1 / Anchor2” 字面量或短码（retest_A1 / retest_A2 / clear_POC / no_trigger / trend_mixed / rr_low）。
         - 严格顺序（必须按该顺序）:
           Summary/Pos/Cap → GateTrace(Gate0→Gate5) → actionDerivation（紧随 GateTrace） → StructureSnapshot → NextTrigger/Timebox → Optional Details
           禁止先输出完整结构总览/最终结论，再回过头补 GateTrace（避免重复组织导致 token 与延迟增加）。
@@ -1968,17 +1969,36 @@ A) 仓位 sizing（基于R的风险等额）
           3) has_position=0 且 action="wait" 时：
              - Gate3~Gate5 只能用 DIAG(EVAL_ONLY) + 1 个“缺口短语”（如 no_trigger / trend_mixed / rr_low），禁止复述结构/趋势细节；
           4) 若字段缺失/为空：直接写 “unknown(missing)” + 1 句影响（≤20字），不要展开。
+          - 【P0｜reasoning 总预算硬约束（仅控制输出长度，不改变判定规则）】
+            * reasoning 总行数上限（含 Summary/GateTrace/actionDerivation/StructureSnapshot/NextTrigger/Optional）：
+              - has_position=0 且 action="wait"：≤6 行（推荐：Summary + Gate0~Gate2 + Gate4 + actionDerivation）
+              - 其余情况：≤9 行（允许包含 StructureSnapshot/NextTrigger，但仍需遵守去重规则）
+            * 预算溢出时的强制裁剪顺序（不得用“续写/解释”绕过预算）：
+              1) 删除 Optional Details；
+              2) 删除 StructureSnapshot 与 NextTrigger（action="wait" 默认直接省略）；
+              3) 将 Gate3~Gate5 裁剪为 “DIAG(EVAL_ONLY)+短码”（禁止自然语言解释）；
+              4) 仍超限：仅保留 Summary + Gate0~Gate2 + actionDerivation（其余行省略）。
+            * 价位/区间/小数输出限制（P0）：
+              - 除 Gate2 行的 Anchor1/Anchor2（完整出现一次）外，其他任何行严禁出现具体价位/区间/小数/≈/%/范围符号；
+              - 若必须引用结构，仅允许写 “Anchor1/Anchor2” 字面量或短码（如 retest_A1 / clear_POC / no_trigger / trend_mixed / rr_low）。
+            * 自检（P0）：若检测到违规（括号解释、价位复述、PASS 时出现 scan、wait 时展开细节等），必须在输出前自行裁剪为合规文本；不得以“说明原因”追加新行。
 
         - 【PROD_LITE 固定行模板（强制｜用于收敛写法，不改变判定规则）】
           * Summary（1行）：原因只允许 1 个短标签（建议枚举：POC_CHOP/STRUCT_MID/NO_TRIGGER/TREND_MIXED/RR_LOW/OF_REDLINE/RISK）
           * GateTrace 每行建议写法：
             - Gate0(RISK): PASS/FAIL fail=>RISK key=<1个账户侧关键数值>; verdict=<ok/limit>
-            - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（二选一，禁止把 intent+regime+alignment 全写）
-            - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC_chop_zone/mid-range/edge>; Anchor1:<.>; Anchor2:<.>; scan=<omit_if_PASS>
+            - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（严格三选一；禁止括号/附加解释/附带 intent、regime、alignment；如出现“(”或多余字段，必须裁剪为单词 bull/bear/neutral）
+            - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC.../mid-range/edge>; Anchor1:<.>; Anchor2:<.>; scan=<omit_if_PASS>（scan 仅允许在 FAIL 时出现；PASS 时出现 scan 视为违规必须删除；如需证明“8类逐类检查均未命中”，仅在 Gate2=FAIL 时额外追加 1 行 StructScan: scan=<...> 且严禁含价位/区间）
             - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in/out/unknown>
             - Gate4(SETUP): PASS/DIAG(EVAL_ONLY) pattern=<none/EDGE/BO_RETEST/MOM_BREAK/SFP/Engulf>; trend=<aligned/mixed>
             - Gate5(EXEC/RR): PASS/DIAG(EVAL_ONLY) reason=<no_clean_sl/too_close/costly/rr_low>; R_clean=<>=<th?>
-
+        - 【P0｜wait 极简输出（不改变 JSON，仅收敛 reasoning）】
+          * 适用条件：has_position=0 且 action="wait"。
+          * reasoning 允许的最大形态（≤6 行）：
+            Summary（1行）→ Gate0 → Gate1 → Gate2 → Gate4（或 Gate3/4 合并为 1 行 DIAG）→ actionDerivation（1行）
+          * 禁止项（P0）：
+            - StructureSnapshot / NextTrigger / Optional Details 默认省略；
+            - 如必须输出 StructureSnapshot/NextTrigger：各≤1行且不得含任何数字/价位/区间，只能引用 Anchor1/2 或短码（retest_A1 / clear_POC / no_trigger）。
         - Optional Details（默认省略，省 token）
           * 仅当 action ∈ {open_long, open_short, hold, close} 时允许；
           * 最多 4 行；且不得重复 GateTrace/Anchor1/2/NextTrigger（否则视为违规扩写）。
@@ -1993,6 +2013,7 @@ A) 仓位 sizing（基于R的风险等额）
       - Gate2~Gate5 仍需输出 DIAG(EVAL_ONLY)，但不得计算或输出可执行明细（如 entry_plan/具体 SL/TP 价位/完整 RR 推导）；
       - 只给“方向偏置/结构锚点/触发条件/是否可能满足 R_clean 门槛”的预判，用于复盘与 NextTrigger。
     【示例｜Gate1 否决但仍全 Gate 复盘（DIAG）】
+    （注意：该示例仅供 REPLAY_FULL / OUTPUT_PROFILE=FULL 复盘参考；PROD_LITE 禁止复制其长句/价位复述写法。PROD_LITE 只允许固定行模板与短码。）
     Summary: action=wait | trade_style=NA | setup_grade=C | edge_score=0.0 | confidence=70 | fail=>OF | 原因=spoofing_risk>0.8
     Pos: 权益≈<X>; 保证金占用≈<Y>; 当前仓位方向=<none>; 数量=<0>; 均价=<NA>
     Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<1>; 处理=<ok>; 原因=<...>
@@ -3358,6 +3379,10 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
 - 以上所有顶层字段/禁止字段/entry_plan 结构/close_pct 规则，统一以本节“2) 每个决策对象必须包含以下字段”与其后的 entry_plan 结构定义为准；
 - 不再在此处重复列字段清单，避免出现第二套协议并存或样例误导。
 9）reasoning 输出规范（复盘版｜唯一口径｜无电报体｜首行 Summary + GateTrace + 细节）
+  - 【适用范围（P0）】本节仅适用于 REPLAY_FULL / OUTPUT_PROFILE=FULL 的复盘输出。
+    * 默认生产输出为 PROD_LITE：当 debug_full_reasoning!=true 且 OUTPUT_PROFILE!=FULL 时，必须忽略本节所有“展开说明/多价位举证/长句推导”等要求，
+      严格按前述【每 Gate 输出预算｜Anti-Latency｜PROD_LITE 强制】与【PROD_LITE 固定行模板】输出。
+    * 若本节与 PROD_LITE 约束冲突：以 PROD_LITE 约束为准（SSOT）。
   - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
   - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
       Summary: action=<...> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<...> | confidence=<...>
