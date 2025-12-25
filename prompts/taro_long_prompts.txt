@@ -432,19 +432,15 @@
          - LONG：Anchor 必须是“在价格下方可做支撑”的结构（或突破后回踩成为支撑的结构）。
          - SHORT：Anchor 必须是“在价格上方可做阻力”的结构（或跌破后回踩成为阻力的结构）。
          - 若候选结构与方向不一致：直接丢弃，不参与排序。
-         【优先级排序（从高到低；同级再比 AnchorScore）】
-         【优先级排序（从高到低；同级再比 AnchorScore）】
-         P1) HTF 供需区（4h/1h DZ/SZ）
-         P2) HTF VPVR 边界（4h/1h VAH/VAL/POC）
-         P3) HTF SR Flip（4h/1h）
-         P3.5) HTF 趋势护航线（4h/1h SuperTrend(ST) / ChannelRail(CH) / DowSwing(DS)）
-              - 仅允许“回踩/反抽确认(BO_RETEST/MOMENTUM_BREAK)”作为锚点；禁止离线追价作为锚点
-         P4) MTF 供需区（30m/15m DZ/SZ）
-         P5) LTF/MTF VPVR 边界（30m/15m/5m VAH/VAL/POC）
-         P5.5) MTF 趋势护航线（30m/15m ST/CH/DS；同上仅回踩确认）
-         P6) FVG 缺口（4h/1h/30m/15m/5m）
-         P7) Fibonacci（cluster / GP / ext）
-
+         【结构候选池（8类同权；同一口径用于 Anchor1/Anchor2）】
+         - 候选结构类型（每类最多取 1 个“最近且最强/最新鲜”的代表点，避免堆砌）：
+           DZ/SZ、FVG、VPVR(POC/VAH/VAL)、SR Flip、FIB、ST、CH、DS
+         - LONG：候选必须是“在价格下方可做支撑”的结构（或突破后回踩成为支撑的结构）。
+         - SHORT：候选必须是“在价格上方可做阻力”的结构（或跌破后回踩成为阻力的结构）。
+         - 若候选结构与方向不一致：直接丢弃，不参与排序。
+         - 线性结构（SR/FIB/ST/CH/DS）允许作为 EDGE 锚点：
+           - 允许“触及/贴线”作为结构成立（配合 Gate3/4 的触发器决定是否进场）
+           - 仍禁止“离线追价”把线当锚点：若远离线/轨道则不纳入候选
          【AnchorScore（同优先级内用于决胜；可计算且可解释）】
          - 计算方式（0~100，越高越强）：
            AnchorScore =
@@ -452,17 +448,14 @@
              - Aging_penalty - Weak_penalty - Proximity_penalty
         1) Base(type)：
         Base(type)={
-          DZ/SZ:55,
+          DZ/SZ:50,
+          FVG:50,
           VPVR_POC/VAH/VAL:50,
-          HTF SR Flip:48,
-          HTF ST:46,
-          HTF CH:44,
-          HTF DS:44,
-          30m/15m 供需区:42,
-          30m/15m VPVR 边界:38,
-          30m/15m ST/CH/DS:36,
-          FVG:38,
-          Fibonacci:30,
+          SR_Flip:50,
+          Fibonacci:50,
+          ST:50,
+          CH:50,
+          DS:50,
           others:20
         }
          2) TF_bonus（若能确定周期则加；更高周期更稳）：
@@ -1950,7 +1943,7 @@ A) 仓位 sizing（基于R的风险等额）
           * GateTrace 每行建议写法：
             - Gate0(RISK): PASS/FAIL fail=>RISK key=<1个账户侧关键数值>; verdict=<ok/limit>
             - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（二选一，禁止把 intent+regime+alignment 全写）
-            - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC_chop_zone/mid-range/edge>; Anchor1:<...>; Anchor2:<...>（见结构锚点写法）
+            - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC_chop_zone/mid-range/edge>; Anchor1:<.>; Anchor2:<.>; scan=<omit_if_PASS>
             - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in/out/unknown>
             - Gate4(SETUP): PASS/DIAG(EVAL_ONLY) pattern=<none/EDGE/BO_RETEST/MOM_BREAK/SFP/Engulf>; trend=<aligned/mixed>
             - Gate5(EXEC/RR): PASS/DIAG(EVAL_ONLY) reason=<no_clean_sl/too_close/costly/rr_low>; R_clean=<>=<th?>
@@ -1958,7 +1951,12 @@ A) 仓位 sizing（基于R的风险等额）
         - Optional Details（默认省略，省 token）
           * 仅当 action ∈ {open_long, open_short, hold, close} 时允许；
           * 最多 4 行；且不得重复 GateTrace/Anchor1/2/NextTrigger（否则视为违规扩写）。
-
+        * 例外（P0｜仅用于 Gate2=FAIL 的可审计性）：
+          - 当 Gate2(STRUCTURE)=FAIL fail=>STRUCT 时，允许额外追加 1 行：
+            StructScan: scan=<...>
+          - 该行必须 ≤110 字符，且严禁出现任何价位/区间；
+          - 该行不用于解释，只用于证明“8类结构逐类检查后均未命中”；
+          - 该行不改变 action，只增强可审计性。
     - 【上层否决后的 DIAG 范围约束】
       当 Gate0 或 Gate1 为 FAIL 时：
       - Gate2~Gate5 仍需输出 DIAG(EVAL_ONLY)，但不得计算或输出可执行明细（如 entry_plan/具体 SL/TP 价位/完整 RR 推导）；
@@ -3382,6 +3380,17 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                     * Anchor2：选择“最近、最决定性的上方供给/阻力/VAH/POC 边界/通道上沿”之一
                   - 若输入存在 VPVR：优先用 VPVR-VAL/VPVR-VAH/POC边界 作为其中一个锚点（但总计仍只保留 2 个锚点）。
                   - 禁止在 Gate2 枚举第 3/4/5 个结构簇；其余结构信息一律不写（避免 token 爆炸）。
+                  -【结构扫描 scan（P0｜仅在 Gate2=FAIL 时强制输出，用于证明“8类都未命中”｜不占价位预算）】
+                    - scan 覆盖 8 类结构，固定顺序为：
+                      DZ/SZ, FVG, VPVR(POC/VAH/VAL), SR, FIB, ST, CH, DS
+                    - 输出格式（推荐｜无分隔符，省字符）：
+                      scan=dz0fvg0vp0sr0fib0st0ch0ds0
+                      其中每类后缀 ∈ {0,1}：
+                        1 = 本轮存在“方向一致且触及关键位”的有效候选（可作为开仓依据之一）
+                        0 = 不存在/不满足（方向不一致或未触及关键位或质量不足）
+                    - Gate2=FAIL 的必要条件：
+                      上述 8 类全部为 0（否则 Gate2 不得 FAIL，至少应 DIAG 或 PASS，并给出 Anchor1/Anchor2 与 NextTrigger）
+                    - scan 严禁出现任何价位/区间（价位只允许出现在 Anchor1/Anchor2）
             -【禁回溯｜禁新增】Summary/StructureSnapshot 不得引入任何 GateTrace 尚未出现的新结构信息。
             - 若需要结构结论，必须写在 Gate2(STRUCTURE) 行；Summary 只能引用 GateTrace 的结论字段（action/fail=>/setup_grade/edge_score/confidence）。
             -【违规处理｜fail=>PROTO_BACKTRACK】若触发“禁回溯｜禁新增”：
