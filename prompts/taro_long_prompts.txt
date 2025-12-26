@@ -133,6 +133,11 @@
          * Gate3/NextTrigger 只引用 trigger_primary（或 flags 中 1 项）；禁止罗列形态细节与多条候选。
        - 本层回答：“现在这个时点/这份数据，允许做决策并允许执行吗？”
     4）开仓条件与执行方式门槛（Setup Gate｜Gate4(SETUP)）
+        【P0｜Gate4 职责边界（不改规则，仅收敛写法）】
+        - Gate4 只负责：trigger 选择 + pattern 映射 + 触发质量分层 + 执行方式收敛（LIMIT/MARKET/等待回踩/降级）。
+        - Gate4 不计算、不裁决 R_clean / R_struct 数值；所有 R_* 计算与“是否达标”统一在 Gate5(EXEC/RR) 完成。
+        - Gate4(GateTrace) 推荐单行模板（避免重复形态细节）：
+          Gate4(SETUP): <PASS/FAIL/DIAG> fail=>SETUP?<; reason=<...>> pattern=<EDGE|MOMENTUM_BREAK|BO_RETEST|none>; trigger=<trigger_primary|NONE>; q=<0~1>; tier=<strict|borderline|none>; downgrade=<on|off>
        - 本层综合：多周期趋势/动能 + RSI 状态 + 形态确认 + 触发质量，决定“能不能开、怎么开（挂单/市价/回踩/缩仓）”。
        - TriggerFlags 选择制（P0｜必须遵守｜降低 token + 提升可复现性）：
          * 触发器识别仅允许使用 trigger_context.trigger_flags / trigger_primary / trigger_quality；
@@ -154,9 +159,9 @@
                    所有比较必须直接用输入的 quality_min / borderline_min。
                  * 准入判定（只决定 Gate4 是否具备开仓资格；执行性交给 Gate5/D8）：
                    1) 若 pattern=none 或 trigger=NONE：
-                      -> Gate4(SETUP)=FAIL fail=>NO_TRIGGER（不是 DIAG）
+                      -> Gate4(SETUP)=FAIL fail=>SETUP; reason=NO_TRIGGER（不是 DIAG）
                    2) 若 q < borderline_min：
-                      -> Gate4(SETUP)=FAIL fail=>LOW_Q
+                      -> Gate4(SETUP)=FAIL fail=>SETUP; reason=LOW_Q
                    3) 若 borderline_min ≤ q < quality_min：
                       -> Gate4(SETUP)=PASS（Borderline PASS｜降级可执行路径，必须开启 downgrade）
                       -> 强制约束（否则视为不满足）：
@@ -169,6 +174,14 @@
                             tier=borderline; q=<..>; borderline_min=<..>; quality_min=<..>; downgrade=on
                    4) 若 q ≥ quality_min：
                       -> Gate4(SETUP)=PASS（Strict PASS｜常规路径）
+                   - 写法硬约束（不改规则，仅降 token）：
+                     Gate4 行只输出 1 个 trigger（=trigger_primary；缺失则取 quality 最高者），禁止在 Gate4 文本里展开 trigger_flags 列表或复述多条形态细节。
+                   【P0｜trade_style 冻结（Gate4->Gate5 单向传递）】
+                   - trade_style 必须在 Gate4 结束时确定并冻结（Freeze）。
+                   - Gate5(EXEC/RR) 只能沿用 Gate4 冻结后的 trade_style 来选择对应的 R_clean 门槛与例外集合；
+                     严禁在 Gate5 中“为了让 R_clean 通过/不通过”而回头改变 trade_style。
+                   - 若 Gate4 触发 Borderline PASS（tier=borderline; downgrade=on），trade_style 必须为 LTF_scalp（已在 Gate4 规则中要求），
+                     Gate5 只能按 LTF_scalp 的门槛校验。
        - 趋势与动能（Trend & Momentum）：
          * 综合 4h/1h、30m/15m、5m 的趋势与动能（EMA 排列、MACD、SuperTrend 等）：
            - 若计划方向与 4h/1h、30m/15m 大体同向：顺势场景，允许按 trade_style 执行；
@@ -185,6 +198,23 @@
        - 本层回答：“综合条件是否足够支持开仓？若支持，执行方式如何收敛？”
   5）执行细节与 R 要求（Execution & R Filter）
      - 仅当 0~4 层全部通过后，才计算与执行：
+        【P0｜R_clean 统一算式（必须可核验）】
+        - 变量定义（多空对称）：
+          entry = entry_plan.entry_price（LIMIT 用挂单价；MARKET 用 last_price 仅作估算，但必须在 reasoning 标注 est=1）
+          sl    = init_stop（必须位于“结构失效边界”之外）
+          tp1   = 结构允许的首个主要目标/最近阻力(做多)/支撑(做空)（禁止选择 VPVR POC/区间中部这类磁铁位作为“主要TP1”）
+          risk  = |entry - sl|
+          reward_gross = |tp1 - entry|
+
+        - R_struct = reward_gross / risk
+        - costs_price = (fee_rate + slippage_rate) * entry   （若无输入则写 ctxNA，不得臆造）
+        - costs_R = costs_price / risk
+        - R_clean = R_struct - costs_R
+
+        【P0｜R_clean 对账输出（写在 Gate5 行或紧随其后 1 行）】
+        - 必须输出可核验数字：entry=<..> sl=<..> tp1=<..> risk=<..> reward=<..> costs_R=<..> => R_clean=<..>
+        - 禁止只写“R_clean不足/通过”不给数字。
+
        * 依据最近反向结构与 init_stop 计算 R_struct / R_clean；
        * 校验是否满足对应 trade_style（HTF_swing / LTF_scalp）的最小 R 要求；
        * 决定：
@@ -3197,6 +3227,12 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
          - 若 has_position=1：action 仅允许 ∈ {"hold","close"}
        * 仅对开仓动作约束：当 action ∈ {"open_long","open_short"} 时，edge_score 必须 ≥ 0.5；
          非开仓动作（wait/hold/close）允许 edge_score = 0 或为负，用于表达“无edge/负edge”。
+       【P0-ES-01｜edge_score 最低可用口径（不改门槛，仅修复 0.0 失真）】
+       - edge_score 输出必须保留 2 位小数（例如 0.37 / -0.12）；禁止用 0.0 作为“默认占位符”。
+       - 当你认为 edge 接近 0，也必须输出真实的小数（例如 0.04 / -0.03），而不是统一写 0.0（避免复盘失真）。
+       - 本补丁不改变任何既有开仓门槛：
+         * action ∈ {"open_long","open_short"} 时 edge_score ≥ 0.5 的硬约束仍以原文为准。
+
      - 对于 action="wait" / "hold" 的标的：
        * 若你认为当前机会明显负期望（结构混乱、潜在空间不足、与大级别强冲突）：
         - "setup_grade": "C"
@@ -3239,6 +3275,22 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
            2) 若你无法给出可核验算式、或算式与 entry_plan 数字不一致：
               - 视为“不可执行/不可托管”，若 has_position=0：action 强制为 "wait"（fail=>RCALC）；若 has_position=1：action 仅允许 ∈ {"hold","close"}（严禁输出 wait；仅管理既有仓位）。
            3) 若 R_clean < 1.0：
+              【P0-RC-02｜R_clean<1 的原因码诊断（只增解释，不改裁决）】
+              - 适用范围：
+                * 当 Gate5(EXEC/RR) 因“空间不足/成本吞噬/不可执行”等导致 FAIL fail=>RR；
+                * 或 Gate5=PASS 但触发“R_clean<1 的 LTF_scalp 例外/降级路径”时（仍需解释为什么<1）。
+              - 写法要求（不新增 JSON 字段，仅写进 reasoning）：
+                在 Gate5(EXEC/RR) 行或紧随其后一行，追加 rr_diag_tags（1~3 个即可）：
+                rr_diag_tags ∈ {
+                  TP1_TOO_CLOSE,        // tp1/最近反向结构太近，reward 太小
+                  SL_TOO_WIDE,          // init_stop 太远/不干净，risk 太大
+                  ENTRY_CHASING,        // entry 脱离结构依托（追价）
+                  COSTS_DOMINATE,       // 成本/滑点吞噬导致净R过低
+                  TP1_MAGNET_INVALID,   // 误把 POC/区间中轴当 tp1
+                  TARGET_UNCLEAR        // 最近“可兑现目标结构”不清晰
+                }
+              - rr_diag_tags 仅用于诊断说明，不得改变 Gate5 的阈值/裁决逻辑（所有阈值仍以 Gate5 既有规则为准）。
+
               - 裁决前置约束（防止口径打架）：
                 · trade_style 必须在 Gate4 已确定（HTF_swing / LTF_scalp）；Gate5 只允许“按既定 trade_style 套阈值裁决”，不得在 Gate5 重新改风格来绕门槛。
                 · 任何 “R_clean<1 的例外” 仅限 LTF_scalp，且必须写明 downgrade（risk_down、LIMIT、TP1 快速兑现等）。
@@ -3480,6 +3532,11 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                   - 禁止在 Gate2 枚举第 3/4/5 个结构簇；其余结构信息一律不写（避免 token 爆炸）。
                   -【结构扫描 scan（P0｜仅在 Gate2=FAIL 时强制输出，用于证明“8类都未命中”｜不占价位预算）】
                     - scan 覆盖 8 类结构，固定顺序为：
+                    【P0-G2-01｜scan 输出格式契约（不增加价位枚举）】
+                    - Gate2=FAIL fail=>STRUCT 时，必须输出 scan 一行（仅“0/1 命中标记”，不写额外价位）：
+                      scan: DZ/SZ=<0|1>, FVG=<0|1>, VPVR=<0|1>, SR=<0|1>, FIB=<0|1>, ST=<0|1>, CH=<0|1>, DS=<0|1>; all8_miss=<0|1>
+                    - 其中 all8_miss 必须等价于：当且仅当 8 项全为 0 时 all8_miss=1，否则为 0。
+                    - Gate2=PASS 时禁止输出 scan（避免 token 爆炸；scan 只用于证明 FAIL 的覆盖性）。
                       DZ/SZ, FVG, VPVR(POC/VAH/VAL), SR, FIB, ST, CH, DS
                     - 输出格式（推荐｜无分隔符，省字符）： scan=dz0fvg0vp0sr0fib0st0ch0ds0
                       其中每类后缀 ∈ {0,1}：
