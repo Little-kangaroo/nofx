@@ -454,6 +454,14 @@
            - 允许“触及/贴线”作为结构成立（配合 Gate3/4 的触发器决定是否进场）
            - 仍禁止“离线追价”把线当锚点：若远离线/轨道则不纳入候选
            【KeyTouch Map（P0｜用于“触及关键位”判定：scan=1 与 Anchor 入选的唯一口径｜不增加价位枚举）】
+           -【P0｜统一触达阈值（量化 KeyTouch，避免主观保守导致 scan 全 0）】
+             * 计算 touch_bps：
+               - 若存在 ATR14_5m 与 last_price：touch_bps = max(25, round(0.35 * ATR14_5m / last_price * 10000))
+               - 否则：touch_bps = 30
+             * 距离定义 dist_bps：
+               - 对区间类（DZ/SZ/FVG/VPVR边界）：dist_bps = 0 若 last_price 在区间内；否则取到最近边界的 bps 距离
+               - 对线性类（SR/FIB/ST/CH/DS）：dist_bps = |last_price - line_price| / last_price * 10000
+             * KeyTouch=1 当且仅当 dist_bps <= touch_bps（且已通过方向一致性过滤）；否则 KeyTouch=0
            - 总则：只有满足【方向一致性】后，才允许进入 KeyTouch；KeyTouch 命中=该类 scan 允许置 1，且该结构才可进入 AnchorScore 排序。
            - DZ/SZ：
              - LONG：触及 Demand Zone 的“prox/上沿”或进入 DZ（视为可支撑）；distal 仅作失效边界，不作为入选触点
@@ -3217,22 +3225,12 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
            · 对空单：最近的 30m/15m/5m demand 区或 swing low；
          - 给出该距离的点数和折算后的 R 值（记为 R_clean）：
            · 例如："最近反向结构为 15m supply 87200-87500，entry→supply_low≈0.8R"；
-         - 若 R_clean < 1.0：
-           · 视为“空间不足”，默认不得作为常规模型的新开仓信号；
-           · 但对 trade_style="LTF_scalp" 允许更细分门槛（仅用于提频；必须显式降级）：
-             (a) 若 trade_style="LTF_scalp" 且 R_clean < 0.5：
-                 - 空间严重不足，禁止新建 open_long/open_short（保持原口径）。
-             (b) 若 trade_style="LTF_scalp" 且 R_clean ∈ [0.5, 0.8)：
-                 - 仅允许在“趋势尾声反转型 LTF_scalp”例外场景下小仓试单；
-                 - 必须同时满足：pattern∈{EDGE, BO_RETEST, MOMENTUM_BREAK} + 5m Confirm-1/2 + edge_score ≥ 0.65 + confidence ≥ 70；
-                 - 且必须强制降级：risk_down ≥ 0.5；order_type=LIMIT；必须设置 TP1 快速兑现（≥+0.5R 或最近 Anchor/VPVR 边界，close_pct ≥0.5）；
-                 - 否则：has_position=0 -> action="wait"；has_position=1 -> 仅允许 {"hold","close"}（仅管理仓位；严禁输出 wait）。
-             (c) 若 trade_style="LTF_scalp" 且 R_clean ∈ [0.8, 1.0)：
-                 - 允许作为 LTF_scalp 降级单进入候选，但必须强制降级（同上：risk_down≥0.5 + LIMIT + TP1 快速兑现 + 禁止追价/加仓）。
-           · 若 trade_style="HTF_swing"：
-             - 仍按原逻辑：R_clean < 1.0 默认不得开仓；
-             - 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚），否则 action="wait"。
-
+           - 若 R_clean < 1.0：
+             · 视为“空间不足”的裁决口径，统一以 Gate5 段落《【P0-Gate5｜R_clean 强制算式与自证】/ 3) 若 R_clean < 1.0》为准（含 LTF_scalp 分段阈值、强确认条件、强制降级约束）。
+             · 本处仅要求：在 reasoning 中给出最近反向结构 + R_clean 的可核验数字描述；不得在此重复阈值或新增第二套例外口径。
+             · 若 trade_style="HTF_swing"：
+                 - 仍按原逻辑：R_clean < 1.0 默认不得开仓；
+                 - 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚），否则 action="wait"。
          【P0-Gate5｜R_clean 强制算式与自证】
          - 只要 action ∈ {"open_long","open_short"}：
            1) 必须在 reasoning 中给出一行“算式展示”，格式如下（必须含数字）：
@@ -3241,12 +3239,26 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
            2) 若你无法给出可核验算式、或算式与 entry_plan 数字不一致：
               - 视为“不可执行/不可托管”，若 has_position=0：action 强制为 "wait"（fail=>RCALC）；若 has_position=1：action 仅允许 ∈ {"hold","close"}（严禁输出 wait；仅管理既有仓位）。
            3) 若 R_clean < 1.0：
-           - 默认不得开仓；
-           - 仅允许模板已定义的 LTF_scalp 例外，并按以下阈值裁决（与“第6条：最近反向结构与可用空间”一致）：
-             a) R_clean < 0.5：绝对禁止；
-             b) R_clean ∈ [0.5, 0.8)：仅允许“趋势尾声反转型 LTF_scalp”且满足强确认 + 强降级约束；
-             c) R_clean ∈ [0.8, 1.0)：允许 LTF_scalp 进入候选，但必须强制降级（risk_down≥0.5 + LIMIT + TP1 快速兑现 + 禁止追价/加仓）。
-           - 若不满足上述“例外集合 + 对应阈值”：视为 Gate5 未通过，最终动作必须服从 actionDerivation（has_position 分支；持仓时严禁输出 action="wait"）。
+              - 裁决前置约束（防止口径打架）：
+                · trade_style 必须在 Gate4 已确定（HTF_swing / LTF_scalp）；Gate5 只允许“按既定 trade_style 套阈值裁决”，不得在 Gate5 重新改风格来绕门槛。
+                · 任何 “R_clean<1 的例外” 仅限 LTF_scalp，且必须写明 downgrade（risk_down、LIMIT、TP1 快速兑现等）。
+              - 统一硬禁区（两种风格都适用）：
+                a) 若 R_clean < 0.5：绝对禁止 open_long/open_short（空间极小，直接 Gate5=FAIL fail=>RR reason=rr_low_hard）。
+              - 若 trade_style="HTF_swing"：
+                · 仍按原逻辑：R_clean < 1.0 默认不得开仓；
+                · 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚），否则 action="wait"。
+              - 若 trade_style="LTF_scalp"（分段允许，但必须显式降级）：
+                b) 若 R_clean ∈ [0.5, 0.8)：
+                   · 仅允许在“趋势尾声反转型 LTF_scalp”例外场景下小仓试单；
+                   · 必须同时满足：pattern∈{EDGE, BO_RETEST, MOMENTUM_BREAK} + 5m Confirm-1/2 + edge_score ≥ 0.65 + confidence ≥ 70；
+                   · 且必须强制降级：risk_down ≥ 0.5；order_type=LIMIT；必须设置 TP1 快速兑现（≥+0.5R 或最近 Anchor/VPVR 边界，close_pct ≥0.5）；禁止追价/加仓。
+                   · 不满足任一项：Gate5=FAIL fail=>RR reason=rr_low_not_qualified。
+                c) 若 R_clean ∈ [0.8, 1.0)：
+                   · 允许作为 LTF_scalp 降级单进入候选，但必须强制降级（risk_down≥0.5 + LIMIT + TP1 快速兑现 + 禁止追价/加仓）。
+                   · 不满足降级约束：Gate5=FAIL fail=>RR reason=rr_low_no_downgrade。
+              - 写法约束（降 token，避免复述）：
+                · Gate5(EXEC/RR) 行只写 1 行：FAIL/PASS + fail=>RR + reason=短码 + (R_clean=<数值> 可选)；
+                  禁止在 Gate5 行内重复阈值解释（阈值解释放在 Summary 的 1 句内即可）。
         7. 若是开仓（open_long/open_short），还需明确说明本次止损 sl_struct 依托的结构：
           - 对多单：例如“sl_struct 设在最近 15m demand 区下沿 2.065，再下方留出 ≈0.2*ATR 作为缓冲”；
           - 对空单：例如“sl_struct 设在最近 30m supply 区上沿 0.1459，上方留出若干 tick 作为缓冲”；
@@ -3469,10 +3481,12 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                   -【结构扫描 scan（P0｜仅在 Gate2=FAIL 时强制输出，用于证明“8类都未命中”｜不占价位预算）】
                     - scan 覆盖 8 类结构，固定顺序为：
                       DZ/SZ, FVG, VPVR(POC/VAH/VAL), SR, FIB, ST, CH, DS
-                    - 输出格式（推荐｜无分隔符，省字符）：
-                      scan=dz0fvg0vp0sr0fib0st0ch0ds0
+                    - 输出格式（推荐｜无分隔符，省字符）： scan=dz0fvg0vp0sr0fib0st0ch0ds0
                       其中每类后缀 ∈ {0,1}：
                         1 = 本轮存在“方向一致 + KeyTouch=1”的有效候选（可作为开仓依据之一；禁止把“只是存在结构但未触达”记为 1）
+                    -【P0｜计算顺序（硬）】必须先计算 8 类 KeyTouch/scan，再决定 Gate2 状态与 pos：
+                      * 任意 scan=1：Gate2 必须 PASS（上游 Gate0/1=PASS 时不得 DIAG 逃避）
+                      * scan 全 0：Gate2 才允许 FAIL
                         0 = 不存在/不满足（方向不一致或未触及关键位或质量不足）
                     - Gate2=FAIL 的必要条件：
                     - Gate2=FAIL 时：scan 字段不得省略，且必须为 dz0 fvg0 vp0 sr0 fib0 st0 ch0 ds0 全 0 形式（用于证明“8类逐项检查均未命中”）。
