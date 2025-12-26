@@ -2014,7 +2014,7 @@ A) 仓位 sizing（基于R的风险等额）
       - 只给“方向偏置/结构锚点/触发条件/是否可能满足 R_clean 门槛”的预判，用于复盘与 NextTrigger。
     【示例｜Gate1 否决但仍全 Gate 复盘（DIAG）】
     （注意：该示例仅供 REPLAY_FULL / OUTPUT_PROFILE=FULL 复盘参考；PROD_LITE 禁止复制其长句/价位复述写法。PROD_LITE 只允许固定行模板与短码。）
-    Summary: action=wait | trade_style=NA | setup_grade=C | edge_score=0.0 | confidence=70 | fail=>OF | 原因=spoofing_risk>0.8
+    Summary: action=wait | trade_style=LTF_scalp | setup_grade=C | edge_score=0.1 | confidence=70 | fail=>OF | 原因=spoofing_risk>0.8
     Pos: 权益≈<X>; 保证金占用≈<Y>; 当前仓位方向=<none>; 数量=<0>; 均价=<NA>
     Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<1>; 处理=<ok>; 原因=<...>
     GateTrace:
@@ -3126,6 +3126,15 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
       //   "R_struct": number,     // 结构空间换算的期望收益（R倍数），以 init_stop 定义的 1R 为基准
       //   "R_clean": number       // 清洁R（考虑成本/滑点/可执行性后的期望R）；需满足风格门槛，否则应 wait
       // }
+   【P0｜评分字段必须独立计算（禁止默认值化/归零模板外溢）】
+   - "setup_grade"/"edge_score"/"confidence" 必须基于本轮 Gate0→Gate5 的评估计算，与你最终 "action" 无关；
+     即使 action="wait" 也必须输出“本轮最佳候选 setup”的真实评分（可以很低/接近 0，甚至为负；但不得无脑写 0.0）。
+   - 【严格区分】只有当你确实触发“协议自检失败（PROTO_CHECK: FAIL）”，且无法通过“补齐必填字段/删除禁止字段/修正 null 规则/修正 action-close 规则”等方式修复时，
+     才允许启用“安全回退归零模板”：setup_grade="C"、edge_score=0.0、confidence<=60。
+   - reasoning 的 Summary 中 trade_style 不允许写 NA；必须二选一：
+       * trade_style=LTF_scalp（默认）
+       * trade_style=HTF_swing（仅当你明确判断满足 Strict PASS 候选时才允许）
+     若关键输入缺失触发 xF，可写：trade_style=unknown(missing:<字段名列表>)。
    【硬约束】禁止输出任何其它“顶层契约字段”替代物（防止第二套字段契约并存）：
    - 禁止顶层出现：side / type / entry_order_policy / reduce_plan / notes / trade_action / decision / plan / position_action / reasoning_chain ...
    - 严禁在 entry_plan 内输出 entry_order_policy（它属于系统/执行端配置，不是模型输出字段）。
@@ -3139,9 +3148,11 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
       - action∈{"open_long","open_short"} => close_pct=null 且 entry_plan 为 object 且 stop_update=null；
       - action∈{"hold","wait"} => close_pct=null 且 entry_plan=null；
       - 若任一项失败：本轮对该 symbol 输出“安全回退动作”（严禁越权执行），并强制清空可执行字段：
+         - 注意：本“安全回退动作”仅用于【字段契约/JSON 合法性】失败（PROTO）；严禁因为 Gate 否决、模型不确定、或 token 预算而触发。
+         - 能修复就修复（补齐字段/置 null/删禁止字段/纠正 close_pct 规则），不要回退到 PROTO。
          - 若 has_position=0：action="wait"
          - 若 has_position=1：action="hold"（仅管理既有仓位；严禁输出 wait；如确有离场需求只能用 action="close" + close_pct）
-         - setup_grade="C"、edge_score=0.0、confidence<=60
+         - （仅当 PROTO_CHECK: FAIL 时才允许）setup_grade="C"、edge_score=0.0、confidence<=60
          - 字段归零约束（防止后端误执行）：
            - action="wait" => entry_plan=null 且 stop_update=null 且 close_pct=null
            - action="hold" => entry_plan=null 且 close_pct=null；stop_update 允许为 null 或 object（用于移动止损）
@@ -3346,7 +3357,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
     "setup_grade": "C",
     "edge_score": 0.0,
     "confidence": 82,
-    "reasoning": "Summary: action=wait | trade_style=NA | setup_grade=C | edge_score=0.0 | confidence=82\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): FAIL=>STRUCT\nGate3(RR): NA\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 等待结构明朗与 5m Trigger 确认后再评估。",
+    "reasoning": "Summary: action=wait | trade_style=LTF_scalp | setup_grade=C | edge_score=0.0 | confidence=82\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): FAIL=>STRUCT\nGate3(RR): NA\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 等待结构明朗与 5m Trigger 确认后再评估。",
     "stop_update": null,
     "close_pct": null,
     "entry_plan": null
@@ -3396,6 +3407,17 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
               - Gate3(TIMING): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>TIME 或 fail=>xF 可选] 证据（5m收盘锚点/触发窗口/数据是否闭合）
               - Gate4(SETUP): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>SETUP 可选] 证据（趋势动能/RSI/形态确认/入场触发质量；RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向）
               - Gate5(EXEC/RR): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>RR 可选] 证据（可执行性/滑点追价/成本；R_clean 必须给可核验算式）
+              【P0｜GateTrace 一致性（禁止下层 PASS 推翻上层 FAIL）】
+              - 若 GateK 为 FAIL，则所有下层 Gate（K+1..5）的状态必须写 DIAG(EVAL_ONLY)；
+                禁止写 PASS/FAIL（避免出现 Gate2=FAIL 但 Gate4=PASS 的协议矛盾）。
+              - 允许的最小一致性集合（必须严格遵守）：
+                * Gate0=FAIL => Gate1~Gate5=DIAG(EVAL_ONLY)
+                * Gate1=FAIL => Gate2~Gate5=DIAG(EVAL_ONLY)
+                * Gate2=FAIL => Gate3~Gate5=DIAG(EVAL_ONLY)
+                * Gate3=FAIL => Gate4~Gate5=DIAG(EVAL_ONLY)
+                * Gate4=FAIL => Gate5=DIAG(EVAL_ONLY)
+              - 违规样例（严禁出现）：Gate2=FAIL 与 Gate4=PASS；Gate3=FAIL 与 Gate5=PASS；等。
+
               -【Token Budget｜GateTrace 最小证据集（不改变 Gate 判定，只压缩表达）】
                 - 对 action="wait" 且 has_position=0 的标的：每个 Gate 行只保留“最小可核验证据集”，禁止复述输入大段字段。
                   * Gate0(RISK)：只输出 1 个账户侧关键数值 + 1 个结论即可。
