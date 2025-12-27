@@ -145,11 +145,18 @@
          * 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，并在 Gate4 行写 trigger=NONE。
          * 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择 trigger_primary（缺失则选 quality 最高者）作为 trigger，
            并按以下映射输出 pattern（case-sensitive；仅取其一）：
+           * pattern 输出硬约束（P0｜防止 taxonomy 漂移）：
+             - pattern 只允许取值：{none, EDGE, MOMENTUM_BREAK, BO_RETEST}。
+             - 严禁输出：{SFP, Engulf, MOM_BREAK, IBB, MOMO, ENGULF_BULL/BEAR, SFP_BULL/BEAR} 等任何触发器名/别名。
+             - trigger 必须输出 trigger_primary（缺失则取 quality 最高者）或 NONE；pattern 不得与 trigger 同名。
              - trigger ∈ {SFP_*}          => pattern=SFP
              - trigger ∈ {ENGULF_*}       => pattern=Engulf
              - trigger ∈ {EDGE_*}         => pattern=EDGE
              - trigger ∈ {BO_RETEST_*}    => pattern=BO_RETEST
              - trigger ∈ {IBB_*, MOMO_*}  => pattern=MOMENTUM_BREAK   （同义别名：MOM_BREAK 视为 MOMENTUM_BREAK）
+            【P1｜pattern taxonomy SSOT（全局唯一口径）】
+            - 本段落的 pattern 枚举与映射为 SSOT。
+            - 模板其他位置若出现 {MOM_BREAK/MOMENTUM_BREAK/MOM_BREAKOUT} 等同义写法：统一视为 MOMENTUM_BREAK；输出时只能写 MOMENTUM_BREAK（禁止输出别名）。
 
            补充约束：
              - 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，且 trigger=NONE。
@@ -204,99 +211,102 @@
          * rsi_state="EXHAUSTION_*"：默认禁止顺势继续开新顺势单；仅允许 wait，或在“反转结构 + 订单流吸收/背离”成立时以明显降级风险做试探（必须在 reasoning 写明降级）。
        - 本层回答：“综合条件是否足够支持开仓？若支持，执行方式如何收敛？”
   5）执行细节与 R 要求（Execution & R Filter）
-     - 仅当 0~4 层全部通过后，才允许把 action 输出为 open_long/open_short。
-       但即使本轮最终 action=wait/hold/close，Gate5 仍必须给出“可核验 RR 诊断数字”（除非触发 RR_CTX_MISSING 的硬条件）。
+       - 仅当 0~4 层全部通过后，才允许把 action 输出为 open_long/open_short。
+         但只要 Gate4=PASS 且 Gate0~Gate3 未 FAIL，本轮无论最终 action=wait/hold/close，
+         Gate5 仍必须输出 1 行“可核验 RR 对账数字”（除非触发 RR_CTX_MISSING 的硬条件：无法生成任何合法 entry/sl/tp1 组合）。
 
-     【P0｜Gate5 唯一口径：先生成可执行计划，再算 Real_R / R_clean，再裁决 PASS/FAIL】
-     A) 生成“可执行计划”（必须给出 entry/sl/tp1；不得用省略号代替数字）
-        1) entry 候选（最多 2 个；按 Gate4 冻结的 order_type/执行意图）
-           - 若 Gate4 指定 order_type=LIMIT：
-             entry_candidate_1 = entry_plan.entry_price（若 Gate4 未给 entry_plan，则用 trigger_key_level 或 Anchor1 的关键边界生成一个 LIMIT 价；必须落在结构允许窗口内）
-             entry_candidate_2 = （可选）更保守的回踩价（例如 key_level±0.2*ATR14(5m) 内），用于“救 RR”
-           - 若 Gate4 指定 order_type=MARKET：
-             entry_candidate_1 = trigger_context.last_price（必须在 reasoning 标注 est=1）
+       【SSOT｜Gate5(EXEC/RR) 唯一流程：先生成可执行计划 -> 统一算式 -> 成本口径 -> 选最优候选 -> 裁决 PASS/FAIL】
+       A) 生成“可执行计划”（必须给出 entry/sl/tp1；不得用省略号代替数字）
+          A1) entry 候选（最多 2 个；必须服从 Gate4 冻结的 order_type）
+              - 若 Gate4 指定 order_type=LIMIT：
+                entry_candidate_1 = entry_plan.entry_price（若 Gate4 未给 entry_plan，则用 trigger_key_level 或 Anchor1 的关键边界生成 LIMIT 价；必须落在结构允许窗口内）
+                entry_candidate_2 = （可选）更保守的回踩价（例如 key_level±0.2*ATR14(5m) 内），仅用于“提升 RR”；不得追价
+              - 若 Gate4 指定 order_type=MARKET：
+                entry_candidate_1 = trigger_context.last_price（必须在 reasoning 标注 est=1）
 
-        2) sl（init_stop）生成规则（多空对称，必须满足方向正确性）
-           - LONG：sl < entry；且 sl 位于“主结构失效边界”之外 + buffer
-           - SHORT：sl > entry；且 sl 位于“主结构失效边界”之外 + buffer
-           - buffer 取：max(0.20*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
-           - 若无法给出满足方向正确性的 sl -> Gate5=DIAG(EVAL_ONLY) fail=>RR_CTX_MISSING（reason=NO_VALID_SL）
+          A2) sl（init_stop）生成规则（多空对称；必须满足方向正确性）
+              - LONG：sl < entry；且 sl 位于“主结构失效边界”之外 + buffer
+              - SHORT：sl > entry；且 sl 位于“主结构失效边界”之外 + buffer
+              - buffer 取：max(0.20*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
+              - 若无法给出满足方向正确性的 sl -> 视为 RR_CTX_MISSING（reason=RR_CTX_MISSING; detail=NO_VALID_SL）
 
-        3) tp1 生成规则（禁止把“磁铁位”当主 TP1）
-           - tp1 必须取“最近反向结构/首个 Respect 障碍”的有效边界：
-             * LONG：最近 supply / swing_high / SR_R / VAH/VAL 边界等（禁止 VPVR POC、区间中轴）
-             * SHORT：最近 demand / swing_low / SR_S / VAH/VAL 边界等（同禁 POC/中轴）
-           - 若只能找到 POC/中轴而无其它目标 -> 视为 OBSTACLE_CLUSTER 场景，走 C) 的保守口径
-           - 若 tp1 与 entry 同侧（LONG tp1<=entry / SHORT tp1>=entry）-> 目标无效，按 RR_CTX_MISSING（reason=NO_VALID_TP1）
+          A3) tp1 生成规则（禁止把“磁铁位”当主 TP1）
+              - tp1 必须取“最近反向结构/首个 Respect 障碍”的有效边界：
+                * LONG：最近 supply / swing_high / SR_R / VAH/VAL 边界等（禁止 VPVR POC、区间中轴）
+                * SHORT：最近 demand / swing_low / SR_S / VAH/VAL 边界等（同禁 POC/中轴）
+              - 若 tp1 与 entry 同侧（LONG tp1<=entry / SHORT tp1>=entry）-> 视为 RR_CTX_MISSING（reason=RR_CTX_MISSING; detail=NO_VALID_TP1）
+              - 若只能找到 POC/中轴而无其它目标：进入 E) OBSTACLE_CLUSTER 保守重算流程（不得直接放弃）
 
-     B) 统一算式（必须可核验；多空对称；必须输出数字）
-        对每个 entry_candidate 计算：
-        - entry = candidate
-        - sl    = init_stop
-        - tp1   = 目标锚点
-        - risk  = |entry - sl|
-        - reward_gross = |tp1 - entry|
-        - Real_R = reward_gross / risk
+          A4) RR_CTX_MISSING 的硬条件（唯一允许 Gate5=DIAG 的场景）
+              - 任一方向下：无法生成任何合法 entry/sl/tp1 组合（NO_VALID_SL/NO_VALID_TP1/候选全无效）
+              - 触发后：Gate5=DIAG(EVAL_ONLY) fail=>RR；reason=RR_CTX_MISSING；并在 NextTrigger 写“缺什么/如何补齐或如何触发新的有效组合”
 
-        【成本常量（若输入未提供 fee_rate/slippage_rate，则使用以下默认；不得输出 ctxNA 逃避计算）】
-        - Binance USDT 永续：maker_fee=0.0002；taker_fee=0.0005；slippage=0.0005
-        - fee_rate = (order_type==LIMIT ? maker_fee : taker_fee)
-        - slippage_rate = slippage
-        - costs_price = (fee_rate + slippage_rate) * entry
-        - costs_R = costs_price / risk
-        - R_clean = Real_R - costs_R
+       B) 统一算式 + 成本口径（必须可核验；多空对称；必须输出数字）
+          对每个 entry_candidate（若存在）计算：
+          - entry = candidate
+          - sl    = init_stop
+          - tp1   = 目标锚点
+          - risk  = |entry - sl|
+          - reward_gross = |tp1 - entry|
+          - Real_R = reward_gross / risk
 
-        【对账输出（必须 1 行，严禁省略号）】
-        RR: entry=<..> sl=<..> tp1=<..> risk=<..> reward=<..> fee=<..> slip=<..> costs_R=<..> => Real_R=<..> R_clean=<..>
+          【成本常量（若输入未提供 fee_rate/slippage_rate，则使用以下默认；禁止写 ctxNA）】
+          - Binance USDT 永续：maker_fee=0.0002；taker_fee=0.0005；slippage=0.0005
+          - fee_rate = (order_type==LIMIT ? maker_fee : taker_fee)
+          - slippage_rate = slippage
+          - costs_price = (fee_rate + slippage_rate) * entry
+          - costs_R = costs_price / risk
+          - R_clean = Real_R - costs_R
 
-        从候选中选“可执行且 R_clean 最大”的那一个作为最终计划；
-        若所有候选都不满足方向正确性/目标有效性 -> RR_CTX_MISSING。
+          【对账输出（必须 1 行，严禁省略号）】
+          RR: entry=<..> sl=<..> tp1=<..> risk=<..> reward=<..> fee=<..> slip=<..> costs_R=<..> => Real_R=<..> R_clean=<..>
 
-     C) RR 裁决树（这是 Gate5 的唯一阈值口径；其它章节不得再写第二套）
-        先按 Real_R 分层（与模板 D8 的精神一致：避免把 MR 全否决，但保持 HTF 的硬约束）：
-        1) 若 Real_R < 0.5：
-           -> Gate5=FAIL fail=>RR_LOW_HARD（空间极小；禁止 open）
-        2) 若 0.5 ≤ Real_R < 1.0：
-           a) trade_style=HTF_swing：
-              -> Gate5=FAIL fail=>RR（HTF 不做小空间）
-           b) trade_style=LTF_scalp：
-              -> 进入“降级放行”判定（满足则 PASS，否则 FAIL）：
-                 - risk_down ≥ 0.5（且 qty/position_risk_pct 至少减半）
-                 - order_type=LIMIT，禁止追价
-                 - 必须设置 TP1 快速兑现：TP1 对应 close_pct ≥ 0.5
-                 - 禁止加仓；剩余仓位必须写明更紧 stop/锁盈触发
-                 若以上任一条无法满足 -> Gate5=FAIL fail=>RR（reason=DOWNGRADE_REQ_NOT_MET）
-        3) 若 1.0 ≤ Real_R < 2.0：
-           a) trade_style=HTF_swing：
-              -> Gate5=FAIL fail=>RR（HTF 目标空间不足）
-           b) trade_style=LTF_scalp：
-              -> 继续看 R_clean 下限（见 D）
-        4) 若 Real_R ≥ 2.0：
-           -> 继续看 R_clean 下限（见 D）
+          从候选中选“合法且 R_clean 最大”的那一个作为最终计划；
+          若 tie：优先更小 risk（更紧的无效边界）；再 tie：优先 LIMIT 候选。
 
-        D) R_clean 下限（与 trade_style 绑定；不得再用“R_clean<1 一刀切”）
-           - LTF_scalp：R_clean ≥ 0.5 为最低可放行线
-             * 0.5~0.8：仅允许“明显降级 + 快速兑现(close_pct≥0.5) + LIMIT + 禁止追价/加仓”
-             * ≥0.8：常规 LTF 可放行
-           - HTF_swing：R_clean ≥ 1.5 且 Real_R≥2.0 才可放行
-           - 若不满足 -> Gate5=FAIL fail=>RR（reason=RR_CLEAN）
+          重要：只要 Gate4=PASS 且至少存在 1 个合法候选，本轮无论 Gate5 PASS/FAIL，都必须输出上述 RR 对账行（用于统计与复盘）。
 
-     E) OBSTACLE_CLUSTER（障碍聚集）强制处理（不允许只 DIAG 就结束）
-        - 定义：entry→tp1 方向存在 ≥2 个 Respect 障碍（HTF 结构 / POC / strength_z>1.5）且间距 <0.5R
-        - 处理：
-          1) 取“最近 Respect 障碍”作为 TP1 重新计算 Conservative_R_clean（必须输出数字）
-          2) 若 Conservative_R_clean 达到对应 trade_style 下限：
-             -> Gate5=PASS 但必须降级：setup_grade 降 1 档 + risk_down≥0.5 + LIMIT + TP1 快速兑现
-          3) 否则：
-             -> Gate5=FAIL fail=>RR（reason=RR_LOW_CLUSTER）
+       C) 裁决阈值（Gate5 唯一口径；模板其它位置不得再写第二套）
+          C1) 统一硬禁区（两种风格都适用）
+              - 若 Real_R < 0.5 或 R_clean < 0.5：
+                -> Gate5=FAIL fail=>RR；reason=RR_LOW_HARD
 
-     F) Gate5 最终输出约束
-        - 只有当 Gate5=PASS 时，action 才允许为 open_long/open_short，并必须输出 entry_plan（含 entry_price/order_type/tp1/close_pct/init_stop 等）
-        - 若 Gate5=FAIL：
-           has_position=0 -> action="wait"
-           has_position=1 -> action ∈ {"hold","close"}（严禁 wait）
-        - 若 Gate5=DIAG(EVAL_ONLY)：
-           仅允许在“关键字段缺失导致无法生成任何合法 entry/sl/tp1 组合”时出现；否则一律按 PASS/FAIL 给结论。
+          C2) trade_style=HTF_swing（硬约束）
+              - 必须同时满足：Real_R ≥ 2.0 且 R_clean ≥ 1.5
+              - 否则：Gate5=FAIL fail=>RR；reason=RR_CLEAN
+
+          C3) trade_style=LTF_scalp（分段允许，但必须显式降级）
+              - 若 R_clean ≥ 0.8：
+                -> Gate5=PASS（常规 LTF）
+              - 若 0.5 ≤ R_clean < 0.8：
+                -> 仅允许“降级放行”，必须同时满足（不满足任一项则 FAIL）：
+                   a) risk_down ≥ 0.5（qty/position_risk_pct 至少减半）
+                   b) order_type=LIMIT（禁止追价）
+                   c) 必须设置 TP1 快速兑现：TP1 对应 close_pct ≥ 0.5
+                   d) 禁止加仓；剩余仓位必须写明更紧 stop/锁盈触发
+                -> 满足则 Gate5=PASS（downgrade=on），否则 Gate5=FAIL fail=>RR；reason=DOWNGRADE_REQ_NOT_MET
+
+       D) 输出 reason short_code 集合（用于 Summary 单标签统计；必须从集合取值）
+          reason ∈ {OK, RR_CTX_MISSING, RR_LOW_HARD, RR_CLEAN, DOWNGRADE_REQ_NOT_MET, RR_LOW_CLUSTER}
+          - PASS：reason=OK
+          - DIAG：reason=RR_CTX_MISSING
+          - FAIL：按上述裁决落到对应 reason
+
+       E) OBSTACLE_CLUSTER（障碍聚集）强制处理（不得“只 DIAG 就结束”）
+          - 定义：entry→tp1 方向存在 ≥2 个 Respect 障碍（HTF 结构 / POC / strength_z>1.5）且间距 <0.5R
+          - 处理（必须输出数字）：
+            1) 取“最近 Respect 障碍”作为 TP1，重新计算 Conservative_R_clean
+            2) 若 Conservative_R_clean 达到对应 trade_style 的下限：
+               -> Gate5=PASS，但必须降级：setup_grade 降 1 档 + risk_down≥0.5 + LIMIT + TP1 快速兑现；reason=OK
+            3) 否则：
+               -> Gate5=FAIL fail=>RR；reason=RR_LOW_CLUSTER
+
+       F) Gate5 最终输出约束（与 actionDerivation 对齐）
+          - 只有当 Gate5=PASS 时，action 才允许为 open_long/open_short，并必须输出 entry_plan（含 entry_price/order_type/tp1/close_pct/init_stop 等）
+          - 若 Gate5=FAIL：
+             has_position=0 -> action="wait"
+             has_position=1 -> action ∈ {"hold","close"}（严禁 wait）
+          - Gate5=DIAG(EVAL_ONLY) 仅允许在 RR_CTX_MISSING（无法生成任何合法组合）时出现；其它场景一律按 PASS/FAIL 给结论
 
 - 总体原则（用于消解“同样超卖却得到相反决策”的矛盾）：
   1）“能不能做、做多还是做空” 主要由【结构 + 订单流】决定，
@@ -332,6 +342,11 @@
      * Gate5(EXEC/RR)=PASS 且 R_clean 达门槛；
      * 在 GateTrace 后追加 "Exception:"，写清：结构锚点 / 入场触发 / 失效条件 / 时间窗 / 风险降级比例。
    - 若否决：Gate2(STRUCTURE) 行必须：FAIL + fail=>STRUCT。
+   【P1｜Gate2 DIAG 使用硬约束（防止 Gate2=DIAG 但 Gate4=PASS 的链路矛盾）】
+   - 当 Gate0(RISK)=PASS 且 Gate1(ORDERFLOW)=PASS 时：
+     Gate2(STRUCTURE) 必须输出 PASS 或 FAIL；禁止输出 DIAG(EVAL_ONLY)。
+   - 只有在 Gate0 或 Gate1 为 FAIL 的情况下：
+     Gate2 才允许 DIAG(EVAL_ONLY)，并且必须满足“上层否决后的 DIAG 范围约束”（下层 Gate3~Gate5 统一 DIAG；Gate5 reason=SKIP_UPSTREAM_FAIL）。
 4) 若 Gate3（TIMING）不满足（例如缺少5m收盘确认、数据未闭合 xF、或不在触发窗口）：
    - 若 has_position=0：action="wait"
    - 若 has_position=1：action ∈ {"hold","close"}（严禁输出 wait；默认 hold；如出现风控恶化/保护线触发/需要止损退出才 close）
@@ -2095,6 +2110,9 @@ A) 仓位 sizing（基于R的风险等额）
               4) 仍超限：仅保留 Summary + Gate0~Gate2 + actionDerivation（其余行省略）。
             * 价位/区间/小数输出限制（P0）：
               - 除 Gate2 行的 Anchor1/Anchor2（完整出现一次）外，其他任何行严禁出现具体价位/区间/小数/≈/%/范围符号；
+              - 例外（P0｜仅用于 Gate5 可核验）：当 Gate4(SETUP)=PASS 且 Gate0~Gate3 均非 FAIL 时，允许额外追加 1 行 RRLine（只此 1 行允许数字）：
+                RR: entry=<.>; sl=<.>; tp1=<.>; risk=<.>; reward=<.>; costs_R=<.>; R_clean=<.>; Real_R=<.>; est=<0/1>
+                其余任何行仍严禁出现数字/价位/区间/百分号。
               - 若必须引用结构，仅允许写 “Anchor1/Anchor2” 字面量或短码（如 retest_A1 / clear_POC / no_trigger / trend_mixed / rr_low）。
             * 自检（P0）：若检测到违规（括号解释、价位复述、PASS 时出现 scan、wait 时展开细节等），必须在输出前自行裁剪为合规文本；不得以“说明原因”追加新行。
 
@@ -2105,12 +2123,16 @@ A) 仓位 sizing（基于R的风险等额）
             - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（严格三选一；禁止括号/附加解释/附带 intent、regime、alignment；如出现“(”或多余字段，必须裁剪为单词 bull/bear/neutral）
             - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC.../mid-range/edge>; Anchor1:<.>; Anchor2:<.>; scan=<omit_if_PASS>（scan 仅允许在 FAIL 时出现；PASS 时出现 scan 视为违规必须删除；如需证明“8类逐类检查均未命中”，仅在 Gate2=FAIL 时额外追加 1 行 StructScan: scan=<...> 且严禁含价位/区间）
             - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in/out/unknown>
-            - Gate4(SETUP): PASS/DIAG(EVAL_ONLY) pattern=<none/EDGE/BO_RETEST/MOM_BREAK/SFP/Engulf>; trend=<aligned/mixed>
-            - Gate5(EXEC/RR): PASS/DIAG(EVAL_ONLY) reason=<no_clean_sl/too_close/costly/rr_low>; R_clean=<>=<th?>
+            - Gate4(SETUP): PASS/FAIL/DIAG(EVAL_ONLY) pattern=<none/EDGE/BO_RETEST/MOMENTUM_BREAK>; trigger=<trigger_primary|NONE>; q=<0~1>; tier=<strict/borderline/none>; trend=<aligned/mixed>
+            - Gate5(EXEC/RR): PASS/FAIL/DIAG(EVAL_ONLY) fail=><RR/RR_LOW_HARD/RR_CTX_MISSING>; reason=<short_code>; R_clean=<.>; th=<.>
         - 【P0｜wait 极简输出（不改变 JSON，仅收敛 reasoning）】
           * 适用条件：has_position=0 且 action="wait"。
-          * reasoning 允许的最大形态（≤6 行）：
-            Summary（1行）→ Gate0 → Gate1 → Gate2 → Gate4（或 Gate3/4 合并为 1 行 DIAG）→ actionDerivation（1行）
+          * reasoning 允许的最大形态（≤9 行）：
+            Summary（1行）→ Gate0 → Gate1 → Gate2 → Gate3 → Gate4 → Gate5 → actionDerivation（1行）
+            说明（P0）：
+            - Gate3 与 Gate5 不得省略；严禁 “Gate3/4 合并为 1 行 DIAG”。
+            - 若上层 GateK=FAIL：下层 Gate(K+1..5) 必须输出 DIAG(EVAL_ONLY)（其中 Gate5 统一写 reason=SKIP_UPSTREAM_FAIL），不得出现 PASS/FAIL。
+            - 若 Gate0~Gate3 均非 FAIL 且 Gate4=PASS：无论最终 action 是否为 wait，Gate5 都必须给出 RRLine（见 P0-G5-RR-01）。
           * 禁止项（P0）：
             - StructureSnapshot / NextTrigger / Optional Details 默认省略；
             - 如必须输出 StructureSnapshot/NextTrigger：各≤1行且不得含任何数字/价位/区间，只能引用 Anchor1/2 或短码（retest_A1 / clear_POC / no_trigger）。
@@ -2124,8 +2146,9 @@ A) 仓位 sizing（基于R的风险等额）
           - 该行不用于解释，只用于证明“8类结构逐类检查后均未命中”；
           - 该行不改变 action，只增强可审计性。
     - 【上层否决后的 DIAG 范围约束】
-      当 Gate0 或 Gate1 为 FAIL 时：
-      - Gate2~Gate5 仍需输出 DIAG(EVAL_ONLY)，但不得计算或输出可执行明细（如 entry_plan/具体 SL/TP 价位/完整 RR 推导）；
+      当 Gate0 / Gate1 / Gate2 / Gate3 任一为 FAIL 时：
+      - Gate(K+1)~Gate5 必须输出 DIAG(EVAL_ONLY)，不得出现 PASS/FAIL（其中 Gate5 统一写 reason=SKIP_UPSTREAM_FAIL）；
+      - 禁止计算或输出可执行明细（如 entry_plan/具体 SL/TP 价位/完整 RR 推导）；
       - 只给“方向偏置/结构锚点/触发条件/是否可能满足 R_clean 门槛”的预判，用于复盘与 NextTrigger。
     【示例｜Gate1 否决但仍全 Gate 复盘（DIAG）】
     （注意：该示例仅供 REPLAY_FULL / OUTPUT_PROFILE=FULL 复盘参考；PROD_LITE 禁止复制其长句/价位复述写法。PROD_LITE 只允许固定行模板与短码。）
@@ -2869,9 +2892,12 @@ D. 风险与资金安全 (Risk & Safety)
                      -> Gate5(EXEC/RR)=PASS（常规，但仍需遵守 R_clean 门槛与执行约束）
                4) 若 Real_R ≥ 2.0：
                   -> Gate5(EXEC/RR)=PASS（HTF_swing 常规；LTF_scalp 亦可）
-        - 若 Real_R / R_clean 无法计算（例如 ctxNA_lot_size / no_clean_path_between_anchors / no_R_clean_calc_without_qty 等）：
+        - 若 Real_R / R_clean 无法计算（仅当 entry/sl/tp1 任一缺失/为空/矛盾，或导致 risk<=0 或 reward<=0；qty 缺失不构成 RR 计算缺失）：
           -> Gate5(EXEC/RR)=DIAG(EVAL_ONLY) fail=>RR_CTX_MISSING
           -> action 按 has_position 分支输出；并在 NextTrigger 写明“恢复可计算”的最小条件（例如：必须给 qty 或必须给合法 stop_anchor 与 target_anchor）
+        - DIAG(EVAL_ONLY) 的唯一合法 fail=> 为 RR_CTX_MISSING：
+          * 只要 Real_R/R_clean 可计算但不达标：一律用 FAIL（fail=>RR_LOW_HARD 或 fail=>RR）；
+          * 严禁用 DIAG 表达 rr_low / costly / RR_eval_only 等“可计算否决”。
   D8-Plus) 止损质量深度自检 (Stop Loss Quality & Integrity)
           - 核心目的：防止止损设在“纸糊的地板”上，或暴露在“钢板”之上。
           - 问：
@@ -2998,32 +3024,14 @@ B5) 智能障碍识别与空间计算 (Smart Space Calculation)
       1. 所有 HTF (4h/1h) 级别的结构。
       2. VPVR POC (这是最大的磁铁和阻力)。
       3. `ctx.strength_z` > 1.5 的强结构。
-  第二步：空间门槛（默认 + 例外，唯一口径）
-  - 默认门槛：
-    * HTF_swing：R_clean ≥ 2.0
-    * LTF_scalp：R_clean ≥ 1.0
-  - 例外（仅 LTF_scalp 可用，且并在 GateTrace 之后追加一行：Exception: <为何允许例外/满足了哪些必要条件/不满足哪些常规条件/风险对冲方式/失败即止的退出触发>）：
-    * 允许 R_clean ∈ [0.5, 1.0) 的唯一条件集合与 Gate5 保持一致：
-      - rsi_state ∈ {TREND_OVEREXTENDED, TREND_OVERSOLD/OVERBOUGHT} 且
-      - pattern ∈ {EDGE, BO_RETEST} 且
-      - 5m Confirm-1/2 已满足 且
-      - edge_score ≥ 0.65 且 confidence ≥ 70（常规 PASS）
-          若 confidence ∈ [60,70) ：允许但必须降级（risk_pct*=0.5 且 LIMIT 且 setup_grade 降 1 档）
-          若 confidence < 60 ：不允许例外开仓（action="wait"）
-    * 若 R_clean < 0.5：无条件禁止开仓（action="wait"）。
-第三步：障碍聚集/路径不干净（Obstacle Cluster）— 降级而非直接否决
-  - 定义：在 entry→目标方向上，存在 ≥2 个“Respect”级别障碍（HTF 结构 / POC / strength_z>1.5）且它们之间的间距 < 0.5R，使得无法给出“干净的一条清晰路径”。
-  - 动作（必须做“保守R”的计算，不得写 R_clean=unknown）：
-    1) 取最近的一个 Respect 障碍作为 TP1（第一止盈/第一减仓目标），并据此计算 Conservative_R_clean：
-       Conservative_R_clean = (TP1 - Entry) / (Entry - SL) （LONG；SHORT 对称）
-    2) 若 Conservative_R_clean 仍满足门槛：允许 PASS，但必须降级执行：
-       - setup_grade 至少降 1 档（A→B，B→C）
-       - position_risk_pct *= 0.5（或 qty *= 0.5）
-       - order_type 强制为 LIMIT（禁止追价 Market）
-       - take_profit 先给 TP1；更远 TP2/TP3 仅在“障碍被消化后”再考虑（写入 NextTrigger）
-    3) 若 Conservative_R_clean 不满足门槛：
-       - 不直接 FAIL；Gate5 标记 DIAG(EVAL_ONLY) + reason=RR_low_cluster
-       - action="wait"，并给出解除条件：需要价格脱离障碍簇 / 障碍被实体收盘突破 / 回踩确认等（写 NextTrigger）
+  第二步：空间门槛（引用 Gate5｜禁止第二套门槛）
+    - 本节仅负责“Respect/Discount/Ignore”的分级，供 Gate5 选 TP1/判定障碍使用。
+    - 空间门槛（Real_R/R_clean）、例外集合、以及 OBSTACLE_CLUSTER 的裁决与动作：
+      统一以 Gate5(EXEC/RR) 的 C/D/E 段落为准；不得在此重复阈值、例外条件、或 action/DIAG 规则。
+
+    第三步：障碍聚集/路径不干净（引用 Gate5｜禁止只 DIAG）
+    - OBSTACLE_CLUSTER 的定义与处理（Conservative_R_clean 重算、降级放行或 FAIL）：
+      统一以 Gate5(EXEC/RR).E 为准；本节不再给出独立动作口径。
 B6) 执行时效与反延迟闸门 (Execution Timeliness & Anti-Latency Guard)
   - 核心目的：确保决策基于“最新、有效、未失效”的市场状态。
   - 问：在生成最终 JSON 的这一刻，以下 3 个子闸门是否全部通过？
@@ -3397,6 +3405,19 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                    · 不满足降级约束：Gate5=FAIL fail=>RR reason=rr_low_no_downgrade。
               - 写法约束（降 token，避免复述）：
                 · Gate5(EXEC/RR) 行只写 1 行：FAIL/PASS + fail=>RR + reason=短码 + (R_clean=<数值> 可选)；
+                【P2｜Gate5 reason short_code（SSOT｜用于 Summary 单标签统计）】
+                - reason 只允许取以下集合（其余一律视为违规并需改写）：
+                  reason ∈ {
+                    rr_low_hard,           // Real_R < 0.5
+                    rr_low_not_qualified,  // Real_R 可计算但不满足 trade_style 门槛/约束（含 HTF_swing 小空间）
+                    rr_low_no_downgrade,   // LTF_scalp 可做，但缺少强制降级条件（risk_down/LIMIT/TP1 快速兑现等）
+                    costly,                // costs_R 吞噬导致 R_clean 不达标
+                    too_close,             // entry 与结构失效/障碍过近导致无净空间（可计算否决）
+                    no_clean_sl,           // 无法给出“结构失效边界之外”的合法 init_stop
+                    ctx_missing,           // 仅用于 DIAG 且 fail=>RR_CTX_MISSING
+                    skip_upstream_fail     // 仅用于上层 FAIL 时 Gate5 DIAG：reason=SKIP_UPSTREAM_FAIL（推荐 Summary 使用该标签）
+                  }
+                - 规则：只要 Real_R/R_clean 可计算但不达标，必须用 FAIL（不得用 DIAG 替代）。
                   禁止在 Gate5 行内重复阈值解释（阈值解释放在 Summary 的 1 句内即可）。
         7. 若是开仓（open_long/open_short），还需明确说明本次止损 sl_struct 依托的结构：
           - 对多单：例如“sl_struct 设在最近 15m demand 区下沿 2.065，再下方留出 ≈0.2*ATR 作为缓冲”；
