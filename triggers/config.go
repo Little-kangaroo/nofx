@@ -27,6 +27,18 @@ type TriggerConfig struct {
 	RangeAtrMax      float64 `json:"range_atr_max"`      // 最大波幅（ATR倍数，默认：5.0）
 	CloseNearExtreme float64 `json:"close_near_extreme"` // 收盘靠近极值阈值（默认：0.20）
 
+	// 🔥 P0新增：EDGE（结构边缘触碰）配置
+	EdgeTouchBps      float64 `json:"edge_touch_bps"`       // EDGE触碰基点阈值（默认：12）
+	EdgeTouchAtrMult  float64 `json:"edge_touch_atr_mult"`  // EDGE触碰ATR倍数阈值（默认：0.20）
+	EdgeMinStrengthZ  float64 `json:"edge_min_strength_z"`  // EDGE最小结构强度Z分数（默认：-0.2）
+
+	// 🔥 P0新增：BO_RETEST（突破回测）配置
+	BoLookbackBars int     `json:"bo_lookback_bars"` // BO_RETEST回看K线数量（默认：30）
+	BoMaxAgeBars   int     `json:"bo_max_age_bars"`  // BO_RETEST最大年龄（默认：6）
+	BoBreakMinAtr  float64 `json:"bo_break_min_atr"` // BO_RETEST最小突破幅度（ATR倍数，默认：0.20）
+	BoRetestTolBps float64 `json:"bo_retest_tol_bps"` // BO_RETEST回测容差（基点，默认：10）
+	BoConfirmMinQ  float64 `json:"bo_confirm_min_q"`  // BO_RETEST确认最小质量（默认：0.30）
+
 	// === 通用量能配置 ===
 	VolZMin float64 `json:"vol_z_min"` // 最小量能Z分数（默认：0.8）
 
@@ -67,6 +79,18 @@ func DefaultConfig() TriggerConfig {
 		RangeAtrMin:      1.2,
 		RangeAtrMax:      2.8,
 		CloseNearExtreme: 0.20,
+
+		// 🔥 P0新增：EDGE配置
+		EdgeTouchBps:     12,   // 触碰基点阈值
+		EdgeTouchAtrMult: 0.20, // 触碰ATR倍数阈值
+		EdgeMinStrengthZ: -0.2, // 最小结构强度Z分数
+
+		// 🔥 P0新增：BO_RETEST配置
+		BoLookbackBars: 30,   // 回看K线数量
+		BoMaxAgeBars:   6,    // 最大年龄
+		BoBreakMinAtr:  0.20, // 最小突破幅度（ATR倍数）
+		BoRetestTolBps: 10,   // 回测容差（基点）
+		BoConfirmMinQ:  0.30, // 确认最小质量
 
 		// 量能配置
 		VolZMin: 0.8,

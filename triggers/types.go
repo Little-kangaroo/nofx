@@ -18,6 +18,14 @@ const (
 	FlagMomoBear = "MOMO_BEAR" // 动能向下（看空）
 	FlagMomoBull = "MOMO_BULL" // 动能向上（看多）
 
+	// 🔥 P0新增：EDGE - 结构边缘触碰
+	FlagEdgeBull = "EDGE_BULL" // 支撑边缘触碰（看多）
+	FlagEdgeBear = "EDGE_BEAR" // 阻力边缘触碰（看空）
+
+	// 🔥 P0新增：BO_RETEST - 突破回测
+	FlagBoRetestBull = "BO_RETEST_BULL" // 向上突破回测（看多）
+	FlagBoRetestBear = "BO_RETEST_BEAR" // 向下突破回测（看空）
+
 	// 无触发器
 	FlagNone = "NONE"
 )
@@ -89,4 +97,35 @@ const (
 	KeyLevelEngulfInvalidLow  = "engulf_invalid_low"  // Engulf失效的前bar低点
 	KeyLevelMomoInvalidHigh   = "momo_invalid_high"   // Momo失效的点火bar高点
 	KeyLevelMomoInvalidLow    = "momo_invalid_low"    // Momo失效的点火bar低点
+
+	// 🔥 P0新增：EDGE触发器关键位类型
+	KeyLevelEdgeSupport    = "edge_support"    // EDGE支撑位（VPVR VAL/POC、S/R Support、供需区下沿）
+	KeyLevelEdgeResistance = "edge_resistance" // EDGE阻力位（VPVR VAH/POC、S/R Resistance、供需区上沿）
+
+	// 🔥 P0新增：BO_RETEST触发器关键位类型
+	KeyLevelBoBreakoutSupport    = "bo_breakout_support"    // BO_RETEST突破支撑位
+	KeyLevelBoBreakoutResistance = "bo_breakout_resistance" // BO_RETEST突破阻力位
 )
+
+// 🔥 P0新增：TouchInfo EDGE触发器的触碰信息
+type TouchInfo struct {
+	Level      float64 `json:"level"`       // 关键位价格
+	Side       string  `json:"side"`        // 方向："LONG"（支撑）或"SHORT"（阻力）
+	DistBps    float64 `json:"dist_bps"`    // 距离（基点，1基点=0.01%）
+	DistAtr    float64 `json:"dist_atr"`    // 距离（ATR倍数）
+	Source     string  `json:"source"`      // 数据源："VPVR"/"SR"/"SUPPLY_DEMAND"
+	StrengthZ  float64 `json:"strength_z"`  // 结构强度Z分数（标准化）
+	TimeFrame  string  `json:"timeframe"`   // 时间框架："5m"/"15m"/"30m"/"1h"/"4h"
+	KeyType    string  `json:"key_type"`    // 关键位类型（edge_support/edge_resistance）
+}
+
+// 🔥 P0新增：LevelInfo BO_RETEST触发器的关键位信息
+type LevelInfo struct {
+	Level     float64 `json:"level"`      // 关键位价格
+	Side      string  `json:"side"`       // 方向："LONG"（支撑）或"SHORT"（阻力）
+	Source    string  `json:"source"`     // 数据源："VPVR"/"SR"/"SUPPLY_DEMAND"
+	StrengthZ float64 `json:"strength_z"` // 结构强度Z分数（标准化）
+	TimeFrame string  `json:"timeframe"`  // 时间框架："5m"/"15m"/"30m"/"1h"/"4h"
+	KeyType   string  `json:"key_type"`   // 关键位类型（bo_breakout_support/bo_breakout_resistance）
+}
+

@@ -117,7 +117,7 @@
        - 模板后续所有出现的下列引用，统一改为“从 trigger_context 取值”的别名（Single Source）：
          * ohlc_last_closed.x            := trigger_context.is_kline_closed
          * ohlc_last_closed.close_time   := trigger_context.trigger_bar_close_time_ms
-         * ohlc_last_closed.close        := trigger_context.trigger_bar_close_price        （新增，必填）
+         * ohlc_last_closed.close        := trigger_context.trigger_bar_close_price（优先）；若不存在则用 trigger_context.trigger_bar_close_price5m
          * last_price / price            := trigger_context.last_price                      （新增，必填）
        - 解释约束：
          1) 任何章节若写“MarketSnapshot.5m 缺失则不可验证”，在 Token-Lite 模式下等价于：
@@ -144,9 +144,16 @@
            严禁在 reasoning 中“根据K线/指标再推断一个未给出的触发器/形态”。
          * 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，并在 Gate4 行写 trigger=NONE。
          * 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择 trigger_primary（缺失则选 quality 最高者）作为 trigger，
-           并按以下映射输出 pattern：
-             - trigger ∈ {SFP_*, ENGULF_*} => pattern=EDGE
-             - trigger ∈ {IBB_*, MOMO_*}  => pattern=MOMENTUM_BREAK
+           并按以下映射输出 pattern（case-sensitive；仅取其一）：
+             - trigger ∈ {SFP_*}          => pattern=SFP
+             - trigger ∈ {ENGULF_*}       => pattern=Engulf
+             - trigger ∈ {EDGE_*}         => pattern=EDGE
+             - trigger ∈ {BO_RETEST_*}    => pattern=BO_RETEST
+             - trigger ∈ {IBB_*, MOMO_*}  => pattern=MOMENTUM_BREAK   （同义别名：MOM_BREAK 视为 MOMENTUM_BREAK）
+
+           补充约束：
+             - 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，且 trigger=NONE。
+             - 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择 trigger_primary（缺失则选 quality 最高者）作为 trigger，并按上表映射 pattern。
              - pattern=BO_RETEST 仅在 Gate2 已给出“有效突破后回踩关键位”的结构证据时允许（并说明 retest_anchor=...）；否则不得输出 BO_RETEST。
          * Gate4 行建议短格式（避免复述形态细节）：
            - Gate4(SETUP): <PASS/FAIL/DIAG> ... pattern=<.>; trigger=<trigger>; q=<0~1>; key=<trigger_key_level 可选>
@@ -197,30 +204,100 @@
          * rsi_state="EXHAUSTION_*"：默认禁止顺势继续开新顺势单；仅允许 wait，或在“反转结构 + 订单流吸收/背离”成立时以明显降级风险做试探（必须在 reasoning 写明降级）。
        - 本层回答：“综合条件是否足够支持开仓？若支持，执行方式如何收敛？”
   5）执行细节与 R 要求（Execution & R Filter）
-     - 仅当 0~4 层全部通过后，才计算与执行：
-        【P0｜R_clean 统一算式（必须可核验）】
-        - 变量定义（多空对称）：
-          entry = entry_plan.entry_price（LIMIT 用挂单价；MARKET 用 last_price 仅作估算，但必须在 reasoning 标注 est=1）
-          sl    = init_stop（必须位于“结构失效边界”之外）
-          tp1   = 结构允许的首个主要目标/最近阻力(做多)/支撑(做空)（禁止选择 VPVR POC/区间中部这类磁铁位作为“主要TP1”）
-          risk  = |entry - sl|
-          reward_gross = |tp1 - entry|
+     - 仅当 0~4 层全部通过后，才允许把 action 输出为 open_long/open_short。
+       但即使本轮最终 action=wait/hold/close，Gate5 仍必须给出“可核验 RR 诊断数字”（除非触发 RR_CTX_MISSING 的硬条件）。
 
-        - R_struct = reward_gross / risk
-        - costs_price = (fee_rate + slippage_rate) * entry   （若无输入则写 ctxNA，不得臆造）
+     【P0｜Gate5 唯一口径：先生成可执行计划，再算 Real_R / R_clean，再裁决 PASS/FAIL】
+     A) 生成“可执行计划”（必须给出 entry/sl/tp1；不得用省略号代替数字）
+        1) entry 候选（最多 2 个；按 Gate4 冻结的 order_type/执行意图）
+           - 若 Gate4 指定 order_type=LIMIT：
+             entry_candidate_1 = entry_plan.entry_price（若 Gate4 未给 entry_plan，则用 trigger_key_level 或 Anchor1 的关键边界生成一个 LIMIT 价；必须落在结构允许窗口内）
+             entry_candidate_2 = （可选）更保守的回踩价（例如 key_level±0.2*ATR14(5m) 内），用于“救 RR”
+           - 若 Gate4 指定 order_type=MARKET：
+             entry_candidate_1 = trigger_context.last_price（必须在 reasoning 标注 est=1）
+
+        2) sl（init_stop）生成规则（多空对称，必须满足方向正确性）
+           - LONG：sl < entry；且 sl 位于“主结构失效边界”之外 + buffer
+           - SHORT：sl > entry；且 sl 位于“主结构失效边界”之外 + buffer
+           - buffer 取：max(0.20*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
+           - 若无法给出满足方向正确性的 sl -> Gate5=DIAG(EVAL_ONLY) fail=>RR_CTX_MISSING（reason=NO_VALID_SL）
+
+        3) tp1 生成规则（禁止把“磁铁位”当主 TP1）
+           - tp1 必须取“最近反向结构/首个 Respect 障碍”的有效边界：
+             * LONG：最近 supply / swing_high / SR_R / VAH/VAL 边界等（禁止 VPVR POC、区间中轴）
+             * SHORT：最近 demand / swing_low / SR_S / VAH/VAL 边界等（同禁 POC/中轴）
+           - 若只能找到 POC/中轴而无其它目标 -> 视为 OBSTACLE_CLUSTER 场景，走 C) 的保守口径
+           - 若 tp1 与 entry 同侧（LONG tp1<=entry / SHORT tp1>=entry）-> 目标无效，按 RR_CTX_MISSING（reason=NO_VALID_TP1）
+
+     B) 统一算式（必须可核验；多空对称；必须输出数字）
+        对每个 entry_candidate 计算：
+        - entry = candidate
+        - sl    = init_stop
+        - tp1   = 目标锚点
+        - risk  = |entry - sl|
+        - reward_gross = |tp1 - entry|
+        - Real_R = reward_gross / risk
+
+        【成本常量（若输入未提供 fee_rate/slippage_rate，则使用以下默认；不得输出 ctxNA 逃避计算）】
+        - Binance USDT 永续：maker_fee=0.0002；taker_fee=0.0005；slippage=0.0005
+        - fee_rate = (order_type==LIMIT ? maker_fee : taker_fee)
+        - slippage_rate = slippage
+        - costs_price = (fee_rate + slippage_rate) * entry
         - costs_R = costs_price / risk
-        - R_clean = R_struct - costs_R
+        - R_clean = Real_R - costs_R
 
-        【P0｜R_clean 对账输出（写在 Gate5 行或紧随其后 1 行）】
-        - 必须输出可核验数字：entry=<..> sl=<..> tp1=<..> risk=<..> reward=<..> costs_R=<..> => R_clean=<..>
-        - 禁止只写“R_clean不足/通过”不给数字。
+        【对账输出（必须 1 行，严禁省略号）】
+        RR: entry=<..> sl=<..> tp1=<..> risk=<..> reward=<..> fee=<..> slip=<..> costs_R=<..> => Real_R=<..> R_clean=<..>
 
-       * 依据最近反向结构与 init_stop 计算 R_struct / R_clean；
-       * 校验是否满足对应 trade_style（HTF_swing / LTF_scalp）的最小 R 要求；
-       * 决定：
-         · 具体 entry_price 区间（仅在结构允许窗口内挂单）；
-         · order_type（MARKET / LIMIT），若 RSI 极端且为趋势型，只能 LIMIT；
-         · 初始止损 init_stop 与后续锁盈/保本轨迹。
+        从候选中选“可执行且 R_clean 最大”的那一个作为最终计划；
+        若所有候选都不满足方向正确性/目标有效性 -> RR_CTX_MISSING。
+
+     C) RR 裁决树（这是 Gate5 的唯一阈值口径；其它章节不得再写第二套）
+        先按 Real_R 分层（与模板 D8 的精神一致：避免把 MR 全否决，但保持 HTF 的硬约束）：
+        1) 若 Real_R < 0.5：
+           -> Gate5=FAIL fail=>RR_LOW_HARD（空间极小；禁止 open）
+        2) 若 0.5 ≤ Real_R < 1.0：
+           a) trade_style=HTF_swing：
+              -> Gate5=FAIL fail=>RR（HTF 不做小空间）
+           b) trade_style=LTF_scalp：
+              -> 进入“降级放行”判定（满足则 PASS，否则 FAIL）：
+                 - risk_down ≥ 0.5（且 qty/position_risk_pct 至少减半）
+                 - order_type=LIMIT，禁止追价
+                 - 必须设置 TP1 快速兑现：TP1 对应 close_pct ≥ 0.5
+                 - 禁止加仓；剩余仓位必须写明更紧 stop/锁盈触发
+                 若以上任一条无法满足 -> Gate5=FAIL fail=>RR（reason=DOWNGRADE_REQ_NOT_MET）
+        3) 若 1.0 ≤ Real_R < 2.0：
+           a) trade_style=HTF_swing：
+              -> Gate5=FAIL fail=>RR（HTF 目标空间不足）
+           b) trade_style=LTF_scalp：
+              -> 继续看 R_clean 下限（见 D）
+        4) 若 Real_R ≥ 2.0：
+           -> 继续看 R_clean 下限（见 D）
+
+        D) R_clean 下限（与 trade_style 绑定；不得再用“R_clean<1 一刀切”）
+           - LTF_scalp：R_clean ≥ 0.5 为最低可放行线
+             * 0.5~0.8：仅允许“明显降级 + 快速兑现(close_pct≥0.5) + LIMIT + 禁止追价/加仓”
+             * ≥0.8：常规 LTF 可放行
+           - HTF_swing：R_clean ≥ 1.5 且 Real_R≥2.0 才可放行
+           - 若不满足 -> Gate5=FAIL fail=>RR（reason=RR_CLEAN）
+
+     E) OBSTACLE_CLUSTER（障碍聚集）强制处理（不允许只 DIAG 就结束）
+        - 定义：entry→tp1 方向存在 ≥2 个 Respect 障碍（HTF 结构 / POC / strength_z>1.5）且间距 <0.5R
+        - 处理：
+          1) 取“最近 Respect 障碍”作为 TP1 重新计算 Conservative_R_clean（必须输出数字）
+          2) 若 Conservative_R_clean 达到对应 trade_style 下限：
+             -> Gate5=PASS 但必须降级：setup_grade 降 1 档 + risk_down≥0.5 + LIMIT + TP1 快速兑现
+          3) 否则：
+             -> Gate5=FAIL fail=>RR（reason=RR_LOW_CLUSTER）
+
+     F) Gate5 最终输出约束
+        - 只有当 Gate5=PASS 时，action 才允许为 open_long/open_short，并必须输出 entry_plan（含 entry_price/order_type/tp1/close_pct/init_stop 等）
+        - 若 Gate5=FAIL：
+           has_position=0 -> action="wait"
+           has_position=1 -> action ∈ {"hold","close"}（严禁 wait）
+        - 若 Gate5=DIAG(EVAL_ONLY)：
+           仅允许在“关键字段缺失导致无法生成任何合法 entry/sl/tp1 组合”时出现；否则一律按 PASS/FAIL 给结论。
+
 - 总体原则（用于消解“同样超卖却得到相反决策”的矛盾）：
   1）“能不能做、做多还是做空” 主要由【结构 + 订单流】决定，
      RSI 只负责“怎么买/卖”和“是否需要等回踩”，而不是单独改变方向。
@@ -2765,6 +2842,16 @@ D. 风险与资金安全 (Risk & Safety)
                    - 必须设置 TP1：目标 >= +0.5R 或最近 Anchor/VPVR 边界；TP1 close_pct ≥ 0.5
                    - 剩余仓位：默认不加仓；必须启用更紧 stop / 锁盈（写明触发条件）
                    - GateTrace/Exception 必须写：Exception: rr_low_downgrade; Real_R=<..>; TP1=<..>; close_pct=<..>
+             【P0｜降级 PASS 的硬执行约束（必须在 JSON 与 GateTrace 同时体现）】
+             - 当 (0.5 ≤ Real_R < 1.0) 且 trade_style=LTF_scalp 时，只要 Gate0~Gate4 全 PASS：
+               1) Gate5 必须为 PASS（不得输出 DIAG(EVAL_ONLY) 来规避开仓）
+               2) entry_plan 必须满足：
+                  - order_type=LIMIT（禁止 MARKET/追价），并给出 entry_price（挂单价）
+                  - risk_down ≥ 0.5（必须风险降级）
+                  - tp1 必须 ≥ entry + 0.5R（或等价空头条件），且 close_pct ≥ 0.5（TP1 快兑）
+                  - 明确写 no_chase=1（禁止追价/加仓）
+               3) GateTrace/Exception 必须追加：
+                  Exception: rr_low_downgrade; Real_R=<...>; risk_down=<...>; order_type=LIMIT; tp1=<...>; close_pct>=0.5
           3) - 分层口径（避免把 MR 机会全部否决，同时保持 HTF_swing 的 2R 硬约束）：
                1) 若 Real_R < 0.5：
                   -> Gate5(EXEC/RR)=FAIL fail=>RR_LOW_HARD（空间极小）

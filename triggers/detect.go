@@ -140,6 +140,8 @@ func DetectTriggers(klines []Kline, atr5m float64, volZ float64, cfg TriggerConf
 		}
 	}
 
+	// 🔥 P0新增：注意 - EDGE和BO_RETEST触发器需要Gate2结构数据，请使用DetectTriggersWithStructures()
+
 	// 🔥 P0-新增：在PostProcess前保存原始数据（用于诊断和Gate3触发窗口）
 	res.RawFlags = make([]string, len(res.Flags))
 	copy(res.RawFlags, res.Flags)
@@ -174,6 +176,108 @@ func DetectTriggers(klines []Kline, atr5m float64, volZ float64, cfg TriggerConf
 	}
 
 	// 🔥 P0-2修复：契约自洽安全带 - Strict层
+	if len(res.StrictFlags) == 0 {
+		res.StrictQuality = map[string]float64{}
+		res.Primary = FlagNone
+	}
+	if len(res.StrictFlags) > 0 && (res.Primary == FlagNone || !containsString(res.StrictFlags, res.Primary)) {
+		res.Primary = res.StrictFlags[0]
+	}
+
+	return res
+}
+
+// DetectTriggersWithStructures 扩展版触发器检测（支持Gate2结构数据）
+// 🔥 P0新增：支持EDGE和BO_RETEST触发器，需要Gate2结构聚合数据
+// klines: K线数据（至少需要3根，建议200+根用于Swing检测）
+// atr5m: 5分钟ATR（必须）
+// volZ: 量能Z分数（<0表示不使用量能过滤）
+// cfg: 触发器配置
+// touches: EDGE触发器的触碰点数据（来自Gate2结构聚合）
+// levels: BO_RETEST触发器的关键位数据（来自Gate2结构聚合）
+// currentPrice: 当前价格（用于距离计算）
+// 返回: 触发器扫描结果（包含传统触发器 + EDGE + BO_RETEST）
+func DetectTriggersWithStructures(
+	klines []Kline,
+	atr5m float64,
+	volZ float64,
+	cfg TriggerConfig,
+	touches []TouchInfo,
+	levels []LevelInfo,
+	currentPrice float64,
+) TriggerScanResult {
+	// 1. 先执行基础触发器检测（SFP, Engulf, IBB, Momo）
+	res := DetectTriggers(klines, atr5m, volZ, cfg)
+
+	// 🔥 P0-04修复：引入 bestKeyQ 变量用于后续EDGE/BO_RETEST的KeyLevel选择
+	bestKeyQ := -1.0
+	if res.Primary != FlagNone {
+		if q, exists := res.Quality[res.Primary]; exists {
+			bestKeyQ = q
+		}
+	}
+
+	// 2. EDGE触发器检测（如果提供了触碰点数据）
+	if len(touches) > 0 {
+		edgeFlag, edgeQ, edgeLevel, edgeKeyType := DetectEdge(touches, currentPrice, cfg)
+		if edgeFlag != FlagNone && edgeQ > 0 {
+			res.Flags = append(res.Flags, edgeFlag)
+			res.Quality[edgeFlag] = edgeQ
+			// 如果EDGE质量更高，更新KeyLevel
+			if res.KeyLevel == 0 || edgeQ > bestKeyQ {
+				res.KeyLevel = edgeLevel
+				res.KeyType = edgeKeyType
+				bestKeyQ = edgeQ
+			}
+		}
+	}
+
+	// 3. BO_RETEST触发器检测（如果提供了关键位数据）
+	if len(levels) > 0 && len(klines) >= 2 {
+		boFlag, boQ, boLevel, boKeyType := DetectBoRetest(levels, klines, currentPrice, atr5m, cfg)
+		if boFlag != FlagNone && boQ > 0 {
+			res.Flags = append(res.Flags, boFlag)
+			res.Quality[boFlag] = boQ
+			// 如果BO_RETEST质量更高，更新KeyLevel
+			if res.KeyLevel == 0 || boQ > bestKeyQ {
+				res.KeyLevel = boLevel
+				res.KeyType = boKeyType
+				bestKeyQ = boQ
+			}
+		}
+	}
+
+	// 4. 重新执行后处理（因为新增了EDGE/BO_RETEST触发器）
+	// 保存原始数据
+	res.RawFlags = make([]string, len(res.Flags))
+	copy(res.RawFlags, res.Flags)
+	res.RawQuality = make(map[string]float64, len(res.Quality))
+	for k, v := range res.Quality {
+		res.RawQuality[k] = v
+	}
+
+	// 生成分层输出（raw/ai/strict三层质量过滤）
+	aiFlags, aiprimary := PostProcessFlagsWithMin(res.Flags, res.Quality, cfg.BorderlineMin, cfg)
+	res.AIFlags = aiFlags
+	res.AIQuality = extractQualityMap(res.AIFlags, res.Quality)
+
+	strictFlags, strictprimary := PostProcessFlagsWithMin(res.Flags, res.Quality, cfg.QualityMin, cfg)
+	res.StrictFlags = strictFlags
+	res.StrictQuality = extractQualityMap(res.StrictFlags, res.Quality)
+
+	// res.Flags/res.Primary 保持与 strict 层相同（向后兼容）
+	res.Flags = res.StrictFlags
+	res.Primary = strictprimary
+
+	// 契约自洽安全带 - AI层
+	if len(res.AIFlags) == 0 {
+		res.AIQuality = map[string]float64{}
+	}
+	if len(res.AIFlags) > 0 && (aiprimary == FlagNone || !containsString(res.AIFlags, aiprimary)) {
+		aiprimary = res.AIFlags[0]
+	}
+
+	// 契约自洽安全带 - Strict层
 	if len(res.StrictFlags) == 0 {
 		res.StrictQuality = map[string]float64{}
 		res.Primary = FlagNone
@@ -307,6 +411,7 @@ func containsString(slice []string, item string) bool {
 // flag: 内部触发器标志（如 "SFP_BULL", "ENGULF_BEAR" 等）
 // 返回: V-16.4 pattern hint 名称
 // 🔥 P1-2新增：支持 AI 模型识别触发器类型
+// 🔥 P0新增：支持 EDGE 和 BO_RETEST 触发器
 func GetPatternHint(flag string) string {
 	// 根据 flag 前缀映射到 pattern
 	switch {
@@ -318,6 +423,10 @@ func GetPatternHint(flag string) string {
 		return "MOM_BREAK"
 	case flag == FlagMomoBull || flag == FlagMomoBear:
 		return "MOM_BREAK"
+	case flag == FlagEdgeBull || flag == FlagEdgeBear:
+		return "EDGE"
+	case flag == FlagBoRetestBull || flag == FlagBoRetestBear:
+		return "BO_RETEST"
 	case flag == FlagNone:
 		return ""
 	default:

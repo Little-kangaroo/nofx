@@ -4180,6 +4180,16 @@ func getTriggerContextForAI(symbol string, lastPrice float64, timeframeKlines ma
 		formattedQuality[k] = float64(int(v*100+0.5)) / 100 // 四舍五入保留2位小数
 	}
 
+	// 🔥 P0新增：计算window_state（窗口状态）
+	// 逻辑：
+	// - "in": 有触发器（len(AIFlags) > 0）
+	// - "no_trigger": 无触发器（len(AIFlags) == 0）
+	// - "intrabar_forbidden": K线进行中禁止检测（当前使用已收盘K线，此状态暂不使用）
+	windowState := "no_trigger"
+	if len(result.AIFlags) > 0 {
+		windowState = "in"
+	}
+
 	triggerContext := map[string]interface{}{
 		// V-16.4 标准字段
 		"is_kline_closed":   true, // 5m收盘触发
@@ -4189,6 +4199,8 @@ func getTriggerContextForAI(symbol string, lastPrice float64, timeframeKlines ma
 		"trigger_quality":   formattedQuality, // 🔥 改造：格式化为2位小数
 		"trigger_key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
 		"trigger_key_level_type": result.KeyType,
+		// 🔥 P0新增：window_state字段（窗口状态）
+		"window_state": windowState,
 		"statistical_significance": map[string]interface{}{
 			"volume_z": FormatByDataTypeAndSymbol(volZ, "ratio", symbol),
 			"atr_5m":   FormatByDataTypeAndSymbol(atr5m, "price", symbol),
@@ -4238,6 +4250,8 @@ func buildEmptyTriggerContext(reason string) map[string]interface{} {
 		"trigger_quality":        map[string]float64{},
 		"trigger_key_level":      0,
 		"trigger_key_level_type": "",
+		// 🔥 P0新增：window_state字段（空触发器时为no_trigger）
+		"window_state": "no_trigger",
 		"statistical_significance": map[string]interface{}{
 			"volume_z": 0,
 			"atr_5m":   0,
