@@ -3511,53 +3511,9 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
       - 错误示例： "reasoning": '避开低流动性标的'
 10. 最终输出示例（统一为唯一字段契约；reasoning=Summary(单行)+GateTrace(多行)+复盘细节；非开仓 entry_plan=null）
 - 示例一：无开仓动作（hold / wait）
-[
-  {
-    "symbol": "HYPEUSDT",
-    "action": "hold",
-    "setup_grade": "C",
-    "edge_score": 0.0,
-    "confidence": 86,
-    "reasoning": "Summary: action=hold | trade_style=SWING | setup_grade=C | edge_score=0.0 | confidence=86\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): PASS\nGate3(RR): PASS\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 仅管理既有仓位；若出现结构破坏/硬风控触发则 close。",
-    "stop_update": {"prev_stop": 37.10, "new_stop": 37.85, "reason": "R_lock"},
-    "close_pct": null,
-    "entry_plan": null
-  },
-  {
-    "symbol": "SOLUSDT",
-    "action": "wait",
-    "setup_grade": "C",
-    "edge_score": 0.0,
-    "confidence": 82,
-    "reasoning": "Summary: action=wait | trade_style=LTF_scalp | setup_grade=C | edge_score=0.0 | confidence=82\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): FAIL=>STRUCT\nGate3(RR): NA\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 等待结构明朗与 5m Trigger 确认后再评估。",
-    "stop_update": null,
-    "close_pct": null,
-    "entry_plan": null
-  }
-]
+[{"symbol":"HYPEUSDT","action":"hold","setup_grade":"C","edge_score":0.0,"confidence":86,"reasoning":"Summary: action=hold | trade_style=SWING | setup_grade=C | edge_score=0.0 | confidence=86\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): PASS\nGate3(RR): PASS\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 仅管理既有仓位；若出现结构破坏/硬风控触发则 close。","stop_update":{"prev_stop":37.10,"new_stop":37.85,"reason":"R_lock"},"close_pct":null,"entry_plan":null},{"symbol":"SOLUSDT","action":"wait","setup_grade":"C","edge_score":0.0,"confidence":82,"reasoning":"Summary: action=wait | trade_style=LTF_scalp | setup_grade=C | edge_score=0.0 | confidence=82\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): FAIL=>STRUCT\nGate3(RR): NA\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 等待结构明朗与 5m Trigger 确认后再评估。","stop_update":null,"close_pct":null,"entry_plan":null}]
 - 示例二：开仓动作（open_long / open_short｜entry_plan 必须为 object）
-[
-  {
-    "symbol": "SOLUSDT",
-    "action": "open_short",
-    "setup_grade": "B",
-    "edge_score": 0.7,
-    "confidence": 78,
-    "reasoning": "Summary: action=open_short | trade_style=SWING | setup_grade=B | edge_score=0.7 | confidence=78\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): PASS\nGate3(RR): PASS\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 示例仅展示字段结构；真实复盘请按 GateTrace 写明否决点与触发条件。",
-    "stop_update": null,
-    "close_pct": null,
-    "entry_plan": {
-      "order_type": "MARKET",
-      "price": 136.4,
-      "qty": 0.7,
-      "leverage": 10,
-      "init_stop": 137.9,
-      "take_profit": null,
-      "R_struct": 1.0,
-      "R_clean": 1.5
-    }
-  }
-]
+[{"symbol":"SOLUSDT","action":"open_short","setup_grade":"B","edge_score":0.7,"confidence":78,"reasoning":"Summary: action=open_short | trade_style=SWING | setup_grade=B | edge_score=0.7 | confidence=78\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): PASS\nGate3(RR): PASS\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 示例仅展示字段结构；真实复盘请按 GateTrace 写明否决点与触发条件。","stop_update":null,"close_pct":null,"entry_plan":{"order_type":"MARKET","price":136.4,"qty":0.7,"leverage":10,"init_stop":137.9,"take_profit":null,"R_struct":1.0,"R_clean":1.5}}]
 要求（唯一字段契约｜严禁第二套字段并存）：
 - 以上所有顶层字段/禁止字段/entry_plan 结构/close_pct 规则，统一以本节“2) 每个决策对象必须包含以下字段”与其后的 entry_plan 结构定义为准；
 - 不再在此处重复列字段清单，避免出现第二套协议并存或样例误导。
@@ -3568,9 +3524,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
     * 若本节与 PROD_LITE 约束冲突：以 PROD_LITE 约束为准（SSOT）。
   - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
   - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
-      Summary: action=<...> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<...> | confidence=<...>
-               | (action="close" 时必须带 close_pct=<0~1>)
-               | (若被闸门否决必须带 fail=>... 并写解除条件)
+      Summary: action=<...> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<...> | confidence=<...>| (action="close" 时必须带 close_pct=<0~1>)| (若被闸门否决必须带 fail=>... 并写解除条件)
     - 强制：从第二行开始必须出现 GateTrace（顺序固定 Gate0→Gate5；每行一个 Gate；PASS/FAIL/DIAG(EVAL_ONLY) 必须明确；禁止写 N/A/跳过）：
         GateTrace:
               - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
@@ -3589,7 +3543,6 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                 * Gate3=FAIL => Gate4~Gate5=DIAG(EVAL_ONLY)
                 * Gate4=FAIL => Gate5=DIAG(EVAL_ONLY)
               - 违规样例（严禁出现）：Gate2=FAIL 与 Gate4=PASS；Gate3=FAIL 与 Gate5=PASS；等。
-
               -【Token Budget｜GateTrace 最小证据集（不改变 Gate 判定，只压缩表达）】
                 - 对 action="wait" 且 has_position=0 的标的：每个 Gate 行只保留“最小可核验证据集”，禁止复述输入大段字段。
                   * Gate0(RISK)：只输出 1 个账户侧关键数值 + 1 个结论即可。
