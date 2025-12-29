@@ -130,6 +130,7 @@
          * 若 trigger_flags 非空且 is_kline_closed=true：window=in ⇒ Gate3 可 PASS（是否开仓继续交由 Gate4/Gate5）。
          * 若 is_kline_closed=false：除非明确启用 INTRABAR_ENABLE 且满足其生效条件，否则 window=intrabar_forbidden ⇒ Gate3=FAIL fail=>TIME。
          * Gate3/NextTrigger 只引用 trigger_primary（或 flags 中 1 项）；禁止罗列形态细节与多条候选。
+         * GateTrace 的 Gate3 行必须“原样映射”window_state：window_state=no_trigger 就必须输出 window=no_trigger 且 Gate3=FAIL；严禁把 no_trigger 写成 in。
        - 本层回答：“现在这个时点/这份数据，允许做决策并允许执行吗？”
     4）开仓条件与执行方式门槛（Setup Gate｜Gate4(SETUP)）
         【P0｜Gate4 职责边界（不改规则，仅收敛写法）】
@@ -2123,7 +2124,7 @@ A) 仓位 sizing（基于R的风险等额）
               - 除 Gate2 行的 Anchor1/Anchor2（完整出现一次）外，其他任何行严禁出现“市场价位/价位区间/百分号/≈/范围符号”，也不得复述 Anchor1/Anchor2 之外的第 3 个价位；
                 但允许出现“非价位”的归一化/风控数值（例如 spoof=<x.xx>, q=<0~1>, risk_down=<.>, R_clean=<.>, th=<.>, borderline_min/quality_min 等）。
               - 例外（P0｜仅用于 Gate5 可核验）：当 Gate4(SETUP)=PASS 且 Gate0~Gate3 均非 FAIL 时，允许额外追加 1 行 RRLine（只此 1 行允许数字）：
-                RR: entry=<.>; sl=<.>; tp1=<.>; risk=<.>; reward=<.>; costs_R=<.>; R_clean=<.>; Real_R=<.>; est=<0/1>
+                RR: entry=<..> sl=<..> tp1=<..> risk=<..> reward=<..> fee=<..> slip=<..> costs_R=<..> => Real_R=<..> R_clean=<..> | R_struct=<..> Real_R_eval=<..> R_clean_eval=<..>
                 其余任何行仍严禁出现数字/价位/区间/百分号。
               - 若必须引用结构，仅允许写 “Anchor1/Anchor2” 字面量或短码（如 retest_A1 / clear_POC / no_trigger / trend_mixed / rr_low）。
             * 自检（P0）：若检测到违规（括号解释、价位复述、PASS 时出现 scan、wait 时展开细节等），必须在输出前自行裁剪为合规文本；不得以“说明原因”追加新行。
@@ -2133,9 +2134,9 @@ A) 仓位 sizing（基于R的风险等额）
             - Gate0(RISK): PASS/FAIL fail=>RISK key=<1个账户侧关键数值>; verdict=<ok/limit>
             - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（严格三选一；禁止括号/附加解释/附带 intent、regime、alignment；如出现“(”或多余字段，必须裁剪为单词 bull/bear/neutral）
             - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC.../mid-range/edge>; Anchor1:<.>; Anchor2:<.>; scan=<omit_if_PASS>（scan 仅允许在 FAIL 时出现；PASS 时出现 scan 视为违规必须删除；如需证明“8类逐类检查均未命中”，仅在 Gate2=FAIL 时额外追加 1 行 StructScan: scan=<...> 且严禁含价位/区间）
-            - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in/out/unknown>
+            - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in/no_trigger/intrabar_forbidden/out/unknown>（window 必须与 trigger_context.window_state 同值；window!=in ⇒ Gate3=FAIL fail=>TIME）
             - Gate4(SETUP): PASS/FAIL/DIAG(EVAL_ONLY) pattern=<none/EDGE/BO_RETEST/MOMENTUM_BREAK>; trigger=<trigger_primary|NONE>; q=<0~1>; tier=<strict/borderline/none>; trend=<aligned/mixed>
-            - Gate5(EXEC/RR): PASS/FAIL/DIAG(EVAL_ONLY) fail=><RR/RR_CTX_MISSING/SKIP_UPSTREAM_FAIL>; reason=<short_code>; R_clean=<.>; th=<.>
+            - Gate5(EXEC/RR): (PASS|FAIL) tag=>RR; reason=<short_code>; R_clean=<.>; th=<.>  ｜  DIAG(EVAL_ONLY) fail=><RR_CTX_MISSING|SKIP_UPSTREAM_FAIL>; reason=<short_code>; th=<.>
         - 【P0｜wait 极简输出（不改变 JSON，仅收敛 reasoning）】
           * 适用条件：has_position=0 且 action="wait"。
           * reasoning 允许的最大形态（≤9 行）：
@@ -2143,7 +2144,8 @@ A) 仓位 sizing（基于R的风险等额）
             说明（P0）：
             - Gate3 与 Gate5 不得省略；严禁 “Gate3/4 合并为 1 行 DIAG”。
             - 若上层 GateK=FAIL：下层 Gate(K+1..5) 必须输出 DIAG(EVAL_ONLY)（其中 Gate5 统一写 reason=SKIP_UPSTREAM_FAIL），不得出现 PASS/FAIL。
-            - 若 Gate0~Gate3 均非 FAIL 且 Gate4=PASS：无论最终 action 是否为 wait，Gate5 都必须给出 RRLine（见 P0-G5-RR-01）。
+            - 若 Gate0~Gate3 均非 FAIL 且 Gate4=PASS：无论 Gate5 PASS/FAIL、无论最终 action 是否为 wait，都必须给出 1 行 RRLine（使用 Gate5【对账输出】的 SSOT 格式）。
+            - 自检（P0）：若 Gate4=PASS 但缺失 RRLine，视为协议违规，必须在输出前补齐（不得用“省略/…”代替）。
           * 禁止项（P0）：
             - StructureSnapshot / NextTrigger / Optional Details 默认省略；
             - 如必须输出 StructureSnapshot/NextTrigger：各≤1行且不得含任何数字/价位/区间，只能引用 Anchor1/2 或短码（retest_A1 / clear_POC / no_trigger）。
@@ -2905,6 +2907,7 @@ D. 风险与资金安全 (Risk & Safety)
           -> Gate5(EXEC/RR)=DIAG(EVAL_ONLY) fail=>RR_CTX_MISSING
           -> action 按 has_position 分支输出；并在 NextTrigger 写明“恢复可计算”的最小条件（例如：必须给 qty 或必须给合法 stop_anchor 与 target_anchor）
         - DIAG(EVAL_ONLY) 的 fail=> 仅允许取 {RR_CTX_MISSING, SKIP_UPSTREAM_FAIL}：
+          * 严禁 DIAG(EVAL_ONLY) 输出 fail=>RR 或 tag=>RR；DIAG 只允许 fail=>RR_CTX_MISSING / fail=>SKIP_UPSTREAM_FAIL。
           * RR_CTX_MISSING：仅用于“RR 不可计算/无合法 entry-sl-tp1 组合”；
           * SKIP_UPSTREAM_FAIL：仅用于“上游 Gate0~Gate4 已 FAIL 导致本层不裁决，仅输出诊断占位”。
           * 只要 Real_R/R_clean 可计算但不达标：一律用 FAIL（fail=>RR_LOW_HARD 或 fail=>RR）；
@@ -3412,7 +3415,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                    · 允许作为 LTF_scalp 降级单进入候选，但必须强制降级（risk_down≥0.5 + LIMIT + TP1 快速兑现 + 禁止追价/加仓）。
                    · 不满足降级约束：Gate5=FAIL fail=>RR reason=rr_low_no_downgrade。
               - 写法约束（降 token，避免复述）：
-                · Gate5(EXEC/RR) 行只写 1 行：FAIL/PASS + fail=>RR + reason=短码 + (R_clean=<数值> 可选)；
+                · Gate5(EXEC/RR) 行只写 1 行：PASS/FAIL + tag=>RR + reason=短码 + (R_clean=<数值> 可选)；若为 DIAG(EVAL_ONLY)：DIAG(EVAL_ONLY) + fail=><RR_CTX_MISSING|SKIP_UPSTREAM_FAIL> + reason=短码。
                 【P1｜Gate5 reason short_code（SSOT｜用于 Summary 单标签统计）】
                 - reason 只允许取 Gate5(EXEC/RR) 章节 D) 中的集合：
                   reason ∈ {OK, RR_CTX_MISSING, RR_LOW_HARD, RR_CLEAN, DOWNGRADE_REQ_NOT_MET, RR_LOW_CLUSTER, SKIP_UPSTREAM_FAIL}
