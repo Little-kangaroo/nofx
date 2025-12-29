@@ -288,16 +288,15 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 	currentPrice := 0.0
 	timestamp := time.Now().UnixMilli()
 
-	// 🔥 P0-03修复：统一约束currentPrice必须来自5m数据，与V-13.5的vacuum/trigger规则一致
-	// 避免优先使用4h导致取到"未收盘4h close（动态变化）"造成全链路时间锚点错配
+	// 🔥 P0-05修复：禁用4h降级，必须有5m数据才能执行分析
+	// 避免降级到4h导致取到"未收盘4h close（动态变化）"造成全链路时间锚点错配
 	if len(klines5m) > 0 {
 		currentPrice = klines5m[len(klines5m)-1].Close  // 强制使用5m last closed price
 		timestamp = klines5m[len(klines5m)-1].CloseTime
-	} else if len(klines4h) > 0 {
-		// 仅当5m数据不可用时才降级使用4h（紧急兼容模式）
-		currentPrice = klines4h[len(klines4h)-1].Close
-		timestamp = klines4h[len(klines4h)-1].CloseTime
-		log.Printf("⚠️ [P0-03] 5m数据不可用，降级使用4h价格 - 可能影响时间锚点一致性")
+	} else {
+		// P0-05：禁用4h降级逻辑，5m数据不可用时直接返回nil
+		log.Printf("⚠️ [P0-05] 5m数据不可用，无法执行分析（已禁用4h降级）- Symbol: %s", symbol)
+		return nil
 	}
 
 	// 🔥 P0-3修复：使用统一ATR管理器，确保ATR计算一致性
@@ -479,16 +478,15 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 	currentPrice := 0.0
 	timestamp := time.Now().UnixMilli()
 
-	// 🔥 P0-03修复：统一约束currentPrice必须来自5m数据，与V-13.5的vacuum/trigger规则一致
-	// 避免优先使用4h导致取到"未收盘4h close（动态变化）"造成全链路时间锚点错配
+	// 🔥 P0-05修复：禁用4h降级，必须有5m数据才能执行分析
+	// 避免降级到4h导致取到"未收盘4h close（动态变化）"造成全链路时间锚点错配
 	if len(klines5m) > 0 {
 		currentPrice = klines5m[len(klines5m)-1].Close  // 强制使用5m last closed price
 		timestamp = klines5m[len(klines5m)-1].CloseTime
-	} else if len(klines4h) > 0 {
-		// 仅当5m数据不可用时才降级使用4h（紧急兼容模式）
-		currentPrice = klines4h[len(klines4h)-1].Close
-		timestamp = klines4h[len(klines4h)-1].CloseTime
-		log.Printf("⚠️ [P0-03] 5m数据不可用，降级使用4h价格 - 可能影响时间锚点一致性")
+	} else {
+		// P0-05：禁用4h降级逻辑，5m数据不可用时直接返回nil
+		log.Printf("⚠️ [P0-05] 5m数据不可用，无法执行分析（已禁用4h降级）- Symbol: %s", symbol)
+		return nil
 	}
 
 	result := &ComprehensiveResult{

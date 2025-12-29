@@ -228,17 +228,17 @@
               - 若 Gate4 指定 order_type=MARKET：
                 entry_candidate_1 = trigger_context.last_price（必须在 reasoning 标注 est=1）
           A2) sl（init_stop）生成规则（多空对称；必须满足方向正确性）
-              - LONG：sl < entry；且 sl 位于“主结构失效边界”之外 + buffer
-              - SHORT：sl > entry；且 sl 位于“主结构失效边界”之外 + buffer
-              - buffer 取：max(0.20*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
+              - LONG：sl < entry；且 sl 位于"主结构失效边界"之外 + buffer
+              - SHORT：sl > entry；且 sl 位于"主结构失效边界"之外 + buffer
+              - buffer 取：max(0.25*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
               - 若无法给出满足方向正确性的 sl -> 视为 RR_CTX_MISSING（reason=RR_CTX_MISSING; detail=NO_VALID_SL）
               【P1｜risk 下限（防止 costs_R 被极小 risk 放大）】
-              - 定义 risk_floor = max(0.35*ATR14(5m), entry*0.0015)；若 ATR 缺失则仅用 entry*0.0015
+              - 定义 risk_floor = max(0.40*ATR14(5m), entry*0.0015)；若 ATR 缺失则仅用 entry*0.0015
               - 若 risk < risk_floor：
                 * 对 LIMIT 候选：优先尝试 entry_candidate_2（更保守回踩）重新计算（提升 risk 与 RR 稳定性）
                 * 若仍 < risk_floor：该候选视为不可执行（reason=RISK_TOO_TIGHT），不得用于“选最优候选”
-          A3) tp1 生成规则（禁止把“磁铁位”当主 TP1）
-              - tp1 必须取“最近反向结构/首个 Respect 障碍”的有效边界：
+          A3) tp1 生成规则（禁止把"磁铁位"当主 TP1）
+              - tp1 优先取"最近反向结构/首个 Respect 障碍"的有效边界；若该障碍导致 R_clean 不足，允许跳到"第二近 Respect 障碍"（详见 E) OBSTACLE_CLUSTER 处理）：
                 * LONG：最近 supply / swing_high / SR_R / VAH/VAL 边界等（禁止 VPVR POC、区间中轴）
                 * SHORT：最近 demand / swing_low / SR_S / VAH/VAL 边界等（同禁 POC/中轴）
               - 若 tp1 与 entry 同侧（LONG tp1<=entry / SHORT tp1>=entry）-> 视为 RR_CTX_MISSING（reason=RR_CTX_MISSING; detail=NO_VALID_TP1）
@@ -285,7 +285,7 @@
       C) 裁决阈值（Gate5 唯一口径；模板其它位置不得再写第二套）
          - 本节所有比较统一使用：Real_R_eval / R_clean_eval（定义见上文 B）
          C1) 统一硬禁区（两种风格都适用）
-             - 若 Real_R_eval < 0.4 或 R_clean_eval < 0.4：
+             - 若 Real_R_eval < 0.3 或 R_clean_eval < 0.3：
                -> Gate5=FAIL fail=>RR；reason=RR_LOW_HARD
 
          C2) trade_style=HTF_swing（硬约束；不降低门槛，仅允许用 R_struct 计入 Real_R_eval）
@@ -296,11 +296,11 @@
                   b) 禁止追价；优先 LIMIT（若 Gate4 冻结为 MARKET，必须写最大追价上限与放弃条件）
              - 否则：Gate5=FAIL fail=>RR；reason=RR_CLEAN
 
-         C3) trade_style=LTF_scalp（分段允许；修复“close_pct不可表达”的矛盾）
-             - 若 R_clean_eval ≥ 0.7：
+         C3) trade_style=LTF_scalp（分段允许；修复"close_pct不可表达"的矛盾）
+             - 若 R_clean_eval ≥ 0.5：
                -> Gate5=PASS（常规 LTF）
-             - 若 0.4 ≤ R_clean_eval < 0.7：
-               -> 仅允许“降级放行”，必须同时满足（不满足任一项则 FAIL）：
+             - 若 0.3 ≤ R_clean_eval < 0.5：
+               -> 仅允许"降级放行"，必须同时满足（不满足任一项则 FAIL）：
                   a) risk_down ≥ 0.5（qty/position_risk_pct 至少减半）
                   b) order_type=LIMIT（禁止追价）
                   c) reasoning 必须写明：TP1 快速兑现（≥50%）（执行端按默认/配置实现；模型不新增 JSON 字段）
@@ -312,13 +312,16 @@
           - PASS：reason=OK
           - DIAG：reason=RR_CTX_MISSING
           - FAIL：按上述裁决落到对应 reason
-       E) OBSTACLE_CLUSTER（障碍聚集）强制处理（不得“只 DIAG 就结束”）
+       E) OBSTACLE_CLUSTER（障碍聚集）强制处理（不得"只 DIAG 就结束"）
           - 定义：entry→tp1 方向存在 ≥2 个 Respect 障碍（HTF 结构 / POC / strength_z>1.5）且间距 <0.5R
           - 处理（必须输出数字）：
-            1) 取“最近 Respect 障碍”作为 TP1，重新计算 Conservative_R_clean
-            2) 若 Conservative_R_clean 达到对应 trade_style 的下限：
-               -> Gate5=PASS，但必须降级：setup_grade 降 1 档 + risk_down≥0.5 + LIMIT + TP1 快速兑现；reason=OK
-            3) 否则：
+            1) 优先尝试"最近 Respect 障碍"作为 TP1，计算 Conservative_R_clean_1st
+            2) 若 Conservative_R_clean_1st 达到对应 trade_style 的下限：
+               -> Gate5=PASS；reason=OK（使用最近障碍）
+            3) 否则，尝试"第二近 Respect 障碍"作为 TP1，计算 Conservative_R_clean_2nd
+            4) 若 Conservative_R_clean_2nd 达到对应 trade_style 的下限：
+               -> Gate5=PASS，但必须降级：setup_grade 降 1 档 + risk_down≥0.5 + LIMIT + TP1 快速兑现；reason=OK（使用第二近障碍，跳过最近障碍）
+            5) 否则：
                -> Gate5=FAIL fail=>RR；reason=RR_LOW_CLUSTER
        F) Gate5 最终输出约束（与 actionDerivation 对齐）
           - 只有当 Gate5=PASS 时，action 才允许为 open_long/open_short，并必须输出 entry_plan（含 entry_price/order_type/tp1/close_pct/init_stop 等）

@@ -131,3 +131,130 @@ func getAIPrimaryQuality(result TriggerScanResult) float64 {
 func DetectTriggersRecentDefault(klines []Kline, atr5m float64, volZ float64, cfg TriggerConfig) TriggerWithAge {
 	return DetectTriggersRecent(klines, atr5m, volZ, cfg, 3)
 }
+
+// DetectTriggersRecentWithStructures 最近N根K线窗口触发器检测（支持EDGE和BO_RETEST）
+// 🔥 P1-01-c新增：扩展版，支持传入Gate2结构数据以启用EDGE触发器
+//
+// 参数：
+// - klines: K线数据（至少需要3根，建议200+根用于Swing检测）
+// - atr5m: 5分钟ATR（必须）
+// - volZ: 量能Z分数（<0表示不使用量能过滤）
+// - cfg: 触发器配置
+// - windowSize: 回看窗口大小（默认3，表示检测最近3根K线）
+// - touches: EDGE触发器的触碰点数据（来自Gate2结构聚合）
+// - levels: BO_RETEST触发器的关键位数据（来自Gate2结构聚合）
+// - currentPrice: 当前价格（用于距离计算）
+//
+// 返回: 最佳触发器结果（按age优先、quality次优排序）
+func DetectTriggersRecentWithStructures(
+	klines []Kline,
+	atr5m float64,
+	volZ float64,
+	cfg TriggerConfig,
+	windowSize int,
+	touches []TouchInfo,
+	levels []LevelInfo,
+	currentPrice float64,
+) TriggerWithAge {
+	// 参数验证
+	if windowSize <= 0 {
+		windowSize = 3 // 默认回看3根
+	}
+	if len(klines) < windowSize {
+		// K线数量不足，降级到可用数量
+		windowSize = len(klines)
+	}
+	if windowSize < 1 {
+		// 完全没有K线，返回空结果
+		return TriggerWithAge{
+			Result:         createEmptyTriggerScanResult(),
+			AgeBars:        -1,
+			BarCloseTimeMs: 0,
+		}
+	}
+
+	// 收集所有候选触发器
+	candidates := make([]TriggerWithAge, 0, windowSize)
+
+	// 逐根K线检测（从最新到最旧）
+	for age := 0; age < windowSize; age++ {
+		// 构建截止到当前age的K线切片
+		endIdx := len(klines) - age
+		if endIdx <= 0 {
+			break
+		}
+		partialKlines := klines[:endIdx]
+
+		// 🔥 P1-01-c关键修改：调用 DetectTriggersWithStructures 以支持 EDGE 触发器
+		result := DetectTriggersWithStructures(
+			partialKlines,
+			atr5m,
+			volZ,
+			cfg,
+			touches,      // 传入 TouchInfo 用于 EDGE 检测
+			levels,       // 传入 LevelInfo 用于 BO_RETEST 检测
+			currentPrice, // 当前价格
+		)
+
+		// 使用 ai_flags（而不是 strict_flags），与Gate3窗口对齐
+		// 只有ai_flags非空才认为检测到触发器
+		if len(result.AIFlags) > 0 {
+			candidates = append(candidates, TriggerWithAge{
+				Result:         result,
+				AgeBars:        age,
+				BarCloseTimeMs: partialKlines[endIdx-1].CloseTime,
+			})
+		}
+	}
+
+	// 如果没有任何候选，返回空结果
+	if len(candidates) == 0 {
+		return TriggerWithAge{
+			Result:         createEmptyTriggerScanResult(),
+			AgeBars:        -1,
+			BarCloseTimeMs: klines[len(klines)-1].CloseTime, // 使用最后一根K线的收盘时间
+		}
+	}
+
+	// 排序：age越小越优先，age相同时quality越高越优先
+	// 使用 ai_flags 的 primary 和 ai_quality 进行排序
+	sort.SliceStable(candidates, func(i, j int) bool {
+		// 优先级1: age越小越优先
+		if candidates[i].AgeBars != candidates[j].AgeBars {
+			return candidates[i].AgeBars < candidates[j].AgeBars
+		}
+
+		// 优先级2: quality越高越优先（使用ai_quality中的primary质量）
+		qI := getAIPrimaryQuality(candidates[i].Result)
+		qJ := getAIPrimaryQuality(candidates[j].Result)
+		return qI > qJ
+	})
+
+	// 返回最佳候选（排序后的第一个）
+	return candidates[0]
+}
+
+// DetectTriggersRecentWithStructuresDefault 使用默认窗口大小（3根）的结构化触发器检测
+// 🔥 P1-01-c新增：便捷封装函数
+//
+// 参数：
+// - klines: K线数据
+// - atr5m: 5分钟ATR
+// - volZ: 量能Z分数
+// - cfg: 配置
+// - touches: EDGE触发器的触碰点数据（来自Gate2）
+// - levels: BO_RETEST触发器的关键位数据（来自Gate2）
+// - currentPrice: 当前价格
+//
+// 返回: 最佳触发器结果
+func DetectTriggersRecentWithStructuresDefault(
+	klines []Kline,
+	atr5m float64,
+	volZ float64,
+	cfg TriggerConfig,
+	touches []TouchInfo,
+	levels []LevelInfo,
+	currentPrice float64,
+) TriggerWithAge {
+	return DetectTriggersRecentWithStructures(klines, atr5m, volZ, cfg, 3, touches, levels, currentPrice)
+}

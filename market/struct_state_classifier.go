@@ -34,17 +34,18 @@ type StructStateEvidence struct {
 	// 距离信息（ATR归一化）
 	NearestDistance    float64 `json:"nearest_distance"`     // 最近锚点距离（ATR倍数）
 	DistanceCategory   string  `json:"distance_category"`    // "VERY_CLOSE"/"CLOSE"/"MEDIUM"/"FAR"
-	
+
 	// 空间结构信息
 	AnchorDensity      float64 `json:"anchor_density"`       // 锚点密度（每ATR内的锚点数）
 	StructuralSupport  float64 `json:"structural_support"`   // 结构支持强度 (0-1)
 	ConflictingAnchors int     `json:"conflicting_anchors"`  // 冲突锚点数量
-	
+	TotalCandidates    int     `json:"total_candidates"`     // 总候选数（用于计算冲突比例）
+
 	// 质量评估
 	BestAnchorScore    float64 `json:"best_anchor_score"`    // 最佳锚点评分
 	AverageScore       float64 `json:"average_score"`        // 平均锚点评分
 	HighQualityCount   int     `json:"high_quality_count"`   // 高质量锚点数量(>70分)
-	
+
 	// 时间框架分析
 	HTFSupport         bool    `json:"htf_support"`          // 高时间框架支持
 	MTFAlignment       bool    `json:"mtf_alignment"`        // 多时间框架对齐
@@ -179,8 +180,14 @@ func (ssc *StructStateClassifier) generateEvidence(
 		}
 	}
 	
-	// 计算距离信息
-	nearestDistance := math.Abs(candidates[0].Level - lastPrice) / atr14
+	// 计算距离信息 - 使用有效距离并遍历所有候选找真正最近的
+	nearestDistance := 999.0 // 初始化为极大值
+	for _, candidate := range candidates {
+		dist := effectiveDistance(lastPrice, candidate) / atr14
+		if dist < nearestDistance {
+			nearestDistance = dist
+		}
+	}
 	distanceCategory := ssc.categorizeDistance(nearestDistance)
 	
 	// 计算锚点密度（每ATR内的锚点数）
@@ -216,6 +223,7 @@ func (ssc *StructStateClassifier) generateEvidence(
 		AnchorDensity:      anchorDensity,
 		StructuralSupport:  structuralSupport,
 		ConflictingAnchors: conflictingAnchors,
+		TotalCandidates:    len(candidates), // P0-04修复：添加总候选数
 		BestAnchorScore:    bestAnchorScore,
 		AverageScore:       averageScore,
 		HighQualityCount:   highQualityCount,
@@ -250,14 +258,14 @@ func (ssc *StructStateClassifier) calculateAnchorDensity(
 	// 统计2个ATR范围内的锚点数量
 	rangeATR := 2.0
 	count := 0
-	
+
 	for _, candidate := range candidates {
-		distance := math.Abs(candidate.Level - lastPrice) / atr14
+		distance := effectiveDistance(lastPrice, candidate) / atr14
 		if distance <= rangeATR {
 			count++
 		}
 	}
-	
+
 	return float64(count) / rangeATR
 }
 
@@ -419,10 +427,9 @@ func (ssc *StructStateClassifier) determineState(
 		return StructStateDanger // 结构支持不足
 	}
 	
-	// 检查冲突比例
-	totalCandidates := evidence.HighQualityCount + evidence.ConflictingAnchors
-	if totalCandidates > 0 {
-		conflictRatio := float64(evidence.ConflictingAnchors) / float64(totalCandidates)
+	// 检查冲突比例（P0-04修复：使用总候选数而非HQ+Conflict）
+	if evidence.TotalCandidates > 0 {
+		conflictRatio := float64(evidence.ConflictingAnchors) / float64(evidence.TotalCandidates)
 		if conflictRatio > ssc.config.MaxConflictRatio {
 			return StructStateDanger // 冲突过多
 		}

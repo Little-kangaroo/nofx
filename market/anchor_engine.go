@@ -83,6 +83,41 @@ func NewAnchorEngine(config *AnchorEngineConfig) *AnchorEngine {
 	}
 }
 
+// effectiveDistance 计算价格到锚点的有效距离（Zone边界距离）
+// 对于Zone类型（BandLo != BandHi），使用价格到Zone边界的距离
+// 对于Point类型（BandLo == BandHi），退化为价格到Level的距离
+//
+// 返回值说明：
+// - 价格在Zone内部：返回0
+// - 价格在Zone外部：返回到最近边界的距离（正值）
+func effectiveDistance(price float64, c AnchorCandidate) float64 {
+	lo, hi := c.BandLo, c.BandHi
+
+	// Edge case 1: 点位结构（BandLo == BandHi）
+	// 使用浮点比较容忍度1e-9避免精度问题
+	if math.Abs(lo-hi) < 1e-9 {
+		return math.Abs(price - lo)
+	}
+
+	// Edge case 2: BandLo > BandHi（数据错误，交换修正）
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+
+	// Edge case 3: 价格在Zone内部（返回0）
+	if price >= lo && price <= hi {
+		return 0
+	}
+
+	// Edge case 4: 价格在Zone下方（返回到下沿的距离）
+	if price < lo {
+		return lo - price
+	}
+
+	// Edge case 5: 价格在Zone上方（返回到上沿的距离）
+	return price - hi
+}
+
 // ProcessCandidates 处理锚点候选：映射->过滤->排序->选择
 func (ae *AnchorEngine) ProcessCandidates(
 	supplyDemandData *SupplyDemandData,
@@ -140,7 +175,7 @@ func (ae *AnchorEngine) ProcessCandidates(
 	// 2. 方向一致性过滤
 	var validCandidates []AnchorCandidate
 	for _, candidate := range allCandidates {
-		if ae.directionalFilter(candidate, lastPrice) {
+		if ae.directionalFilter(candidate, lastPrice, atr14) {
 			validCandidates = append(validCandidates, candidate)
 		}
 	}
@@ -235,22 +270,38 @@ func (ae *AnchorEngine) compareCandidates(a, b AnchorCandidate, lastPrice float6
 		return a.AnchorScore > b.AnchorScore
 	}
 	
-	// 3. 距离细分 (更近优先)
-	distA := math.Abs(a.Level - lastPrice)
-	distB := math.Abs(b.Level - lastPrice)
+	// 3. 距离细分 (更近优先) - 使用有效距离而非Level距离
+	distA := effectiveDistance(lastPrice, a)
+	distB := effectiveDistance(lastPrice, b)
 	return distA < distB
 }
 
-// directionalFilter 方向一致性过滤
-// LONG候选必须在价格下方（支撑），SHORT候选必须在价格上方（阻力）
-func (ae *AnchorEngine) directionalFilter(c AnchorCandidate, lastPrice float64) bool {
+// directionalFilter 方向一致性过滤（改进版：使用Zone边界）
+// LONG候选：价格必须 >= BandLo（允许容忍度0.1*ATR）
+// SHORT候选：价格必须 <= BandHi（允许容忍度0.1*ATR）
+func (ae *AnchorEngine) directionalFilter(c AnchorCandidate, lastPrice float64, atr14 float64) bool {
+	lo, hi := c.BandLo, c.BandHi
+
+	// 修正BandLo > BandHi的情况
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+
+	// 容忍度：0.1*ATR（避免因微小误差过滤掉边缘触碰）
+	tolerance := 0.0
+	if atr14 > 0 {
+		tolerance = 0.1 * atr14
+	}
+
 	switch c.Dir {
 	case "LONG":
-		// LONG候选必须在价格下方（支撑）
-		return c.Level <= lastPrice
+		// LONG候选：价格应在Zone下方或Zone内（支撑作用）
+		// 使用BandLo作为判断基准（而非Level）
+		return lastPrice >= lo-tolerance
 	case "SHORT":
-		// SHORT候选必须在价格上方（阻力）
-		return c.Level >= lastPrice
+		// SHORT候选：价格应在Zone上方或Zone内（阻力作用）
+		// 使用BandHi作为判断基准（而非Level）
+		return lastPrice <= hi+tolerance
 	default:
 		return false
 	}
@@ -324,11 +375,11 @@ func (ae *AnchorEngine) computeAnchorScore(c AnchorCandidate, lastPrice, atr14 f
 		}
 	}
 	
-	// 距离惩罚（ATR归一化）
+	// 距离惩罚（ATR归一化）- 使用有效距离而非Level距离
 	if atr14 > 0 {
-		distance := math.Abs(c.Level - lastPrice)
+		distance := effectiveDistance(lastPrice, c)
 		distanceATR := distance / atr14
-		
+
 		if distanceATR > ae.config.MaxProximityATR {
 			breakdown.ProximityPenalty = -20.0 // 过远严重惩罚
 		} else if distanceATR > 4.0 {
@@ -337,7 +388,7 @@ func (ae *AnchorEngine) computeAnchorScore(c AnchorCandidate, lastPrice, atr14 f
 			breakdown.ProximityPenalty = -5.0
 		}
 		// 距离适中或很近，无惩罚
-		
+
 		// 记录距离信息到Meta
 		// 这里不能直接修改c，在调用处处理
 	}

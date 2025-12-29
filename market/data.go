@@ -865,7 +865,7 @@ func FormatAsCompactData(data *Data) string {
 			"基础指标":         calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
 			"多时间框架分析":   extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
 			"订单流分析":       GetOrderFlowDataForAIV2(data.Symbol),
-			"trigger_context": getTriggerContextForAI(data.Symbol, data.LastPrice, timeframeKlines),
+			"trigger_context": getTriggerContextForAI(data, timeframeKlines),
 			// 🔥 P0-1新增：输出交易所元数据，解决 ctxNA_lot_size / ctxNA_execution_params
 			"ExchangeMeta": extractExchangeMetaForAI(data),
 			//"Gate2结构聚合":  buildGate2CompactOutput(data),
@@ -4056,14 +4056,14 @@ func normalizeNilCollections(tc map[string]interface{}) {
 }
 
 // getTriggerContextForAI 获取指定币种的触发器检测数据（供AI使用）
-// symbol: 币种符号
-// lastPrice: 当前最新价格
+// 🔥 P1-01-d修改：接受完整Data结构以支持EDGE触发器（需要Gate2锚点数据）
+// data: 完整市场数据（包含Symbol、LastPrice、StructureGate2等）
 // timeframeKlines: 缓存的K线数据
-func getTriggerContextForAI(symbol string, lastPrice float64, timeframeKlines map[string][]Kline) map[string]interface{} {
+func getTriggerContextForAI(data *Data, timeframeKlines map[string][]Kline) map[string]interface{} {
 	// 错误恢复处理
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("⚠️ 触发器检测数据获取失败 %s: %v", symbol, r)
+			log.Printf("⚠️ 触发器检测数据获取失败 %s: %v", data.Symbol, r)
 		}
 	}()
 
@@ -4120,9 +4120,57 @@ func getTriggerContextForAI(symbol string, lastPrice float64, timeframeKlines ma
 
 	cfg = triggers.VolatilityAdjustedConfig(cfg, volRegime)
 
-	// 🔥 P1-1修复：使用最近N根窗口检测（N=3），提高触发命中率
-	// 回看最近3根K线，优先age小的，次优quality高的
-	resultWithAge := triggers.DetectTriggersRecentDefault(triggerKlines, atr5m, volZ, cfg)
+	// 🔥 P1-01-d关键修改：构建TouchInfo以启用EDGE触发器
+	// 🔥 P1-02关键修改：获取5m K线的high/low作为触碰判定价格
+	var touches []triggers.TouchInfo
+	var levels []triggers.LevelInfo // BO_RETEST暂时为空（P1阶段只实现EDGE）
+
+	if data.StructureGate2 != nil && len(klines5m) > 0 {
+		// 获取最新5m K线的high和low
+		latestKline := klines5m[len(klines5m)-1]
+		kline5mHigh := latestKline.High
+		kline5mLow := latestKline.Low
+
+		// 从Gate2锚点数据构建TouchInfo
+		// 🔥 P1-02修改：
+		// - LONG（支撑）：使用5m low作为touch_price，检测是否向下触碰支撑位
+		// - SHORT（阻力）：使用5m high作为touch_price，检测是否向上触碰阻力位
+		touchesLong := buildTouchInfoFromAnchors(
+			data.StructureGate2.TopAnchorsLong,
+			"LONG",
+			data.LastPrice, // currentPrice用于计算distBps基准
+			kline5mLow,     // touchPrice：LONG使用5m low
+			atr5m,
+		)
+		touchesShort := buildTouchInfoFromAnchors(
+			data.StructureGate2.TopAnchorsShort,
+			"SHORT",
+			data.LastPrice, // currentPrice用于计算distBps基准
+			kline5mHigh,    // touchPrice：SHORT使用5m high
+			atr5m,
+		)
+
+		// 合并LONG和SHORT触碰点
+		touches = append(touchesLong, touchesShort...)
+	}
+
+	// 🔥 P1-01-d关键修改：使用支持结构数据的触发器检测
+	var resultWithAge triggers.TriggerWithAge
+	if len(touches) > 0 {
+		// 有结构数据：使用EDGE触发器
+		resultWithAge = triggers.DetectTriggersRecentWithStructuresDefault(
+			triggerKlines,
+			atr5m,
+			volZ,
+			cfg,
+			touches,
+			levels,
+			data.LastPrice,
+		)
+	} else {
+		// 无结构数据：使用传统触发器
+		resultWithAge = triggers.DetectTriggersRecentDefault(triggerKlines, atr5m, volZ, cfg)
+	}
 	result := resultWithAge.Result
 	ageBars := resultWithAge.AgeBars
 	barCloseTimeMs := resultWithAge.BarCloseTimeMs
@@ -4197,13 +4245,13 @@ func getTriggerContextForAI(symbol string, lastPrice float64, timeframeKlines ma
 		"trigger_flags":     result.AIFlags,   // 🔥 P0-2修复：使用 ai_flags（BorderlineMin过滤）用于Gate3窗口
 		"trigger_primary":   primary,          // 🔥 P1-3修复：从 AIFlags 中选质量最高（与 flags/quality 对齐）
 		"trigger_quality":   formattedQuality, // 🔥 改造：格式化为2位小数
-		"trigger_key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", symbol),
+		"trigger_key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", data.Symbol),
 		"trigger_key_level_type": result.KeyType,
 		// 🔥 P0新增：window_state字段（窗口状态）
 		"window_state": windowState,
 		"statistical_significance": map[string]interface{}{
-			"volume_z": FormatByDataTypeAndSymbol(volZ, "ratio", symbol),
-			"atr_5m":   FormatByDataTypeAndSymbol(atr5m, "price", symbol),
+			"volume_z": FormatByDataTypeAndSymbol(volZ, "ratio", data.Symbol),
+			"atr_5m":   FormatByDataTypeAndSymbol(atr5m, "price", data.Symbol),
 		},
 		// 🔥 P1-1新增：窗口检测字段
 		"trigger_age_bars":          ageBars,                                     // 触发器年龄（0=当前bar，1=上一根，2=上上根，-1=无触发）
@@ -4211,9 +4259,9 @@ func getTriggerContextForAI(symbol string, lastPrice float64, timeframeKlines ma
 		// 🔥 P1-2新增：pattern hint 字段
 		"trigger_pattern_hint": triggers.GetPatternHintFromFlags(result.AIFlags), // 触发器pattern类型提示（"SFP", "Engulf", "MOM_BREAK", ""）
 		// 🔥 新增：触发K线收盘价
-		"trigger_bar_close_price5m": FormatByDataTypeAndSymbol(triggerBarClosePrice, "price", symbol), // 触发K线的收盘价
+		"trigger_bar_close_price5m": FormatByDataTypeAndSymbol(triggerBarClosePrice, "price", data.Symbol), // 触发K线的收盘价
 		// 🔥 新增：当前最新价格
-		"last_price": FormatByDataTypeAndSymbol(lastPrice, "price", symbol), // 当前 last price
+		"last_price": FormatByDataTypeAndSymbol(data.LastPrice, "price", data.Symbol), // 当前 last price
 		// 元数据
 		"klines_count": len(triggerKlines),
 		"状态":          "正常",
@@ -4287,5 +4335,76 @@ func buildEmptyTriggerContext(reason string) map[string]interface{} {
 	normalizeNilCollections(emptyContext)
 
 	return emptyContext
+}
+
+// buildTouchInfoFromAnchors 将 AnchorCandidate 列表转换为 TouchInfo 列表（供 EDGE 触发器使用）
+// 🔥 P1-01-b新增：适配器函数，连接 Gate2 锚点数据与 triggers 包的 EDGE 检测
+// 🔥 P1-02修改：使用5m high/low作为touch_price，提高触碰检测准确性
+//
+// 参数：
+// - anchors: Gate2 锚点候选列表
+// - side: "LONG"（支撑）或 "SHORT"（阻力）
+// - currentPrice: 当前最新价格（用于计算distBps）
+// - touchPrice: 触碰判定价格（LONG用5m low，SHORT用5m high）
+// - atr14: 14周期ATR（用于计算 dist_atr）
+//
+// 返回：TouchInfo 列表，可直接传递给 triggers.DetectEdge()
+func buildTouchInfoFromAnchors(anchors []AnchorCandidate, side string, currentPrice, touchPrice, atr14 float64) []triggers.TouchInfo {
+	touches := make([]triggers.TouchInfo, 0, len(anchors))
+
+	for _, anchor := range anchors {
+		// 🔥 P1-02关键修改：使用 touchPrice 而非 currentPrice 计算距离
+		// - 对于 LONG（支撑）：touchPrice = 5m low（最低价）
+		// - 对于 SHORT（阻力）：touchPrice = 5m high（最高价）
+		// 这样可以检测到K线内部的触碰，而不仅仅是收盘价的触碰
+
+		// 计算到关键位的真实距离（使用effectiveDistance以正确处理Zone边界）
+		distRaw := effectiveDistance(touchPrice, anchor)
+
+		// 计算距离指标（注意：distBps使用currentPrice作为基准以保持一致性）
+		distBps := (distRaw / currentPrice) * 10000 // 转换为基点（1基点=0.01%）
+		distAtr := 0.0
+		if atr14 > 0 {
+			distAtr = distRaw / atr14 // ATR倍数
+		}
+
+		// 提取 StrengthZ（可能为空）
+		strengthZ := 0.0
+		if anchor.StrengthZ != nil {
+			strengthZ = *anchor.StrengthZ
+		}
+
+		// 构建来源字符串
+		source := string(anchor.Type) // AnchorType 转为字符串
+
+		// 确定 KeyType
+		keyType := triggers.KeyLevelEdgeSupport
+		if side == "SHORT" {
+			keyType = triggers.KeyLevelEdgeResistance
+		}
+
+		// 🔥 关键：使用 Zone 边界作为 Level
+		// - 对于 LONG（支撑）：使用 BandLo（下沿）
+		// - 对于 SHORT（阻力）：使用 BandHi（上沿）
+		level := anchor.Level // 默认使用中心点
+		if side == "LONG" {
+			level = anchor.BandLo
+		} else if side == "SHORT" {
+			level = anchor.BandHi
+		}
+
+		touches = append(touches, triggers.TouchInfo{
+			Level:     level,
+			Side:      side,
+			DistBps:   distBps,
+			DistAtr:   distAtr,
+			Source:    source,
+			StrengthZ: strengthZ,
+			TimeFrame: anchor.TF,
+			KeyType:   keyType,
+		})
+	}
+
+	return touches
 }
 
