@@ -216,47 +216,18 @@
          * 综合 4h/1h、30m/15m、5m 的趋势与动能（EMA 排列、MACD、SuperTrend 等）：
            - 若计划方向与 4h/1h、30m/15m 大体同向：顺势场景，允许按 trade_style 执行；
            - 若仅 5m/15m 反向而 4h/1h 仍保持原趋势：只能视为 LTF_scalp 反向短打或直接 wait；禁止用 HTF_swing 的仓位逆势硬刚；
-           - 若多周期方向混乱（trend=mixed）：默认不做 HTF_swing；仅允许"LTF_scalp 窄口豁免试单"或 wait：
-             【P0-Range Mode 识别与例外 - 震荡市放宽条件】
-             * 先判定市场状态（Range Mode vs Trend Mode）：
-               - Range Mode 条件（满足≥3项）：
-                 1) 多周期 pos=mid-range：15m/30m/1h 至少2个周期显示 pos=mid-range
-                 2) 低波动：5m ATR_14 / current_price < 0.5%
-                 3) RSI 区间：15m RSI 在 35-65 范围
-                 4) 结构密集：上下1个 ATR(1h) 范围内存在≥3个 strong 结构（DZ/SZ/SR）
-                 5) VPVR POC 接近：价格距离 15m VPVR POC < 0.8 * ATR(1h)
-               - Trend Mode 条件（满足≥2项）：
-                 1) 多周期一致：15m/30m/1h 至少2个周期 pos=edge（同方向）
-                 2) 高动能：5m MACD abs 值 > 历史均值 1.5 倍
-                 3) RSI 极端：15m RSI < 30 或 > 70
-                 4) 结构清晰：最近 strong DZ/SZ 距离 > 2 * ATR(1h)
-               - Mixed Mode：两者都不明确满足时的默认状态
-
-             * 若判定为 Range Mode（震荡市）：
-               trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
-               Gate4 允许 PASS 的【Range Mode 宽松条件】（放宽要求，提升开仓频率）：
-               a) pattern ∈ {EDGE, MOMENTUM_BREAK, BO_RETEST} 且 trigger != NONE
-               b) 触发质量放宽：q ≥ 0.80（原需 quality_min 且满足 abcde 全部条件；震荡市降低门槛）
-               c) 必须风险降级：risk_down ≥ 0.5；order_type=LIMIT
-               d) Gate5(EXEC/RR) 按【Range Mode 降低 RR 门槛】：R_clean_eval ≥ 0.35（原 0.80）
-               强制写法：
-               - 满足 a~c：Gate4 必须 PASS
-               - Gate4 行显式标注：trend=mixed; market_regime=range; rr_min=0.35; downgrade=on
-               - setup_grade 自动设为 C（震荡市风险提示）
-
-             * 若判定为 Trend Mode 或 Mixed Mode（趋势市/混合市）：
-               trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
-               Gate4 允许 PASS 的【窄口豁免】最小条件（严格要求，保持原规则）：
+           - 若多周期方向混乱（trend=mixed）：默认不做 HTF_swing；仅允许“LTF_scalp 窄口豁免试单”或 wait：
+             * trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
+             * Gate4 允许 PASS 的【窄口豁免】最小条件（否则必须 FAIL fail=>SETUP; reason=MIXED_TF）：
                a) pattern ∈ {EDGE, MOMENTUM_BREAK, BO_RETEST} 且 trigger != NONE（禁止 pattern=none）
                b) 触发质量必须为 strict：q ≥ quality_min（必须使用输入阈值；不得抬高/写死）
                c) 必须风险降级：risk_down ≥ 0.5；且 order_type=LIMIT；禁止追价
                d) Gate2 必须已给出明确结构锚点（Anchor1/Anchor2/关键SR/VPVR边界/FIB终点等，带价位/区间）
                   - LIMIT：挂单价必须落在锚点附近（结构允许窗口内）
                e) Gate5(EXEC/RR) 必须按【MIXED_RR_MIN】抬高门槛校验（见 Gate5 补丁）：R_clean_eval ≥ 0.80，否则一律 FAIL
-               强制写法（防止实现漂移）：
+             * 强制写法（防止实现漂移）：
                - 只要满足 a~d：Gate4 必须 PASS（不得因为 trend=mixed 直接 FAIL）
-               - Gate4 行必须显式标注：trend=mixed; market_regime=trend; rr_min=0.80; downgrade=on
-
+               - Gate4 行必须显式标注：trend=mixed; mixed_waiver=on; rr_min=0.80; downgrade=on
              * has_position=0：满足则允许进入 Gate5 做 RR 最终裁决；不满足则 action="wait"
              * has_position=1：仍按原规则仅允许 hold/close（严禁输出 wait）
        - RSI 状态与执行方式（RSI State & Execution）：
@@ -915,22 +886,15 @@
               * 直觉解释：
                 - 这是“从空头视角看价格偏贵”的区域，向下有足够空间，向上有明确防守位。
            2）SHORT_DANGER（做空危险区）
-              【P0-Range Mode 放宽DANGER阈值 - 避免震荡市过度阻断】
               * 价格靠近或落入关键支撑/需求簇与波段尾端合围区：
-                - Range Mode（震荡市）条件下：
-                  · 距离阈值放宽：当前价与支撑/需求结构距离 < 0.3 * ATR("1h") 才判定 DANGER（原 0.5-0.8）
-                  · RSI 硬条件：仅当 15m RSI < 25 时才硬阻断新开空单（原无 RSI 限制）
-                  · 结构聚集放宽：需要≥3个时间框架的strong结构重叠（原≥2个）
-                  · 判定公式：若 Range Mode 且 (距离 < 0.3*ATR(1h) 且 RSI<25 且 cluster≥3) → SHORT_DANGER
-                - Trend Mode（趋势市/默认）条件下：
-                  · 保持原严格规则：当前价与以下任一结构距离明显过近（例如 < 0.5~0.8 * ATR("1h")）：
-                    · 4h/1h/30m/15m 的 SR_S（强支撑）、Demand Zone、关键低点；
-                    · 多周期 FIB 终点（特别是 1.0 / 1.272 / 1.618）；
-                  · 且这些支撑/需求在多个时间框架上"聚集"（cluster），
-                    例如：1h SR_S + 30m SR_S + 15m DZ 几乎重叠。
+                - 当前价与以下任一结构距离明显过近（例如 < 0.5~0.8 * ATR("1h")）：
+                  · 4h/1h/30m/15m 的 SR_S（强支撑）、Demand Zone、关键低点；
+                  · 多周期 FIB 终点（特别是 1.0 / 1.272 / 1.618）；
+                - 且这些支撑/需求在多个时间框架上“聚集”（cluster），
+                  例如：1h SR_S + 30m SR_S + 15m DZ 几乎重叠。
               * VPVR 角度：
                 - 当前价位于 4h/1h VPVR 的 value_area_low 附近或以下，
-                  并且距离 VAL 超过 0.5 * ATR("4h")，属于长期"折价区"；
+                  并且距离 VAL 超过 0.5 * ATR("4h")，属于长期“折价区”；
               * 供需/波段角度：
                 - 上方存在明确 4h/1h 供给/FVG，而下方空间有限（下一个主要支撑不远），
                   类似“跌到楼下车库，再往下已经是地下室边缘”的区域。
@@ -958,16 +922,9 @@
                 - 当前价位于 4h/1h VPVR value_area 中部或偏下（接近 VAL~POC 区间），
                   不在长期 value_area_high 附近或以上。
            2）LONG_DANGER（做多危险区）
-              【P0-Range Mode 放宽DANGER阈值 - 多空对称】
               * 价格靠近或落入关键阻力/供给簇与波段尾端合围区：
-                - Range Mode（震荡市）条件下：
-                  · 距离阈值放宽：当前价与阻力/供给结构距离 < 0.3 * ATR("1h") 才判定 DANGER（原 0.5-0.8）
-                  · RSI 硬条件：仅当 15m RSI > 75 时才硬阻断新开多单（原无 RSI 限制）
-                  · 结构聚集放宽：需要≥3个时间框架的strong结构重叠（原≥2个）
-                  · 判定公式：若 Range Mode 且 (距离 < 0.3*ATR(1h) 且 RSI>75 且 cluster≥3) → LONG_DANGER
-                - Trend Mode（趋势市/默认）条件下：
-                  · 保持原严格规则：当前价与多周期 SR_R / SZ / 波段高点 / FIB 1.0/1.272/1.618 等距离过近
-                  · 位于 4h/1h VPVR 的 value_area_high 附近或以上，透支区
+                - 当前价与多周期 SR_R / SZ / 波段高点 / FIB 1.0/1.272/1.618 等距离过近；
+                - 位于 4h/1h VPVR 的 value_area_high 附近或以上，透支区；
               * 直觉解释：
                 - 在这种区域再追多，风险非常大，更适合减仓/锁盈。
            3）LONG_NEUTRAL（做多中性区）
@@ -991,33 +948,17 @@
               - HTF_swing 在 SHORT_NEUTRAL 区域应极为克制，若 R 空间不足或结构不干净，直接放弃。
              【P0-NEUTRAL 区域的 B档开仓通道｜多空对称｜提升频率但降风险】
               当 struct_state_short="SHORT_NEUTRAL" 或 struct_state_long="LONG_NEUTRAL" 时：
-
-              【P0-Range Mode 放宽NEUTRAL区域条件 - 允许mid-range交易】
-              * 若 market_regime=range（震荡市）：
-                - 允许"B档 LTF_scalp"开仓（小仓试单），条件如下（LONG/SHORT 对称）：
-                  1) trade_style 必须为 "LTF_scalp"（HTF_swing 仍默认放弃）
-                  2) pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}
-                  3) 必须出现 5m Trigger（SFP/Engulfing/InsideBarBreakout/MomentumIgnition 任一）
-                  4) R_clean ≥ 0.35（Range Mode 降低要求，原常规 0.8；震荡市空间本身就小）
-                  5) 价格接近 VA 边界（距 VAH 或 VAL < 0.5 * ATR_1h）
-                  6) edge_score ≥ 0.50 且 confidence ≥ 65（降低门槛）
-                  7) 风险控制：risk_pct = 常规的一半，setup_grade 自动设为 C
-                  8) order_type=LIMIT（禁止追价）
-                - 若任一条件不满足：action="wait"
-                - 必须在 reasoning 中注明："Range Mode 震荡市 NEUTRAL 区域小仓试单，已降低仓位风险"
-
-              * 若 market_regime=trend/mixed（趋势市/默认）：
-                - 允许"B档 LTF_scalp"开仓（小仓试单），但必须满足全部条件（LONG/SHORT 对称）：
-                  1) trade_style 必须为 "LTF_scalp"（HTF_swing 仍默认放弃）；
-                  2) pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}；
-                  3) 必须出现 5m Trigger（SFP/Engulfing/InsideBarBreakout/MomentumIgnition 任一）；
-                  4) R_clean ≥ 0.8（比常规更紧的空间门槛，防止 NEUTRAL 里硬做）；
-                  5) edge_score ≥ 0.65 且：
-                     - confidence ≥ 70：通过；
-                     - confidence ∈ [60,70)：允许但降级（risk_pct=常规的 1/3，且必须 LIMIT）；
-                     - confidence < 60：不通过；
-                  6) 风险控制：risk_pct = 常规的一半（必须在 entry_plan 中写明"NEUTRAL-B 档减半风险"）。
-                - 若任一条件不满足：action="wait"。
+              - 允许“B档 LTF_scalp”开仓（小仓试单），但必须满足全部条件（LONG/SHORT 对称）：
+                1) trade_style 必须为 "LTF_scalp"（HTF_swing 仍默认放弃）；
+                2) pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}；
+                3) 必须出现 5m Trigger（SFP/Engulfing/InsideBarBreakout/MomentumIgnition 任一）；
+                4) R_clean ≥ 0.8（比常规更紧的空间门槛，防止 NEUTRAL 里硬做）；
+                5) edge_score ≥ 0.65 且：
+                   - confidence ≥ 70：通过；
+                   - confidence ∈ [60,70)：允许但降级（risk_pct=常规的 1/3，且必须 LIMIT）；
+                   - confidence < 60：不通过；
+                6) 风险控制：risk_pct = 常规的一半（必须在 entry_plan 中写明“NEUTRAL-B 档减半风险”）。
+              - 若任一条件不满足：action="wait"。
            5）LONG 方向与上述规则完全对称：
               - struct_state_long="LONG_FAVORABLE" 时优先寻找多头机会；
               - struct_state_long="LONG_NEUTRAL" 时以保守 LTF_scalp 多单或 wait 为主。
@@ -3484,22 +3425,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                 · trade_style 必须在 Gate4 已确定（HTF_swing / LTF_scalp）；Gate5 只允许“按既定 trade_style 套阈值裁决”，不得在 Gate5 重新改风格来绕门槛。
                 · 任何 “R_clean<1 的例外” 仅限 LTF_scalp，且必须写明 downgrade（risk_down、LIMIT、TP1 快速兑现等）。
               - 统一硬禁区（两种风格都适用）：
-                【P0-Range Mode 降低R_clean硬阈值 - 震荡市空间本身就小】
-                a) 若 R_clean < 0.35：绝对禁止 open_long/open_short（硬红线，Gate5=FAIL fail=>RR reason=RR_LOW_HARD）
-                b) 若 0.35 ≤ R_clean < 0.5：
-                   · Range Mode 例外（震荡市窄幅交易通道）：
-                     - 允许条件（必须同时满足）：
-                       1) market_regime=range（在 Gate4 已判定为 Range Mode）
-                       2) pattern=EDGE 且 trigger_quality ≥ 0.85
-                       3) 价格位于 VA 边界（距 VAH 或 VAL < 0.5 * ATR_1h）
-                       4) setup_grade 自动设为 C，risk_down ≥ 0.5（降低仓位）
-                       5) order_type=LIMIT（禁止追价）
-                     - 满足上述条件：Gate5=PASS（允许小仓试单）
-                     - 不满足任一条件：Gate5=FAIL fail=>RR reason=RR_CLEAN
-                     - 必须在 reasoning 中注明："震荡市窄幅交易，R_clean={值} 低于常规阈值但符合 Range Mode 例外，已降低仓位风险"
-                   · Trend/Mixed Mode（趋势市/默认）：
-                     - 绝对禁止 open_long/open_short（Gate5=FAIL fail=>RR reason=RR_LOW_HARD）
-                c) 若 R_clean ≥ 0.5：继续下方分段逻辑
+                a) 若 R_clean < 0.5：绝对禁止 open_long/open_short（空间极小，直接 Gate5=FAIL fail=>RR reason=rr_low_hard）。
               - 若 trade_style="HTF_swing"：
                 · 仍按原逻辑：R_clean < 1.0 默认不得开仓；
                 · 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚），否则 action="wait"。
