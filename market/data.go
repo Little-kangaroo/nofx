@@ -4010,7 +4010,7 @@ func buildAnchorScoreBreakdown(gate2 *StructureGate2) map[string]interface{} {
 // normalizeNilCollections 标准化 trigger_context 中的所有 slice/map 字段，确保非 nil（避免 JSON 序列化为 null）
 // 🔥 P0-修复：最后兜底，确保所有字段都是 [] 或 {} 而不是 null
 func normalizeNilCollections(tc map[string]interface{}) {
-	// 顶层字段
+	// 顶层字段 - 当前触发器数据
 	if tc["trigger_flags"] == nil {
 		tc["trigger_flags"] = []string{}
 	}
@@ -4018,40 +4018,18 @@ func normalizeNilCollections(tc map[string]interface{}) {
 		tc["trigger_quality"] = map[string]float64{}
 	}
 
-	// _debug 字段
-	dbg, ok := tc["_debug"].(map[string]interface{})
-	if !ok || dbg == nil {
-		// 如果 _debug 不存在或为 nil，创建一个空的
-		tc["_debug"] = map[string]interface{}{
-			"raw_flags":      []string{},
-			"raw_quality":    map[string]float64{},
-			"strict_flags":   []string{},
-			"strict_quality": map[string]float64{},
-			"ai_flags":       []string{},
-			"ai_quality":     map[string]float64{},
-		}
-		return
+	// 🔥 分层触发器数据字段（从_debug提升而来）
+	if tc["raw_flags"] == nil {
+		tc["raw_flags"] = []string{}
 	}
-
-	// 规范化 _debug 中的字段
-	if dbg["raw_flags"] == nil {
-		dbg["raw_flags"] = []string{}
+	if tc["raw_quality"] == nil {
+		tc["raw_quality"] = map[string]float64{}
 	}
-	if dbg["strict_flags"] == nil {
-		dbg["strict_flags"] = []string{}
+	if tc["strict_flags"] == nil {
+		tc["strict_flags"] = []string{}
 	}
-	if dbg["ai_flags"] == nil {
-		dbg["ai_flags"] = []string{}
-	}
-
-	if dbg["raw_quality"] == nil {
-		dbg["raw_quality"] = map[string]float64{}
-	}
-	if dbg["strict_quality"] == nil {
-		dbg["strict_quality"] = map[string]float64{}
-	}
-	if dbg["ai_quality"] == nil {
-		dbg["ai_quality"] = map[string]float64{}
+	if tc["strict_quality"] == nil {
+		tc["strict_quality"] = map[string]float64{}
 	}
 }
 
@@ -4262,22 +4240,17 @@ func getTriggerContextForAI(data *Data, timeframeKlines map[string][]Kline) map[
 		"trigger_bar_close_price5m": FormatByDataTypeAndSymbol(triggerBarClosePrice, "price", data.Symbol), // 触发K线的收盘价
 		// 🔥 新增：当前最新价格
 		"last_price": FormatByDataTypeAndSymbol(data.LastPrice, "price", data.Symbol), // 当前 last price
+		// 🔥 质量阈值配置（从_debug提升为正式字段）
+		"quality_min":    cfg.QualityMin,    // Strict模式质量阈值（通常0.60）
+		"borderline_min": cfg.BorderlineMin, // Borderline模式质量阈值（通常0.25）
+		// 🔥 分层触发器数据（从_debug提升为正式字段）
+		"raw_flags":      result.RawFlags,      // PostProcess前的所有触发器
+		"raw_quality":    result.RawQuality,    // PostProcess前的所有质量评分
+		"strict_flags":   result.StrictFlags,   // Strict层过滤后的触发器（QualityMin）
+		"strict_quality": result.StrictQuality, // Strict层质量评分
 		// 元数据
 		"klines_count": len(triggerKlines),
 		"状态":          "正常",
-		// 🔥 P0-2修复：增强调试数据（包含分层输出信息）- 已屏蔽
-		// "_debug": map[string]interface{}{
-		// 	"raw_flags":      result.RawFlags,        // PostProcess前的所有触发器
-		// 	"raw_quality":    result.RawQuality,      // PostProcess前的所有质量评分
-		// 	"ai_flags":       result.AIFlags,         // AI层过滤后的触发器（BorderlineMin）
-		// 	"ai_quality":     result.AIQuality,       // AI层质量评分
-		// 	"strict_flags":   result.StrictFlags,     // Strict层过滤后的触发器（QualityMin）
-		// 	"strict_quality": result.StrictQuality,   // Strict层质量评分
-		// 	"quality_min":    cfg.QualityMin,         // 当前使用的Strict质量阈值
-		// 	"borderline_min": cfg.BorderlineMin,      // 当前使用的AI质量阈值
-		// 	"age_bars":       ageBars,                // 🔥 P1-1新增：触发器年龄（用于诊断窗口检测）
-		// 	"bar_close_time": barCloseTimeMs,         // 🔥 P1-1新增：触发器所在K线收盘时间
-		// },
 	}
 
 	// 🔥 P0-修复：最后兜底 - 规范化所有 slice/map 字段，确保非 nil（避免 JSON 序列化为 null）
@@ -4313,22 +4286,17 @@ func buildEmptyTriggerContext(reason string) map[string]interface{} {
 		"trigger_bar_close_price5m": 0,
 		// 🔥 新增：当前最新价格（空值）
 		"last_price": 0,
+		// 🔥 质量阈值配置（从_debug提升为正式字段）
+		"quality_min":    0.55, // 默认值
+		"borderline_min": 0.20, // 默认值
+		// 🔥 分层触发器数据（从_debug提升为正式字段）
+		"raw_flags":      []string{},
+		"raw_quality":    map[string]float64{},
+		"strict_flags":   []string{},
+		"strict_quality": map[string]float64{},
 		// 元数据
 		"klines_count": 0,
 		"状态":          reason,
-		// 🔥 P0-修复：添加 _debug 字段，确保与正常输出保持一致 - 已屏蔽
-		// "_debug": map[string]interface{}{
-		// 	"raw_flags":      []string{},
-		// 	"raw_quality":    map[string]float64{},
-		// 	"ai_flags":       []string{},
-		// 	"ai_quality":     map[string]float64{},
-		// 	"strict_flags":   []string{},
-		// 	"strict_quality": map[string]float64{},
-		// 	"quality_min":    0.55, // 默认值
-		// 	"borderline_min": 0.20, // 默认值
-		// 	"age_bars":       -1,
-		// 	"bar_close_time": 0,
-		// },
 	}
 
 	// 🔥 P0-修复：最后兜底 - 规范化所有 slice/map 字段

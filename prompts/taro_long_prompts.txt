@@ -197,7 +197,7 @@
                       -> 强制约束（否则视为不满足）：
                          a) trade_style 必须为 LTF_scalp（HTF_swing 一律视为不满足：Gate4=FAIL）
                          b) 必须风险降级：risk_down ≥ 0.5；order_type=LIMIT；禁止追价
-                         c) setup_grade 最高只能给到 "B"（不得 "A"）；edge_score 必须 ≥ 0.60
+                         c) setup_grade 最高只能给到 "B"（不得 "A"）；edge_score 必须 ≥ 0.35（与 rr_min=0.35 的 LTF_scalp 降级路径对齐）
                          d) entry_plan 必须包含 TP1 快速兑现：TP1 >= +0.5R 或最近边界；TP1 close_pct ≥ 0.5；
                             剩余仓位必须使用更紧 stop（并禁止加仓）
                          e) GateTrace 必须写清 tier 与阈值：
@@ -217,48 +217,60 @@
            - 若计划方向与 4h/1h、30m/15m 大体同向：顺势场景，允许按 trade_style 执行；
            - 若仅 5m/15m 反向而 4h/1h 仍保持原趋势：只能视为 LTF_scalp 反向短打或直接 wait；禁止用 HTF_swing 的仓位逆势硬刚；
            - 若多周期方向混乱（trend=mixed）：默认不做 HTF_swing；仅允许"LTF_scalp 窄口豁免试单"或 wait：
-             【P0-Range Mode 识别与例外 - 震荡市放宽条件】
-             * 先判定市场状态（Range Mode vs Trend Mode）：
-               - Range Mode 条件（满足≥3项）：
-                 1) 多周期 pos=mid-range：15m/30m/1h 至少2个周期显示 pos=mid-range
-                 2) 低波动：5m ATR_14 / current_price < 0.5%
-                 3) RSI 区间：15m RSI 在 35-65 范围
-                 4) 结构密集：上下1个 ATR(1h) 范围内存在≥3个 strong 结构（DZ/SZ/SR）
-                 5) VPVR POC 接近：价格距离 15m VPVR POC < 0.8 * ATR(1h)
-               - Trend Mode 条件（满足≥2项）：
-                 1) 多周期一致：15m/30m/1h 至少2个周期 pos=edge（同方向）
-                 2) 高动能：5m MACD abs 值 > 历史均值 1.5 倍
-                 3) RSI 极端：15m RSI < 30 或 > 70
-                 4) 结构清晰：最近 strong DZ/SZ 距离 > 2 * ATR(1h)
-               - Mixed Mode：两者都不明确满足时的默认状态
+      【P0-Range Mode 识别与例外 - 震荡市放宽条件】
+        * 先统一 market_regime 口径（Regime Alias Map；仅用于判断/对账，不新增 JSON 字段）：
+          - market_regime_raw := 宏观资金趋势.market_regime（缺失则视为 "mixed"）
+          - market_regime_norm :=
+              if market_regime_raw ∈ {range, trend, mixed}: market_regime_raw
+              else if market_regime_raw == "consolidation": range
+              else if market_regime_raw == "mixed_signals": mixed
+              else if market_regime_raw ∈ {"spot_led_decline","spot_led_rally"}: trend
+              else: mixed
+        * 市场状态判定（Range Mode vs Trend Mode）：
+          - Range Mode（满足任一即判定为 range）：
+            1) market_regime_norm = range
+            2) trend=mixed 且 Gate2/多周期结构位置以“价值区内”为主：pos ∈ {mid-range, POC_edge, POC_chop_zone}
+            3) 原 Range Mode 条件（满足≥2项；缺失项不计入，不当作失败）：
+               a) 多周期 pos=mid-range：15m/30m/1h 至少2个周期显示 pos=mid-range
+               b) 低波动：5m ATR_14 / current_price < 0.5%
+               c) RSI 区间：15m RSI 在 35-65 范围
+               d) 结构密集：上下1个 ATR(1h) 范围内存在≥3个 strong 结构（DZ/SZ/SR）
+               e) VPVR POC 接近：价格距离 15m VPVR POC < 0.8 * ATR(1h)
+          - Trend Mode（满足≥2项）：
+            1) market_regime_norm = trend
+            2) 多周期一致：15m/30m/1h 至少2个周期 pos=edge（同方向）
+            3) 高动能：5m MACD abs 值 > 历史均值 1.5 倍
+            4) RSI 极端：15m RSI < 30 或 > 70
+            5) 结构清晰：最近 strong DZ/SZ 距离 > 2 * ATR(1h)
+          - Mixed Mode：两者都不明确满足时的默认状态（market_regime_norm=mixed）
+        * 若判定为 Range Mode（震荡市）：
+          trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
+          Gate4 允许 PASS 的【Range Mode 宽松条件】（放宽要求，提升开仓频率）：
+          a) pattern ∈ {EDGE, MOMENTUM_BREAK, BO_RETEST} 且 trigger != NONE
+          b) 触发质量放宽（仍服从输入阈值）：q ≥ max(borderline_min, 0.30)
+          c) 必须风险降级：risk_down ≥ 0.5；order_type=LIMIT
+          强制写法：
+          - 满足 a~c：Gate4 必须 PASS（不得因为 pos=mid-range 直接 FAIL）
+          - Gate4 行显式标注：trend=mixed; market_regime=range; rr_min=0.35; downgrade=on
+          - setup_grade 自动设为 B（震荡市风险提示；禁止设为 C，避免触发全局“C 禁开仓”）
 
-             * 若判定为 Range Mode（震荡市）：
-               trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
-               Gate4 允许 PASS 的【Range Mode 宽松条件】（放宽要求，提升开仓频率）：
-               a) pattern ∈ {EDGE, MOMENTUM_BREAK, BO_RETEST} 且 trigger != NONE
-               b) 触发质量放宽：q ≥ 0.80（原需 quality_min 且满足 abcde 全部条件；震荡市降低门槛）
-               c) 必须风险降级：risk_down ≥ 0.5；order_type=LIMIT
-               d) Gate5(EXEC/RR) 按【Range Mode 降低 RR 门槛】：R_clean_eval ≥ 0.35（原 0.80）
-               强制写法：
-               - 满足 a~c：Gate4 必须 PASS
-               - Gate4 行显式标注：trend=mixed; market_regime=range; rr_min=0.35; downgrade=on
-               - setup_grade 自动设为 C（震荡市风险提示）
+        * 若判定为 Trend Mode 或 Mixed Mode（趋势市/混合市）：
+          trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
+          Gate4 允许 PASS 的【窄口豁免】最小条件（保持原结构要求，但修复 rr_min/market_regime 口径）：
+          a) pattern ∈ {EDGE, MOMENTUM_BREAK, BO_RETEST} 且 trigger != NONE（禁止 pattern=none）
+          b) 触发质量必须为 strict：q ≥ quality_min（必须使用输入阈值；不得抬高/写死）
+          c) 必须风险降级：risk_down ≥ 0.5；且 order_type=LIMIT；禁止追价
+          d) Gate2 必须已给出明确结构锚点（Anchor1/Anchor2/关键SR/VPVR边界/FIB终点等，带价位/区间）
+             - LIMIT：挂单价必须落在锚点附近（结构允许窗口内）
+          e) rr_min 选择（Gate4 显式输出 rr_min，供 Gate5 作为唯一门槛来源）：
+             - 若 market_regime_norm=mixed：rr_min=0.50（替代原 0.80 的“永不过线”门槛）
+             - 若 market_regime_norm=trend：rr_min=0.80（保持原严苛）
+          强制写法（防止实现漂移）：
+          - 只要满足 a~d：Gate4 必须 PASS（不得因为 trend=mixed 直接 FAIL）
+          - Gate4 行必须显式标注：trend=mixed; market_regime=mixed; rr_min=<按 e)>; downgrade=on
+        * has_position=0：满足则允许进入 Gate5 做 RR 最终裁决；不满足则 action="wait"
+        * has_position=1：仍按原规则仅允许 hold/close（严禁输出 wait）
 
-             * 若判定为 Trend Mode 或 Mixed Mode（趋势市/混合市）：
-               trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
-               Gate4 允许 PASS 的【窄口豁免】最小条件（严格要求，保持原规则）：
-               a) pattern ∈ {EDGE, MOMENTUM_BREAK, BO_RETEST} 且 trigger != NONE（禁止 pattern=none）
-               b) 触发质量必须为 strict：q ≥ quality_min（必须使用输入阈值；不得抬高/写死）
-               c) 必须风险降级：risk_down ≥ 0.5；且 order_type=LIMIT；禁止追价
-               d) Gate2 必须已给出明确结构锚点（Anchor1/Anchor2/关键SR/VPVR边界/FIB终点等，带价位/区间）
-                  - LIMIT：挂单价必须落在锚点附近（结构允许窗口内）
-               e) Gate5(EXEC/RR) 必须按【MIXED_RR_MIN】抬高门槛校验（见 Gate5 补丁）：R_clean_eval ≥ 0.80，否则一律 FAIL
-               强制写法（防止实现漂移）：
-               - 只要满足 a~d：Gate4 必须 PASS（不得因为 trend=mixed 直接 FAIL）
-               - Gate4 行必须显式标注：trend=mixed; market_regime=trend; rr_min=0.80; downgrade=on
-
-             * has_position=0：满足则允许进入 Gate5 做 RR 最终裁决；不满足则 action="wait"
-             * has_position=1：仍按原规则仅允许 hold/close（严禁输出 wait）
        - RSI 状态与执行方式（RSI State & Execution）：
          * 禁止“单看某一周期 RSI 数值就一票否决或放行交易”，所有 RSI 判断必须建立在 rsi_state 上；
          * rsi_state="NORMAL"：RSI 不构成限制，可按结构 + 趋势执行；
@@ -347,20 +359,23 @@
              - 否则：Gate5=FAIL fail=>RR；reason=RR_CLEAN
 
          C3) trade_style=LTF_scalp（分段允许；修复"close_pct不可表达"的矛盾）
-           【P0｜MIXED_RR_MIN（与 Gate4 mixed_waiver 对账）】
-           - 若 Gate4(SETUP)=PASS 且 trend=mixed（mixed_waiver=on）：
-             * 统一抬高门槛：R_clean_eval 必须 ≥ 0.80
-             * 若不满足：Gate5=FAIL fail=>RR；reason=RR_MIXED
-             - 若 R_clean_eval ≥ 0.5：
-               -> Gate5=PASS（常规 LTF）
-             - 若 0.3 ≤ R_clean_eval < 0.5：
-               -> 仅允许"降级放行"，必须同时满足（不满足任一项则 FAIL）：
-                  a) risk_down ≥ 0.5（qty/position_risk_pct 至少减半）
-                  b) order_type=LIMIT（禁止追价）
-                  c) reasoning 必须写明：TP1 快速兑现（≥50%）（执行端按默认/配置实现；模型不新增 JSON 字段）
-                  d) 禁止加仓；剩余仓位必须写明更紧 stop/锁盈触发（R_lock / milestones_aggr 等）
-               -> 满足则 Gate5=PASS（downgrade=on），否则 Gate5=FAIL fail=>RR；reason=DOWNGRADE_REQ_NOT_MET
-
+           【P0｜RR_MIN 单一口径（以 Gate4 rr_min 为准；修复 Range/Mixed 冲突）】
+              - Gate5 的 RR 最小门槛 rr_min 的唯一来源：Gate4(SETUP) 行中显式输出的 rr_min
+                * 若 Gate4 未输出 rr_min：默认 rr_min=0.50（常规 LTF 下限；仅用于兜底）
+              - 判定规则：
+                * 若 R_clean_eval < rr_min：
+                  -> Gate5=FAIL fail=>RR；reason=RR_CLEAN
+                  -> 若 rr_min ≥ 0.80 且 trend=mixed：reason=RR_MIXED（用于统计，但门槛仍以 rr_min 为准）
+                * 若 R_clean_eval ≥ rr_min：
+                  - 若 R_clean_eval ≥ 0.5：
+                    -> Gate5=PASS（常规 LTF）
+                  - 若 rr_min ≤ R_clean_eval < 0.5：
+                    -> 仅允许"降级放行"，必须同时满足（不满足任一项则 FAIL）：
+                       a) risk_down ≥ 0.5（qty/position_risk_pct 至少减半）
+                       b) order_type=LIMIT（禁止追价）
+                       c) reasoning 必须写明：TP1 快速兑现（≥50%）（执行端按默认/配置实现；模型不新增 JSON 字段）
+                       d) 禁止加仓；剩余仓位必须写明更紧 stop/锁盈触发（R_lock / milestones_aggr 等）
+                    -> 满足则 Gate5=PASS（downgrade=on），否则 Gate5=FAIL fail=>RR；reason=DOWNGRADE_REQ_NOT_MET
        D) 输出 reason short_code 集合（用于 Summary 单标签统计；必须从集合取值）
           reason ∈ {OK, RR_CTX_MISSING, RR_LOW_HARD, RR_CLEAN, DOWNGRADE_REQ_NOT_MET, RR_LOW_CLUSTER, RR_MIXED}
           - PASS：reason=OK
@@ -2218,7 +2233,7 @@ A) 仓位 sizing（基于R的风险等额）
             - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（严格三选一；禁止括号/附加解释/附带 intent、regime、alignment；如出现“(”或多余字段，必须裁剪为单词 bull/bear/neutral）
             - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC.../mid-range/edge>; Anchor1:<.>; Anchor2:<.>; scan=<omit_if_PASS>（scan 仅允许在 FAIL 时出现；PASS 时出现 scan 视为违规必须删除；如需证明“8类逐类检查均未命中”，仅在 Gate2=FAIL 时额外追加 1 行 StructScan: scan=<...> 且严禁含价位/区间）
             - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in/no_trigger/intrabar_forbidden/out/unknown>（window 必须与 trigger_context.window_state 同值；window!=in ⇒ Gate3=FAIL fail=>TIME）
-            - Gate4(SETUP): PASS/FAIL/DIAG(EVAL_ONLY) pattern=<none/EDGE/BO_RETEST/MOMENTUM_BREAK>; trigger=<trigger_primary|NONE>; q=<0~1>; tier=<strict/borderline/none>; trend=<aligned/mixed>
+            - Gate4(SETUP): PASS/FAIL/DIAG(EVAL_ONLY) pattern=<none/EDGE/BO_RETEST/MOMENTUM_BREAK>; trigger=<trigger_primary|NONE>; q=<0~1>; tier=<strict/borderline/none>; trend=<aligned/mixed>; market_regime=<range|trend|mixed>; rr_min=<0.35|0.80>; downgrade=<on|off>
             - Gate5(EXEC/RR): (PASS|FAIL) tag=>RR; reason=<short_code>; R_clean=<.>; th=<.>  ｜  DIAG(EVAL_ONLY) fail=><RR_CTX_MISSING|SKIP_UPSTREAM_FAIL>; reason=<short_code>; th=<.>
         - 【P0｜wait 极简输出（不改变 JSON，仅收敛 reasoning）】
           * 适用条件：has_position=0 且 action="wait"。
@@ -3411,13 +3426,15 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
        * 若 setup_grade = "C"：禁止新开仓（open_long/open_short）；
          - 若 has_position=0：action="wait"
          - 若 has_position=1：action 仅允许 ∈ {"hold","close"}（仅管理既有仓位）
-     - 约束：若你最终对某个 symbol 输出 "action": "open_long" 或 "open_short"：
-       * 则该 symbol 的 edge_score 必须 ≥ 0.5；
-       * 若你主观判断 edge_score < 0.5：则该 symbol 禁止开新仓（open_long/open_short）；
-         - 若 has_position=0：action="wait"
-         - 若 has_position=1：action 仅允许 ∈ {"hold","close"}
-       * 仅对开仓动作约束：当 action ∈ {"open_long","open_short"} 时，edge_score 必须 ≥ 0.5；
-         非开仓动作（wait/hold/close）允许 edge_score = 0 或为负，用于表达“无edge/负edge”。
+         - 约束：若你最终对某个 symbol 输出 "action": "open_long" 或 "open_short"：
+            * 该 symbol 的 edge_score 必须 ≥ ES_MIN；
+              - ES_MIN := max(0.35, rr_min)
+              - rr_min 取 Gate4(SETUP) 行中显式输出的 rr_min（若 Gate4 未输出 rr_min，则默认 rr_min=0.50 作为兜底）
+            * 若你主观判断 edge_score < ES_MIN：则该 symbol 禁止开新仓（open_long/open_short）；
+              - 若 has_position=0：action="wait"
+              - 若 has_position=1：action 仅允许 ∈ {"hold","close"}
+            * 仅对开仓动作约束：当 action ∈ {"open_long","open_short"} 时，edge_score 必须 ≥ ES_MIN；
+              非开仓动作（wait/hold/close）允许 edge_score = 0 或为负，用于表达“无edge/负edge”。
        【P0-ES-01｜edge_score 最低可用口径（不改门槛，仅修复 0.0 失真）】
        - edge_score 输出必须保留 2 位小数（例如 0.37 / -0.12）；禁止用 0.0 作为“默认占位符”。
        - 当你认为 edge 接近 0，也必须输出真实的小数（例如 0.04 / -0.03），而不是统一写 0.0（避免复盘失真）。
