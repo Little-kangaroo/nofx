@@ -280,7 +280,23 @@
   5）执行细节与 R 要求（Execution & R Filter）
        - 仅当 0~4 层全部通过后，才允许把 action 输出为 open_long/open_short。
          但只要 Gate4=PASS 且 Gate0~Gate3 未 FAIL，本轮无论最终 action=wait/hold/close，
-         Gate5 仍必须输出 1 行“可核验 RR 对账数字”（除非触发 RR_CTX_MISSING 的硬条件：无法生成任何合法 entry/sl/tp1 组合）。
+         Gate5 仍必须输出 1 行“可核验 RR 对账数字”，并按 has_position 分叉（开仓 RR 与持仓管理严格解耦）：
+
+         - has_position=0（本轮评估开新仓）：
+           必须输出 OPEN_RR_LINE（entry/sl/tp1 全套），按下述 Gate5 唯一流程生成与裁决 PASS/FAIL。
+           仅在此分支允许使用 RR_CTX_MISSING（= 无法生成任何合法 entry/sl/tp1 组合）。
+
+         - has_position=1（本轮仅管理既有仓位）：
+           必须输出 POS_RR_LINE（不依赖 entry_plan，不要求 entry/sl/tp1，不得引用 RR_CTX_MISSING）；
+           POS_RR_LINE 必须使用 position.entry_price / last_price / positions.stop_price / leverage（及成本参数）进行可核验对账，
+           并至少包含：roi_unrealized、R_unrealized、R_to_stop、prev_stop、new_stop(若本轮触发更新)。
+
+           严禁在 has_position=1 分支使用 fail=>RR_CTX_MISSING；
+           若字段不足导致无法完整对账，改用 fail=>POS_CTX_MISSING（并注明缺失字段），但仍必须继续执行“锁盈/移动止损”可行部分。
+
+         【硬规则】Gate5 的 DIAG(EVAL_ONLY) / fail=>POS_CTX_MISSING 仅影响“开新仓计划细节输出”，不得成为 stop_update 的阻断条件；
+         has_position=1 时，只要满足锁盈/保护触发且可执行，本轮必须给出 stop_update（见《利润保护模式》与《止损更新输出要求》）。
+
        【SSOT｜Gate5(EXEC/RR) 唯一流程：先生成可执行计划 -> 统一算式 -> 成本口径 -> 选最优候选 -> 裁决 PASS/FAIL】
        A) 生成“可执行计划”（必须给出 entry/sl/tp1；不得用省略号代替数字）
           A1) entry 候选（最多 2 个；必须服从 Gate4 冻结的 order_type）
@@ -1604,6 +1620,12 @@
             * 统一定义 roi_unrealized（多空对称，默认 leverage=10；若上游提供 leverage 则用上游值）：
               - LONG：roi_unrealized = ((last_price - entry_price) / entry_price) * leverage
               - SHORT：roi_unrealized = ((entry_price - last_price) / entry_price) * leverage
+             【P0｜roi_unrealized 口径强制（持仓管理优先，防漏锁盈）】
+             - 当 has_position=1 时，roi_unrealized 必须优先按“价格差 * leverage”计算（以上两式），不得直接把输入里的“盈亏%/pnl_pct/浮盈%”当作 roi_unrealized。
+             - 若输入同时给了 pnl_pct：仅作为一致性校验；若与价格计算口径不一致，以价格计算为准，并在 reasoning 标注：ROI_SRC=PRICE_OVERRIDE。
+             - ROI 锁盈从“允许(allow)”提升为“必须(MUST)”：
+               只要 roi_unrealized ≥ roi_lock_trigger 且 持仓时间 ≥ protect_trigger.time_min，且短周期结构未出现明确反转，
+               除非触发 C) 更新门槛未达 / update_cooldown 未过 / EXEC_GAP（不可执行），否则 stop_update 必须输出 object，不得为 null。
             * ROI 锁盈门槛（统一以 roi_unrealized=杠杆 ROI 口径；不再写“10x”）：
               - roi_lock_trigger = 0.05   // 浮盈(含杠杆) ≥ 5% 才开始锁盈
               - roi_lock_floor   = 0.02   // 一旦触发锁盈，至少锁住 2% 浮盈（覆盖成本后仍“净盈利”）
@@ -2326,6 +2348,14 @@ B) 候选止损价（对称写法）
   R_unrealized≈几R、命中的 R_lock 档位、new_stop≈价位、以及该设置如何同时满足“继续吃趋势 / 防止利润大幅回吐”。
   允许多行解释；禁止省略关键数值；不再要求单行电报码，也不再禁止长句。
 -【止损更新输出要求】
+【P0｜止损更新与 Gate5 解耦（防 RR_CTX_MISSING 误伤持仓锁盈）】
+- has_position=1 时，“止损更新/锁盈/保护”属于持仓管理强制模块：
+  不受 Gate5(EXEC/RR) 开仓 RR 对账的 PASS/FAIL/DIAG 影响。
+- 允许 stop_update=null 的唯一理由仅限：
+  (a) C) 更新门槛未达（min_tick_move_to_update 等），或
+  (b) update_cooldown 未过，或
+  (c) EXEC_GAP/安全距离约束导致不可执行；
+  其余情况下（尤其 roi_unrealized ≥ roi_lock_trigger 且 time_min 满足），必须输出 stop_update object。
 - 对每个有持仓的 symbol，你在内部推导中（不得输出推导过程）算出 new_stop 之后，必须执行以下检查：
   1) 先按 C) 中的规则判断是否满足更新门槛；
   2) 若不满足门槛 ⇒ 在最终 JSON 中对该 symbol 输出 "stop_update": null；
