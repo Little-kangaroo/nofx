@@ -45,3 +45,4 @@ web/.vite/
 web/yarn.lock
 config.db
 restart_nofx.sh
+records.go
