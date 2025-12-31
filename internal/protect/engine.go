@@ -104,8 +104,10 @@ func (e *Engine) Evaluate(pos PositionState, m MarketSnapshot) StopUpdatePlan {
 	if highestROIThreshold > 0 {
 		var targetTP float64
 		if pos.Side == Long {
-			// LONG: 止盈价 = 入场价 * (1 + 止盈百分比)
-			targetTP = pos.Entry * (1 + highestTPPct)
+			// 🔧 修复：止盈价应基于ROI目标，而非价格百分比
+			// LONG: 止盈价 = 入场价 * (1 + 止盈ROI / 杠杆)
+			// 例如：10x杠杆，止盈ROI 15% → 价格涨1.5%
+			targetTP = pos.Entry * (1 + highestTPPct/pos.Leverage)
 			// 单调性：止盈只能上移（初始值为0时直接设置）
 			if pos.PrevTakeProfit == 0 {
 				tpCandidate = targetTP
@@ -113,8 +115,9 @@ func (e *Engine) Evaluate(pos PositionState, m MarketSnapshot) StopUpdatePlan {
 				tpCandidate = maxFloat(tpCandidate, targetTP)
 			}
 		} else {
-			// SHORT: 止盈价 = 入场价 * (1 - 止盈百分比)
-			targetTP = pos.Entry * (1 - highestTPPct)
+			// 🔧 修复：SHORT止盈价基于ROI目标
+			// SHORT: 止盈价 = 入场价 * (1 - 止盈ROI / 杠杆)
+			targetTP = pos.Entry * (1 - highestTPPct/pos.Leverage)
 			// 单调性：止盈只能下移（初始值为0时直接设置）
 			if pos.PrevTakeProfit == 0 {
 				tpCandidate = targetTP

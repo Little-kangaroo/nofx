@@ -32,7 +32,7 @@ func TestROITakeProfitCalculation(t *testing.T) {
 			leverage:           10.0,
 			prevTakeProfit:     0.0,
 			expectedShouldUpdate: true,
-			expectedTPPrice:    115000.0, // entry * 1.15
+			expectedTPPrice:    101500.0, // 🔧 修复后：entry * (1 + 0.15/10) = entry * 1.015
 			expectedReason:     "ROI_10_PCT",
 		},
 		{
@@ -41,9 +41,9 @@ func TestROITakeProfitCalculation(t *testing.T) {
 			entryPrice:         100000.0,
 			markPrice:          102000.0, // +2% price, 20% ROI at 10x leverage
 			leverage:           10.0,
-			prevTakeProfit:     115000.0, // 已有15%止盈
+			prevTakeProfit:     101500.0, // 🔧 修复后：已有15%止盈
 			expectedShouldUpdate: true,
-			expectedTPPrice:    130000.0, // entry * 1.30
+			expectedTPPrice:    103000.0, // 🔧 修复后：entry * (1 + 0.30/10) = entry * 1.03
 			expectedReason:     "ROI_20_PCT",
 		},
 		{
@@ -52,9 +52,9 @@ func TestROITakeProfitCalculation(t *testing.T) {
 			entryPrice:         100000.0,
 			markPrice:          105000.0, // +5% price, 50% ROI at 10x leverage
 			leverage:           10.0,
-			prevTakeProfit:     130000.0, // 已有30%止盈
+			prevTakeProfit:     103000.0, // 🔧 修复后：已有30%止盈
 			expectedShouldUpdate: true,
-			expectedTPPrice:    170000.0, // entry * 1.70
+			expectedTPPrice:    107000.0, // 🔧 修复后：entry * (1 + 0.70/10) = entry * 1.07
 			expectedReason:     "ROI_50_PCT",
 		},
 		{
@@ -65,7 +65,7 @@ func TestROITakeProfitCalculation(t *testing.T) {
 			leverage:           10.0,
 			prevTakeProfit:     0.0,
 			expectedShouldUpdate: true,
-			expectedTPPrice:    85000.0, // entry * 0.85
+			expectedTPPrice:    98500.0, // 🔧 修复后：entry * (1 - 0.15/10) = entry * 0.985
 			expectedReason:     "ROI_10_PCT",
 		},
 		{
@@ -74,9 +74,9 @@ func TestROITakeProfitCalculation(t *testing.T) {
 			entryPrice:         100000.0,
 			markPrice:          98000.0, // -2% price, 20% ROI at 10x leverage
 			leverage:           10.0,
-			prevTakeProfit:     85000.0, // 已有15%止盈
+			prevTakeProfit:     98500.0, // 🔧 修复后：已有15%止盈
 			expectedShouldUpdate: true,
-			expectedTPPrice:    70000.0, // entry * 0.70
+			expectedTPPrice:    97000.0, // 🔧 修复后：entry * (1 - 0.30/10) = entry * 0.97
 			expectedReason:     "ROI_20_PCT",
 		},
 		{
