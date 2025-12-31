@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -20,6 +21,7 @@ import (
 // Database 配置数据库
 type Database struct {
 	db *sql.DB
+	mu sync.RWMutex // 用于并发安全
 }
 
 // NewDatabase 创建配置数据库
@@ -316,6 +318,9 @@ func (d *Database) createTables() error {
 		`ALTER TABLE traders ADD COLUMN system_prompt_template TEXT DEFAULT 'default'`, // 系统提示词模板名称
 		`ALTER TABLE ai_models ADD COLUMN custom_api_url TEXT DEFAULT ''`,              // 自定义API地址
 		`ALTER TABLE ai_models ADD COLUMN custom_model_name TEXT DEFAULT ''`,           // 自定义模型名称
+		// 🎯 V-19.0: 止盈管理字段（ROI-based automatic take-profit）
+		`ALTER TABLE trades ADD COLUMN current_take_profit REAL DEFAULT 0`,            // 当前止盈价（parallel to current_stop_price）
+		`ALTER TABLE trades ADD COLUMN last_tp_update_time_ms INTEGER DEFAULT 0`,      // 上次止盈更新时间戳（毫秒）
 	}
 
 	for _, query := range alterQueries {
@@ -1370,6 +1375,10 @@ type TradeRecord struct {
 	CloseOrderID  string    `json:"close_order_id"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+
+	// 🔒 V-18.0/V-19.0: 锁盈系统字段（从database_protect.go合并）
+	InitialStopPrice float64 `json:"initial_stop_price"` // 初始止损价（用于计算R0风险单位）
+	CurrentStopPrice float64 `json:"current_stop_price"` // 当前止损价
 }
 
 // TradeAction 交易动作结构

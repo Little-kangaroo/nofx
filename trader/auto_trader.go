@@ -1,12 +1,14 @@
 package trader
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math"
 	"nofx/config"
 	"nofx/decision"
+	"nofx/internal/protect"
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
@@ -122,6 +124,11 @@ type AutoTrader struct {
 	lastKnownStopOrders   map[string][]map[string]interface{} // 上次检查的止损单状态 (posKey -> orders)
 	exchangeSync          *ExchangeRecordSync // 交易所记录同步器
 	wsOrderManager        *WebSocketOrderManager // WebSocket订单管理器
+
+	// 🔒 锁盈系统
+	profitScheduler *protect.Scheduler      // 锁盈调度器
+	protectCtx      context.Context          // 锁盈系统context
+	protectCancel   context.CancelFunc       // 锁盈系统cancel函数
 }
 
 // NewAutoTrader 创建自动交易器
@@ -264,6 +271,36 @@ func NewAutoTrader(config AutoTraderConfig, database *config.Database) (*AutoTra
 		log.Printf("⚠️ [%s] 跳过WebSocket订单管理器初始化 (仅支持币安)", config.Name)
 	}
 
+	// 🔒 初始化锁盈系统
+	log.Printf("🔒 [%s] 初始化锁盈系统...", config.Name)
+	protectEng := &protect.Engine{
+		Cfg: protect.DefaultConfig(),
+		Fees: protect.FeeModel{
+			TakerFeeBps:      4,  // Binance Futures Taker费率
+			SlippageBpsMinor: 2,
+			FundingBps:       0,  // 可选
+		},
+		UseAggressiveProfile: func(pos protect.PositionState) bool {
+			return true  // 固定使用激进档锁盈
+		},
+	}
+
+	priceCache := market.GetGlobalPriceCache()
+	if priceCache == nil {
+		log.Printf("⚠️ [%s] 全局PriceCache未初始化，锁盈系统将在首次使用时重试", config.Name)
+	}
+
+	scheduler := protect.NewScheduler(
+		protectEng,
+		newPositionStoreAdapter(database, config.ID),
+		priceCache,
+		newStopExecutorAdapter(trader),
+	)
+
+	autoTrader.profitScheduler = scheduler
+	autoTrader.protectCtx, autoTrader.protectCancel = context.WithCancel(context.Background())
+	log.Printf("✅ [%s] 锁盈系统已初始化", config.Name)
+
 	return autoTrader, nil
 }
 
@@ -320,6 +357,12 @@ func (at *AutoTrader) Run() error {
 		}
 	}
 
+	// 🔒 启动锁盈系统Fast Loop
+	if at.profitScheduler != nil {
+		go at.profitScheduler.StartFastLoop(at.protectCtx)
+		log.Printf("✅ [%s] 锁盈系统Fast Loop已启动（10秒循环）", at.name)
+	}
+
 	// 创建结束信号通道
 	done := make(chan struct{})
 	
@@ -339,13 +382,19 @@ func (at *AutoTrader) Run() error {
 // Stop 停止自动交易
 func (at *AutoTrader) Stop() {
 	at.isRunning = false
-	
+
 	// 🆕 停止WebSocket订单管理器
 	if at.wsOrderManager != nil {
 		at.wsOrderManager.Stop()
 		log.Printf("✅ [%s] WebSocket订单管理器已停止", at.name)
 	}
-	
+
+	// 🔒 停止锁盈系统Fast Loop
+	if at.protectCancel != nil {
+		at.protectCancel()
+		log.Printf("✅ [%s] 锁盈系统已停止", at.name)
+	}
+
 	log.Println("⏹ 自动交易系统停止")
 }
 
@@ -978,9 +1027,9 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	log.Printf("    leverage: %d", decision.Leverage)
 	log.Printf("    actualPrice: %.6f (来源: %s)", actualPrice, priceDataSource)
 
-	
-	at.recordTradeToDatabase(decision.Symbol, "long", quantity, decision.Leverage, 
-		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_long", true)
+
+	at.recordTradeToDatabase(decision.Symbol, "long", quantity, decision.Leverage,
+		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_long", true, decision.StopLoss)
 
 	// 记录开仓时间
 	posKey := decision.Symbol + "_long"
@@ -1164,9 +1213,9 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	log.Printf("    quantity: %.6f", quantity)
 	log.Printf("    leverage: %d", decision.Leverage)
 	log.Printf("    actualPrice: %.6f (来源: %s)", actualPrice, priceDataSource)
-	
-	at.recordTradeToDatabase(decision.Symbol, "short", quantity, decision.Leverage, 
-		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_short", true)
+
+	at.recordTradeToDatabase(decision.Symbol, "short", quantity, decision.Leverage,
+		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_short", true, decision.StopLoss)
 
 	// 记录开仓时间
 	posKey := decision.Symbol + "_short"
@@ -3188,8 +3237,8 @@ func (at *AutoTrader) recordStopLossAsTradeAction(pendingOrder *PendingStopOrder
 }
 
 // recordTradeToDatabase 将交易记录到数据库
-func (at *AutoTrader) recordTradeToDatabase(symbol, side string, quantity float64, leverage int, 
-	price float64, orderID string, action string, isOpen bool) {
+func (at *AutoTrader) recordTradeToDatabase(symbol, side string, quantity float64, leverage int,
+	price float64, orderID string, action string, isOpen bool, initialStopPrice float64) {
 	if at.database == nil {
 		return
 	}
@@ -3197,23 +3246,25 @@ func (at *AutoTrader) recordTradeToDatabase(symbol, side string, quantity float6
 	if isOpen {
 		// 开仓记录
 		tradeRecord := &config.TradeRecord{
-			TraderID:      at.id,
-			Symbol:        symbol,
-			Side:          side,
-			Quantity:      quantity,
-			Leverage:      leverage,
-			OpenPrice:     price,
-			PositionValue: quantity * price,
-			MarginUsed:    (quantity * price) / float64(leverage),
-			OpenTime:      time.Now(),
-			Status:        "open",
-			OpenOrderID:   orderID,
+			TraderID:         at.id,
+			Symbol:           symbol,
+			Side:             side,
+			Quantity:         quantity,
+			Leverage:         leverage,
+			OpenPrice:        price,
+			PositionValue:    quantity * price,
+			MarginUsed:       (quantity * price) / float64(leverage),
+			OpenTime:         time.Now(),
+			Status:           "open",
+			OpenOrderID:      orderID,
+			InitialStopPrice: initialStopPrice,  // 🔒 记录初始止损价（用于锁盈系统计算R0）
+			CurrentStopPrice: initialStopPrice,  // 🔒 初始止损价同时作为当前止损价
 		}
-		
+
 		if err := at.database.CreateTrade(tradeRecord); err != nil {
 			log.Printf("  ⚠️ 记录开仓到数据库失败: %v", err)
 		} else {
-			log.Printf("  💾 已记录开仓到数据库: %s", tradeRecord.ID)
+			log.Printf("  💾 已记录开仓到数据库: %s (InitialStop: %.6f)", tradeRecord.ID, initialStopPrice)
 		}
 	}
 

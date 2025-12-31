@@ -297,6 +297,19 @@ func main() {
 		log.Printf("✅ 订单流系统启动成功")
 	}
 
+	// 🔒 数据库迁移：添加锁盈系统字段
+	log.Printf("🔧 执行锁盈系统数据库迁移...")
+	if err := database.MigrateProtectFields(); err != nil {
+		log.Printf("⚠️ 锁盈字段迁移失败（可能已存在）: %v", err)
+	} else {
+		log.Printf("✅ 锁盈字段迁移完成")
+	}
+
+	// 🔒 初始化全局PriceCache（用于锁盈系统）
+	log.Printf("🔒 初始化锁盈系统PriceCache...")
+	market.NewGlobalPriceCache()
+	log.Printf("✅ 全局PriceCache初始化完成")
+
 	fmt.Println()
 
 	// 从数据库读取默认主流币种列表

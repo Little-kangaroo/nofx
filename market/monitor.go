@@ -217,6 +217,12 @@ func (m *WSMonitor) processKlineUpdate(symbol string, wsData KlineWSData, _time 
 	kline.TakerBuyBaseVolume, _ = parseFloat(wsData.Kline.TakerBuyBaseVolume)
 	kline.TakerBuyQuoteVolume, _ = parseFloat(wsData.Kline.TakerBuyQuoteVolume)
 
+	// 🔒 更新PriceCache（用于锁盈系统）
+	if priceCache := GetGlobalPriceCache(); priceCache != nil {
+		tickSize := getSmartTickSizeBySymbol(symbol)
+		priceCache.Update(symbol, kline.Close, kline.Close, tickSize)
+	}
+
 	// 🎯 BTCUSDT 5分钟收盘事件检测
 	if symbol == "BTCUSDT" && _time == "5m" && wsData.Kline.IsFinal {
 		closeTime := time.UnixMilli(wsData.Kline.CloseTime)
