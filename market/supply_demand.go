@@ -169,7 +169,7 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 		Statistics:   stats,
 		LastAnalysis: time.Now().UnixMilli(),
 	})
-	
+
 	return result
 }
 
@@ -2023,7 +2023,7 @@ func (sda *SupplyDemandAnalyzer) calculateATR(klines []Kline, period int) float6
 	}
 
 	atr := trSum / float64(validPeriods)
-	log.Printf("🔢 [ATR计算] 周期=%d, ATR=%.2f (市场波动性基准)", validPeriods, atr)
+	//log.Printf("🔢 [ATR计算] 周期=%d, ATR=%.2f (市场波动性基准)", validPeriods, atr)
 	return atr
 }
 

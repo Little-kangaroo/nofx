@@ -232,7 +232,7 @@ func (bw *BatchWriter) AddToBatch(record *ZoneStrengthRecord) {
 
 	// 检查是否需要立即刷新
 	if len(bw.records) >= bw.batchSize {
-		log.Printf("📦 [批量写入器] 达到批量大小 (%d)，触发刷新", len(bw.records))
+		//log.Printf("📦 [批量写入器] 达到批量大小 (%d)，触发刷新", len(bw.records))
 		go bw.flushBatch()          // 异步刷新
 		bw.records = bw.records[:0] // 清空缓存
 		bw.lastFlush = time.Now()
