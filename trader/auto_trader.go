@@ -459,6 +459,11 @@ func (at *AutoTrader) runCycleWithTimeAnchor(anchorTime time.Time) error {
 		Success:      true,
 	}
 
+	// 🔥 新增：0. 先对账，确保数据库与交易所一致（在所有逻辑之前执行）
+	if err := at.ReconcileWithExchange(); err != nil {
+		log.Printf("⚠️ [对账] 对账失败（不影响后续流程）: %v", err)
+	}
+
 	// 1. 检查是否需要停止交易
 	if time.Now().Before(at.stopUntil) {
 		remaining := at.stopUntil.Sub(time.Now())
@@ -1045,6 +1050,11 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	at.recordTradeToDatabase(decision.Symbol, "long", quantity, decision.Leverage,
 		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_long", true, decision.StopLoss)
 
+	// 🔥 新增：异步验证开仓数据（从交易所获取真实成交价）
+	if orderID, ok := order["orderId"].(int64); ok && orderID > 0 {
+		go at.SyncOpenTradeData(decision.Symbol, orderID)
+	}
+
 	// 记录开仓时间
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
@@ -1230,6 +1240,11 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 
 	at.recordTradeToDatabase(decision.Symbol, "short", quantity, decision.Leverage,
 		actualPrice, fmt.Sprintf("%v", order["orderId"]), "open_short", true, decision.StopLoss)
+
+	// 🔥 新增：异步验证开仓数据（从交易所获取真实成交价）
+	if orderID, ok := order["orderId"].(int64); ok && orderID > 0 {
+		go at.SyncOpenTradeData(decision.Symbol, orderID)
+	}
 
 	// 记录开仓时间
 	posKey := decision.Symbol + "_short"

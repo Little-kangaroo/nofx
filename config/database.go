@@ -1546,6 +1546,97 @@ func (d *Database) GetTraderTrades(traderID string, limit int) ([]*TradeRecord, 
 	return trades, nil
 }
 
+// GetOpenTrades 获取指定trader的所有开仓交易
+func (d *Database) GetOpenTrades(traderID string) ([]*TradeRecord, error) {
+	query := `
+		SELECT id, trader_id, symbol, side, quantity, leverage, open_price, close_price,
+			position_value, margin_used, pnl, pnl_pct, duration_seconds,
+			open_time, close_time, status, close_reason, open_order_id, close_order_id,
+			created_at, updated_at
+		FROM trades
+		WHERE trader_id = ? AND status = 'open'
+		ORDER BY open_time DESC
+	`
+
+	rows, err := d.db.Query(query, traderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var trades []*TradeRecord
+	for rows.Next() {
+		var trade TradeRecord
+		var closePrice sql.NullFloat64
+		var closeTime sql.NullTime
+		var closeOrderID sql.NullString
+
+		err := rows.Scan(
+			&trade.ID, &trade.TraderID, &trade.Symbol, &trade.Side, &trade.Quantity,
+			&trade.Leverage, &trade.OpenPrice, &closePrice, &trade.PositionValue,
+			&trade.MarginUsed, &trade.PnL, &trade.PnLPct, &trade.DurationSecs,
+			&trade.OpenTime, &closeTime, &trade.Status, &trade.CloseReason,
+			&trade.OpenOrderID, &closeOrderID, &trade.CreatedAt, &trade.UpdatedAt)
+
+		if err != nil {
+			log.Printf("⚠️ 扫描交易记录失败: %v", err)
+			continue
+		}
+
+		if closePrice.Valid {
+			trade.ClosePrice = &closePrice.Float64
+		}
+		if closeTime.Valid {
+			trade.CloseTime = &closeTime.Time
+		}
+		if closeOrderID.Valid {
+			trade.CloseOrderID = closeOrderID.String
+		}
+
+		trades = append(trades, &trade)
+	}
+
+	return trades, nil
+}
+
+// GetTradeByID 根据ID获取交易记录
+func (d *Database) GetTradeByID(tradeID string) (*TradeRecord, error) {
+	var trade TradeRecord
+	var closePriceSql sql.NullFloat64
+	var closeTime sql.NullTime
+	var closeOrderID sql.NullString
+
+	err := d.db.QueryRow(`
+		SELECT id, trader_id, symbol, side, quantity, leverage, open_price, close_price,
+			position_value, margin_used, pnl, pnl_pct, duration_seconds,
+			open_time, close_time, status, close_reason, open_order_id, close_order_id,
+			created_at, updated_at
+		FROM trades
+		WHERE id = ?
+	`, tradeID).Scan(
+		&trade.ID, &trade.TraderID, &trade.Symbol, &trade.Side, &trade.Quantity,
+		&trade.Leverage, &trade.OpenPrice, &closePriceSql, &trade.PositionValue,
+		&trade.MarginUsed, &trade.PnL, &trade.PnLPct, &trade.DurationSecs,
+		&trade.OpenTime, &closeTime, &trade.Status, &trade.CloseReason,
+		&trade.OpenOrderID, &closeOrderID, &trade.CreatedAt, &trade.UpdatedAt)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if closePriceSql.Valid {
+		trade.ClosePrice = &closePriceSql.Float64
+	}
+	if closeTime.Valid {
+		trade.CloseTime = &closeTime.Time
+	}
+	if closeOrderID.Valid {
+		trade.CloseOrderID = closeOrderID.String
+	}
+
+	return &trade, nil
+}
+
 // DeleteTrade 删除交易记录
 func (d *Database) DeleteTrade(tradeID string) error {
 	_, err := d.db.Exec(`DELETE FROM trades WHERE id = ?`, tradeID)
