@@ -171,6 +171,16 @@
              - trigger ∈ {EDGE_*}         => pattern=EDGE
              - trigger ∈ {BO_RETEST_*}    => pattern=BO_RETEST
              - trigger ∈ {IBB_*, MOMO_*}  => pattern=MOMENTUM_BREAK   （同义别名：MOM_BREAK 视为 MOMENTUM_BREAK）
+             【P0｜MOMENTUM_BREAK Anti-Chase（不改触发器识别，仅收敛执行方式）】
+             - 适用范围：pattern=MOMENTUM_BREAK 且 has_position=0
+             - 默认策略：不追价。优先用 LIMIT 做“结构回踩/回测”进场，避免突破瞬间滑点+回撤止损。
+             规则：
+             1) 若 trigger_context.vol_ratio 存在且 vol_ratio >= 1.2 且 q >= quality_min：
+                - 允许 order_type=MARKET（但 Gate5 必须用 last_price 并标注 est=1，且不得追价描述）
+             2) 否则（vol_ratio 缺失 或 vol_ratio < 1.2 或 q 仅 borderline）：
+                - order_type 强制 = LIMIT
+                - entry_price 必须锚定 trigger_key_level 或 Gate2 已给出的 retest_anchor / Anchor1（不得用 last_price 追价）
+                - Gate4 行必须追加：momentum_no_chase=1; entry_from=<trigger_key_level|retest_anchor|Anchor1>
             【P1｜pattern taxonomy SSOT（全局唯一口径）】
             - 本段落的 pattern 枚举与映射为 SSOT。
             - 模板其他位置若出现 {MOM_BREAK/MOMENTUM_BREAK/MOM_BREAKOUT} 等同义写法：统一视为 MOMENTUM_BREAK；输出时只能写 MOMENTUM_BREAK（禁止输出别名）。
@@ -277,6 +287,37 @@
          * rsi_state="TREND_OVERSOLD"/"TREND_OVERBOUGHT"：允许顺势开仓，但必须 LIMIT（回踩窗口）且禁止追价；若无合理挂单窗口则 action="wait"；
          * rsi_state="EXHAUSTION_*"：默认禁止顺势继续开新顺势单；仅允许 wait，或在“反转结构 + 订单流吸收/背离”成立时以明显降级风险做试探（必须在 reasoning 写明降级）。
        - 本层回答：“综合条件是否足够支持开仓？若支持，执行方式如何收敛？”
+      【P0｜RSI 回踩窗口自动生成（不改规则，仅补齐“无合理挂单窗口”的判定与生成口径）】
+      - 适用范围：has_position=0 且本轮允许评估新开仓；rsi_state ∈ {TREND_OVERSOLD, TREND_OVERBOUGHT}
+      - 核心目标：把“必须 LIMIT、否则 wait”的要求落到可执行数字上，避免因“说不出窗口/价格”而退化为 wait 或追价 MARKET。
+
+      A) 强制执行方式（不新增动作集合）
+      1) rsi_state=TREND_OVERSOLD 且计划方向为 LONG：
+         - order_type 强制 = LIMIT（禁止 MARKET）
+      2) rsi_state=TREND_OVERBOUGHT 且计划方向为 SHORT：
+         - order_type 强制 = LIMIT（禁止 MARKET）
+
+      B) 回踩窗口（entry_window）与 entry_price 生成（必须给出数字；不得用“等待回踩/找机会”替代）
+      1) 定义 atr5m：
+         - atr5m = ATR14(5m)（若缺失，用 fallback_atr = last_price*0.0010）
+      2) 定义 anchor_price（只能从已给出的 SSOT 信息中取，不得发明新锚点）：
+         - 优先级：trigger_key_level > Gate2 已给出的 Anchor1/关键SR/供需边界价 > trigger_context.trigger_bar_close_price
+      3) 定义 window_half：
+         - window_half = max(0.20*atr5m, anchor_price*0.0008)
+      4) 生成 entry_window：
+         - LONG：entry_window = [anchor_price - window_half, anchor_price + window_half]，且 entry_price 必须满足 entry_price ≤ last_price（禁止追价）
+         - SHORT：entry_window = [anchor_price - window_half, anchor_price + window_half]，且 entry_price 必须满足 entry_price ≥ last_price（禁止追价）
+      5) entry_price 选择规则（只选 1 个价格；必须落在 entry_window 内）：
+         - 优先“更保守、不追价”的一侧：
+           * LONG：优先取靠近 entry_window 下沿的价（更接近支撑/需求），但仍需落在结构允许窗口内
+           * SHORT：优先取靠近 entry_window 上沿的价（更接近阻力/供给），但仍需落在结构允许窗口内
+      6) 若 anchor_price / atr5m 均无法取得导致无法生成 entry_window：
+         - 保持原规则：视为“无合理挂单窗口”，本轮新开仓不放行（has_position=0 -> action=wait），但必须在 NextTrigger 明确“缺少哪一个字段”。
+
+      C) 写法硬约束（reasoning/GateTrace，不新增 JSON 字段）
+      - Gate4(SETUP) 行若触发本规则，必须追加：
+        rsi_adjust=on; entry_window=[L,H]; entry_from=<trigger_key_level|Anchor1|close_price>; no_chase=1
+
   5）执行细节与 R 要求（Execution & R Filter）
        - 仅当 0~4 层全部通过后，才允许把 action 输出为 open_long/open_short。
          但只要 Gate4=PASS 且 Gate0~Gate3 未 FAIL，本轮无论最终 action=wait/hold/close，
@@ -302,6 +343,29 @@
                 entry_candidate_2 = （可选）更保守的回踩价（例如 key_level±0.2*ATR14(5m) 内），仅用于“提升 RR”；不得追价
               - 若 Gate4 指定 order_type=MARKET：
                 entry_candidate_1 = trigger_context.last_price（必须在 reasoning 标注 est=1）
+              【P0｜RR_REPAIR：RR 不达标前的“单次修复循环”（不降低门槛，只提升可修复率）】
+              - 适用范围：has_position=0 且 order_type=LIMIT
+              - 原则：在给出 Gate5=FAIL fail=>RR 之前，必须至少尝试 1 次 entry_candidate_2（若可构造），以把“可修复的边缘单”修复成合规开仓；修复仅做一次，避免漂移。
+
+              触发条件（满足任一即触发修复）：
+              1) candidate_1 存在但 risk < risk_floor 或被判定 RISK_TOO_TIGHT
+              2) candidate_1 可计算但 R_clean_eval < rr_min（或 swing 门槛）且差距不大（建议：< 0.10R 的量级）
+              3) candidate_1 因“tp1 过近/障碍聚集”导致 R_clean_eval 不足（但仍能构造合法 tp1）
+
+              修复动作（只做一次，二选一即可）：
+              A) entry 修复（优先）：
+              - 使用“更保守回踩价”构造 entry_candidate_2（必须在 Gate2 结构允许窗口内）：
+                * LONG：entry_candidate_2 = entry_candidate_1 - max(0.20*ATR14(5m), entry_candidate_1*0.0010)
+                * SHORT：entry_candidate_2 = entry_candidate_1 + max(0.20*ATR14(5m), entry_candidate_1*0.0010)
+              - 重新按 Gate5 全流程计算（sl/tp1/成本口径不变，仍需方向正确性与结构失效边界）
+
+              B) tp1 修复（仅当 entry 修复不可构造或仍失败时）：
+              - 强制进入 E) OBSTACLE_CLUSTER 的“第二近障碍”重算流程（按模板原规则），以便在不降低门槛的情况下争取 R_clean_eval 达标。
+
+              输出写法硬约束：
+              - 若执行了修复循环，必须在 Gate5 行或 RR 行末尾追加：
+                repair=on; repair_step=<entry2|tp1_cluster>; chosen=<cand1|cand2>
+
           A2) sl（init_stop）生成规则（多空对称；必须满足方向正确性）
               - LONG：sl < entry；且 sl 位于"主结构失效边界"之外 + buffer
               - SHORT：sl > entry；且 sl 位于"主结构失效边界"之外 + buffer
