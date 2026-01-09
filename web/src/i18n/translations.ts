@@ -811,8 +811,8 @@ export const translations = {
     step2Desc: '前端设置交易所 API（如 Binance、Hyperliquid）、AI 模型和自定义提示词。',
     step3Title: '部署与运行',
     step3Desc: '启动自动交易机器人。注意：高风险市场，仅用闲钱测试。',
-    step4Title: '优化与贡献',
-    step4Desc: '优化交易提示词模板。',
+    step4Title: '优化与进阶',
+    step4Desc: 'AI自动学习交易提示词模板优化。',
     importantRiskWarning: '重要风险提示',
     riskWarningText: '勿用无法承受损失的资金，无官方策略。交易有风险，投资需谨慎。',
     
