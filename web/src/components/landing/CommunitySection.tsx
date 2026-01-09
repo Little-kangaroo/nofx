@@ -41,7 +41,7 @@ export default function CommunitySection() {
   const items: CardProps[] = [
     {
       quote:
-        '系统架构清晰：Go端实时拉取K线与订单流，5分钟收盘触发AI决策并自动执行。信号一致性强，风控闭环完善，适合规模化实盘',
+        '系统架构清晰：Go端实时拉取K线与订单流，交易所5分钟收盘触发AI决策并自动执行。信号一致性强，风控闭环完善，适合规模化实盘交易',
       authorName: 'Michael Williams',
       handle: '@MichaelWil93725',
       avatarUrl:
@@ -52,7 +52,7 @@ export default function CommunitySection() {
     },
     {
       quote:
-        '数据驱动很扎实：1000根K线+技术/结构指标叠加订单流，输入维度完整。AI输出可解析可落地，执行链路稳定，回测与实盘衔接顺畅',
+        '数据驱动很扎实：1000根K线+技术指标/结构指标叠加订单流，输入维度完整。AI输出可解析可落地，执行链路稳定，回测与实盘衔接顺畅',
       authorName: '@Lak',
       handle: '@DIYgod',
       avatarUrl:
