@@ -62,9 +62,9 @@ export default function HeroSection({ language }: HeroSectionProps) {
               </motion.a>
             </div>
 
-            <motion.p className='text-xs pt-4' style={{ color: 'var(--text-tertiary)' }} variants={fadeInUp}>
-{t('poweredBy', language)}
-            </motion.p>
+{/*            <motion.p className='text-xs pt-4' style={{ color: 'var(--text-tertiary)' }} variants={fadeInUp}>*/}
+{/*{t('poweredBy', language)}*/}
+{/*            </motion.p>*/}
           </motion.div>
 
           {/* Right Visual - Interactive Robot */}

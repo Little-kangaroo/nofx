@@ -767,8 +767,8 @@ export const translations = {
     // Features Section
     coreFeatures: '核心功能',
     whyChooseNofx: '为什么选择我们？',
-    openCommunityDriven: '开源、透明、社区驱动的 AI 交易操作系统',
-    openSourceSelfHosted: '100% 开源与自托管',
+    openCommunityDriven: '专业提示词AI 交易操作系统',
+    openSourceSelfHosted: '专业模型提示词',
     openSourceDesc: '你的框架，你的规则。非黑箱，支持自定义提示词和多模型。',
     openSourceFeatures1: '完全开源代码',
     openSourceFeatures2: '支持自托管部署',
