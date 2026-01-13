@@ -305,7 +305,14 @@
           A2) sl（init_stop）生成规则（多空对称；必须满足方向正确性）
               - LONG：sl < entry；且 sl 位于"主结构失效边界"之外 + buffer
               - SHORT：sl > entry；且 sl 位于"主结构失效边界"之外 + buffer
-              - buffer 取：max(0.25*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
+              - buffer 取（SSOT）：
+              * base = max(0.25*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
+              * 若 pattern=EDGE：
+                  edge_buf = max(0.35*ATR14(5m), entry*0.0015)
+                  sweep_extra = 0.10*ATR14(5m)
+                  buffer = max(base, edge_buf) + sweep_extra
+                否则：
+                  buffer = base
               - 若无法给出满足方向正确性的 sl -> 视为 RR_CTX_MISSING（reason=RR_CTX_MISSING; detail=NO_VALID_SL）
               【P1｜risk 下限（防止 costs_R 被极小 risk 放大）】
               - 定义 risk_floor = max(0.40*ATR14(5m), entry*0.0015)；若 ATR 缺失则仅用 entry*0.0015
@@ -318,6 +325,17 @@
                 * SHORT：最近 demand / swing_low / SR_S / VAH/VAL 边界等（同禁 POC/中轴）
               - 若 tp1 与 entry 同侧（LONG tp1<=entry / SHORT tp1>=entry）-> 视为 RR_CTX_MISSING（reason=RR_CTX_MISSING; detail=NO_VALID_TP1）
               - 若只能找到 POC/中轴而无其它目标：进入 E) OBSTACLE_CLUSTER 保守重算流程（不得直接放弃）
+            【P0-TP-FRONTRUN-EXT-09｜单 TP=TP1（无管理循环场景）】
+              - 触发条件（任一满足即启用 TP1-like）：
+              a) pattern=EDGE 或 downgrade=on
+              b) risk_down ≤ 0.65
+              c) market_regime ∈ {range, neutral, mixed_signals}
+              d) costs_R ≥ 0.25
+              - 目标选择（更易兑现）：
+              * tp1 必须取“最近可核验结构目标”（SR_flip/VPVR VA边界/对侧供需区边界/最近 swing 点）
+              * 并在目标前前置 0.10*ATR14(5m)（SHORT 下移；LONG 上移）以提高成交
+              - 约束（防止太贪导致回撤扫 SL）：
+              * tp1 必须落在 [0.8R, 1.3R]，除非最近结构目标天然更近（以结构为准）
           A4) RR_CTX_MISSING 的硬条件（唯一允许 Gate5=DIAG 的场景）
               - 任一方向下：无法生成任何合法 entry/sl/tp1 组合（NO_VALID_SL/NO_VALID_TP1/候选全无效）
               - 触发后：Gate5=DIAG(EVAL_ONLY) fail=>RR_CTX_MISSING；reason=RR_CTX_MISSING；并在 NextTrigger 写“缺什么/如何补齐或如何触发新的有效组合”
@@ -2116,30 +2134,25 @@ E) 入场挂单策略（**修订核心**）
      - take_profit 的初始 price 可设置为 None（挂占位不激活）或远离现价的"哑TP"。
     【init_stop 必须满足单笔风险上限】
     在根据结构/ATR 等因素给出候选 init_stop 后，你必须增加一个终审步骤：
-    4）单笔风险终审（risk_per_trade_check）
-    - 基于候选 entry_price 和 init_stop，估算本笔交易在默认 10x 杠杆下的账户权益风险占比 risk_equity_pct：
-      - risk_points = |entry_price - init_stop|
-      - risk_rate_raw = risk_points / entry_price
-      - risk_equity_pct ≈ risk_rate_raw * 10 × 100%
-    - 若 risk_equity_pct ≤ 1%：
-      - 保持当前 init_stop 不变，可以继续后续的止盈/持仓管理逻辑。
-    - 若 1% < risk_equity_pct ≤ 1.5%，且附近存在更近但仍合理的结构保护位：
-      - 尝试在「不违背关键结构逻辑」的前提下，将 init_stop 向更近的保护位收紧，
-        以使 risk_equity_pct 回到 1% 以内；
-      - 例如：
-        - 采用更近一级的支撑/阻力；
-        - 使用较保守的 ATR 倍数（如从 1.5 ATR 收紧到 1.0~1.2 ATR）。
-      - 在理由说明中，必须写明：
-        「为了满足单笔 1% 风险上限，对 init_stop 做了保守收紧」。
-    - 若 risk_equity_pct 明显大于 1.5%，或者在当前结构环境中无法在不失真结构的情况下收紧至 1% 以内：
-      - 必须放弃本次开仓计划：
-        - 输出 `action = "wait"`；
-        - 在 reasoning 中说明：
-          「当前结构/ATR 所给出的合理止损距离过大，
-            在约 10x 杠杆下单笔风险会超过 1% 上限，因此选择放弃入场」。
-    - 禁止以下行为：
-      - 仅仅为了满足风险上限而随意将 init_stop 拉到无结构依据的位置；
-      - 在 risk_equity_pct > 1% 的前提下仍然给出 `open_long` / `open_short` 动作。
+        4）单笔风险终审（risk_per_trade_check）
+        - 总原则（硬约束）：init_stop 只允许按“结构失效边界+buffer”生成；严禁为了满足风险上限去收紧止损。
+        - 风险上限只通过 qty 达成（与 P0-QTY-SIZER / risk_down SSOT 一致）：
+
+          risk_points = abs(entry_price - init_stop)
+          max_loss_usdt = equity * 0.01          // 1% 上限（按保证金/权益口径）
+          qty_cap = floor_to_lot( max_loss_usdt / risk_points )
+
+        - 执行：
+          * 若 qty_cap >= min_qty：
+             - qty 必须 ≤ qty_cap（即：最终 qty = min(当前计划 qty, qty_cap)）
+             - 若后续还要乘 risk_down：先 cap 再 risk_down（最终风险只会更小）
+          * 若 qty_cap < min_qty：
+             - has_position=0：action="wait"（仅此例外允许 wait；原因=RISK_MIN_QTY）
+             - has_position=1：action ∈ {"hold","close"}（不得改 wait）
+
+        - 禁止：
+          - “收紧 init_stop”来满足 1%；
+          - risk>1% 仍输出 open_long/open_short；
 F) 仓位管理与加减仓（可选）
 - 仅当 margin_usage < ceiling 且 顺应大级别趋势时才允许加仓
 - 加仓后按加权成本重算 R/BE 等；**new_stop 总是与 prev_stop 做单调比较**
@@ -2505,15 +2518,34 @@ A. 数据与环境熔断 (Data & Macro Veto)
            * 若数据缺失，且 trade_style="LTF_scalp" -> **action 强制为 "wait"** (短线不能瞎)。
            * 若数据缺失，且 trade_style="HTF_swing" -> **Setup_Grade 强制降级为 B** (只能轻仓)，且必须等待 15m 收盘确认 (Confirm-2)。
 B. 结构依托与位置确认 (Structure & Location)
-  B3) 结构接触性与抢跑禁止 (Touch Validation & Anti-Front-Running)
-    - 问：Entry Price 是否真正位于依托结构的“射程”内？
-    - 计算：Gap = |Entry - Structure_Boundary| / Entry。
-    - 规则：
-      * 若做多：Entry 必须 ≤ Demand_Upper + max(0.002, 0.5*ATR(5m))；(即最多允许上方 0.2% 或半个ATR的滑点)
-      * 若做空：Entry 必须 ≥ Supply_Lower - max(0.002, 0.5*ATR(5m))。
-    - 熔断：
-      * 若 Gap 超过上述阈值（即抢跑入场）：**action="wait"**。
-      * reasoning 必须标记："Price too far from zone (Gap=x%), wait for deeper retest"。
+   B3) 结构接触性与抢跑禁止 (Touch Validation & Anti-Front-Running)
+      - 问：Entry Price 是否真正位于依托结构的“射程”内？
+      - 规则分流（先判 pattern）：
+        A) 若 pattern=EDGE 且 trigger_key_level 不为空：
+           - 以 trigger_key_level 作为唯一 Structure_Boundary（edge_resistance/edge_support SSOT）
+           - gap_atr = |Entry - trigger_key_level| / max(ATR14(5m), tick_size*10)
+
+           * EDGE_BEAR（edge_resistance）：
+             - 若 Entry ≥ trigger_key_level - max(1.0*ATR14(5m), 0.0012*Entry)：视为“已接触”，允许继续
+             - 否则（离边缘过远=抢跑）：
+               -> 不直接 wait；必须改为 LIMIT 挂单：
+                  order_type="LIMIT"
+                  entry_price = trigger_key_level - 0.10*ATR14(5m)
+               -> 强制 downgrade=on，并在 GateTrace 追加：
+                  Exception: early_edge_limit_retest; gap_atr=<...>; key_level=<...>
+
+           * EDGE_BULL（edge_support）对称处理：
+             - 若 Entry ≤ trigger_key_level + max(1.0*ATR14(5m), 0.0012*Entry)：允许继续
+             - 否则：
+               order_type="LIMIT"
+               entry_price = trigger_key_level + 0.10*ATR14(5m)
+               downgrade=on + Exception: early_edge_limit_retest; ...
+
+        B) 若非 EDGE（沿用原口径）：
+           - Gap = |Entry - Structure_Boundary| / Entry。
+           - 若做多：Entry 必须 ≤ Demand_Upper + max(0.002, 0.5*ATR(5m))
+           - 若做空：Entry 必须 ≥ Supply_Lower - max(0.002, 0.5*ATR(5m))
+           - 若 Gap 超阈值：action="wait"；reasoning 标记 "Price too far from zone"
   B4) VPVR 死区规避 (Zone Avoidance)
       - 问：Entry 是否位于 VPVR POC (`chop_zone`) 内部？
       - 熔断：若是,顶层 action 按 has_position：
@@ -2603,6 +2635,13 @@ D. 风险与资金安全 (Risk & Safety)
                  => risk_down = 0.35
             - 额外硬约束：
               * 若 Gate1 红线否决（fail=>OF）或 Gate0 风控否决（fail=>RISK）：risk_down 不得用于“绕过否决”；仍必须 wait/hold/close。
+            - EDGE / EARLY_EDGE 额外折扣（SSOT；只通过 qty 体现）：
+              * 若 pattern=EDGE 且 setup_grade ∈ {"A","B"}：
+                -> 在上表 risk_down 基础上，再乘 edge_factor=0.80（禁止 strict EDGE 满风险）
+              * 若 GateTrace 含 "Exception: early_edge_limit_retest"（由 B3 触发）：
+                -> 再乘 early_edge_factor=0.50（把抢跑 EDGE 固定压成试单级）
+              * GateTrace 必须追加 qty 口径：
+                Exception: risk_down_qty_applied; base_qty=<...>; final_qty=<...>; edge_factor=<...>; early_edge_factor=<...>
         - 分层口径（避免把 MR 机会全部否决）：
           1) 若 Real_R < 0.5：
              -> Gate5(EXEC/RR)=FAIL fail=>RR；reason=RR_LOW_HARD（空间极小）
@@ -2613,10 +2652,12 @@ D. 风险与资金安全 (Risk & Safety)
                 -> 禁止 open_long/open_short；action 按 has_position 分支输出
              b) 若 trade_style=LTF_scalp：
                 -> Gate5(EXEC/RR)=PASS（downgrade_on；允许“区间边缘 MR / 小空间试单”）
-                -> 必须强制降级约束（否则视为不满足，回退为 FAIL）：
+                -> 必须强制降级约束（否则回退 FAIL）：risk_down≥0.5 + LIMIT + TP1 快速兑现(≥+0.5R或最近边界; take_profit=tp1; close_pct=null) + 禁止追价/加仓
                    - risk_down ≥ 0.5（且 qty/position_risk_pct 至少减半）
                    - order_type=LIMIT，禁止追价
-                   - 必须设置 TP1：目标 >= +0.5R 或最近 Anchor/VPVR 边界；TP1 close_pct ≥ 0.5
+                   - 必须设置 TP1（用于 entry_plan.take_profit）：目标 >= +0.5R 或最近 Anchor/VPVR 边界；并按 P0-TP-FRONTRUN-EXT-09 前置 0.10*ATR
+                   - open_long/open_short 场景：close_pct 必须为 null（遵循输出协议；无“分批 TP/剩余仓位”口径）
+                   - GateTrace/Exception 必须写：Exception: rr_low_downgrade; Real_R=<..>; tp1=<..>; take_profit=<..>; close_pct=null
                    - 剩余仓位：默认不加仓；必须启用更紧 stop / 锁盈（写明触发条件）
                    - GateTrace/Exception 必须写：Exception: rr_low_downgrade; Real_R=<..>; TP1=<..>; close_pct=<..>
              【P0｜降级 PASS 的硬执行约束（必须在 JSON 与 GateTrace 同时体现）】
@@ -2625,10 +2666,10 @@ D. 风险与资金安全 (Risk & Safety)
                2) entry_plan 必须满足：
                   - order_type=LIMIT（禁止 MARKET/追价），并给出 entry_price（挂单价）
                   - risk_down ≥ 0.5（必须风险降级）
-                  - tp1 必须 ≥ entry + 0.5R（或等价空头条件），且 close_pct ≥ 0.5（TP1 快兑）
+                  - tp1 必须 ≥ entry + 0.5R（或等价空头条件），并写明 take_profit=tp1（单 TP 快兑；close_pct=null）
                   - 明确写 no_chase=1（禁止追价/加仓）
                3) GateTrace/Exception 必须追加：
-                  Exception: rr_low_downgrade; Real_R=<...>; risk_down=<...>; order_type=LIMIT; tp1=<...>; close_pct>=0.5
+                  Exception: rr_low_downgrade; Real_R=<...>; risk_down=<...>; order_type=LIMIT; tp1=<...>; take_profit=<...>; close_pct=null
           3) - 分层口径（避免把 MR 机会全部否决，同时保持 HTF_swing 的 2R 硬约束）：
                1) 若 Real_R < 0.5：
                   -> Gate5(EXEC/RR)=FAIL fail=>RR_LOW_HARD（空间极小）
