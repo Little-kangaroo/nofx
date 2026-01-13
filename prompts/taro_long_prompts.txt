@@ -855,17 +855,45 @@
                 * entry_price 落在 zone 中部甚至靠近对侧边缘；
                 * 止损落在 zone 内（例如 demand 区内部就止损多单），
                   这些都应视为“被结构噪音扫掉”的高风险行为。
-              【P0-EDGE 执行硬约束（禁止追单版）】
-              - 只要 pattern=EDGE：
-                1) order_type 强制为 "LIMIT"，禁止 "MARKET"（因为 MARKET 会把“贴边试单”变成“追价/打在区外”）。
-                2) SHORT-EDGE 的 entry_price 必须满足以下其一，否则 action="wait"：
-                   - entry_price ∈ [supply_high - 0.25*ATR14_5m, supply_high + 0.05*ATR14_5m]（贴近上沿的可控试空窗口）
-                   - 且必须满足 Rejection-A 或 Rejection-B（仍按原硬要求）
-                3) LONG-EDGE 对称：
-                   - entry_price ∈ [demand_low - 0.05*ATR14_5m, demand_low + 0.25*ATR14_5m]
-                4) 若 entry_price 明显落在 zone 外侧（例如 SHORT 但 entry_price < supply_low）：
-                   - 一律视为“追空/区外开仓”，action="wait"；
-                   - 正确做法只能是：等待回抽到上沿再评估 Rejection，或改走 BO_RETEST 剧本。
+              【P0-EDGE 执行硬约束（不降频版｜默认 LIMIT + 条件允许 MARKET）】
+              - 只要 pattern=EDGE（多空对称）：
+                1) order_type 默认 "LIMIT"（贴边试单优先）；但允许在满足 MARKET_SAFE 的情况下使用 "MARKET"（用于避免错失触发后的快速回补）：
+                   【MARKET_SAFE 条件（必须全部满足，否则不得用 MARKET；不满足时必须改为 LIMIT，而不是 wait）】
+                   a) trigger_context.is_kline_closed=true
+                   b) trigger_quality ≥ 0.40
+                   c) |trigger_context.last_price - entry_target| ≤ max(0.05*ATR14_5m, 3*tick_size)
+                   d) slip_bps 已提供且 slip_bps ≤ 6；若 slip_bps 缺失：不得用 MARKET（自动改 LIMIT）
+                   e) spoofing_risk ≤ 0.60（>0.60 视为盘口不稳定：自动改 LIMIT）
+                2) entry_target 合法窗口（不满足时：把 entry_target 拉回窗口 + 降级，而不是 action=wait）：
+                   - SHORT-EDGE：entry_target 必须落在 [supply_high - 0.25*ATR14_5m, supply_high + 0.05*ATR14_5m]
+                     若 last_price 不在窗口：entry_plan.price 取窗口内最接近 last_price 的边界值（clamp 到窗口内）
+                   - LONG-EDGE：entry_target 必须落在 [demand_low  - 0.05*ATR14_5m, demand_low  + 0.25*ATR14_5m]
+                     若 last_price 不在窗口：同上 clamp 到窗口内
+                   - 若 last_price 距离窗口 > 0.50*ATR14_5m：不得追价；必须 order_type="LIMIT" 且 setup_grade 至少降 1 档，并执行 risk_down（见 P0-QTY-SIZER）
+                3) init_stop 必须在 zone 外侧 + buffer（禁止落在 zone 内）：
+                   - SHORT：init_stop ≥ supply_high + SL_buffer
+                   - LONG ：init_stop ≤ demand_low  - SL_buffer
+                   SL_buffer 的统一口径见 P0-SL_FLOOR（不再在此重复定义第二套 buffer）
+                4) EDGE 触发口径（不降频版）：
+                   - “拒绝确认”以 trigger_primary ∈ {SFP_BULL/SFP_BEAR, ENGULF_BULL/ENGULF_BEAR} 且 is_kline_closed=true 为准；
+                   - 若 trigger_primary 不属于上述集合：不得硬按 EDGE 追认（必须切换到 BO_RETEST/MOMENTUM_BREAK 或 wait，按 Gate4 原规则）。
+                5) 禁止追单总则仍生效：
+                   - 若 entry_target 无法落在窗口内（需要跨越 zone 中部/对侧边缘才成交）：必须放弃（has_position=0→wait；has_position=1→hold/close）。
+                【P0｜单 TP（entry_plan.take_profit）口径（无管理循环适配版）】
+                - 由于执行端不提供开仓后“管理循环”，本系统的 take_profit 等价于“单目标快兑 TP1”。
+                - take_profit 的默认选择（多空对称）：
+                  1) 若 setup_grade ∈ {"C"} 或 risk_down ≤ 0.50 或 (market_regime=range 且 orderflow_bias ∈ {neutral, unknown})：
+                     => 优先使用“反向结构外沿前置兑现（front-run）”
+                        - SHORT：TP = demand_high + TP_buffer（必须 < entry）
+                        - LONG ：TP = supply_low  - TP_buffer（必须 > entry）
+                  2) 若 setup_grade ∈ {"A","B"} 且 orderflow_bias 顺势且 spoofing_risk ≤ 0.60：
+                     => 可使用 nearest_opposite_structure_value 作为 TP（更追求 R），但仍必须满足：TP 与 entry 同方向且不穿越对侧结构（避免“不可兑现目标”）。
+                - TP_buffer 统一口径：
+                  * TP_buffer = max( fee_slip_to_price(entry_price, taker_bps, slip_bps), 2*tick_size )
+                - 若 front-run TP 导致 R_clean 低于本策略允许下限：
+                  * 不得直接 wait；
+                  * 先尝试通过更优 entry（LIMIT 更贴边）提升 R_clean；
+                  * 仍不足则继续降级 risk_down（保频但降暴露）。
             2）BO_RETEST（突破-回踩形态｜可执行剧本）
               - 核心思路：先确认“有效突破”，再只在“回踩带”入场；禁止在突破后的第一波延伸追价。
               - 关键定义：
@@ -1252,11 +1280,35 @@
       * 必须逐条核验《【EDGE 进场确认（5m Rejection｜硬要求）】》中的 Rejection-A / Rejection-B；
       * 必须给出用于核验的 5m ohlc_last_closed 数字（open/high/low/close）与 zone 边界；
       * 任一 Rejection 无法满足 => action="wait"，不得以 EDGE 新开仓。
- 3) RCleanArithmetic（R_clean 算术硬对账）
-    - 必须给出：risk = |init_stop - entry_price|；
-    - 必须给出：reward_clean = |entry_price - nearest_opposite_structure_value|；
-    - 必须给出：R_clean = reward_clean / risk（写出具体数值与结果）；
-    - 若输出的 R_clean 与上述算术不一致 => 视为“不可托管决策”，action="wait"（fail=>RCALC）。
+ 3) RCleanArithmetic（R_clean 算术硬对账｜不降频修正版）
+     - 必须给出：risk = |init_stop - entry_price|；
+     - 必须给出：reward_clean = |entry_price - nearest_opposite_structure_value|；
+     - 必须给出：R_clean = reward_clean / risk（写出具体数值与结果）；
+     - 若输出的 R_clean 与上述算术不一致：
+       => 不得直接 wait；必须在本轮输出内“修正 entry_plan”（重算 risk/reward/R_clean 并使其一致）
+       => 仅当缺少必要的结构值（nearest_opposite_structure_value 为空且无法用 VPVR/SR/Fib 替代）导致无法完成修正时，
+          才允许 action="wait"（fail=>RCALC）。
+
+ 3A) 【P0-SL_FLOOR｜止损距离下限（自动修正，不构成新增否决项）｜多空对称】
+     目的：避免 SL 贴到“手续费+滑点+噪声”之内，导致单笔 ROI（按保证金）出现重尾亏损。
+     - 统一计算（若某字段缺失则按 0 处理，但必须在 reasoning 标注“缺失字段=按0处理”）：
+       * cost_floor = fee_slip_to_price(entry_price, taker_bps, slip_bps)
+       * atr_floor  = 0.12 * ATR14_5m
+       * tick_floor = 3 * tick_size
+       * floor = max(cost_floor, atr_floor, tick_floor)
+     - 若 risk < floor：
+       => 必须把 init_stop 调整到 risk_new = floor（LONG：stop=entry-floor；SHORT：stop=entry+floor）
+       => 同时必须按 risk_new 重新缩放 qty，保持“单笔风险金额”不变：
+          qty_new = qty_old * (risk / risk_new)
+       => 随后必须重算 R_clean（保持算术一致）
+       => 若因 SL_FLOOR 外扩导致 R_clean 低于本策略允许的最低门槛（见 Gate5 的 rr_min/Real_R 分层）：
+          不得改为 wait；必须执行“降级但继续开仓”的 Salvage：
+          (i) setup_grade 降 1 档；(ii) risk_down 再减半（见 P0-QTY-SIZER）；(iii) 优先改 LIMIT 提升入场价，而不是否决交易。
+
+ 3B) 【P0-QTY-SIZER｜把 risk_down 固化到 entry_plan.qty（禁止只写在文字里）】
+     - 任何决定 open_long/open_short 的场景，必须在 reasoning 明确给出 risk_down=<数值>；
+     - 且 entry_plan.qty 必须已经乘入 risk_down（后端只看 qty 执行；禁止“文字写降级、qty 不变”的伪降级）。
+
  4) StructureSourceLabel（反向结构来源标签一致性）
     - 若 nearest_opposite_structure_type 声称是 demand_zone / supply_zone：
       * 则对应 timeframe 的 demand_zones / supply_zones 必须存在且不为 null；
@@ -2532,6 +2584,25 @@ D. 风险与资金安全 (Risk & Safety)
           * R_clean：基于结构合法 stop + 最近反向结构（可兑现结构目标）的“干净 R”；
             目标锚点必须来自供需区/摆动点/SR/VPVR边界/Fib 等“结构类目标”；
             订单簿墙仅当 stability_score>0.6 且 flicker_count<5 时可作为目标锚点，否则在 R_clean 计算中必须忽略（见 Gate1）。
+      【P0｜risk_down 唯一口径（SSOT｜只通过 qty 体现，不新增 JSON 字段）】
+            - 定义：risk_down 是“本次开仓风险缩放因子”，用于把边缘机会保留为“小仓试单”，以保证开仓频率不下降但尾部亏损受控。
+            - risk_down 只能通过 entry_plan.qty 体现；禁止引入新字段 risk_down；禁止只在文字里写 risk_down 但 qty 不变。
+            - 取值表（从上到下命中第一条即用；多空对称）：
+              1) 若 setup_grade="A" 且 edge_score ≥ 1.10 且 confidence ≥ 80 且 trigger_quality ≥ 0.35 且 spoofing_risk ≤ 0.60：
+                 => risk_down = 1.00
+              2) 若 setup_grade="B" 或 (0.90 ≤ edge_score < 1.10) 或 (70 ≤ confidence < 80)：
+                 => risk_down = 0.80
+              3) 若满足任一“需要降级而非熔断”的条件：
+                   - trend_alignment=divergent_mixed
+                   - market_regime=range 且 orderflow_bias ∈ {neutral, unknown}
+                   - spoofing_risk ∈ (0.60, 0.80]
+                   - R_clean < 1.00（但仍 ≥ rr_min/Real_R 分层允许的下限）
+                 => risk_down = 0.50
+              4) 若属于“保留频率的小仓探路”（仅限 Gate0/1/2/3/4 均 PASS 且无红线否决）：
+                   - edge_score ∈ [0.65, 0.90) 且 trigger_quality ≥ 0.30
+                 => risk_down = 0.35
+            - 额外硬约束：
+              * 若 Gate1 红线否决（fail=>OF）或 Gate0 风控否决（fail=>RISK）：risk_down 不得用于“绕过否决”；仍必须 wait/hold/close。
         - 分层口径（避免把 MR 机会全部否决）：
           1) 若 Real_R < 0.5：
              -> Gate5(EXEC/RR)=FAIL fail=>RR；reason=RR_LOW_HARD（空间极小）
@@ -2814,15 +2885,45 @@ E10) 与其他 symbol 的相对性价比
 ——————————————————————————————————————
 六、实现提示（伪代码）
 ——————————————————————————————————————
-# —— 入场仅挂 STOP（默认） ——
-def open_position(side, entry, R, qty, flags):
+# —— 入场 + Bracket（STOP + TP）+ 单次 ACK（无循环） ——
+def open_position(side, order_type, entry_price, qty, leverage, init_stop, take_profit, flags):
+    # 1) 先下入场单
+    entry_id = place_entry(side=side, order_type=order_type, price=entry_price, qty=qty, leverage=leverage)
+
+    # 2) 等待入场成交（同步等待，属于本次执行流程；不是“管理循环”）
+    fill = wait_fill_or_timeout(entry_id, timeout_ms=1500)
+    if not fill:
+        cancel(entry_id)
+        return "ENTRY_NOT_FILLED"
+
+    # 3) 下保护止损（必须 reduce_only + close_on_trigger）
     if side == "LONG":
-        stop = round_down(entry - R)    # 取整到tick
-        place_stop(side="SELL", price=stop, reduce_only=True, close_on_trigger=True, trigger=flags.trigger_type)
-    else:  # SHORT
-        stop = round_up(entry + R)
-        place_stop(side="BUY", price=stop, reduce_only=True, close_on_trigger=True, trigger=flags.trigger_type)
-    # 不创建 TP；返回挂单 id 供追踪
+        stop_id = place_stop(side="SELL", stop_price=init_stop, reduce_only=True, close_on_trigger=True, trigger=flags.trigger_type)
+    else:
+        stop_id = place_stop(side="BUY",  stop_price=init_stop, reduce_only=True, close_on_trigger=True, trigger=flags.trigger_type)
+
+    # 4) 下 take_profit（若 take_profit 非 null；同样必须 reduce_only）
+    tp_id = None
+    if take_profit is not None:
+        if side == "LONG":
+            tp_id = place_take_profit(side="SELL", price=take_profit, reduce_only=True)
+        else:
+            tp_id = place_take_profit(side="BUY",  price=take_profit, reduce_only=True)
+
+    # 5) 单次 ACK 校验（无循环）：查一次订单状态，确保至少 STOP 已处于活动态
+    ok_stop = (query_order(stop_id).status in {"NEW","PARTIALLY_FILLED"})
+    ok_tp   = (tp_id is None) or (query_order(tp_id).status in {"NEW","PARTIALLY_FILLED"})
+
+    if not ok_stop:
+        # Fail-safe：避免裸奔仓位导致尾部灾难亏损（立即 reduceOnly 市价平仓）
+        close_market_reduce_only()
+        return "STOP_ACK_FAIL"
+
+    # TP 未 ACK：允许继续，但必须记录告警（因为本系统无管理循环，TP 缺失会拉长持仓暴露）
+    if not ok_tp:
+        warn("TP_ACK_FAIL")
+
+    return "OPEN_OK"
 # —— 空头止损更新（单调下降） ——
 def update_short_stop(prev_stop, candidates, tick):
     s = min(candidates)                 # min 聚合
