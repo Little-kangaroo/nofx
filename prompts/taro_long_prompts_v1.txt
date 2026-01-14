@@ -2190,7 +2190,7 @@ A) 仓位 sizing（基于R的风险等额）
       - 只给“方向偏置/结构锚点/触发条件/是否可能满足 R_clean 门槛”的预判，用于复盘与 NextTrigger。
     【示例｜Gate1 否决但仍全 Gate 复盘（DIAG）】
     （注意：该示例仅供 REPLAY_FULL / OUTPUT_PROFILE=FULL 复盘参考；PROD_LITE 禁止复制其长句/价位复述写法。PROD_LITE 只允许固定行模板与短码。）
-    Summary: action=wait | trade_style=LTF_scalp | setup_grade=C | edge_score=0.1 | confidence=70 | fail=>OF | 原因=spoofing_risk>0.8
+     Summary: trade_style=LTF_scalp | fail=>OF | 原因=spoofing_risk>0.8
     Pos: 权益≈<X>; 保证金占用≈<Y>; 当前仓位方向=<none>; 数量=<0>; 均价=<NA>
     Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<1>; 处理=<ok>; 原因=<...>
     GateTrace:
@@ -3300,7 +3300,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
     * 若本节与 PROD_LITE 约束冲突：以 PROD_LITE 约束为准（SSOT）。
   - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
   - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
-      Summary: action=<...> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<...> | confidence=<...>| (action="close" 时必须带 close_pct=<0~1>)| (若被闸门否决必须带 fail=>... 并写解除条件)
+            Summary: trade_style=<.> | (fail=>.<可带短括注，如 TIME(no_trigger)> 可选) | (reason=<SHORT_CODE> 可选) | （严禁复述 action/setup_grade/edge_score/confidence/close_pct）
     - 强制：从第二行开始必须出现 GateTrace（顺序固定 GateDIR→Gate0→Gate5（GateDIR 为首行）；每行一个 Gate；GateDIR 仅输出 bias/mode/score/veto（不使用 PASS/FAIL）；其余 Gate 仍需 PASS/FAIL/DIAG(EVAL_ONLY) 明确；禁止写 N/A/跳过）：
         GateTrace:
               - GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; mode=<TREND|RANGE|REV|NEUTRAL>; score=<int>; tb=<none|5m>; ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>; veto=<none|direction_mismatch|conflict_no_reversal>
@@ -3387,7 +3387,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                     -上述 8 类只要存在任意 1：Gate2 严禁 FAIL；在上游 Gate0/1=PASS 的前提下必须 PASS（不得用 DIAG 逃避）；仅当上游已 FAIL 时允许 DIAG(EVAL_ONLY)。
                     - scan 严禁出现任何价位/区间（价位只允许出现在 Anchor1/Anchor2）
             -【禁回溯｜禁新增】Summary/StructureSnapshot 不得引入任何 GateTrace 尚未出现的新结构信息。
-            - 若需要结构结论，必须写在 Gate2(STRUCTURE) 行；Summary 只能引用 GateTrace 的结论字段（action/fail=>/setup_grade/edge_score/confidence）。
+            - 若需要结构结论，必须写在 Gate2(STRUCTURE) 行；Summary 只允许包含 trade_style + GateTrace 的否决/短码字段（fail=>/reason）；严禁复述顶层 JSON 字段（action/setup_grade/edge_score/confidence/close_pct）。
             -【违规处理｜fail=>PROTO_BACKTRACK】若触发“禁回溯｜禁新增”：
               * 顶层 action 必须输出“安全动作”（与 actionDerivation 的目标一致）：
                 - has_position=0：action="wait"
