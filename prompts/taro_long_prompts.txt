@@ -50,16 +50,6 @@
          视为“环境不可信”，禁止新开仓；
          has_position=0 -> action="wait"；
          has_position=1 -> 仅允许 action ∈ {"hold","close"}（仅管理既有仓位）。
-       * 【P0｜低量盘整保护（consolidation_lowvol）｜多空对称｜只砍噪声单】
-         若 candle_intent="consolidation" 且 volume_ratio < 0.90：
-           - 默认视为“低参与度盘整/噪声区”，禁止使用 EDGE_* 触发器新开仓（最容易被扫/假信号）。
-           - 唯一例外（允许继续走 Gate2~Gate5）必须同时满足：
-             a) trigger_primary ∈ {BO_RETEST_*, IBB_*, MOMO_*}（突破/回踩/动能类；禁止 EDGE_*）
-             b) vol_ratio ≥ 1.2 且 q(=trigger_quality) ≥ quality_min
-             c) order_type=LIMIT 且 risk_down ≥ 0.5（降级执行）
-           - 若不满足例外：
-             has_position=0 -> action="wait"
-             has_position=1 -> action ∈ {"hold","close"}
        * 若 candle_intent ∈ {smart_money_distribution, smart_money_accumulation, smart_money_absorption}：
          视为“Regime Flags（聪明钱状态标记）”，不得一票否决；
          仅用于“方向偏置 + 开仓门槛调整”，必须继续走完 Gate2~Gate5（按下方【P0-Intent 分类澄清】执行）。
@@ -107,11 +97,7 @@
         * 风险降级：position_risk_pct *= 0.5（或 qty *= 0.5）
         * 需要更强触发质量：trigger_quality ≥ 0.30 且 pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}
       若 trend_alignment≠divergent_mixed：按常规门槛执行。
-    - 做多更苛刻（用于修复“distribution 里 range 试多”类亏损）：
-      只有 struct_state_long=LONG_FAVORABLE 且价格脱离关键 supply/VAH 压制，
-      且出现 5m 多头 Trigger 才允许 open_long；
-      其中：若 candle_intent=smart_money_distribution，则多头 Trigger 必须为 {SFP_BULL, ENGULF_BULL} 之一（禁止 EDGE_BULL 直接试多），并要求 vol_ratio≥1.2 且 q≥quality_min；
-      否则默认 wait。
+    - 做多更苛刻：只有 struct_state_long=LONG_FAVORABLE 且价格脱离关键 supply/VAH 压制并出现 5m 多头 Trigger 才允许 open_long，否则默认 wait
     2) accumulation：
     - 优先做多（对称于 distribution）：open_long 条件放宽到常规门槛；open_short 条件更苛刻
     3) absorption：
@@ -257,35 +243,33 @@
             4) RSI 极端：15m RSI < 30 或 > 70
             5) 结构清晰：最近 strong DZ/SZ 距离 > 2 * ATR(1h)
           - Mixed Mode：两者都不明确满足时的默认状态（market_regime_norm=mixed）
-
         * 若判定为 Range Mode（震荡市）：
           trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
-          Gate4 允许 PASS 的【Range Mode 条件（会提高开仓率）】：
+          Gate4 允许 PASS 的【Range Mode 宽松条件】（放宽要求，提升开仓频率）：
           a) pattern ∈ {EDGE, MOMENTUM_BREAK, BO_RETEST} 且 trigger != NONE
           b) 触发质量放宽（仍服从输入阈值）：q ≥ max(borderline_min, 0.30)
           c) 必须风险降级：risk_down ≥ 0.5；order_type=LIMIT
           强制写法：
           - 满足 a~c：Gate4 必须 PASS（不得因为 pos=mid-range 直接 FAIL）
           - Gate4 行显式标注：trend=mixed; market_regime=range; rr_min=0.35; downgrade=on
-          - setup_grade 自动设为 B
+          - setup_grade 自动设为 B（震荡市风险提示；禁止设为 C，避免触发全局“C 禁开仓”）
 
         * 若判定为 Trend Mode 或 Mixed Mode（趋势市/混合市）：
           trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
-          Gate4 允许 PASS 的【窄口豁免】最小条件：
+          Gate4 允许 PASS 的【窄口豁免】最小条件（保持原结构要求，但修复 rr_min/market_regime 口径）：
           a) pattern ∈ {EDGE, MOMENTUM_BREAK, BO_RETEST} 且 trigger != NONE（禁止 pattern=none）
-          b) 触发质量必须为 strict：q ≥ quality_min
+          b) 触发质量必须为 strict：q ≥ quality_min（必须使用输入阈值；不得抬高/写死）
           c) 必须风险降级：risk_down ≥ 0.5；且 order_type=LIMIT；禁止追价
           d) Gate2 必须已给出明确结构锚点（Anchor1/Anchor2/关键SR/VPVR边界/FIB终点等，带价位/区间）
              - LIMIT：挂单价必须落在锚点附近（结构允许窗口内）
           e) rr_min 选择（Gate4 显式输出 rr_min，供 Gate5 作为唯一门槛来源）：
-             - 若 market_regime_norm=mixed：rr_min=0.50
-             - 若 market_regime_norm=trend：rr_min=0.80
-          强制写法：
+             - 若 market_regime_norm=mixed：rr_min=0.50（替代原 0.80 的“永不过线”门槛）
+             - 若 market_regime_norm=trend：rr_min=0.80（保持原严苛）
+          强制写法（防止实现漂移）：
           - 只要满足 a~d：Gate4 必须 PASS（不得因为 trend=mixed 直接 FAIL）
           - Gate4 行必须显式标注：trend=mixed; market_regime=mixed; rr_min=<按 e)>; downgrade=on
         * has_position=0：满足则允许进入 Gate5 做 RR 最终裁决；不满足则 action="wait"
         * has_position=1：仍按原规则仅允许 hold/close（严禁输出 wait）
-
 
        - RSI 状态与执行方式（RSI State & Execution）：
          * 禁止“单看某一周期 RSI 数值就一票否决或放行交易”，所有 RSI 判断必须建立在 rsi_state 上；
@@ -322,13 +306,6 @@
               - LONG：sl < entry；且 sl 位于"主结构失效边界"之外 + buffer
               - SHORT：sl > entry；且 sl 位于"主结构失效边界"之外 + buffer
               - buffer 取：max(0.25*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
-              - 【P0｜结构失效边界合规性（防止“SL 放在区内/边界内”）】
-                * 若 Gate2 的主结构锚点为 DZ/SZ 区间（例如 Anchor1: DZ@low-high 或 SZ@low-high）：
-                  - LONG：主失效边界 = DZ.low（外侧）；要求 sl ≤ DZ.low - buffer
-                  - SHORT：主失效边界 = SZ.high（外侧）；要求 sl ≥ SZ.high + buffer
-                * 若计算得到的 sl 落在 DZ/SZ 区间内部，或未越过外边界+buffer：
-                  -> 视为“无效止损”（detail=SL_INSIDE_ZONE），不得用于候选；该候选记为 NO_VALID_SL
-                * 严禁为了提高 RR 而把 sl 往区间内收缩；若无法给出合规 sl -> RR_CTX_MISSING
               - 若无法给出满足方向正确性的 sl -> 视为 RR_CTX_MISSING（reason=RR_CTX_MISSING; detail=NO_VALID_SL）
               【P1｜risk 下限（防止 costs_R 被极小 risk 放大）】
               - 定义 risk_floor = max(0.40*ATR14(5m), entry*0.0015)；若 ATR 缺失则仅用 entry*0.0015
