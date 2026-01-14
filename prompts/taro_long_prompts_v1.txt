@@ -27,9 +27,9 @@
   - 目的：防止“触发器漂亮但方向逆势/冲突”导致的逆势开仓；方向不明时宁可等待更清晰的同向信号。
   - 方向裁决仅允许基于四类输入：订单流 + 通道 + 道氏理论 + 超级趋势。严禁引入其他指标改变方向结论。
   - 输出（必须写入 reasoning 的 GateTrace 首行；不新增任何 JSON 字段）：
-    GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; mode=<TREND|RANGE|REV|NEUTRAL>; score=<int>; tb=<none|5m>;
+    GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; score=<int>;
       ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>;
-      veto=<none|direction_mismatch|conflict_no_reversal>
+      veto=<none|direction_mismatch|score_neutral>
 
     A) 分级加权投票（唯一口径｜对称判定｜方向×强度桶）
     - 每票输出 vote ∈ {-4,-3,-2,-1,0,+1,+2,+3,+4}；缺失/不确定一律记 0（不允许“脑补”）。
@@ -90,68 +90,18 @@
              * dominant_direction 明确偏 bearish_distribution -> -1
              * 否则 -> 0
 
-    B) bias 与 mode 的裁决（硬规则｜方向冻结）
-      - bias 仅用于“本轮允许的新开仓方向”（LONG_ONLY/SHORT_ONLY/NEUTRAL），不代表胜率承诺；
-        bias 一旦输出，本轮 Gate0~Gate5 严禁翻方向，只能在该方向下做资格审查（不满足则 wait）。
-      - mode 仅用于复盘“方向来自趋势/区间/反转例外”，不是独立的通过条件。
+        B) bias 的裁决（纯方向｜仅由 dir_score 决定；不含 mode/tb）
+          - GateDIR 只负责“本轮允许的新开仓方向”（LONG_ONLY/SHORT_ONLY/NEUTRAL），不输出任何“区间/反转/平局裁决”等模式标签；
+            严禁用通道位置或 5m 动量对方向做覆盖式裁决（这些属于后续 Gate 的资格审查/触发逻辑，而非方向本身）。
+          - 裁决规则（唯一口径｜对称）：
+              * dir_score >= +5  -> bias=LONG_ONLY ; veto=none
+              * dir_score <= -5  -> bias=SHORT_ONLY; veto=none
+              * 其余              -> bias=NEUTRAL  ; veto=score_neutral
+          - 解释约束：
+              * bias=NEUTRAL 表示方向证据不足/冲突未收敛：has_position=0 必须 action=wait（禁止 open_long/open_short）。
+              * bias 一旦输出，本轮 Gate0~Gate5 必须服从该方向冻结规则：下游只能在同方向下做资格审查（不满足则 wait），不得翻向自洽。
 
-      1) TREND（顺势｜默认优先）
-        - 必须满足：
-          a) ST_vote 与 Dow_vote 同向，且 abs(ST_vote)>=3 且 abs(Dow_vote)>=2（趋势共振）
-          b) dir_score >= +8 -> bias=LONG_ONLY, mode=TREND, veto=none
-             dir_score <= -8 -> bias=SHORT_ONLY, mode=TREND, veto=none
-        - 否则不进入 TREND（转入 RANGE/REV/NEUTRAL）
-
-      2) RANGE（区间｜仅在“通道平或趋势弱”时允许）
-        - 触发条件（满足其一即可）：
-          a) channel_direction=flat
-          b) 或 abs(ST_vote)<=1 且 abs(Dow_vote)<=1（趋势不强）
-        - 在上述前提下：
-          * pos=upper 且 OF_vote<=+1 -> bias=SHORT_ONLY, mode=RANGE, veto=none
-          * pos=lower 且 OF_vote>=-1 -> bias=LONG_ONLY,  mode=RANGE, veto=none
-          * pos=middle -> bias=NEUTRAL, mode=NEUTRAL, veto=conflict_no_reversal
-
-      3) REV（反转例外｜极严｜仅提供“反转方向许可”，后续 Gate4/5 仍需更高门槛确认）
-        - 仅当当前仍为 bias=NEUTRAL 且同时满足：
-          a) channel_direction=flat 且 pos ∈ {upper,lower}（必须在通道极值）
-          b) dow.trend_strength < 40 或 abs(Dow_vote)<=1（趋势惯性弱）
-          c) 订单流出现衰竭/反转证据（满足其一）：
-             - dominant_direction 与 trend_alignment 出现明确的 opposite shift（例如 bearish_distribution 后出现 bullish_confirmation）
-             - 或 candle_intent 明确 confirm/absorption（若该字段存在）
-          d) OF_vote != 0（订单流质量必须可用，禁止“无数据反转”）
-        - 满足则：
-          * pos=upper -> bias=SHORT_ONLY, mode=REV, veto=none
-          * pos=lower -> bias=LONG_ONLY,  mode=REV, veto=none
-        - 并强制要求：后续 Gate4/5 必须提高门槛（setup_grade>=A；trade_style=LTF_scalp；risk_down>=0.5；R_clean_min 提高一档），否则 action=wait。
-
-      4) NEUTRAL（默认）
-        - 以上均不满足 -> bias=NEUTRAL, mode=NEUTRAL, veto=conflict_no_reversal
-
-      5) 5m TIEBREAKER（平局裁决｜仅当 NEUTRAL 且接近 0 分｜只允许 LTF_scalp）
-        - 目的：当 HTF/Channel/OF 出现轻度冲突导致 bias=NEUTRAL，但 5m 出现“强一致动量”时，
-          允许以更严格的门槛给出短线顺势方向（仅 LTF_scalp），减少“本可做但因小分歧而全部 wait”的情况。
-        - 触发前提（必须同时满足）：
-          a) 当前已裁决为 bias=NEUTRAL 且 abs(dir_score) <= 2（平局/近似平局）
-          b) 5m 强趋势一致（两项同向）：
-             - 5m_supertrend.direction 与 5m_dow.trend_direction 同向
-             - 且 5m_dow.trend_strength >= 80
-          c) 订单流“不得与 5m 方向直接冲突”（硬护栏）：
-             - 订单流质量必须可用（不得 OF_STALE）：overall_score>=0.60 且 data_quality>=0.50 且 insufficient_data!=true
-             - 若 5m 指向 LONG：dominant_direction 不得为 bearish_distribution；且 candle_intent 不得为 bearish_confirm / smart_money_distribution / 明确分发类
-             - 若 5m 指向 SHORT：dominant_direction 不得为 bullish_accumulation；且 candle_intent 不得为 bullish_confirm / smart_money_accumulation / 明确吸筹类
-          d) 通道不出现“强反向”（硬护栏）：
-             - 若 CH_vote <= -2 且 5m 指向 LONG -> 禁止启用
-             - 若 CH_vote >= +2 且 5m 指向 SHORT -> 禁止启用
-
-        - 满足则执行（覆盖 NEUTRAL；但不改变“方向冻结→Gate0~Gate5 服从”的主流程）：
-          * 若 5m 指向 LONG：bias=LONG_ONLY, mode=TREND, tb=5m, veto=none
-          * 若 5m 指向 SHORT：bias=SHORT_ONLY, mode=TREND, tb=5m, veto=none
-          * 并强制限制：后续仅允许 LTF_scalp（禁止 HTF_swing）；
-            Gate4/5 提高门槛：setup_grade>=A；risk_down>=0.5；
-            Gate5 需满足 R_clean_eval>=1.20 且 Real_R_eval>=1.50，否则 action=wait。
-
-
-  C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
+C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
         【P0｜方向冻结（GateDIR -> Gate0~Gate5 单向传递，严禁反向漂移）】
         - GateDIR 产出的 dir_bias（LONG_ONLY/SHORT_ONLY/NEUTRAL）在本轮评估中必须“冻结”为唯一允许的新开仓方向；
           Gate0~Gate5 只能在该方向下做“是否具备开仓资格/是否满足风控与执行”的判断：
@@ -2155,7 +2105,7 @@ A) 仓位 sizing（基于R的风险等额）
         - 【PROD_LITE 固定行模板（强制｜用于收敛写法，不改变判定规则）】
           * Summary（1行）：原因只允许 1 个短标签（建议枚举：POC_CHOP/STRUCT_MID/NO_TRIGGER/TREND_MIXED/RR_LOW/OF_REDLINE/RISK）
           * GateTrace 每行建议写法：
-            - GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; mode=<TREND|RANGE|REV|NEUTRAL>; score=<int>; tb=<none|5m>; ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>; veto=<none|direction_mismatch|conflict_no_reversal>
+            - GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; score=<int>; ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>; veto=<none|direction_mismatch|score_neutral>
     - Gate0(RISK): PASS/FAIL fail=>RISK key=<1个账户侧关键数值>; verdict=<ok/limit>
             - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（严格三选一；禁止括号/附加解释/附带 intent、regime、alignment；如出现“(”或多余字段，必须裁剪为单词 bull/bear/neutral）
             - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC.../mid-range/edge>; Anchor1:<.>; Anchor2:<.>; scan=<omit_if_PASS>（scan 仅允许在 FAIL 时出现；PASS 时出现 scan 视为违规必须删除；如需证明“8类逐类检查均未命中”，仅在 Gate2=FAIL 时额外追加 1 行 StructScan: scan=<...> 且严禁含价位/区间）
@@ -2194,7 +2144,7 @@ A) 仓位 sizing（基于R的风险等额）
     Pos: 权益≈<X>; 保证金占用≈<Y>; 当前仓位方向=<none>; 数量=<0>; 均价=<NA>
     Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<1>; 处理=<ok>; 原因=<...>
     GateTrace:
-    - GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; mode=<TREND|RANGE|REV|NEUTRAL>; score=<int>; tb=<none|5m>; ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>; veto=<none|direction_mismatch|conflict_no_reversal>
+    - GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; score=<int>; ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>; veto=<none|direction_mismatch|score_neutral>
     - Gate0(RISK): PASS <一句话说明>
     - Gate1(ORDERFLOW): FAIL fail=>OF | of_redline=<INTENT_FAKE_PUMP/INTENT_FAKE_DUMP/OF_SPOOFING/...>；解除条件=<明确阈值+持续条件>
     - Gate2(STRUCTURE): DIAG(EVAL_ONLY) <给出≥2个结构锚点(价位/区间+ctx强度/状态)+方向偏置>
@@ -3301,10 +3251,10 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
   - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
   - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
             Summary: trade_style=<.> | (fail=>.<可带短括注，如 TIME(no_trigger)> 可选) | (reason=<SHORT_CODE> 可选) | （严禁复述 action/setup_grade/edge_score/confidence/close_pct）
-    - 强制：从第二行开始必须出现 GateTrace（顺序固定 GateDIR→Gate0→Gate5（GateDIR 为首行）；每行一个 Gate；GateDIR 仅输出 bias/mode/score/veto（不使用 PASS/FAIL）；其余 Gate 仍需 PASS/FAIL/DIAG(EVAL_ONLY) 明确；禁止写 N/A/跳过）：
+    - 强制：从第二行开始必须出现 GateTrace（顺序固定 GateDIR→Gate0→Gate5（GateDIR 为首行）；每行一个 Gate；GateDIR 仅输出 bias/score/veto（不使用 PASS/FAIL）；其余 Gate 仍需 PASS/FAIL/DIAG(EVAL_ONLY) 明确；禁止写 N/A/跳过）：
         GateTrace:
-              - GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; mode=<TREND|RANGE|REV|NEUTRAL>; score=<int>; tb=<none|5m>; ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>; veto=<none|direction_mismatch|conflict_no_reversal>
-    - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
+              - GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; score=<int>; ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>; veto=<none|direction_mismatch|score_neutral>
+              - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
               - Gate1(ORDERFLOW): PASS/FAIL [fail=>OF 可选] 证据（红线/否决必须明确写触发条件与解除条件）
               - Gate2(STRUCTURE): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>STRUCT 可选] 证据（至少2个结构锚点+价位/区间）
               - Gate3(TIMING): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>TIME 或 fail=>xF 可选] 证据（5m收盘锚点/触发窗口/数据是否闭合）
