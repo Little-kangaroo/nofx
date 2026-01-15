@@ -77,7 +77,7 @@ func (db *Database) GetOpenTradesForTrader(traderID string) ([]TradeRecordWithPr
 		SELECT
 			id, trader_id, symbol, side, quantity, leverage,
 			open_price, close_price, position_value, margin_used,
-			pnl, pnl_pct, duration_secs,
+			pnl, pnl_pct, duration_seconds,
 			open_time, close_time, status, close_reason,
 			open_order_id, close_order_id,
 			initial_stop_price, current_stop_price, last_stop_update_time,
