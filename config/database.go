@@ -1423,16 +1423,31 @@ func (d *Database) CreateTrade(trade *TradeRecord) error {
 	if trade.ID == "" {
 		trade.ID = fmt.Sprintf("trade_%d", time.Now().UnixNano())
 	}
-	
+
+	// 设置默认值（如果未设置）
+	now := time.Now()
+	if trade.CreatedAt.IsZero() {
+		trade.CreatedAt = now
+	}
+	if trade.UpdatedAt.IsZero() {
+		trade.UpdatedAt = now
+	}
+
 	_, err := d.db.Exec(`
 		INSERT INTO trades (
-			id, trader_id, symbol, side, quantity, leverage, open_price, 
-			position_value, margin_used, open_time, status, open_order_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, trade.ID, trade.TraderID, trade.Symbol, trade.Side, trade.Quantity, 
-	trade.Leverage, trade.OpenPrice, trade.PositionValue, trade.MarginUsed, 
-	trade.OpenTime, trade.Status, trade.OpenOrderID)
-	
+			id, trader_id, symbol, side, quantity, leverage, open_price,
+			position_value, margin_used, pnl, pnl_pct, duration_seconds,
+			open_time, status, open_order_id,
+			initial_stop_price, current_stop_price,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, trade.ID, trade.TraderID, trade.Symbol, trade.Side, trade.Quantity,
+	trade.Leverage, trade.OpenPrice, trade.PositionValue, trade.MarginUsed,
+	trade.PnL, trade.PnLPct, trade.DurationSecs,
+	trade.OpenTime, trade.Status, trade.OpenOrderID,
+	trade.InitialStopPrice, trade.CurrentStopPrice,
+	trade.CreatedAt, trade.UpdatedAt)
+
 	return err
 }
 
@@ -1456,13 +1471,14 @@ func (d *Database) GetOpenTrade(traderID, symbol, side string) (*TradeRecord, er
 	var closePriceSql sql.NullFloat64
 	var closeTime sql.NullTime
 	var closeOrderID sql.NullString
-	
+
 	err := d.db.QueryRow(`
 		SELECT id, trader_id, symbol, side, quantity, leverage, open_price, close_price,
 			position_value, margin_used, pnl, pnl_pct, duration_seconds,
 			open_time, close_time, status, close_reason, open_order_id, close_order_id,
+			initial_stop_price, current_stop_price,
 			created_at, updated_at
-		FROM trades 
+		FROM trades
 		WHERE trader_id = ? AND symbol = ? AND side = ? AND status = 'open'
 		ORDER BY open_time DESC LIMIT 1
 	`, traderID, symbol, side).Scan(
@@ -1470,12 +1486,14 @@ func (d *Database) GetOpenTrade(traderID, symbol, side string) (*TradeRecord, er
 		&trade.Leverage, &trade.OpenPrice, &closePriceSql, &trade.PositionValue,
 		&trade.MarginUsed, &trade.PnL, &trade.PnLPct, &trade.DurationSecs,
 		&trade.OpenTime, &closeTime, &trade.Status, &trade.CloseReason,
-		&trade.OpenOrderID, &closeOrderID, &trade.CreatedAt, &trade.UpdatedAt)
-	
+		&trade.OpenOrderID, &closeOrderID,
+		&trade.InitialStopPrice, &trade.CurrentStopPrice,
+		&trade.CreatedAt, &trade.UpdatedAt)
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if closePriceSql.Valid {
 		trade.ClosePrice = &closePriceSql.Float64
 	}
@@ -1485,7 +1503,7 @@ func (d *Database) GetOpenTrade(traderID, symbol, side string) (*TradeRecord, er
 	if closeOrderID.Valid {
 		trade.CloseOrderID = closeOrderID.String
 	}
-	
+
 	return &trade, nil
 }
 
@@ -1495,41 +1513,44 @@ func (d *Database) GetTraderTrades(traderID string, limit int) ([]*TradeRecord, 
 		SELECT id, trader_id, symbol, side, quantity, leverage, open_price, close_price,
 			position_value, margin_used, pnl, pnl_pct, duration_seconds,
 			open_time, close_time, status, close_reason, open_order_id, close_order_id,
+			initial_stop_price, current_stop_price,
 			created_at, updated_at
-		FROM trades 
-		WHERE trader_id = ? 
+		FROM trades
+		WHERE trader_id = ?
 		ORDER BY open_time ASC  -- 🔥 修复：改为ASC，按开仓时间正序排列
 	`
-	
+
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
-	
+
 	rows, err := d.db.Query(query, traderID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	
+
 	var trades []*TradeRecord
 	for rows.Next() {
 		var trade TradeRecord
 		var closePrice sql.NullFloat64
 		var closeTime sql.NullTime
 		var closeOrderID sql.NullString
-		
+
 		err := rows.Scan(
 			&trade.ID, &trade.TraderID, &trade.Symbol, &trade.Side, &trade.Quantity,
 			&trade.Leverage, &trade.OpenPrice, &closePrice, &trade.PositionValue,
 			&trade.MarginUsed, &trade.PnL, &trade.PnLPct, &trade.DurationSecs,
 			&trade.OpenTime, &closeTime, &trade.Status, &trade.CloseReason,
-			&trade.OpenOrderID, &closeOrderID, &trade.CreatedAt, &trade.UpdatedAt)
-		
+			&trade.OpenOrderID, &closeOrderID,
+			&trade.InitialStopPrice, &trade.CurrentStopPrice,
+			&trade.CreatedAt, &trade.UpdatedAt)
+
 		if err != nil {
 			log.Printf("⚠️ 扫描交易记录失败: %v", err)
 			continue
 		}
-		
+
 		if closePrice.Valid {
 			trade.ClosePrice = &closePrice.Float64
 		}
@@ -1539,10 +1560,10 @@ func (d *Database) GetTraderTrades(traderID string, limit int) ([]*TradeRecord, 
 		if closeOrderID.Valid {
 			trade.CloseOrderID = closeOrderID.String
 		}
-		
+
 		trades = append(trades, &trade)
 	}
-	
+
 	return trades, nil
 }
 
@@ -1552,6 +1573,7 @@ func (d *Database) GetOpenTrades(traderID string) ([]*TradeRecord, error) {
 		SELECT id, trader_id, symbol, side, quantity, leverage, open_price, close_price,
 			position_value, margin_used, pnl, pnl_pct, duration_seconds,
 			open_time, close_time, status, close_reason, open_order_id, close_order_id,
+			initial_stop_price, current_stop_price,
 			created_at, updated_at
 		FROM trades
 		WHERE trader_id = ? AND status = 'open'
@@ -1576,7 +1598,9 @@ func (d *Database) GetOpenTrades(traderID string) ([]*TradeRecord, error) {
 			&trade.Leverage, &trade.OpenPrice, &closePrice, &trade.PositionValue,
 			&trade.MarginUsed, &trade.PnL, &trade.PnLPct, &trade.DurationSecs,
 			&trade.OpenTime, &closeTime, &trade.Status, &trade.CloseReason,
-			&trade.OpenOrderID, &closeOrderID, &trade.CreatedAt, &trade.UpdatedAt)
+			&trade.OpenOrderID, &closeOrderID,
+			&trade.InitialStopPrice, &trade.CurrentStopPrice,
+			&trade.CreatedAt, &trade.UpdatedAt)
 
 		if err != nil {
 			log.Printf("⚠️ 扫描交易记录失败: %v", err)
@@ -1610,6 +1634,7 @@ func (d *Database) GetTradeByID(tradeID string) (*TradeRecord, error) {
 		SELECT id, trader_id, symbol, side, quantity, leverage, open_price, close_price,
 			position_value, margin_used, pnl, pnl_pct, duration_seconds,
 			open_time, close_time, status, close_reason, open_order_id, close_order_id,
+			initial_stop_price, current_stop_price,
 			created_at, updated_at
 		FROM trades
 		WHERE id = ?
@@ -1618,7 +1643,9 @@ func (d *Database) GetTradeByID(tradeID string) (*TradeRecord, error) {
 		&trade.Leverage, &trade.OpenPrice, &closePriceSql, &trade.PositionValue,
 		&trade.MarginUsed, &trade.PnL, &trade.PnLPct, &trade.DurationSecs,
 		&trade.OpenTime, &closeTime, &trade.Status, &trade.CloseReason,
-		&trade.OpenOrderID, &closeOrderID, &trade.CreatedAt, &trade.UpdatedAt)
+		&trade.OpenOrderID, &closeOrderID,
+		&trade.InitialStopPrice, &trade.CurrentStopPrice,
+		&trade.CreatedAt, &trade.UpdatedAt)
 
 	if err != nil {
 		return nil, err
