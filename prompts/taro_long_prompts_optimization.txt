@@ -23,101 +23,7 @@
 - 在对每个 symbol 做一次完整评估时，AI 必须严格按以下自上而下的顺序决策：
   任何上层 Gate 否决，都不得用下层指标“推翻”上层结论。
   但为复盘与 NextTrigger 制定：即使 action 已被上层 Gate 锁定（如 wait/hold/close），也必须继续按 Gate0→Gate5 输出“诊断评估（DIAG）”用于解释与复盘；DIAG 仅做说明，不得改变本次 action。
-   -1）开仓方向裁决（GateDIR｜必须先于 Gate0~Gate5；仅用于“是否允许新开仓 + 允许方向”）
-  - 目的：防止“触发器漂亮但方向逆势/冲突”导致的逆势开仓；方向不明时宁可等待更清晰的同向信号。
-  - 方向裁决仅允许基于四类输入：订单流 + 通道 + 道氏理论 + 超级趋势。严禁引入其他指标改变方向结论。
-  - 输出（必须写入 reasoning 的 GateTrace 首行；不新增任何 JSON 字段）：
-    GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; score=<int>;
-      ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>;
-      veto=<none|direction_mismatch|score_neutral>
-
-    A) 分级加权投票（唯一口径｜对称判定｜方向×强度桶）
-    - 每票输出 vote ∈ {-4,-3,-2,-1,0,+1,+2,+3,+4}；缺失/不确定一律记 0（不允许“脑补”）。
-    - 总分：dir_score = ST_vote + Dow_vote + CH_vote + OF_vote（范围约 [-15,+15]）
-    - 证据字段写入 GateTrace（ST/Dow/CH/OF），若同一类信号在 4h/1h 冲突则记为 mixed。
-
-    1) SuperTrend_vote（等级=4｜优先 4h/1h；缺失则用可用的最高 TF）：
-       - 若 4h 与 1h 同向：
-         * bullish -> +4
-         * bearish -> -4
-       - 若仅有一个 TF（仅 4h 或仅 1h）：
-         * bullish -> +3
-         * bearish -> -3
-       - 若 4h 与 1h 冲突：
-         * ST=mixed；ST_vote=0
-
-    2) Dow_vote（等级=4｜优先 4h/1h；使用 trend_direction + trend_strength；缺失 strength 则按中等强度处理）：
-       - 若 trend_direction=up：
-         * strength>=75 -> +4
-         * 65<=strength<75 -> +3
-         * 55<=strength<65 -> +2
-         * 45<=strength<55 -> +1
-         * strength<45 -> 0
-       - 若 trend_direction=down：对称取负值
-       - 若 trend_direction=flat -> 0
-       - 若 4h 与 1h 的 trend_direction 冲突：Dow=mixed；Dow_vote=0（除非能明确更高 TF 作为唯一口径）
-
-    3) Channel_vote（等级=3｜使用 channel_direction + current_position）：
-       - 若 channel_direction=up：
-         * pos=lower  -> +3
-         * pos=middle -> +2
-         * pos=upper  -> +1   （顺势但偏追价，方向支持弱）
-       - 若 channel_direction=down：
-         * pos=upper  -> -3
-         * pos=middle -> -2
-         * pos=lower  -> -1
-       - 若 channel_direction=flat：
-         * pos=upper  -> -2   （区间上沿更偏空）
-         * pos=lower  -> +2   （区间下沿更偏多）
-         * pos=middle -> 0
-
-    4) Orderflow_vote（等级=4｜使用 trend_alignment + dominant_direction + overall_score + data_quality；质量不足则降权/归零）：
-       a) 先判方向（of_dir）：
-         - trend_alignment 属于 {bullish_aligned, bullish_confirmation, bullish_accumulation} -> of_dir=+1（OF=bull）
-         - trend_alignment 属于 {bearish_aligned, bearish_confirmation, bearish_distribution} -> of_dir=-1（OF=bear）
-         - trend_alignment=divergent_mixed 或缺失 -> of_dir=0（OF=mixed）
-       b) 再判强度（|OF_vote|）：
-         - 若 overall_score<0.60 或 data_quality<0.50 或 标记 insufficient_data=true：
-             OF=na；OF_vote=0
-         - 否则若 of_dir!=0：
-             * overall_score>=0.75 且 data_quality>=0.70 -> |OF_vote|=4
-             * overall_score>=0.65 且 data_quality>=0.60 -> |OF_vote|=3
-             * overall_score>=0.60 且 data_quality>=0.50 -> |OF_vote|=2
-             * 否则 -> |OF_vote|=1
-             OF_vote = of_dir * |OF_vote|
-         - 否则（of_dir=0 且质量可用）：
-             * dominant_direction 明确偏 bullish_accumulation -> +1
-             * dominant_direction 明确偏 bearish_distribution -> -1
-             * 否则 -> 0
-
-        B) bias 的裁决（纯方向｜仅由 dir_score 决定；不含 mode/tb）
-          - GateDIR 只负责“本轮允许的新开仓方向”（LONG_ONLY/SHORT_ONLY/NEUTRAL），不输出任何“区间/反转/平局裁决”等模式标签；
-            严禁用通道位置或 5m 动量对方向做覆盖式裁决（这些属于后续 Gate 的资格审查/触发逻辑，而非方向本身）。
-          - 裁决规则（唯一口径｜对称）：
-              * dir_score >= +5  -> bias=LONG_ONLY ; veto=none
-              * dir_score <= -5  -> bias=SHORT_ONLY; veto=none
-              * 其余              -> bias=NEUTRAL  ; veto=score_neutral
-          - 解释约束：
-              * bias=NEUTRAL 表示方向证据不足/冲突未收敛：has_position=0 必须 action=wait（禁止 open_long/open_short）。
-              * bias 一旦输出，本轮 Gate0~Gate5 必须服从该方向冻结规则：下游只能在同方向下做资格审查（不满足则 wait），不得翻向自洽。
-
-C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
-        【P0｜方向冻结（GateDIR -> Gate0~Gate5 单向传递，严禁反向漂移）】
-        - GateDIR 产出的 dir_bias（LONG_ONLY/SHORT_ONLY/NEUTRAL）在本轮评估中必须“冻结”为唯一允许的新开仓方向；
-          Gate0~Gate5 只能在该方向下做“是否具备开仓资格/是否满足风控与执行”的判断：
-          * 允许：在同方向下 PASS/FAIL；或因证据不足/结构不支撑而否决（action=wait）。
-          * 禁止：在任一 Gate 中“改变方向”（例如 GateDIR=LONG_ONLY 但 Gate4/Gate5 输出 open_short）。
-        - 若下游任一 Gate 发现与 dir_bias 明显冲突的信号：
-          处理方式只能是“否决新开仓并等待更清晰的同向触发”（action=wait），并在 actionDerivation 标注 veto=direction_mismatch；
-          严禁把方向切换为反向开仓来“自洽”。
-
-    - has_position=0：
-      * 若 bias=NEUTRAL：action 只能为 "wait"（禁止 open_long/open_short）
-      * 若 bias=LONG_ONLY：仅允许 open_long（严禁 open_short）
-      * 若 bias=SHORT_ONLY：仅允许 open_short（严禁 open_long）
-    - has_position=1：允许 hold/reduce/close；严禁“加仓到与 bias 相反方向”。
-
-0）账户与风险门槛（Account & Risk Gate）
+   0）账户与风险门槛（Account & Risk Gate）
      - 若本轮开仓会导致：
        * MarginUsed ≥ 95%，或
        * 单笔风险 > risk_per_trade_pct（或超过当前允许的降级比例），action 只能为 "wait" / "close"，禁止新开仓或加仓。
@@ -139,6 +45,25 @@ C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
      - 写法硬约束：
        * 当触发 OF_STALE：不得再输出 “bias=bull/bear”，不得引用宏观资金趋势/trend_alignment 作为任何开仓依据；
        * 下层 Gate2~Gate5 只允许 DIAG(EVAL_ONLY)，且 Gate5 reason=SKIP_UPSTREAM_FAIL（遵循“上层否决后统一 DIAG”口径）。
+
+      【P0｜宏观资金方向硬约束（DIR_VETO -> fail=>xF）｜多空对称】
+      - 前置条件：仅当订单流数据可用（未触发 OF_STALE）时，才允许使用“宏观资金趋势”字段参与方向判断。
+      - 读取字段（若名称略有不同，以语义对应为准）：
+        * 订单流分析.宏观资金趋势.dominant_direction（示例：bullish_accumulation / bearish_distribution / bullish_confirmation / bearish_confirmation / mixed / neutral）
+        * 订单流分析.宏观资金趋势.market_regime（示例：spot_led_decline / spot_led_rally；仅辅助确认，不单独构成开仓理由）
+      - 方向锁定（dir_lock）：
+        * 若 dominant_direction ∈ {bearish_distribution, bearish_confirmation} -> dir_lock="bear"
+        * 若 dominant_direction ∈ {bullish_accumulation, bullish_confirmation} -> dir_lock="bull"
+        * 其它情况 -> dir_lock="mixed_or_unknown"（不加方向锁）
+      - bias 写法硬约束（防止“bearish_distribution 仍写 neutral/bull”）：
+        * 若 dir_lock="bear"：bias 不得为 bull/neutral；只能为 bear
+        * 若 dir_lock="bull"：bias 不得为 bear/neutral；只能为 bull
+      - 开仓硬否决：
+        * 若 has_position=0 且 dir_lock="bear" 且本轮计划方向为 LONG：Gate1=FAIL fail=>xF; reason=DIR_VETO; dir_lock=bear; action="wait"
+        * 若 has_position=0 且 dir_lock="bull" 且本轮计划方向为 SHORT：Gate1=FAIL fail=>xF; reason=DIR_VETO; dir_lock=bull; action="wait"
+        * 若 has_position=1 且出现上述方向冲突：仅允许 action ∈ {"hold","close"}（按风控优先 close；严禁反向加仓/开新仓）
+      - 例外口径（默认不启用）：
+        * 若你认为存在“强反转”机会，也不得在 Gate1 直接放行反向开仓；只能在 NextTrigger 给出反向触发条件，等待结构/触发器在后续 bar 上自证。
 
        * 若 candle_intent ∈ {fake_pump, fake_dump, retail_driven}：
          视为“环境不可信”，禁止新开仓；
@@ -243,14 +168,6 @@ C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
          * GateTrace 的 Gate3 行必须“原样映射”window_state：window_state=no_trigger 就必须输出 window=no_trigger 且 Gate3=FAIL；严禁把 no_trigger 写成 in。
        - 本层回答：“现在这个时点/这份数据，允许做决策并允许执行吗？”
     4）开仓条件与执行方式门槛（Setup Gate｜Gate4(SETUP)）
-        【P0｜方向绑定（GateDIR -> Gate4）】
-        - Gate4(SETUP) 的 trigger/pattern 选择必须服从 dir_bias：
-          * dir_bias=LONG_ONLY  -> trigger 必须是多头方向（如 EDGE_BULL / ENGULF_BULL / IBB_BULL / MOMO_BULL 等），pattern 不得指向空头；
-          * dir_bias=SHORT_ONLY -> trigger 必须是空头方向（如 EDGE_BEAR / ENGULF_BEAR / IBB_BEAR / MOMO_BEAR 等），pattern 不得指向多头；
-          * dir_bias=NEUTRAL    -> Gate4 必须输出 DIAG(EVAL_ONLY) 或 FAIL（按上游规则），不得给出可执行开仓计划。
-        - 若 trigger_primary（或 strict_flags/raw_flags）与 dir_bias 方向不一致：
-          Gate4 必须 FAIL fail=>DIR_TRIG_MISMATCH；has_position=0 => action=wait（禁止新开仓）。
-
         【P0｜Gate4 职责边界（不改规则，仅收敛写法）】
         - Gate4 只负责：trigger 选择 + pattern 映射 + 触发质量分层 + 执行方式收敛（LIMIT/MARKET/等待回踩/降级）。
         - Gate4 不计算、不裁决 R_clean / R_struct 数值；所有 R_* 计算与“是否达标”统一在 Gate5(EXEC/RR) 完成。
@@ -380,14 +297,6 @@ C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
          * rsi_state="EXHAUSTION_*"：默认禁止顺势继续开新顺势单；仅允许 wait，或在“反转结构 + 订单流吸收/背离”成立时以明显降级风险做试探（必须在 reasoning 写明降级）。
        - 本层回答：“综合条件是否足够支持开仓？若支持，执行方式如何收敛？”
   5）执行细节与 R 要求（Execution & R Filter）
-        【P0｜方向绑定（GateDIR -> Gate5）】
-        - Gate5(EXEC/RR) 只允许对 dir_bias 指定的方向计算并输出 RR/entry_plan：
-          * dir_bias=LONG_ONLY  -> 只允许输出 open_long 的 RR（entry/sl/tp1 按多头定义）
-          * dir_bias=SHORT_ONLY -> 只允许输出 open_short 的 RR（entry/sl/tp1 按空头定义）
-          * dir_bias=NEUTRAL    -> 禁止输出可执行 entry_plan/具体 SL/TP；仅允许 DIAG 预判与 NextTrigger
-        - 若 Gate4/Gate5 推导出的 derived_action 与 dir_bias 不一致：
-          必须回退为 action=wait，并在 actionDerivation 写 veto=direction_mismatch（不得反向开仓）。
-
        - 仅当 0~4 层全部通过后，才允许把 action 输出为 open_long/open_short。
          但只要 Gate4=PASS 且 Gate0~Gate3 未 FAIL，本轮无论最终 action=wait/hold/close，
          Gate5 仍必须输出 1 行“可核验 RR 对账数字”，并按 has_position 分叉（开仓 RR 与持仓管理严格解耦）：
@@ -453,6 +362,12 @@ C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
          - slippage_rate = slippage
          - costs_price = (fee_rate + slippage_rate) * entry
          - costs_R = costs_price / risk
+
+         【P1-COST-01｜成本敏感 RR 门槛（防手续费/滑点吞噬；仅 LTF_scalp）】
+         - 若 trade_style=LTF_scalp 且 costs_R > 0.20：
+           * rr_min_eff := rr_min + min(0.30, (costs_R - 0.20))
+           * 阈值裁决使用 rr_min_eff（替代 rr_min）
+           * 若 R_clean_eval < rr_min_eff：Gate5=FAIL fail=>RR；reason=COSTS_TOO_HIGH
 
          【用于阈值裁决的评估口径（只在 Gate5 使用）】
          - 若 trade_style=HTF_swing：Real_R_eval = max(Real_R_tp1, R_struct)
@@ -585,12 +500,6 @@ C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
    - 若 has_position=1：action ∈ {"hold","close"}（严禁输出 wait；默认 hold；如 SL/保护线/风险约束要求退出才 close）
    - Gate5(EXEC/RR) 行必须：FAIL + fail=>RR（统一使用 fail=>RR；禁止输出 fail=>noRT），并写不可执行原因（空间不足/滑点追价/无法给出合法 SL/TP/成本后 R_clean 不达标等）。
 【动作选择要求】
-- 【方向先行（必须）】在任何开仓判断之前，必须先执行 GateDIR 并得到 dir_bias：
-  * dir_bias=LONG_ONLY  -> Gate0~Gate5 仅允许给出 open_long 的可执行结论；不得出现 open_short
-  * dir_bias=SHORT_ONLY -> Gate0~Gate5 仅允许给出 open_short 的可执行结论；不得出现 open_long
-  * dir_bias=NEUTRAL    -> 本轮禁止新开仓（action=wait）；仅允许给出 NextTrigger/Timebox
-  说明：后续 Gate0~Gate5 的 PASS/FAIL 语义均是“在该 dir_bias 方向下是否允许新开仓”，不是“重新裁决方向”。
-
 - 当不同模块信号冲突时，你必须在 reasoning 中显式说明：
   1. 哪些高优先级模块否决了开仓；
   2. 哪些低优先级模块提供了相反建议，但被忽略或降权；
@@ -972,6 +881,16 @@ C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
                 * 止损落在 zone 内（例如 demand 区内部就止损多单），
                   这些都应视为“被结构噪音扫掉”的高风险行为。
               【P0-EDGE 执行硬约束（禁止追单版）】
+              - 【P0-EDGE-02｜ENTRY 合法性自检（必须可核验；违规即 wait）】
+                * 当 pattern=EDGE 时，你必须在 Gate5 RR 计算之前输出以下自检值（写在 reasoning/GateTrace/summary 中即可，不新增 JSON 字段）：
+                  - edge_ref := trigger_key_level（若 trigger_key_level 缺失，则 LONG 用 demand_low、SHORT 用 supply_high 作为 edge_ref）
+                  - edge_win := max(0.25*ATR14_5m, 0.0005*last_price)   // 0.05% 兜底，避免 ATR 缺失时失真
+                  - edge_dist := |entry_price - edge_ref|
+                  - EDGE_ENTRY_OK := (edge_dist <= edge_win) 且满足本段原有窗口约束：
+                    · SHORT-EDGE：entry_price ∈ [supply_high - 0.25*ATR14_5m, supply_high + 0.05*ATR14_5m]
+                    · LONG-EDGE： entry_price ∈ [demand_low - 0.05*ATR14_5m, demand_low + 0.25*ATR14_5m]
+                * 若 EDGE_ENTRY_OK=false：必须输出 Gate5=FAIL fail=>EDGE_ENTRY_CHASING，并将 actionDerivation.derived_action 强制改为 "wait"（has_position=0）。
+                * 解释硬约束：禁止用“看好方向/担心踏空”作为理由绕过 EDGE_ENTRY_OK。
               - 只要 pattern=EDGE：
                 1) order_type 强制为 "LIMIT"，禁止 "MARKET"（因为 MARKET 会把“贴边试单”变成“追价/打在区外”）。
                 2) SHORT-EDGE 的 entry_price 必须满足以下其一，否则 action="wait"：
@@ -1011,6 +930,9 @@ C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
                    且其【实体部分的中点】也必须位于结构外侧。
                  * 若仅是收盘价勉强越过，但实体大部分仍在结构内，视为“弱突破”，action="wait"。
                - 必须同时满足（硬指标）：
+               - 【P1-MOM-01｜MOMENTUM_BREAK 额外门槛（防低 q 假突破）】
+                 * 当 pattern=MOMENTUM_BREAK：trigger_quality(q) 必须 ≥ max(0.65, quality_min, borderline_min + 0.15)
+                 * 且（若可用）spoofing_risk 必须 ≤ 0.20；否则视为盘口污染的假突破，action="wait"。
                1) 实体穿越：5m K 线收盘价（Close）必须**清晰且远离**被突破结构边界。
                   * 仅引线（Wick）刺破不算突破；
                   * 收盘价刚好卡在边界上不算突破。
@@ -1616,6 +1538,17 @@ C) 对 Gate0~Gate5 的硬约束（必须执行；一票否决）
     * 若不满足：必须外扩 SL 或 action="wait"（不得用“过紧止损”换取抢跑）。
   - 规则优先级（防止互相打架）：
     1) 先确保 SL 在结构 invalidation 之外；
+       - 【P0-SL-01｜SL_OUTSIDE_STRUCT（必须可核验；违规即 wait）】
+         * 你必须明确本次 SL 依托的“主结构”类型（DZ/SZ/FVG/VPVR区间边界/SR/FIB/ST/CH/DS 之一），并在 reasoning 中写出对应边界价（zone_low/zone_high 或 line_price）。
+         * buffer 定义（至少满足其一；若 tick_size 缺失则忽略 tick 项）：
+           - buffer := max(0.20*ATR14_5m, 0.0005*entry_price, 2*tick_size)
+         * 区间类结构（DZ/SZ/FVG/VPVR value-area 边界）硬约束：
+           - LONG：sl_struct <= zone_low - buffer
+           - SHORT：sl_struct >= zone_high + buffer
+         * 线性类结构（SR/FIB/ST/CH/DS）硬约束：
+           - LONG：sl_struct <= line_price - buffer
+           - SHORT：sl_struct >= line_price + buffer
+         * 若无法证明 SL 在 invalidation 之外（边界价缺失/不一致/SL 落在区间内）：强制 action="wait"（has_position=0），并标注 reason=SL_INSIDE_STRUCT。
     2) 再应用最小噪音容忍度（按风格）；
     3) 最后检查杠杆安全护栏（Dist_ROI）与 R_clean 门槛；任一不满足则 wait。
 [追踪轨道（响应小级别翻转）]
@@ -2105,8 +2038,7 @@ A) 仓位 sizing（基于R的风险等额）
         - 【PROD_LITE 固定行模板（强制｜用于收敛写法，不改变判定规则）】
           * Summary（1行）：原因只允许 1 个短标签（建议枚举：POC_CHOP/STRUCT_MID/NO_TRIGGER/TREND_MIXED/RR_LOW/OF_REDLINE/RISK）
           * GateTrace 每行建议写法：
-            - GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; score=<int>; ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>; veto=<none|direction_mismatch|score_neutral>
-    - Gate0(RISK): PASS/FAIL fail=>RISK key=<1个账户侧关键数值>; verdict=<ok/limit>
+            - Gate0(RISK): PASS/FAIL fail=>RISK key=<1个账户侧关键数值>; verdict=<ok/limit>
             - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（严格三选一；禁止括号/附加解释/附带 intent、regime、alignment；如出现“(”或多余字段，必须裁剪为单词 bull/bear/neutral）
             - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC.../mid-range/edge>; Anchor1:<.>; Anchor2:<.>; scan=<omit_if_PASS>（scan 仅允许在 FAIL 时出现；PASS 时出现 scan 视为违规必须删除；如需证明“8类逐类检查均未命中”，仅在 Gate2=FAIL 时额外追加 1 行 StructScan: scan=<...> 且严禁含价位/区间）
             - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in/no_trigger/intrabar_forbidden/out/unknown>（window 必须与 trigger_context.window_state 同值；window!=in ⇒ Gate3=FAIL fail=>TIME）
@@ -2140,11 +2072,10 @@ A) 仓位 sizing（基于R的风险等额）
       - 只给“方向偏置/结构锚点/触发条件/是否可能满足 R_clean 门槛”的预判，用于复盘与 NextTrigger。
     【示例｜Gate1 否决但仍全 Gate 复盘（DIAG）】
     （注意：该示例仅供 REPLAY_FULL / OUTPUT_PROFILE=FULL 复盘参考；PROD_LITE 禁止复制其长句/价位复述写法。PROD_LITE 只允许固定行模板与短码。）
-     Summary: trade_style=LTF_scalp | fail=>OF | 原因=spoofing_risk>0.8
+    Summary: action=wait | trade_style=LTF_scalp | setup_grade=C | edge_score=0.1 | confidence=70 | fail=>OF | 原因=spoofing_risk>0.8
     Pos: 权益≈<X>; 保证金占用≈<Y>; 当前仓位方向=<none>; 数量=<0>; 均价=<NA>
     Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<1>; 处理=<ok>; 原因=<...>
     GateTrace:
-    - GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; score=<int>; ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>; veto=<none|direction_mismatch|score_neutral>
     - Gate0(RISK): PASS <一句话说明>
     - Gate1(ORDERFLOW): FAIL fail=>OF | of_redline=<INTENT_FAKE_PUMP/INTENT_FAKE_DUMP/OF_SPOOFING/...>；解除条件=<明确阈值+持续条件>
     - Gate2(STRUCTURE): DIAG(EVAL_ONLY) <给出≥2个结构锚点(价位/区间+ctx强度/状态)+方向偏置>
@@ -3096,6 +3027,10 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
          - 若 has_position=0：action="wait"
          - 若 has_position=1：action 仅允许 ∈ {"hold","close"}（仅管理既有仓位）
          - 约束：若你最终对某个 symbol 输出 "action": "open_long" 或 "open_short"：
+            * 【P0-DIR-01｜最终方向锁（与 Gate1 dir_lock 一致）】
+              - 若 Gate1 已输出 dir_lock="bear"：禁止 open_long；必须改为 action="wait"。
+              - 若 Gate1 已输出 dir_lock="bull"：禁止 open_short；必须改为 action="wait"。
+              - 该约束优先级高于 edge_score/rr_min；属于“方向不允许交易”的硬 veto。
             * 该 symbol 的 edge_score 必须 ≥ ES_MIN；
               - ES_MIN := max(0.35, rr_min)
               - rr_min 取 Gate4(SETUP) 行中显式输出的 rr_min（若 Gate4 未输出 rr_min，则默认 rr_min=0.50 作为兜底）
@@ -3250,10 +3185,9 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
     * 若本节与 PROD_LITE 约束冲突：以 PROD_LITE 约束为准（SSOT）。
   - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
   - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
-            Summary: trade_style=<.> | (fail=>.<可带短括注，如 TIME(no_trigger)> 可选) | (reason=<SHORT_CODE> 可选) | （严禁复述 action/setup_grade/edge_score/confidence/close_pct）
-    - 强制：从第二行开始必须出现 GateTrace（顺序固定 GateDIR→Gate0→Gate5（GateDIR 为首行）；每行一个 Gate；GateDIR 仅输出 bias/score/veto（不使用 PASS/FAIL）；其余 Gate 仍需 PASS/FAIL/DIAG(EVAL_ONLY) 明确；禁止写 N/A/跳过）：
+      Summary: action=<...> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<...> | confidence=<...>| (action="close" 时必须带 close_pct=<0~1>)| (若被闸门否决必须带 fail=>... 并写解除条件)
+    - 强制：从第二行开始必须出现 GateTrace（顺序固定 Gate0→Gate5；每行一个 Gate；PASS/FAIL/DIAG(EVAL_ONLY) 必须明确；禁止写 N/A/跳过）：
         GateTrace:
-              - GateDIR(DIR): bias=<LONG_ONLY|SHORT_ONLY|NEUTRAL>; score=<int>; ST=<bull/bear/mixed/na>; Dow=<up/down/flat/mixed/na,str=<0-100|na>>; CH=<up/down/flat/mixed/na,pos=<upper/middle/lower|na>>; OF=<bull/bear/mixed/na>; veto=<none|direction_mismatch|score_neutral>
               - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
               - Gate1(ORDERFLOW): PASS/FAIL [fail=>OF 可选] 证据（红线/否决必须明确写触发条件与解除条件）
               - Gate2(STRUCTURE): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>STRUCT 可选] 证据（至少2个结构锚点+价位/区间）
@@ -3337,7 +3271,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
                     -上述 8 类只要存在任意 1：Gate2 严禁 FAIL；在上游 Gate0/1=PASS 的前提下必须 PASS（不得用 DIAG 逃避）；仅当上游已 FAIL 时允许 DIAG(EVAL_ONLY)。
                     - scan 严禁出现任何价位/区间（价位只允许出现在 Anchor1/Anchor2）
             -【禁回溯｜禁新增】Summary/StructureSnapshot 不得引入任何 GateTrace 尚未出现的新结构信息。
-            - 若需要结构结论，必须写在 Gate2(STRUCTURE) 行；Summary 只允许包含 trade_style + GateTrace 的否决/短码字段（fail=>/reason）；严禁复述顶层 JSON 字段（action/setup_grade/edge_score/confidence/close_pct）。
+            - 若需要结构结论，必须写在 Gate2(STRUCTURE) 行；Summary 只能引用 GateTrace 的结论字段（action/fail=>/setup_grade/edge_score/confidence）。
             -【违规处理｜fail=>PROTO_BACKTRACK】若触发“禁回溯｜禁新增”：
               * 顶层 action 必须输出“安全动作”（与 actionDerivation 的目标一致）：
                 - has_position=0：action="wait"
