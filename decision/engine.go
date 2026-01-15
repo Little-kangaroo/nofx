@@ -816,6 +816,17 @@ func parseTaroFormatDecisions(jsonContent string) ([]Decision, error) {
 			Stop           interface{} `json:"stop"`             // "new stop if any" - 关键字段，可能是字符串或数字
 			TakeProfitHint string      `json:"take_profit_hint"` // "可选：分段 TP 参考价/规则"
 			Reason         string      `json:"reason"`           // "简洁、与模板规则一一对应"
+			// 🔧 V-19.0: 支持嵌套的 entry_plan 结构（新版taro模板）
+			EntryPlan      *struct {
+				OrderType  string      `json:"order_type"`  // "LIMIT|MARKET"
+				Price      float64     `json:"price"`       // 入场价格
+				Qty        float64     `json:"qty"`         // 数量
+				Leverage   int         `json:"leverage"`    // 杠杆
+				InitStop   float64     `json:"init_stop"`   // 初始止损价（关键）
+				TakeProfit interface{} `json:"take_profit"` // 止盈价
+				RStruct    float64     `json:"R_struct"`    // 结构R值
+				RClean     float64     `json:"R_clean"`     // 净R值
+			} `json:"entry_plan"`
 		} `json:"actions"`
 	}
 
@@ -867,6 +878,39 @@ func parseTaroFormatDecisions(jsonContent string) ([]Decision, error) {
 			if stopPrice > 0 {
 				decision.StopLoss = stopPrice
 				log.Printf("🔍 [调试] taro格式解析: stop='%v' -> StopLoss=%.6f", action.Stop, stopPrice)
+			}
+		}
+
+		// 🔧 V-19.0: 处理 entry_plan.init_stop（新格式，优先级更高）
+		if action.EntryPlan != nil && action.EntryPlan.InitStop > 0 {
+			decision.StopLoss = action.EntryPlan.InitStop
+			log.Printf("🔍 [调试] taro格式解析: entry_plan.init_stop=%.6f -> StopLoss", action.EntryPlan.InitStop)
+
+			// 同时提取 leverage
+			if action.EntryPlan.Leverage > 0 {
+				decision.Leverage = action.EntryPlan.Leverage
+				log.Printf("🔍 [调试] taro格式解析: entry_plan.leverage=%d -> Leverage", action.EntryPlan.Leverage)
+			}
+
+			// 同时提取 take_profit
+			if action.EntryPlan.TakeProfit != nil && decision.TakeProfit == 0 {
+				var tpPrice float64
+				switch v := action.EntryPlan.TakeProfit.(type) {
+				case float64:
+					tpPrice = v
+				case int:
+					tpPrice = float64(v)
+				case string:
+					if v != "" && v != "null" {
+						if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+							tpPrice = parsed
+						}
+					}
+				}
+				if tpPrice > 0 {
+					decision.TakeProfit = tpPrice
+					log.Printf("🔍 [调试] taro格式解析: entry_plan.take_profit=%.6f -> TakeProfit", tpPrice)
+				}
 			}
 		}
 
