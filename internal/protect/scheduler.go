@@ -208,6 +208,38 @@ func (s *Scheduler) tickOnce(ctx context.Context) {
 			}
 		}
 
+		// 显示下一次要更新的止损位置
+		if plan.NewStop > 0 && !math.IsNaN(plan.NewStop) && plan.NewStop != pos.PrevStop {
+			stopDiff := plan.NewStop - pos.PrevStop
+			stopDiffPct := (stopDiff / pos.PrevStop) * 100
+			if pos.Side == "LONG" {
+				log.Printf("   🎯 下次止损目标: %.6f (当前: %.6f, 提升: +%.6f / +%.2f%%)",
+					plan.NewStop, pos.PrevStop, stopDiff, stopDiffPct)
+			} else {
+				log.Printf("   🎯 下次止损目标: %.6f (当前: %.6f, 提升: %.6f / %.2f%%)",
+					plan.NewStop, pos.PrevStop, stopDiff, stopDiffPct)
+			}
+		} else {
+			// 当NewStop为0或无效时，显示其他参考信息
+			if plan.Floor > 0 && !math.IsNaN(plan.Floor) {
+				floorDiff := math.Abs(plan.Floor - pos.PrevStop)
+				if floorDiff > snap.TickSize*2 { // 只有差距足够大时才显示
+					log.Printf("   🎯 盈利地板价: %.6f (当前止损: %.6f)", plan.Floor, pos.PrevStop)
+				}
+			}
+			if plan.BE > 0 && !math.IsNaN(plan.BE) {
+				beDiff := math.Abs(plan.BE - pos.PrevStop)
+				if beDiff > snap.TickSize*2 {
+					log.Printf("   🎯 盈亏平衡价: %.6f (当前止损: %.6f)", plan.BE, pos.PrevStop)
+				}
+			}
+			// 显示触发条件
+			if plan.RoiUnr < s.Eng.Cfg.ROILockTrigger {
+				roiNeeded := (s.Eng.Cfg.ROILockTrigger - plan.RoiUnr) * 100
+				log.Printf("   🎯 等待ROI提升 %.2f%% 后将计算新止损位置", roiNeeded)
+			}
+		}
+
 		log.Printf("")
 
 		// 回写状态机（即使没有改单，也要保持armed/stage）
@@ -224,11 +256,11 @@ func (s *Scheduler) tickOnce(ctx context.Context) {
 		}
 
 		// 执行止损更新
-		log.Printf("🔒 [锁盈执行] %s %s: %.6f → %.6f | ROI:%.2f%% R:%.2fR",
-			pos.Symbol, pos.Side,
-			pos.PrevStop, plan.NewStop,
-			plan.RoiUnr*100, plan.RUnr,
-		)
+		log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		log.Printf("🚨🚨🚨 [止损更新] %s %s 🚨🚨🚨", pos.Symbol, pos.Side)
+		log.Printf("   📊 止损变化: %.6f → %.6f", pos.PrevStop, plan.NewStop)
+		log.Printf("   💰 当前ROI: %.2f%% | R倍数: %.2fR", plan.RoiUnr*100, plan.RUnr)
+		log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 		if err := s.Exec.UpsertStop(ctx, pos.Symbol, pos.Side, pos.Qty, plan.NewStop, pos.StopTriggerType); err != nil {
 			log.Printf("❌ [锁盈失败] %s %s: %v", pos.Symbol, pos.Side, err)
@@ -242,7 +274,10 @@ func (s *Scheduler) tickOnce(ctx context.Context) {
 			log.Printf("❌ [锁盈] 更新持仓状态失败: %s %s: %v", pos.Symbol, pos.Side, err)
 		}
 
-		log.Printf("✅ [锁盈成功] %s %s | 新止损: %.6f\n", pos.Symbol, pos.Side, plan.NewStop)
+		log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		log.Printf("✅✅✅ [止损更新成功] %s %s ✅✅✅", pos.Symbol, pos.Side)
+		log.Printf("   🎯 新止损价格: %.6f", plan.NewStop)
+		log.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 		// 🎯 V-19.0: 止盈更新逻辑（独立于止损更新）
 		if plan.ShouldUpdateTP {
