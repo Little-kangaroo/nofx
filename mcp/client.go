@@ -345,22 +345,18 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 			// 自定义API（通常是OpenAI兼容）- 支持GPT-5.1参数
 			requestBody["max_completion_tokens"] = maxTokens
 
-			// GPT-5.1专用参数（Prompt Caching）
-			if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5.2") {
-				requestBody["reasoning_effort"] = "low"
-				requestBody["prompt_cache_retention"] = "24h"
-				requestBody["prompt_cache_key"] = "nofx:v16.1:prod" // 🔥 缓存键，确保模板版本一致性
-			}
+			// Prompt Caching参数（所有自定义API都设置，不支持的会自动忽略）
+			requestBody["reasoning_effort"] = "low"
+			requestBody["prompt_cache_retention"] = "24h"
+			requestBody["prompt_cache_key"] = "nofx_at_gpt:prod" // 🔥 缓存键，确保模板版本一致性
 		default:
-			// 默认使用新格式，支持GPT-5.1参数
+			// 默认使用新格式，支持OpenAI新版API参数
 			requestBody["max_completion_tokens"] = maxTokens
 
-			// GPT-5.1专用参数（Prompt Caching）
-			if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5") {
-				requestBody["reasoning_effort"] = "low"
-				requestBody["prompt_cache_retention"] = "24h"
-				requestBody["prompt_cache_key"] = "nofx:v16.1:prod" // 🔥 缓存键，确保模板版本一致性
-			}
+			// Prompt Caching参数（所有请求都设置，不支持的会自动忽略）
+			requestBody["reasoning_effort"] = "low"
+			requestBody["prompt_cache_retention"] = "24h"
+			requestBody["prompt_cache_key"] = "nofx_at_gpt:prod" // 🔥 缓存键，确保模板版本一致性
 		}
 
 		log.Printf("📤 [MCP] 使用OpenAI兼容API格式")
