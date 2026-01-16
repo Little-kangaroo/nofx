@@ -299,7 +299,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 		case ProviderQwen:
 			maxTokens = 8192 // Qwen 支持更高的 token 限制
 		case ProviderCustom:
-			maxTokens = 6000 // 自定义 API 默认使用较高限制
+			maxTokens = 7000 // 自定义 API 默认使用较高限制
 		default:
 			maxTokens = 8000 // 默认使用较保守的限制
 		}
