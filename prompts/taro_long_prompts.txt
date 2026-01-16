@@ -809,7 +809,7 @@
     - **强制过滤器 (Vacuum Filter) 及其豁免条件**：
       * 默认规则（ATR 自适应真空半径）：
         - 定义 vacuum_band_pct = clamp( max(0.35%, 0.8 * ATR14_5m / last_price), 0.35%, 1.2% )
-          其中 last_price 使用本次 5m ohlc_last_closed.close（或等价的可核验收盘价）。
+          其中 last_price **仅**使用 trigger_context.last_price（必填，Token-Lite 单一来源）；如需收盘价核验，使用 trigger_context.trigger_bar_close_price。
         - 若当前价格上下 vacuum_band_pct 范围内，找不到上述任何 **第1类 (实体)** 或 **第2类 (价值)** 结构：视为“价格悬空 (Floating)”，action 必须为 "wait"。
       * 【新增】动态趋势豁免 (Dynamic Trend Exception)：
         - 若当前形态判定为 `BO_RETEST` (突破回踩) 或 `MOMENTUM_BREAK` (动能突破)：
@@ -1249,9 +1249,17 @@
     - 若本次依托的是 demand_zone 做多：同理对账 demand_low / demand_high。
  2) PatternValidation（形态硬条件对账）
     - 若本次 pattern=EDGE：
-      * 必须逐条核验《【EDGE 进场确认（5m Rejection｜硬要求）】》中的 Rejection-A / Rejection-B；
-      * 必须给出用于核验的 5m ohlc_last_closed 数字（open/high/low/close）与 zone 边界；
-      * 任一 Rejection 无法满足 => action="wait"，不得以 EDGE 新开仓。
+      * 必须逐条核验《【EDGE 进场确认（5m Rejection｜硬要求）】》。
+      * Token-Lite 单一来源：不得要求/依赖 MarketSnapshot.5m.ohlc_last_closed 的 open/high/low/close。
+      * 必须给出用于核验的最小字段（均来自 trigger_context）：
+        - is_kline_closed (=trigger_context.is_kline_closed) 必须为 true
+        - trigger_primary (=trigger_context.trigger_primary) 必须属于 EDGE-Rejection 集合：
+          · SHORT：{SFP_BEAR, ENGULF_BEAR}
+          · LONG ：{SFP_BULL, ENGULF_BULL}
+        - trigger_bar_close_price (=trigger_context.trigger_bar_close_price) 与 zone 边界的“收回/站回”关系需一致：
+          · SHORT：close ≤ supply_high（回到墙内）
+          · LONG ：close ≥ demand_low（回到墙内）
+      * 任一项无法核验/不满足 => action="wait"，不得以 EDGE 新开仓。
  3) RCleanArithmetic（R_clean 算术硬对账）
     - 必须给出：risk = |init_stop - entry_price|；
     - 必须给出：reward_clean = |entry_price - nearest_opposite_structure_value|；
@@ -1263,9 +1271,12 @@
     - 若结构数组为 null 或缺失：
       * 必须改用并明确标注来源：VPVR_VAL / VPVR_VAH / SR_line / FVG 等；
       * 禁止把 VPVR 的 VAL 伪装成 demand_zone。
- - 若输入未提供 MarketSnapshot.5m.ohlc_last_closed 的 open/high/low/close/close_time/x（且 x 必须为 true，表示“最新已收盘 5m bar”），则：
-   * EDGE 与 BO_RETEST 的 Rejection/Confirm/失效校验均不可验证；
-   * action 必须为 "wait"（禁止 open_long / open_short）。
+ - 若输入未提供 trigger_context 中的最小 5m 收盘锚点字段（Token-Lite Candle SSOT）：
+   * trigger_context.is_kline_closed
+   * trigger_context.trigger_bar_close_time_ms
+   * trigger_context.trigger_bar_close_price（或 trigger_bar_close_price5m）
+   * trigger_context.last_price
+   则：EDGE 与 BO_RETEST 的 Confirm/失效校验不可验证；action 必须为 "wait"（禁止 open_long/open_short）。
  - 追加约束：若 trigger_context.is_kline_closed = false 且未显式启用 INTRABAR_ENABLE：
    * 视为与 5m 收盘体系不一致 => 禁止 open_*；action 只能 wait/hold/close。
 【硬约束：关键结构数据缺失时禁止“假装有结构”】
@@ -2439,8 +2450,8 @@ H) 多时间框架结构与趋势共识（MultiTimeframeContext，必须使用�
 - 执行顺序：数据 -> 环境 -> 结构 -> 方向 -> 风险 -> 协议。
 A. 数据与环境熔断 (Data & Macro Veto)
   A1) 数据完整性 (Data Integrity)
-      - 检查：`MarketSnapshot.5m.ohlc_last_closed.x` 是否为 `true`？
-      - 熔断：若 False 或字段缺失 has_position=0 -> action="wait"; has_position=1 -> action∈{"hold","close"} (fail=>xF)。
+      - 检查：`trigger_context.is_kline_closed` 是否为 `true`？并确保 trigger_context.trigger_bar_close_time_ms / trigger_bar_close_price / last_price 存在。（Token-Lite：不依赖 MarketSnapshot.5m.ohlc_last_closed）
+      - 熔断：若 False 或关键字段缺失 has_position=0 -> action="wait"; has_position=1 -> action∈{"hold","close"} (fail=>xF)。
   A2) 宏观环境健康度 (Macro Health)
       - 检查：是否触发了「A. 环境过滤」中的任意死刑条件？
         * 均线乖离 > 3.0 ATR？
@@ -2720,16 +2731,19 @@ B5) 智能障碍识别与空间计算 (Smart Space Calculation)
 B6) 执行时效与反延迟闸门 (Execution Timeliness & Anti-Latency Guard)
   - 核心目的：确保决策基于“最新、有效、未失效”的市场状态。
   - 问：在生成最终 JSON 的这一刻，以下 3 个子闸门是否全部通过？
-  1. **数据完整性熔断 (Data Integrity)**
-     * 检查对象：`MarketSnapshot.5m.ohlc_last_closed`
-     * **硬约束**：
-       - 必须包含 `open, high, low, close, close_time`。
-       - 关键标志位 `x` (isClosed) 必须为 **true**。
-     * 熔断动作：
-       - 若 `x=false` 或字段缺失 -> 视为“K线未闭合/数据不可信”，reasoning 标记 `fail=>xF`。
+  1. **数据完整性熔断 (Data Integrity｜Token-Lite SSOT)**
+     * 检查对象：`trigger_context`（5m 收盘锚点单一来源；不得因缺失 MarketSnapshot.5m.ohlc_last_closed 而判定缺失）
+     * **硬约束（必须全部满足）**：
+       - trigger_context.is_kline_closed == true
+       - trigger_context.trigger_bar_close_time_ms 存在且为数值
+       - trigger_context.trigger_bar_close_price 存在且为数值（或 trigger_bar_close_price5m）
+       - trigger_context.last_price 存在且为数值
+     * 熔断动作（口径不变）：
+       - 若任一项缺失/为空/矛盾 -> 视为“5m 收盘锚点不可托管”，reasoning 标记 `fail=>xF`。
        - 输出安全动作（与 actionDerivation 一致）：
          * has_position=0：action="wait"
          * has_position=1：action="hold"（严禁输出 "wait"；严禁 open_*）
+     * 注记：若输入同时提供 ohlc_last_closed，仅允许用于 DIAG 对账；决策口径一律以 trigger_context 为准。
   2. **价格滑点与追单限制 (Slippage Check)**
      * 检查对象：`last_price` (当前市价) vs `entry_price` (计划入场价)。
      * **逻辑**：
@@ -2741,11 +2755,11 @@ B6) 执行时效与反延迟闸门 (Execution Timeliness & Anti-Latency Guard)
      * **熔断动作**：若市价已远离计划入场位 -> **action="wait"** (标记 `Price_Moved`)。
   3. **结构即时失效检查 (Instant Invalidation)**
      * 核心：防止“在做空的时候，阻力已经被突破了”。
-     * 检查对象：`ohlc_last_closed` (最新5m K线) vs `依托结构边界`。
+     * 检查对象：`trigger_context.trigger_bar_close_price`（最新已收盘 5m close） vs `依托结构边界`。
      * **逻辑**：
        - **场景 A (EDGE 试错单)**：
-         · 做空：最新 5m Close 必须 **≤** Supply Zone 上沿。若已收盘在 Zone 上方 -> 结构失效。
-         · 做多：最新 5m Close 必须 **≥** Demand Zone 下沿。若已收盘在 Zone 下方 -> 结构失效。
+         · 做空：最新已收盘 5m close 必须 **≤** Supply Zone 上沿。若已收盘在 Zone 上方 -> 结构失效。
+         · 做多：最新已收盘 5m close 必须 **≥** Demand Zone 下沿。若已收盘在 Zone 下方 -> 结构失效。
        - **场景 B (BO_RETEST 突破回踩)**：
          · 最新 5m K 线不得重新跌回/涨回“被突破结构”的深处 (Fakeout)。
      * **熔断动作**：若结构在分析过程中已被击穿 -> **action="wait"** (标记 `Struct_Broken`)。
