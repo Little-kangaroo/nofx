@@ -8,7 +8,7 @@
 【决策优先级总纲（Decision Priority Framework）】
 【唯一口径索引（Single Source of Truth｜用于“去重/听话”）】
 - 若模板内出现重复表述或看似冲突的规则，必须按以下优先级裁决（从上到下，越靠上越“最终解释权”）：
-  1) 【决策优先级总纲（Decision Priority Framework）】与 Gate0~Gate5（全局裁决）
+  1) 【决策优先级总纲（Decision Priority Framework）】与 Gate0~Gate5 + GateDIR（全局裁决）
   2) 【P0-Intent 分类澄清】（订单流意图与红线的唯一口径）
   3) 【微观触发器（5m Trigger - The "Go" Signal）】（触发器定义与可用集合）
   4) 九、输出JSON格式要求（字段契约与禁止字段，机器解析唯一口径）
@@ -16,13 +16,13 @@
 - 其余章节如需再次提及上述内容，只能：
   A) 使用“见<章节名>”引用；或
   B) 在明确标注“属于 GateX 的细化/示例（不新增动作集合、不新增输出字段、不改变优先级）”的前提下补充阈值/例子。
-- 若细化与 Gate0~Gate5 或《九、输出JSON格式要求》冲突：以 Gate0~Gate5 / 字段契约为准。
+- 若细化与 Gate0~Gate5 / GateDIR 或《九、输出JSON格式要求》冲突：以 Gate0~Gate5 / GateDIR / 字段契约为准。
 -- 输出 JSON 中字段名 `action` 必须为小写 `action`；严禁字段名 "Action"/"ACTION" 及任何 action 变体（actions/action_type/actionSide 等）。
  - "action=" 仅允许出现在 reasoning 文本中作为口语写法；不得作为 JSON 字段名出现。
  - 严禁输出字段名 "Action"（大写）以及任何 action 变体（actions / action_type / actionSide 等）。
 - 在对每个 symbol 做一次完整评估时，AI 必须严格按以下自上而下的顺序决策：
   任何上层 Gate 否决，都不得用下层指标“推翻”上层结论。
-  但为复盘与 NextTrigger 制定：即使 action 已被上层 Gate 锁定（如 wait/hold/close），也必须继续按 Gate0→Gate5 输出“诊断评估（DIAG）”用于解释与复盘；DIAG 仅做说明，不得改变本次 action。
+  但为复盘与 NextTrigger 制定：即使 action 已被上层 Gate 锁定（如 wait/hold/close），也必须继续按 Gate0→Gate1→GateDIR→Gate2→Gate3→Gate4→Gate5 输出“诊断评估（DIAG）”用于解释与复盘；DIAG 仅做说明，不得改变本次 action。
    0）账户与风险门槛（Account & Risk Gate）
      - 若本轮开仓会导致：
        * MarginUsed ≥ 95%，或
@@ -104,6 +104,31 @@
     - 解释为“吸收/承接更可能突破”，默认偏向 BO_RETEST / MOMENTUM_BREAK 路径
     - 若要做反转（EDGE-Rejection），必须额外满足：5m 出现 SFP 或 Engulfing 且结构位置在供需边缘，否则按突破思路处理或 wait
     - 即使触发“追涨/跟庄/轧空授权”，也不得在 fail=>OF / fail=>RISK 场景下开新仓
+
+  1.5）方向假设门槛（Direction Hypothesis Gate｜GateDIR）
+     - 目的：在进入 Gate2 结构裁决前，先给出本轮【候选开仓方向】candidate∈{LONG,SHORT,NONE}，用于收敛后续评估。
+       重要：GateDIR 只提供候选，不得推翻 Gate2(STRUCTURE) 的硬否决；结构否决优先于方向假设（防确认偏误）。
+     - GateDIR 仅在 Gate1(ORDERFLOW) 未 FAIL 且 has_position=0 时生效；
+       若 has_position=1：GateDIR 仅输出 DIAG(EVAL_ONLY)，不参与 derived_action（持仓分支本就禁止 open_*）。
+     - 方向来源（四因子投票，均三值 {bull,bear,neutral}）：
+       a) OF_bias := Gate1(ORDERFLOW).bias（bull/bear/neutral；若 Gate1=FAIL(xF/OF) 则本 GateDIR 跳过）
+       b) CH_bias := 通道方向（channel slope/trend；缺失则 neutral）
+       c) DOW_bias := 道氏结构（HH/HL=>bull；LL/LH=>bear；结构不明=>neutral）
+       d) ST_bias := SuperTrend 方向（HTF优先：4h/1h；冲突则 neutral）
+     - Vote 计分（SSOT）：bull=+1，bear=-1，neutral=0；vote_sum = a+b+c+d（范围[-4,+4]）
+     - grade 规则（SSOT，与后文 Bias Synthesis 的 A/B/C 口径保持一致）：
+       * Grade A（强一致）：|vote_sum| ≥ 3 且不存在反向票（例如 vote_sum=+3 时不得出现 bear），且 trend_alignment≠divergent_mixed
+       * Grade B（可用但需降级）：|vote_sum| = 2；或 trend_alignment=divergent_mixed（即便 |vote_sum|≥3 也降为 B）
+       * Grade C（混沌/冲突）：|vote_sum| ≤ 1；或正反票同时存在且明显抵消（例如 +2/-2）
+     - candidate 输出（SSOT）：
+       * vote_sum ≥ +2 => candidate=LONG
+       * vote_sum ≤ -2 => candidate=SHORT
+       * 其余 => candidate=NONE（Grade C）
+     - PASS/FAIL 与执行约束：
+       * GateDIR=FAIL fail=>DIR：当 Grade C 或 candidate=NONE。has_position=0 必须 wait（禁新开仓）；Gate2~Gate5 仅 DIAG(EVAL_ONLY)。
+       * Grade B：若后续允许开仓，强制 downgrade=on / trade_style=LTF_scalp / risk_down≥0.5（与 Gate4 降级口径对齐）。
+       * Gate2 结构否决优先：若 Gate2 将 candidate 方向判为 *_DANGER 或 fail=>STRUCT，则本轮不得“翻向开仓”，只能 wait。
+
   2）结构格局门槛（Structural Context Gate）
      - 这一层决定“做多 / 做空这个方向本身有没有 edge”，是开仓方向的**主要正向因子**。
      - 必须先用 供需区 / SR / VPVR / FIB / 通道 / 道氏 / SuperTrend 等回答两个问题：
@@ -1998,7 +2023,7 @@ A) 仓位 sizing（基于R的风险等额）
           4) （P0｜禁止数字复述）StructureSnapshot / NextTrigger / Optional Details 中严禁出现任何具体价位/区间/小数/≈/%/范围符号；
              只允许引用 “Anchor1 / Anchor2” 字面量或短码（retest_A1 / retest_A2 / clear_POC / no_trigger / trend_mixed / rr_low）。
         - 严格顺序（必须按该顺序）:
-          Summary/Pos/Cap → GateTrace(Gate0→Gate5) → actionDerivation（紧随 GateTrace） → StructureSnapshot → NextTrigger/Timebox → Optional Details
+          Summary/Pos/Cap → GateTrace(Gate0→Gate1→GateDIR→Gate2→Gate3→Gate4→Gate5) → actionDerivation（紧随 GateTrace） → StructureSnapshot → NextTrigger/Timebox → Optional Details
           禁止先输出完整结构总览/最终结论，再回过头补 GateTrace（避免重复组织导致 token 与延迟增加）。
         - 【每 Gate 输出预算｜Anti-Latency｜PROD_LITE 强制】
           1) GateTrace 每个 Gate 行最多 1 行，且每行≤110字符；必须使用短语或 k=v；禁止括号解释、因果长句、推导过程；
@@ -2008,13 +2033,13 @@ A) 仓位 sizing（基于R的风险等额）
           4) 若字段缺失/为空：直接写 “unknown(missing)” + 1 句影响（≤20字），不要展开。
           - 【P0｜reasoning 总预算硬约束（仅控制输出长度，不改变判定规则）】
             * reasoning 总行数上限（含 Summary/GateTrace/actionDerivation/StructureSnapshot/NextTrigger/Optional）：
-              - has_position=0 且 action="wait"：≤6 行（推荐：Summary + Gate0~Gate2 + Gate4 + actionDerivation）
+              - has_position=0 且 action="wait"：≤6 行（推荐：Summary + Gate0→Gate1→GateDIR→Gate2 + Gate4 + actionDerivation）
               - 其余情况：≤9 行（允许包含 StructureSnapshot/NextTrigger，但仍需遵守去重规则）
             * 预算溢出时的强制裁剪顺序（不得用“续写/解释”绕过预算）：
               1) 删除 Optional Details；
               2) 删除 StructureSnapshot 与 NextTrigger（action="wait" 默认直接省略）；
               3) 将 Gate3~Gate5 裁剪为 “DIAG(EVAL_ONLY)+短码”（禁止自然语言解释）；
-              4) 仍超限：仅保留 Summary + Gate0~Gate2 + actionDerivation（其余行省略）。
+              4) 仍超限：仅保留 Summary + Gate0→Gate1→GateDIR→Gate2 + actionDerivation（其余行省略）。
             * 价位/区间/小数输出限制（P0）：
               - 除 Gate2 行的 Anchor1/Anchor2（完整出现一次）外，其他任何行严禁出现“市场价位/价位区间/百分号/≈/范围符号”，也不得复述 Anchor1/Anchor2 之外的第 3 个价位；
                 但允许出现“非价位”的归一化/风控数值（例如 spoof=<x.xx>, q=<0~1>, risk_down=<.>, R_clean=<.>, th=<.>, borderline_min/quality_min 等）。
@@ -2024,10 +2049,14 @@ A) 仓位 sizing（基于R的风险等额）
               - 若必须引用结构，仅允许写 “Anchor1/Anchor2” 字面量或短码（如 retest_A1 / clear_POC / no_trigger / trend_mixed / rr_low）。
             * 自检（P0）：若检测到违规（括号解释、价位复述、PASS 时出现 scan、wait 时展开细节等），必须在输出前自行裁剪为合规文本；不得以“说明原因”追加新行。
         - 【PROD_LITE 固定行模板（强制｜用于收敛写法，不改变判定规则）】
-          * Summary（1行）：原因只允许 1 个短标签（建议枚举：POC_CHOP/STRUCT_MID/NO_TRIGGER/TREND_MIXED/RR_LOW/OF_REDLINE/RISK）
+          * Summary（1行，强制）：必须包含“原因=<一句简短理由>”。
+            - 原因：≤18个中文（或≤12个英文词）；不得包含任何价位/区间/%/≈/范围符号；必须与 action 强一致（open_*/hold/close/wait）。
+            - 仅允许出现一次“原因=...”（避免多理由导致不可检索/不可复盘）。
+            - 建议原因短语（可选，仅作示例）：POC_CHOP/STRUCT_MID/NO_TRIGGER/TREND_MIXED/RR_LOW/OF_REDLINE/RISK/OK
           * GateTrace 每行建议写法：
             - Gate0(RISK): PASS/FAIL fail=>RISK key=<1个账户侧关键数值>; verdict=<ok/limit>
             - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（严格三选一；禁止括号/附加解释/附带 intent、regime、alignment；如出现“(”或多余字段，必须裁剪为单词 bull/bear/neutral）
+            - GateDIR(DIR): PASS/FAIL fail=>DIR cand=<LONG/SHORT/NONE>; grade=<A/B/C>; conf=<0~1>（仅用于收敛方向；不得携带价位/区间；conf 建议=|vote_sum|/4）
             - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC.../mid-range/edge>; Anchor1:<.>; Anchor2:<.>; scan=<omit_if_PASS>（scan 仅允许在 FAIL 时出现；PASS 时出现 scan 视为违规必须删除；如需证明“8类逐类检查均未命中”，仅在 Gate2=FAIL 时额外追加 1 行 StructScan: scan=<...> 且严禁含价位/区间）
             - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in/no_trigger/intrabar_forbidden/out/unknown>（window 必须与 trigger_context.window_state 同值；window!=in ⇒ Gate3=FAIL fail=>TIME）
             - Gate4(SETUP): PASS/FAIL/DIAG(EVAL_ONLY) pattern=<none/EDGE/BO_RETEST/MOMENTUM_BREAK>; trigger=<trigger_primary|NONE>; q=<0~1>; tier=<strict/borderline/none>; trend=<aligned/mixed>; market_regime=<range|trend|mixed>; rr_min=<0.35|0.80>; downgrade=<on|off>
@@ -2035,7 +2064,7 @@ A) 仓位 sizing（基于R的风险等额）
         - 【P0｜wait 极简输出（不改变 JSON，仅收敛 reasoning）】
           * 适用条件：has_position=0 且 action="wait"。
           * reasoning 允许的最大形态（≤9 行）：
-            Summary（1行）→ Gate0 → Gate1 → Gate2 → Gate3 → Gate4 → Gate5 → actionDerivation（1行）
+            Summary（1行）→ Gate0 → Gate1 → GateDIR → Gate2 → Gate3 → Gate4 → Gate5 → actionDerivation（1行）
             说明（P0）：
             - Gate3 与 Gate5 不得省略；严禁 “Gate3/4 合并为 1 行 DIAG”。
             - 若上层 GateK=FAIL：下层 Gate(K+1..5) 必须输出 DIAG(EVAL_ONLY)（其中 Gate5 统一写 reason=SKIP_UPSTREAM_FAIL），不得出现 PASS/FAIL。
@@ -2054,25 +2083,26 @@ A) 仓位 sizing（基于R的风险等额）
           - 该行不用于解释，只用于证明“8类结构逐类检查后均未命中”；
           - 该行不改变 action，只增强可审计性。
     - 【上层否决后的 DIAG 范围约束】
-      当 Gate0 / Gate1 / Gate2 / Gate3 任一为 FAIL 时：
+      当 Gate0 / Gate1 / GateDIR / Gate2 / Gate3 任一为 FAIL 时：
       - Gate(K+1)~Gate5 必须输出 DIAG(EVAL_ONLY)，不得出现 PASS/FAIL（其中 Gate5 统一写 reason=SKIP_UPSTREAM_FAIL）；
       - 禁止计算或输出可执行明细（如 entry_plan/具体 SL/TP 价位/完整 RR 推导）；
       - 只给“方向偏置/结构锚点/触发条件/是否可能满足 R_clean 门槛”的预判，用于复盘与 NextTrigger。
     【示例｜Gate1 否决但仍全 Gate 复盘（DIAG）】
     （注意：该示例仅供 REPLAY_FULL / OUTPUT_PROFILE=FULL 复盘参考；PROD_LITE 禁止复制其长句/价位复述写法。PROD_LITE 只允许固定行模板与短码。）
-    Summary: action=wait | trade_style=LTF_scalp | setup_grade=C | edge_score=0.1 | confidence=70 | fail=>OF | 原因=spoofing_risk>0.8
+    Summary: action=wait | trade_style=LTF_scalp | setup_grade=C | edge_score=0.10 | confidence=70 | fail=>OF | 原因=盘口欺骗风险过高
     Pos: 权益≈<X>; 保证金占用≈<Y>; 当前仓位方向=<none>; 数量=<0>; 均价=<NA>
     Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<1>; 处理=<ok>; 原因=<...>
     GateTrace:
     - Gate0(RISK): PASS <一句话说明>
     - Gate1(ORDERFLOW): FAIL fail=>OF | of_redline=<INTENT_FAKE_PUMP/INTENT_FAKE_DUMP/OF_SPOOFING/...>；解除条件=<明确阈值+持续条件>
+    - GateDIR(DIR): DIAG(EVAL_ONLY) cand=<LONG/SHORT/NONE>; grade=<A/B/C>; conf=<0~1>
     - Gate2(STRUCTURE): DIAG(EVAL_ONLY) <给出≥2个结构锚点(价位/区间+ctx强度/状态)+方向偏置>
     - Gate3(TIMING): DIAG(EVAL_ONLY) <5m是否收盘x=true/数据完整性结论+何时可重评>
     - Gate4(SETUP): DIAG(EVAL_ONLY) <rsi_state/触发器是否存在+需要等待的确认>
     - Gate5(EXEC/RR): DIAG(EVAL_ONLY) <R_clean大概率是否达标/主要缺口项（不输出具体SL/TP价位）>
       actionDerivation: derived_action=<.> | has_position=<0/1> | veto=<最高优先级否决点>
     - veto 字段必须从以下集合取值（严禁自由拼接，便于统计）：
-      veto ∈ {Gate0_RISK, Gate1_OF, Gate2_STRUCT, Gate3_TIME, Gate4_SETUP, Gate5_RR, PROTO}
+      veto ∈ {Gate0_RISK, Gate1_OF, GateDIR_DIR, Gate2_STRUCT, Gate3_TIME, Gate4_SETUP, Gate5_RR, PROTO}
     - StructureSnapshot（最多 1~2 行；仅允许引用 Gate2(STRUCTURE) 行已出现的结构锚点；禁止新增结论/价位/区间）：仅用于“快速扫读”，不得在此进行二次结构推导。
     - NextTrigger(Timebox=未来N根5m收盘): 解除=<1条最高优先级解除条件>; 触发=<1条5m触发或“下一根5m收盘复评”>
       -【短 NextTrigger 规则（省 token｜不改 Gate/字段/动作集合）】
@@ -2944,6 +2974,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    5) "confidence": integer   // 0~100
    6) "reasoning": string     // 复盘版允许多行：必须在 JSON 字符串内用 "\\n" 表示换行（禁止裸换行）。
                               // 唯一口径：首行 Summary（单行） + GateTrace（Gate0→Gate5，顺序固定） + 其余自然语言复盘。
+                              // Summary 必须包含“原因=<一句简短理由>”，尤其当 action∈{open_long,open_short,hold,close} 时为硬要求；原因不得包含价位/区间/%/≈/范围符号。
                               // 允许在 Gate 行使用 fail=>xF / fail=>RISK / fail=>OF / fail=>STRUCT / fail=>TIME / fail=>RR 等否决标记。
                               // 禁止再次出现任何 B:K:R:X 四段电报体骨架或 BKRX 摘要行。
    7) "stop_update": object | null
@@ -3161,9 +3192,9 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
       - 错误示例： "reasoning": '避开低流动性标的'
 10. 最终输出示例（统一为唯一字段契约；reasoning=Summary(单行)+GateTrace(多行)+复盘细节；非开仓 entry_plan=null）
 - 示例一：无开仓动作（hold / wait）
-[{"symbol":"HYPEUSDT","action":"hold","setup_grade":"C","edge_score":0.0,"confidence":86,"reasoning":"Summary: action=hold | trade_style=SWING | setup_grade=C | edge_score=0.0 | confidence=86\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): PASS\nGate3(RR): PASS\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 仅管理既有仓位；若出现结构破坏/硬风控触发则 close。","stop_update":null,"close_pct":null,"entry_plan":null},{"symbol":"SOLUSDT","action":"wait","setup_grade":"C","edge_score":0.0,"confidence":82,"reasoning":"Summary: action=wait | trade_style=LTF_scalp | setup_grade=C | edge_score=0.0 | confidence=82\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): FAIL=>STRUCT\nGate3(RR): NA\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 等待结构明朗与 5m Trigger 确认后再评估。","stop_update":null,"close_pct":null,"entry_plan":null}]
+[{"symbol":"HYPEUSDT","action":"hold","setup_grade":"C","edge_score":0.0,"confidence":86,"reasoning":"Summary: action=hold | trade_style=HTF_swing | setup_grade=C | edge_score=0.00 | confidence=86 | 原因=仅管理既有仓位\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): PASS\nGate3(RR): PASS\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 仅管理既有仓位；若出现结构破坏/硬风控触发则 close。","stop_update":null,"close_pct":null,"entry_plan":null},{"symbol":"SOLUSDT","action":"wait","setup_grade":"C","edge_score":0.0,"confidence":82,"reasoning":"Summary: action=wait | trade_style=LTF_scalp | setup_grade=C | edge_score=0.00 | confidence=82 | 原因=结构未通过需等待\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): FAIL=>STRUCT\nGate3(RR): NA\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 等待结构明朗与 5m Trigger 确认后再评估。","stop_update":null,"close_pct":null,"entry_plan":null}]
 - 示例二：开仓动作（open_long / open_short｜entry_plan 必须为 object）
-[{"symbol":"SOLUSDT","action":"open_short","setup_grade":"B","edge_score":0.7,"confidence":78,"reasoning":"Summary: action=open_short | trade_style=SWING | setup_grade=B | edge_score=0.7 | confidence=78\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): PASS\nGate3(RR): PASS\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 示例仅展示字段结构；真实复盘请按 GateTrace 写明否决点与触发条件。","stop_update":null,"close_pct":null,"entry_plan":{"order_type":"MARKET","price":136.4,"qty":0.7,"leverage":10,"init_stop":137.9,"take_profit":null,"R_struct":1.0,"R_clean":1.5}}]
+[{"symbol":"SOLUSDT","action":"open_short","setup_grade":"B","edge_score":0.7,"confidence":78,"reasoning":"Summary: action=open_short | trade_style=HTF_swing | setup_grade=B | edge_score=0.70 | confidence=78 | 原因=顺结构触发确认RR达标\nGate0: PASS\nGate1(ORDERFLOW): PASS\nGate2(STRUCTURE): PASS\nGate3(RR): PASS\nGate4(EXEC): PASS\nGate5(TIME): PASS\nDetails: 示例仅展示字段结构；真实复盘请按 GateTrace 写明否决点与触发条件。","stop_update":null,"close_pct":null,"entry_plan":{"order_type":"MARKET","price":136.4,"qty":0.7,"leverage":10,"init_stop":137.9,"take_profit":null,"R_struct":1.0,"R_clean":1.5}}]
 要求（唯一字段契约｜严禁第二套字段并存）：
 - 以上所有顶层字段/禁止字段/entry_plan 结构/close_pct 规则，统一以本节“2) 每个决策对象必须包含以下字段”与其后的 entry_plan 结构定义为准；
 - 不再在此处重复列字段清单，避免出现第二套协议并存或样例误导。
@@ -3174,7 +3205,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
     * 若本节与 PROD_LITE 约束冲突：以 PROD_LITE 约束为准（SSOT）。
   - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
   - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
-      Summary: action=<...> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<...> | confidence=<...>| (action="close" 时必须带 close_pct=<0~1>)| (若被闸门否决必须带 fail=>... 并写解除条件)
+      Summary: action=<...> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<...> | confidence=<...> | 原因=<一句简短理由> | (action="close" 时必须带 close_pct=<0~1>) | (若被闸门否决必须带 fail=>... 并写解除条件)
     - 强制：从第二行开始必须出现 GateTrace（顺序固定 Gate0→Gate5；每行一个 Gate；PASS/FAIL/DIAG(EVAL_ONLY) 必须明确；禁止写 N/A/跳过）：
         GateTrace:
               - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
@@ -3276,6 +3307,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
         2) derived_action 必须严格按以下表计算（不得发明例外）：
          - 若 Gate0(RISK)=FAIL -> derived_action="wait"（或 has_position=1 时为 "close"/"hold"，按 Gate0 规则要求）
          - 否则若 Gate1(ORDERFLOW)=FAIL -> derived_action="wait"（或 has_position=1 时为 "hold"/"close"；禁止 open_*）
+         - 否则若 has_position=0 且 GateDIR(DIR)=FAIL -> derived_action="wait"（禁止 open_*）
          - 否则若 Gate3(TIMING)=FAIL 或 fail=>xF -> derived_action="wait"（或 has_position=1 时为 "hold"；禁止 open_*）
          - 否则若 has_position=1 -> derived_action ∈ {"hold","close"}（绝对禁止 "open_long/open_short/wait"）
          - 否则（has_position=0）：
