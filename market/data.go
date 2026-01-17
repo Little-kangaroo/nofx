@@ -860,12 +860,32 @@ func FormatAsCompactData(data *Data) string {
 	// 直接使用缓存的K线数据，避免二次网络请求导致的数据漂移
 	timeframeKlines := data.KlineCache
 
+	// 获取订单流和多时间框架数据
+	orderflowData := GetOrderFlowDataForAIV2(data.Symbol)
+	mtfData := extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines)
+
+	// 🔥 方向裁决模块：计算 plan_side（SSOT）
+	var directionArbitration interface{}
+	if dirResult := ComputeDirectionForSymbol(data.Symbol, orderflowData, mtfData); dirResult != nil {
+		directionArbitration = dirResult
+	} else {
+		// 如果计算失败，返回 UNKNOWN 状态
+		directionArbitration = map[string]interface{}{
+			"plan_side":    "UNKNOWN",
+			"block_entry":  true,
+			"block_reason": "COMPUTE_FAILED",
+			"confidence":   0.0,
+			"flags":        []string{"COMPUTE_FAILED"},
+		}
+	}
+
 	result := map[string]interface{}{
 		data.Symbol: map[string]interface{}{
-			"基础指标":         calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
-			"多时间框架分析":   extractCompactMultiTimeframeAnalysisWithSupertrend(data, timeframeKlines),
-			"订单流分析":       GetOrderFlowDataForAIV2(data.Symbol),
-			"trigger_context": getTriggerContextForAI(data, timeframeKlines),
+			"基础指标":              calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
+			"多时间框架分析":        mtfData,
+			"订单流分析":            orderflowData,
+			"trigger_context":      getTriggerContextForAI(data, timeframeKlines),
+			"direction_arbitration": directionArbitration,
 			// 🔥 P0-1新增：输出交易所元数据，解决 ctxNA_lot_size / ctxNA_execution_params
 			"ExchangeMeta": extractExchangeMetaForAI(data),
 			//"Gate2结构聚合":  buildGate2CompactOutput(data),
