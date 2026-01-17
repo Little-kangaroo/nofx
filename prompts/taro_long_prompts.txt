@@ -7,15 +7,6 @@
   2）减少明显负 EV 的交易，集中火力在有 edge 的 A/B 级机会上。
 【决策优先级总纲（Decision Priority Framework）】
 【唯一口径索引（Single Source of Truth｜用于“去重/听话”）】
-【P0｜Direction SSOT（后端方向裁决｜计划方向唯一口径）】
-- planned_dir := direction_arbitration.plan_side ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}
-- block_entry := direction_arbitration.block_entry（true 表示“本轮禁止新开仓”）
-- 规则（多空对称，属于 P0 最高优先级）：
-  1) Gate2/Gate3/Gate4/Gate5 中所有“拟开仓方向/计划方向/偏置方向”必须以 planned_dir 为准；严禁在 reasoning 中重新裁定方向。
-  2) 若 block_entry=true 且 has_position=0：本轮 action 必须为 "wait"；Gate2~Gate5 仅允许 DIAG（解释/复盘），不得 open_*。
-  3) 若 planned_dir ∈ {NEUTRAL, UNKNOWN}：本轮禁止 open_long/open_short；Gate2~Gate5 仅允许 DIAG；必须在 GateTrace 中写明 reason=NO_PLAN_DIR。
-  4) 允许在 DIAG 中简述“反向更强的结构/订单流证据”，但不得据此输出与 planned_dir 相反的 open_*。
-
 - 若模板内出现重复表述或看似冲突的规则，必须按以下优先级裁决（从上到下，越靠上越“最终解释权”）：
   1) 【决策优先级总纲（Decision Priority Framework）】与 Gate0~Gate5（全局裁决）
   2) 【P0-Intent 分类澄清】（订单流意图与红线的唯一口径）
@@ -31,7 +22,17 @@
  - 严禁输出字段名 "Action"（大写）以及任何 action 变体（actions / action_type / actionSide 等）。
 - 在对每个 symbol 做一次完整评估时，AI 必须严格按以下自上而下的顺序决策：
   任何上层 Gate 否决，都不得用下层指标“推翻”上层结论。
-  但为复盘与 NextTrigger 制定：即使 action 已被上层 Gate 锁定（如 wait/hold/close），也必须继续按 Gate0→Gate5 输出“诊断评估（DIAG）”用于解释与复盘；DIAG 仅做说明，不得改变本次 action。
+  但为复盘与 NextTrigger 制定：即使 action 已被上层 Gate 锁定（如 wait/hold/close），也必须继续按 GateDIR→Gate5 输出“诊断评估（DIAG）”用于解释与复盘；DIAG 仅做说明，不得改变本次 action。
+
+【P0｜Direction SSOT（开仓方向单一真相源｜先方向、后结构）】
+- planned_dir：本轮“唯一计划方向”，由后端方向裁决层输出 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}
+- block_entry：本轮“禁新开仓”开关（1=禁止新开仓；0=允许进入后续 Gate 审查）
+- 硬约束（P0｜必须执行）：
+  1) 若 planned_dir ∈ {NEUTRAL, UNKNOWN} 且 has_position=0：action 必须为 "wait"；GateDIR=FAIL reason=NO_PLAN_DIR；Gate2~Gate5 只允许 DIAG(EVAL_ONLY)。
+  2) 若 block_entry=1 且 has_position=0：action 必须为 "wait"；GateDIR=FAIL reason=ENTRY_BLOCKED；Gate2~Gate5 只允许 DIAG(EVAL_ONLY)。
+  3) Gate2~Gate4 只能评估 planned_dir 方向是否“具备开仓资格”；严禁输出与 planned_dir 相反方向的 open_*。
+  4) 可观测性：Summary 必须包含 plan/block；GateTrace 第 1 行必须为 GateDIR(DIR)，输出 planned_dir/block_entry/reason。
+
    0）账户与风险门槛（Account & Risk Gate）
      - 若本轮开仓会导致：
        * MarginUsed ≥ 95%，或
@@ -66,7 +67,7 @@
          视为盘口高度污染，禁止新开仓；
          has_position=0 -> action="wait"；
          has_position=1 -> 仅允许 action ∈ {"hold","close"}。
-       * 若 宏观资金趋势.trend_alignment 与计划开仓方向明显相反，
+       * 若 宏观资金趋势.trend_alignment 与 planned_dir 明显相反，
          且你无法在 reasoning 中给出有说服力的反例（例如：HTF 顶/底部结构 + exhaustion）默认禁止新开仓；
          has_position=0 -> action="wait"；
          has_position=1 -> 仅允许 action ∈ {"hold","close"}（优先考虑减仓/止损/退出，而非观望式 wait）。
@@ -114,17 +115,6 @@
     - 若要做反转（EDGE-Rejection），必须额外满足：5m 出现 SFP 或 Engulfing 且结构位置在供需边缘，否则按突破思路处理或 wait
     - 即使触发“追涨/跟庄/轧空授权”，也不得在 fail=>OF / fail=>RISK 场景下开新仓
   2）结构格局门槛（Structural Context Gate）
-     【P0｜Gate2 单向资格审查（必须基于 planned_dir）】
-     - 本层不再“选择方向”，只回答：在 planned_dir 方向上是否具备结构 edge（可交易资格）。
-     - 判定流程（多空对称）：
-       * 若 planned_dir=LONG：仅评估 long-side 结构（DZ/VAL/下轨/上破后回踩等）与 struct_state_long；
-         - 若 long-side 结构不支持（处于供给/VAH/上轨压制或顺势追高禁区等）→ Gate2=FAIL fail=>STRUCT; reason=LONG_NO_EDGE。
-       * 若 planned_dir=SHORT：仅评估 short-side 结构（SZ/VAH/上轨/下破后反抽等）与 struct_state_short；
-         - 若 short-side 结构不支持（处于需求/VAL/下轨支撑或顺势追空禁区等）→ Gate2=FAIL fail=>STRUCT; reason=SHORT_NO_EDGE。
-       * 若 planned_dir ∈ {NEUTRAL, UNKNOWN}：Gate2=DIAG; reason=NO_PLAN_DIR（不得新开仓）。
-       * 若 block_entry=true：Gate2=DIAG; reason=ENTRY_BLOCKED（不得新开仓）。
-     - 反向结构信息仅允许写入 DIAG（用于复盘/NextTrigger），不得据此反向开仓。
-
      - 这一层决定“做多 / 做空这个方向本身有没有 edge”，是开仓方向的**主要正向因子**。
      - 必须先用 供需区 / SR / VPVR / FIB / 通道 / 道氏 / SuperTrend 等回答两个问题：
        a. 当前价格所处的是：
@@ -165,49 +155,40 @@
          * 若 trigger_context 缺失，或 trigger_flags 为空/不存在：window=no_trigger ⇒ Gate3=FAIL fail=>TIME（仅禁新开仓；仍需 DIAG 复盘与 NextTrigger）。
          * 若 trigger_flags 非空且 is_kline_closed=true：window=in ⇒ Gate3 可 PASS（是否开仓继续交由 Gate4/Gate5）。
          * 若 is_kline_closed=false：除非明确启用 INTRABAR_ENABLE 且满足其生效条件，否则 window=intrabar_forbidden ⇒ Gate3=FAIL fail=>TIME。
-         * Gate3/NextTrigger 只引用（方向过滤后）trigger_primary（或 flags 中与 planned_dir 同向的 1 项）；禁止罗列形态细节与多条候选。
-         * GateTrace 的 Gate3 行必须“原样映射”window_state：window_state=no_trigger 就必须输出 window=no_trigger 且 Gate3=FAIL；严禁把 no_trigger 写成 in。
-       【P0｜Gate3 方向过滤的触发窗口（必须基于 planned_dir）】
-       - 定义：dir_triggers := 在 trigger_context.trigger_flags 中，筛选与 planned_dir 同向的触发器集合。
-         * LONG 触发器判定：trigger 含 "_BULL" 或 "LONG"（例如 SFP_BULL/ENGULF_BULL/BO_RETEST_BULL 等）。
-         * SHORT 触发器判定：trigger 含 "_BEAR" 或 "SHORT"（例如 SFP_BEAR/ENGULF_BEAR/BO_RETEST_BEAR 等）。
-         * 若触发器码无方向后缀：视为 unknown_trigger，不得作为开仓依据（仅 DIAG）。
-       - 方向过滤规则：
-         * 若 trigger_flags 为空：保持 window=no_trigger（原规则）。
-         * 若 trigger_flags 非空但 dir_triggers 为空：对 planned_dir 视为 window=no_trigger ⇒ Gate3=FAIL fail=>TIME; reason=NO_TRIGGER_FOR_DIR。
-           - 允许在 DIAG 中列出 1 个“存在但方向相反”的触发器码，用于复盘；不得因此改变 planned_dir。
-         * 若 dir_triggers 非空且 is_kline_closed=true：window=in ⇒ Gate3 可 PASS（是否开仓交由 Gate4/Gate5）。
-       - Gate3/NextTrigger 选择：
-         * 若 trigger_primary 与 planned_dir 同向：沿用 trigger_primary。
-         * 若 trigger_primary 与 planned_dir 反向：必须从 dir_triggers 中选择 1 个作为本轮 trigger（优先 quality 最高者），并在 GateTrace 中说明 primary_mismatch=on。
+         * Gate3/NextTrigger 只引用 dir_trigger（方向过滤后的最终触发器）；禁止强制 trigger_primary；禁止罗列形态细节与多条候选。
+        【P0｜Gate3 方向过滤触发器（Trigger Direction Filter｜SSOT）】
+         - 目标：在“已给定 planned_dir”的前提下，仅允许引用同向触发器，并产出本轮唯一触发器口径 dir_trigger（供 Gate4/NextTrigger 使用）。
+         - 输入优先级（从上到下，存在则直接使用）：
+           1) 若 trigger_context.dir_trigger 已提供且非空：dir_trigger := trigger_context.dir_trigger（后端已方向过滤的最终触发器）。
+           2) 否则：从 trigger_context.trigger_flags 中做方向过滤：
+              * planned_dir=LONG  => 仅保留包含 "_BULL" 或 "LONG" 的触发器
+              * planned_dir=SHORT => 仅保留包含 "_BEAR" 或 "SHORT" 的触发器
+              * 过滤结果记为 dir_triggers（0..N）。
+         - dir_trigger 选择（当未提供 trigger_context.dir_trigger 时执行）：
+           * 若 trigger_primary 与 planned_dir 同向：dir_trigger := trigger_primary
+           * 否则：dir_trigger := dir_triggers 中任意 1 项（只选 1 个；优先 SFP/ENGULF/BO_RETEST/IBB/MOMO 等更“强确认”的触发器）
+           * 若 dir_triggers 为空：dir_trigger := NONE；并将 window 视为 no_trigger_for_dir；Gate3=FAIL fail=>TIME; reason=NO_TRIGGER_FOR_DIR（仅禁新开仓）。
+         - Gate3 行必须输出 trig=<dir_trigger|NONE>（仅 1 项）；Gate4/NextTrigger 只允许引用 dir_trigger。
 
+         * GateTrace 的 Gate3 行必须“原样映射”window_state：window=<trigger_context.window_state>；若 window!=in（含 no_trigger/no_trigger_for_dir/intrabar_forbidden/out/unknown）则 Gate3=FAIL fail=>TIME；严禁把 no_trigger 写成 in。
        - 本层回答：“现在这个时点/这份数据，允许做决策并允许执行吗？”
     4）开仓条件与执行方式门槛（Setup Gate｜Gate4(SETUP)）
         【P0｜Gate4 职责边界（不改规则，仅收敛写法）】
         - Gate4 只负责：trigger 选择 + pattern 映射 + 触发质量分层 + 执行方式收敛（LIMIT/MARKET/等待回踩/降级）。
         - Gate4 不计算、不裁决 R_clean / R_struct 数值；所有 R_* 计算与“是否达标”统一在 Gate5(EXEC/RR) 完成。
         - Gate4(GateTrace) 推荐单行模板（避免重复形态细节）：
-          Gate4(SETUP): <PASS/FAIL/DIAG> fail=>SETUP?<; reason=<...>> pattern=<EDGE|MOMENTUM_BREAK|BO_RETEST|none>; trigger=<trigger_primary|NONE>; q=<0~1>; tier=<strict|borderline|none>; downgrade=<on|off>
+          Gate4(SETUP): <PASS/FAIL/DIAG> fail=>SETUP?; reason=<short_code>; pattern=<EDGE|MOMENTUM_BREAK|BO_RETEST|none>; trigger=<dir_trigger|NONE>; q=<0.00~1.00>; tier=<strict|borderline|none>; downgrade=<on|off>
        - 本层综合：多周期趋势/动能 + RSI 状态 + 形态确认 + 触发质量，决定“能不能开、怎么开（挂单/市价/回踩/缩仓）”。
        - TriggerFlags 选择制（P0｜必须遵守｜降低 token + 提升可复现性）：
-         【P0｜Gate4 触发器选择必须与 planned_dir 同向】
-         - Gate4 的 trigger 只能从 Gate3 的 dir_triggers 中选择（见 Gate3 的方向过滤定义）。
-         - 若 planned_dir ∈ {NEUTRAL, UNKNOWN} 或 block_entry=true：Gate4 必须输出 pattern=none; trigger=NONE; Gate4=FAIL 或 DIAG（按 Gate3/上层 fail 口径），不得 open_*。
-         - 若 trigger_flags 非空但找不到与 planned_dir 同向的 trigger：
-           -> Gate4(SETUP)=FAIL fail=>SETUP; reason=NO_TRIGGER_FOR_DIR; pattern=none; trigger=NONE。
-         - 若存在同向 trigger：
-           * 优先使用 trigger_primary（若其同向）；否则选同向触发器中 quality 最高者（仍仅选 1 个）。
-           * pattern 映射保持不变，但必须与所选 trigger 同向一致。
-
-         * 触发器识别仅允许使用 trigger_context.trigger_flags / trigger_primary / trigger_quality；
+         * 触发器识别仅允许使用 trigger_context.trigger_flags / trigger_primary / trigger_quality / dir_triggers / dir_trigger；
            严禁在 reasoning 中“根据K线/指标再推断一个未给出的触发器/形态”。
          * 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，并在 Gate4 行写 trigger=NONE。
-         * 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择【与 planned_dir 同向】的 trigger（优先使用 trigger_primary；若其反向则选同向触发器中 quality 最高者）作为 trigger，
+         * 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择 dir_trigger 作为 trigger（dir_trigger 由 Gate3 产出）。若 dir_trigger=NONE：Gate4=FAIL fail=>SETUP; reason=NO_TRIGGER_FOR_DIR; pattern=none; trigger=NONE。
            并按以下映射输出 pattern（case-sensitive；仅取其一）：
            * pattern 输出硬约束（P0｜防止 taxonomy 漂移）：
              - pattern 只允许取值：{none, EDGE, MOMENTUM_BREAK, BO_RETEST}（case-sensitive）。
              - 禁止把任何 trigger 名/别名当作 pattern 输出（包括：SFP、Engulf、MOM_BREAK、IBB、MOMO、ENGULF_BULL/BEAR、SFP_BULL/BEAR 等）。
-             - trigger 字段必须输出 trigger_primary（缺失则取 quality 最高者）或 NONE；允许出现 SFP_BULL/BEAR、ENGULF_BULL/BEAR、IBB_*、MOMO_* 等原始触发器码。
+             - trigger 字段必须输出 dir_trigger（方向过滤后的最终触发器；dir_trigger 可能等于 trigger_primary，也可能是从 dir_triggers 中选出的同向替代）；若无同向触发则 trigger=NONE。
              - pattern 不得与 trigger 同名；pattern 仅用于归类（EDGE/BO_RETEST/MOMENTUM_BREAK/none）。
              - trigger ∈ {SFP_*}          => pattern=EDGE
              - trigger ∈ {ENGULF_*}       => pattern=MOMENTUM_BREAK
@@ -219,14 +200,13 @@
             - 模板其他位置若出现 {MOM_BREAK/MOMENTUM_BREAK/MOM_BREAKOUT} 等同义写法：统一视为 MOMENTUM_BREAK；输出时只能写 MOMENTUM_BREAK（禁止输出别名）。
            补充约束：
              - 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，且 trigger=NONE。
-             - 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择【与 planned_dir 同向】的 trigger（优先 trigger_primary；若其反向则选同向 quality 最高者）并按上表映射 pattern。
+             - 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须使用 dir_trigger 作为 trigger（dir_trigger=NONE 则 Gate4=FAIL reason=NO_TRIGGER_FOR_DIR），并按上表映射 pattern。
              - pattern=BO_RETEST 仅在 Gate2 已给出“有效突破后回踩关键位”的结构证据时允许（并说明 retest_anchor=...）；否则不得输出 BO_RETEST。
          * Gate4 行建议短格式（避免复述形态细节）：
            - Gate4(SETUP): <PASS/FAIL/DIAG> ... pattern=<.>; trigger=<trigger>; q=<0~1>; key=<trigger_key_level 可选>
                - 触发质量三档准入（Trigger Quality Tiering｜必须使用输入阈值，不得模板硬编码）：
                  * 定义：
-                   - q_map = trigger_context.trigger_quality（若为字典：{trigger_code: score}；若为标量：直接视为 q）
-                   - q = (q_map[trigger] if q_map is dict else q_map)
+                   - q = trigger_context.trigger_quality
                    - quality_min = trigger_context.quality_min
                    - borderline_min = trigger_context.borderline_min
                  * 严禁模板内“私自抬高/写死” quality_min（例如把 0.55 写成 0.60，或使用 quality_min+0.05 作为默认门槛）；
@@ -249,7 +229,7 @@
                    4) 若 q ≥ quality_min：
                       -> Gate4(SETUP)=PASS（Strict PASS｜常规路径）
                    - 写法硬约束（不改规则，仅降 token）：
-                     Gate4 行只输出 1 个 trigger（=trigger_primary；缺失则取 quality 最高者），禁止在 Gate4 文本里展开 trigger_flags 列表或复述多条形态细节。
+                     Gate4 行只输出 1 个 trigger（=dir_trigger），禁止在 Gate4 文本里展开 trigger_flags 列表或复述多条形态细节。
                    【P0｜trade_style 冻结（Gate4->Gate5 单向传递）】
                    - trade_style 必须在 Gate4 结束时确定并冻结（Freeze）。
                    - Gate5(EXEC/RR) 只能沿用 Gate4 冻结后的 trade_style 来选择对应的 R_clean 门槛与例外集合；
@@ -534,7 +514,7 @@
       * 预算与约束（不改规则，只收敛写法）：
         - clearOF：仅当 Gate1=FAIL fail=>OF 时出现；且只写“解除条件”，不得复述证据链；
         - 结构锚点：仅允许引用 Gate2(STRUCTURE) 行已出现的信息；优先 Anchor1/Anchor2；最多 2 个锚点；
-        - 触发 T：只允许 1 项触发器短码：优先 trigger_primary（或从 trigger_flags 取 1 项）；建议用枚举码（SFP_*/ENGULF_*/IBB_*/MOMO_*）；禁止枚举长列表或复述形态细节；
+        - 触发 T：只允许 1 项触发器短码：优先 dir_trigger（若为 NONE 则写“下一根5m出现同向触发”）；禁止枚举长列表或复述形态细节；
         - 禁止在 NextTrigger 重复解释 Gate2/Gate4；禁止新增第 3 个价位/区间。
 5) Gate4（SETUP）只能在综合条件不足时否决开仓；其中 RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向：
    - 若综合不足（仅否决“新开仓”）：has_position=0 -> action="wait"；has_position=1 -> action ∈ {"hold","close"}（仅管理既有仓位；严禁输出 wait）。
@@ -2042,7 +2022,7 @@ A) 仓位 sizing（基于R的风险等额）
           4) （P0｜禁止数字复述）StructureSnapshot / NextTrigger / Optional Details 中严禁出现任何具体价位/区间/小数/≈/%/范围符号；
              只允许引用 “Anchor1 / Anchor2” 字面量或短码（retest_A1 / retest_A2 / clear_POC / no_trigger / trend_mixed / rr_low）。
         - 严格顺序（必须按该顺序）:
-          Summary/Pos/Cap → GateTrace(Gate0→Gate5) → actionDerivation（紧随 GateTrace） → StructureSnapshot → NextTrigger/Timebox → Optional Details
+          Summary/Pos/Cap → GateTrace(GateDIR→Gate5) → actionDerivation（紧随 GateTrace） → StructureSnapshot → NextTrigger/Timebox → Optional Details
           禁止先输出完整结构总览/最终结论，再回过头补 GateTrace（避免重复组织导致 token 与延迟增加）。
         - 【每 Gate 输出预算｜Anti-Latency｜PROD_LITE 强制】
           1) GateTrace 每个 Gate 行最多 1 行，且每行≤110字符；必须使用短语或 k=v；禁止括号解释、因果长句、推导过程；
@@ -2068,14 +2048,16 @@ A) 仓位 sizing（基于R的风险等额）
               - 若必须引用结构，仅允许写 “Anchor1/Anchor2” 字面量或短码（如 retest_A1 / clear_POC / no_trigger / trend_mixed / rr_low）。
             * 自检（P0）：若检测到违规（括号解释、价位复述、PASS 时出现 scan、wait 时展开细节等），必须在输出前自行裁剪为合规文本；不得以“说明原因”追加新行。
         - 【PROD_LITE 固定行模板（强制｜用于收敛写法，不改变判定规则）】
-          * Summary（1行）：原因只允许 1 个短标签（建议枚举：POC_CHOP/STRUCT_MID/NO_TRIGGER/TREND_MIXED/RR_LOW/OF_REDLINE/RISK）
+          * Summary（1行）：原因只允许 1 个短标签（建议枚举：POC_CHOP/STRUCT_MID/NO_TRIGGER/TREND_MIXED/RR_LOW/OF_REDLINE/RISK）；且必须包含 plan/block：
+          Summary: action=<...> | plan=<LONG/SHORT/NEUTRAL/UNKNOWN> | block=<0/1> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<0~1> | confidence=<0~100> | (optional: close_pct=<0~1>) | (optional: fail=>... )
           * GateTrace 每行建议写法：
+            - GateDIR(DIR): PASS/FAIL fail=>DIR planned_dir=<LONG/SHORT/NEUTRAL/UNKNOWN>; block_entry=<0/1>; reason=<ok|NO_PLAN_DIR|ENTRY_BLOCKED>
             - Gate0(RISK): PASS/FAIL fail=>RISK key=<1个账户侧关键数值>; verdict=<ok/limit>
-            - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<x.xx>; bias=<bull/bear/neutral>（严格三选一；禁止括号/附加解释/附带 intent、regime、alignment；如出现“(”或多余字段，必须裁剪为单词 bull/bear/neutral）
-            - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT pos=<POC.../mid-range/edge>; Anchor1:<.>; Anchor2:<.>; scan=<omit_if_PASS>（scan 仅允许在 FAIL 时出现；PASS 时出现 scan 视为违规必须删除；如需证明“8类逐类检查均未命中”，仅在 Gate2=FAIL 时额外追加 1 行 StructScan: scan=<...> 且严禁含价位/区间）
-            - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in/no_trigger/intrabar_forbidden/out/unknown>（window 必须与 trigger_context.window_state 同值；window!=in ⇒ Gate3=FAIL fail=>TIME）
-            - Gate4(SETUP): PASS/FAIL/DIAG(EVAL_ONLY) pattern=<none/EDGE/BO_RETEST/MOMENTUM_BREAK>; trigger=<trigger_primary|NONE>; q=<0~1>; tier=<strict/borderline/none>; trend=<aligned/mixed>; market_regime=<range|trend|mixed>; rr_min=<0.35|0.80>; downgrade=<on|off>
-            - Gate5(EXEC/RR): (PASS|FAIL) tag=>RR; reason=<short_code>; R_clean=<.>; th=<.>  ｜  DIAG(EVAL_ONLY) fail=><RR_CTX_MISSING|SKIP_UPSTREAM_FAIL>; reason=<short_code>; th=<.>
+            - Gate1(ORDERFLOW): PASS/FAIL fail=>OF spoof=<0~1>; of_bias=<bull/bear/neutral/unknown>; of_redline=<NONE|INTENT_FAKE_*|OF_SPOOFING>; plan=<LONG/SHORT/NEUTRAL/UNKNOWN>; block=<0/1>
+            - Gate2(STRUCTURE): PASS/FAIL fail=>STRUCT reason=<short_code>; Anchor1:<...>@<low>-<high>; Anchor2:<...>@<low>-<high>
+            - Gate3(TIMING): PASS/FAIL fail=>TIME 5m_close=<T/F>; window=<in|no_trigger|no_trigger_for_dir|intrabar_forbidden|out|unknown>; trig=<dir_trigger|NONE>
+            - Gate4(SETUP): PASS/FAIL/DIAG(EVAL_ONLY) fail=>SETUP? pattern=<none|EDGE|BO_RETEST|MOMENTUM_BREAK>; trigger=<dir_trigger|NONE>; q=<0.00~1.00>; tier=<strict|borderline|none>; downgrade=<on|off>
+            - Gate5(EXEC/RR): PASS/FAIL/DIAG(EVAL_ONLY) fail=>RR reason=<short_code|SKIP_UPSTREAM_FAIL>; th=<rr_min>; R_clean_eval=<pass/fail>; note=<1短语>
         - 【P0｜wait 极简输出（不改变 JSON，仅收敛 reasoning）】
           * 适用条件：has_position=0 且 action="wait"。
           * reasoning 允许的最大形态（≤9 行）：
@@ -2108,6 +2090,7 @@ A) 仓位 sizing（基于R的风险等额）
     Pos: 权益≈<X>; 保证金占用≈<Y>; 当前仓位方向=<none>; 数量=<0>; 均价=<NA>
     Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<1>; 处理=<ok>; 原因=<...>
     GateTrace:
+    - GateDIR(DIR): PASS/FAIL [fail=>DIR 可选] 证据（planned_dir/block_entry；禁止新开仓的原因必须写 NO_PLAN_DIR 或 ENTRY_BLOCKED）
     - Gate0(RISK): PASS <一句话说明>
     - Gate1(ORDERFLOW): FAIL fail=>OF | of_redline=<INTENT_FAKE_PUMP/INTENT_FAKE_DUMP/OF_SPOOFING/...>；解除条件=<明确阈值+持续条件>
     - Gate2(STRUCTURE): DIAG(EVAL_ONLY) <给出≥2个结构锚点(价位/区间+ctx强度/状态)+方向偏置>
@@ -2116,7 +2099,7 @@ A) 仓位 sizing（基于R的风险等额）
     - Gate5(EXEC/RR): DIAG(EVAL_ONLY) <R_clean大概率是否达标/主要缺口项（不输出具体SL/TP价位）>
       actionDerivation: derived_action=<.> | has_position=<0/1> | veto=<最高优先级否决点>
     - veto 字段必须从以下集合取值（严禁自由拼接，便于统计）：
-      veto ∈ {Gate0_RISK, Gate1_OF, Gate2_STRUCT, Gate3_TIME, Gate4_SETUP, Gate5_RR, PROTO}
+      veto ∈ {Gate0_RISK, GateDIR_DIR, Gate1_OF, Gate2_STRUCT, Gate3_TIME, Gate4_SETUP, Gate5_RR, PROTO}
     - StructureSnapshot（最多 1~2 行；仅允许引用 Gate2(STRUCTURE) 行已出现的结构锚点；禁止新增结论/价位/区间）：仅用于“快速扫读”，不得在此进行二次结构推导。
     - NextTrigger(Timebox=未来N根5m收盘): 解除=<1条最高优先级解除条件>; 触发=<1条5m触发或“下一根5m收盘复评”>
       -【短 NextTrigger 规则（省 token｜不改 Gate/字段/动作集合）】
@@ -2987,7 +2970,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
    4) "edge_score": number
    5) "confidence": integer   // 0~100
    6) "reasoning": string     // 复盘版允许多行：必须在 JSON 字符串内用 "\\n" 表示换行（禁止裸换行）。
-                              // 唯一口径：首行 Summary（单行） + GateTrace（Gate0→Gate5，顺序固定） + 其余自然语言复盘。
+                              // 唯一口径：首行 Summary（单行） + GateTrace（GateDIR→Gate5，顺序固定） + 其余自然语言复盘。
                               // 允许在 Gate 行使用 fail=>xF / fail=>RISK / fail=>OF / fail=>STRUCT / fail=>TIME / fail=>RR 等否决标记。
                               // 禁止再次出现任何 B:K:R:X 四段电报体骨架或 BKRX 摘要行。
    7) "stop_update": object | null
@@ -3008,7 +2991,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
       //   "R_clean": number       // 清洁R（考虑成本/滑点/可执行性后的期望R）；需满足风格门槛，否则应 wait
       // }
    【P0｜评分字段必须独立计算（禁止默认值化/归零模板外溢）】
-   - "setup_grade"/"edge_score"/"confidence" 必须基于本轮 Gate0→Gate5 的评估计算，与你最终 "action" 无关；
+   - "setup_grade"/"edge_score"/"confidence" 必须基于本轮 GateDIR→Gate5 的评估计算，与你最终 "action" 无关；
      即使 action="wait" 也必须输出“本轮最佳候选 setup”的真实评分（可以很低/接近 0，甚至为负；但不得无脑写 0.0）。
    - 【严格区分】只有当你确实触发“协议自检失败（PROTO_CHECK: FAIL）”，且无法通过“补齐必填字段/删除禁止字段/修正 null 规则/修正 action-close 规则”等方式修复时，
      才允许启用“安全回退归零模板”：setup_grade="C"、edge_score=0.0、confidence<=60。
@@ -3039,7 +3022,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
            - action="hold" => entry_plan=null 且 close_pct=null；stop_update 允许为 null 或 object（用于移动止损）
          - 并在 reasoning 中：
            1) Summary 写 fail=>PROTO_<REASON>（REASON 必须全大写+下划线；说明失败原因与解除条件）；
-           2) GateTrace 仍按 Gate0→Gate5 输出，但应以 DIAG(EVAL_ONLY) 为主（不得给可执行明细）；
+           2) GateTrace 仍按 GateDIR→Gate5 输出，但应以 DIAG(EVAL_ONLY) 为主（不得给可执行明细）；
            3) 在 actionDerivation 行之后追加：PROTO_CHECK: FAIL fail=>PROTO_<REASON> | fix=<解除条件/修复要点>。
    - "confidence": 0~100 的整数
    - "setup_grade":              // ★ 这里加双引号，明确是字段名
@@ -3218,9 +3201,10 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
     * 若本节与 PROD_LITE 约束冲突：以 PROD_LITE 约束为准（SSOT）。
   - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
   - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
-      Summary: action=<...> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<...> | confidence=<...>| (action="close" 时必须带 close_pct=<0~1>)| (若被闸门否决必须带 fail=>... 并写解除条件)
-    - 强制：从第二行开始必须出现 GateTrace（顺序固定 Gate0→Gate5；每行一个 Gate；PASS/FAIL/DIAG(EVAL_ONLY) 必须明确；禁止写 N/A/跳过）：
+      Summary: action=<...> | plan=<LONG/SHORT/NEUTRAL/UNKNOWN> | block=<0/1> | trade_style=<...> | setup_grade=<A/B/C> | edge_score=<0~1> | confidence=<0~100> | (optional: close_pct=<0~1>) | (optional: fail=>... + 解除条件)
+    - 强制：从第二行开始必须出现 GateTrace（顺序固定 GateDIR→Gate5；每行一个 Gate；PASS/FAIL/DIAG(EVAL_ONLY) 必须明确；禁止写 N/A/跳过）：
         GateTrace:
+              - GateDIR(DIR): PASS/FAIL [fail=>DIR 可选] 证据（planned_dir/block_entry；禁止新开仓的原因必须写 NO_PLAN_DIR 或 ENTRY_BLOCKED）
               - Gate0(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
               - Gate1(ORDERFLOW): PASS/FAIL [fail=>OF 可选] 证据（红线/否决必须明确写触发条件与解除条件）
               - Gate2(STRUCTURE): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>STRUCT 可选] 证据（至少2个结构锚点+价位/区间）
@@ -3319,6 +3303,7 @@ def fee_slip_to_price(entry, taker_bps, slip_bps):
          actionDerivation: derived_action=<...> | has_position=<0/1> | veto=<最高优先级否决点>
         2) derived_action 必须严格按以下表计算（不得发明例外）：
          - 若 Gate0(RISK)=FAIL -> derived_action="wait"（或 has_position=1 时为 "close"/"hold"，按 Gate0 规则要求）
+         - 否则若 GateDIR(DIR)=FAIL -> derived_action="wait"（或 has_position=1 时为 "hold"/"close"；禁止 open_*）
          - 否则若 Gate1(ORDERFLOW)=FAIL -> derived_action="wait"（或 has_position=1 时为 "hold"/"close"；禁止 open_*）
          - 否则若 Gate3(TIMING)=FAIL 或 fail=>xF -> derived_action="wait"（或 has_position=1 时为 "hold"；禁止 open_*）
          - 否则若 has_position=1 -> derived_action ∈ {"hold","close"}（绝对禁止 "open_long/open_short/wait"）
