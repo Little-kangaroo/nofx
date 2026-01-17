@@ -7,6 +7,15 @@
   2）减少明显负 EV 的交易，集中火力在有 edge 的 A/B 级机会上。
 【决策优先级总纲（Decision Priority Framework）】
 【唯一口径索引（Single Source of Truth｜用于“去重/听话”）】
+【P0｜Direction SSOT（后端方向裁决｜计划方向唯一口径）】
+- planned_dir := direction_arbitration.plan_side ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}
+- block_entry := direction_arbitration.block_entry（true 表示“本轮禁止新开仓”）
+- 规则（多空对称，属于 P0 最高优先级）：
+  1) Gate2/Gate3/Gate4/Gate5 中所有“拟开仓方向/计划方向/偏置方向”必须以 planned_dir 为准；严禁在 reasoning 中重新裁定方向。
+  2) 若 block_entry=true 且 has_position=0：本轮 action 必须为 "wait"；Gate2~Gate5 仅允许 DIAG（解释/复盘），不得 open_*。
+  3) 若 planned_dir ∈ {NEUTRAL, UNKNOWN}：本轮禁止 open_long/open_short；Gate2~Gate5 仅允许 DIAG；必须在 GateTrace 中写明 reason=NO_PLAN_DIR。
+  4) 允许在 DIAG 中简述“反向更强的结构/订单流证据”，但不得据此输出与 planned_dir 相反的 open_*。
+
 - 若模板内出现重复表述或看似冲突的规则，必须按以下优先级裁决（从上到下，越靠上越“最终解释权”）：
   1) 【决策优先级总纲（Decision Priority Framework）】与 Gate0~Gate5（全局裁决）
   2) 【P0-Intent 分类澄清】（订单流意图与红线的唯一口径）
@@ -105,6 +114,17 @@
     - 若要做反转（EDGE-Rejection），必须额外满足：5m 出现 SFP 或 Engulfing 且结构位置在供需边缘，否则按突破思路处理或 wait
     - 即使触发“追涨/跟庄/轧空授权”，也不得在 fail=>OF / fail=>RISK 场景下开新仓
   2）结构格局门槛（Structural Context Gate）
+     【P0｜Gate2 单向资格审查（必须基于 planned_dir）】
+     - 本层不再“选择方向”，只回答：在 planned_dir 方向上是否具备结构 edge（可交易资格）。
+     - 判定流程（多空对称）：
+       * 若 planned_dir=LONG：仅评估 long-side 结构（DZ/VAL/下轨/上破后回踩等）与 struct_state_long；
+         - 若 long-side 结构不支持（处于供给/VAH/上轨压制或顺势追高禁区等）→ Gate2=FAIL fail=>STRUCT; reason=LONG_NO_EDGE。
+       * 若 planned_dir=SHORT：仅评估 short-side 结构（SZ/VAH/上轨/下破后反抽等）与 struct_state_short；
+         - 若 short-side 结构不支持（处于需求/VAL/下轨支撑或顺势追空禁区等）→ Gate2=FAIL fail=>STRUCT; reason=SHORT_NO_EDGE。
+       * 若 planned_dir ∈ {NEUTRAL, UNKNOWN}：Gate2=DIAG; reason=NO_PLAN_DIR（不得新开仓）。
+       * 若 block_entry=true：Gate2=DIAG; reason=ENTRY_BLOCKED（不得新开仓）。
+     - 反向结构信息仅允许写入 DIAG（用于复盘/NextTrigger），不得据此反向开仓。
+
      - 这一层决定“做多 / 做空这个方向本身有没有 edge”，是开仓方向的**主要正向因子**。
      - 必须先用 供需区 / SR / VPVR / FIB / 通道 / 道氏 / SuperTrend 等回答两个问题：
        a. 当前价格所处的是：
@@ -145,8 +165,22 @@
          * 若 trigger_context 缺失，或 trigger_flags 为空/不存在：window=no_trigger ⇒ Gate3=FAIL fail=>TIME（仅禁新开仓；仍需 DIAG 复盘与 NextTrigger）。
          * 若 trigger_flags 非空且 is_kline_closed=true：window=in ⇒ Gate3 可 PASS（是否开仓继续交由 Gate4/Gate5）。
          * 若 is_kline_closed=false：除非明确启用 INTRABAR_ENABLE 且满足其生效条件，否则 window=intrabar_forbidden ⇒ Gate3=FAIL fail=>TIME。
-         * Gate3/NextTrigger 只引用 trigger_primary（或 flags 中 1 项）；禁止罗列形态细节与多条候选。
+         * Gate3/NextTrigger 只引用（方向过滤后）trigger_primary（或 flags 中与 planned_dir 同向的 1 项）；禁止罗列形态细节与多条候选。
          * GateTrace 的 Gate3 行必须“原样映射”window_state：window_state=no_trigger 就必须输出 window=no_trigger 且 Gate3=FAIL；严禁把 no_trigger 写成 in。
+       【P0｜Gate3 方向过滤的触发窗口（必须基于 planned_dir）】
+       - 定义：dir_triggers := 在 trigger_context.trigger_flags 中，筛选与 planned_dir 同向的触发器集合。
+         * LONG 触发器判定：trigger 含 "_BULL" 或 "LONG"（例如 SFP_BULL/ENGULF_BULL/BO_RETEST_BULL 等）。
+         * SHORT 触发器判定：trigger 含 "_BEAR" 或 "SHORT"（例如 SFP_BEAR/ENGULF_BEAR/BO_RETEST_BEAR 等）。
+         * 若触发器码无方向后缀：视为 unknown_trigger，不得作为开仓依据（仅 DIAG）。
+       - 方向过滤规则：
+         * 若 trigger_flags 为空：保持 window=no_trigger（原规则）。
+         * 若 trigger_flags 非空但 dir_triggers 为空：对 planned_dir 视为 window=no_trigger ⇒ Gate3=FAIL fail=>TIME; reason=NO_TRIGGER_FOR_DIR。
+           - 允许在 DIAG 中列出 1 个“存在但方向相反”的触发器码，用于复盘；不得因此改变 planned_dir。
+         * 若 dir_triggers 非空且 is_kline_closed=true：window=in ⇒ Gate3 可 PASS（是否开仓交由 Gate4/Gate5）。
+       - Gate3/NextTrigger 选择：
+         * 若 trigger_primary 与 planned_dir 同向：沿用 trigger_primary。
+         * 若 trigger_primary 与 planned_dir 反向：必须从 dir_triggers 中选择 1 个作为本轮 trigger（优先 quality 最高者），并在 GateTrace 中说明 primary_mismatch=on。
+
        - 本层回答：“现在这个时点/这份数据，允许做决策并允许执行吗？”
     4）开仓条件与执行方式门槛（Setup Gate｜Gate4(SETUP)）
         【P0｜Gate4 职责边界（不改规则，仅收敛写法）】
@@ -156,10 +190,19 @@
           Gate4(SETUP): <PASS/FAIL/DIAG> fail=>SETUP?<; reason=<...>> pattern=<EDGE|MOMENTUM_BREAK|BO_RETEST|none>; trigger=<trigger_primary|NONE>; q=<0~1>; tier=<strict|borderline|none>; downgrade=<on|off>
        - 本层综合：多周期趋势/动能 + RSI 状态 + 形态确认 + 触发质量，决定“能不能开、怎么开（挂单/市价/回踩/缩仓）”。
        - TriggerFlags 选择制（P0｜必须遵守｜降低 token + 提升可复现性）：
+         【P0｜Gate4 触发器选择必须与 planned_dir 同向】
+         - Gate4 的 trigger 只能从 Gate3 的 dir_triggers 中选择（见 Gate3 的方向过滤定义）。
+         - 若 planned_dir ∈ {NEUTRAL, UNKNOWN} 或 block_entry=true：Gate4 必须输出 pattern=none; trigger=NONE; Gate4=FAIL 或 DIAG（按 Gate3/上层 fail 口径），不得 open_*。
+         - 若 trigger_flags 非空但找不到与 planned_dir 同向的 trigger：
+           -> Gate4(SETUP)=FAIL fail=>SETUP; reason=NO_TRIGGER_FOR_DIR; pattern=none; trigger=NONE。
+         - 若存在同向 trigger：
+           * 优先使用 trigger_primary（若其同向）；否则选同向触发器中 quality 最高者（仍仅选 1 个）。
+           * pattern 映射保持不变，但必须与所选 trigger 同向一致。
+
          * 触发器识别仅允许使用 trigger_context.trigger_flags / trigger_primary / trigger_quality；
            严禁在 reasoning 中“根据K线/指标再推断一个未给出的触发器/形态”。
          * 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，并在 Gate4 行写 trigger=NONE。
-         * 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择 trigger_primary（缺失则选 quality 最高者）作为 trigger，
+         * 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择【与 planned_dir 同向】的 trigger（优先使用 trigger_primary；若其反向则选同向触发器中 quality 最高者）作为 trigger，
            并按以下映射输出 pattern（case-sensitive；仅取其一）：
            * pattern 输出硬约束（P0｜防止 taxonomy 漂移）：
              - pattern 只允许取值：{none, EDGE, MOMENTUM_BREAK, BO_RETEST}（case-sensitive）。
@@ -176,13 +219,14 @@
             - 模板其他位置若出现 {MOM_BREAK/MOMENTUM_BREAK/MOM_BREAKOUT} 等同义写法：统一视为 MOMENTUM_BREAK；输出时只能写 MOMENTUM_BREAK（禁止输出别名）。
            补充约束：
              - 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，且 trigger=NONE。
-             - 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择 trigger_primary（缺失则选 quality 最高者）作为 trigger，并按上表映射 pattern。
+             - 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择【与 planned_dir 同向】的 trigger（优先 trigger_primary；若其反向则选同向 quality 最高者）并按上表映射 pattern。
              - pattern=BO_RETEST 仅在 Gate2 已给出“有效突破后回踩关键位”的结构证据时允许（并说明 retest_anchor=...）；否则不得输出 BO_RETEST。
          * Gate4 行建议短格式（避免复述形态细节）：
            - Gate4(SETUP): <PASS/FAIL/DIAG> ... pattern=<.>; trigger=<trigger>; q=<0~1>; key=<trigger_key_level 可选>
                - 触发质量三档准入（Trigger Quality Tiering｜必须使用输入阈值，不得模板硬编码）：
                  * 定义：
-                   - q = trigger_context.trigger_quality
+                   - q_map = trigger_context.trigger_quality（若为字典：{trigger_code: score}；若为标量：直接视为 q）
+                   - q = (q_map[trigger] if q_map is dict else q_map)
                    - quality_min = trigger_context.quality_min
                    - borderline_min = trigger_context.borderline_min
                  * 严禁模板内“私自抬高/写死” quality_min（例如把 0.55 写成 0.60，或使用 quality_min+0.05 作为默认门槛）；
