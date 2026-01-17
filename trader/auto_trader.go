@@ -274,18 +274,14 @@ func NewAutoTrader(config AutoTraderConfig, database *config.Database) (*AutoTra
 	// 🔒 初始化锁盈系统
 	log.Printf("🔒 [%s] 初始化锁盈系统...", config.Name)
 
-	// 自定义锁盈配置
+	// V-20.0 简化配置：纯ROI锁盈（无时间约束）
 	protectCfg := protect.DefaultConfig()
 
-	// 🔧 平衡型配置：ROI 5%立即锁住3% ROI盈利
-	protectCfg.ProtectTimeMinSec = 0  // ROI 5%立即触发，不等3分钟
-	protectCfg.FloorPriceBps = 30     // 锁住3% ROI（10x杠杆下0.3%价格 = 3% ROI）
+	// 自定义盈利地板：锁住3% ROI（10x杠杆下0.3%价格 = 3% ROI）
+	protectCfg.FloorPriceBps = 30
 
-	// 🔧 可选修改1：禁用ROI止盈（不挂止盈单）
+	// 可选：禁用ROI止盈（不挂止盈单）
 	// protectCfg.TPMilestones = nil
-
-	// 🔧 可选修改2：降低快速通道阈值（ROI 6%立即触发）
-	// protectCfg.ROILockFastTrigger = 0.06
 
 	protectEng := &protect.Engine{
 		Cfg: protectCfg,
@@ -293,9 +289,6 @@ func NewAutoTrader(config AutoTraderConfig, database *config.Database) (*AutoTra
 			TakerFeeBps:      4,  // Binance Futures Taker费率
 			SlippageBpsMinor: 2,
 			FundingBps:       0,  // 可选
-		},
-		UseAggressiveProfile: func(pos protect.PositionState) bool {
-			return true  // 固定使用激进档锁盈
 		},
 	}
 

@@ -34,13 +34,10 @@ type Scheduler struct {
 	Exec    StopExecutor
 }
 
-// NewScheduler 创建调度器
+// NewScheduler 创建调度器（V-20.0 简化版）
 func NewScheduler(eng *Engine, store PositionStore, prices PriceCache, exec StopExecutor) *Scheduler {
-	// 创建Fast Loop专用引擎（关闭SoftStop）
+	// V-20.0: 移除了SoftStop和档位选择，Fast引擎与主引擎相同
 	engFast := *eng
-	if !eng.Cfg.Scheduler.EnableSoftStopInFastLoop {
-		engFast.SoftStop = nil
-	}
 
 	return &Scheduler{
 		Eng:     eng,
@@ -170,16 +167,10 @@ func (s *Scheduler) tickOnce(ctx context.Context) {
 				}
 			}
 
-			// 打印未触发ROI锁盈的原因
+			// 打印未触发ROI锁盈的原因（V-20.0: 移除了时间约束）
 			if plan.RoiUnr < s.Eng.Cfg.ROILockTrigger {
 				log.Printf("      💡 ROI %.2f%% < 触发阈值 %.2f%% (未达到锁盈条件)",
 					plan.RoiUnr*100, s.Eng.Cfg.ROILockTrigger*100)
-			} else if !pos.ROIArmed {
-				if holdTimeSec < s.Eng.Cfg.ProtectTimeMinSec && plan.RoiUnr < s.Eng.Cfg.ROILockFastTrigger {
-					log.Printf("      ⏰ ROI %.2f%% 已达标，但需持仓 %ds (当前 %ds) 或 ROI >= %.2f%%",
-						plan.RoiUnr*100, s.Eng.Cfg.ProtectTimeMinSec, holdTimeSec,
-						s.Eng.Cfg.ROILockFastTrigger*100)
-				}
 			}
 
 			if plan.Note != "" && plan.Note != "not improved" && plan.Note != "cooldown" && plan.Note != "min move not reached" {

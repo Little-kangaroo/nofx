@@ -27,8 +27,6 @@ func Test_ROI_ProfitFloor_Armed(t *testing.T) {
 		OpenTimeMs:           now - 10*60*1000, // 10分钟前开仓
 		StopTriggerType:      TriggerLast,
 		ROIArmed:             false,
-		BreakEvenArmed:       false,
-		RLockStage:           0,
 		LastStopUpdateTimeMs: 0,
 	}
 
@@ -219,62 +217,6 @@ func Test_MinTickMove(t *testing.T) {
 		t.Logf("⚠️  plan允许更新（浮盈较大）: newStop=%.2f, reasons=%v", plan.NewStop, plan.Reasons)
 	} else if !plan.ShouldUpdate {
 		t.Logf("✓ 最小移动距离测试通过: reasons=%v", plan.Reasons)
-	}
-}
-
-// Test_RLock_Milestone 测试R_lock里程碑锁盈
-func Test_RLock_Milestone(t *testing.T) {
-	cfg := DefaultConfig()
-
-	eng := Engine{
-		Cfg:  cfg,
-		Fees: FeeModel{TakerFeeBps: 4, SlippageBpsMinor: 2},
-		UseAggressiveProfile: func(pos PositionState) bool {
-			return true // 使用激进档
-		},
-	}
-
-	now := int64(1_700_000_000_000)
-
-	// LONG持仓：入场95000，初始止损94000，当前价96000
-	// R0 = 95000-94000 = 1000
-	// R_unr = (96000-95000)/1000 = 1.0R
-	// 激进档：1.0R → 锁0.70R → 止损应上移至95000+700=95700
-	pos := PositionState{
-		Symbol:          "BTCUSDT",
-		Side:            Long,
-		Qty:             0.1,
-		Entry:           95000,
-		Leverage:        10,
-		InitStop:        94000,
-		PrevStop:        94000,
-		OpenTimeMs:      now - 10*60*1000,
-		StopTriggerType: TriggerLast,
-		RLockStage:      0,
-	}
-
-	m := MarketSnapshot{
-		Symbol:    "BTCUSDT",
-		LastPrice: 96000,
-		MarkPrice: 96000,
-		TickSize:  1,
-		NowMs:     now,
-	}
-
-	plan := eng.Evaluate(pos, m)
-
-	expectedLockPrice := 95000 + 0.70*1000 // 95700
-
-	if plan.ShouldUpdate {
-		if plan.NewStop < expectedLockPrice-10 {
-			t.Fatalf("expected newStop >= %.2f, got %.2f", expectedLockPrice, plan.NewStop)
-		}
-		t.Logf("✓ R_lock测试通过: R_unr=%.2f, stage=%d, newStop=%.2f (expected~%.2f)",
-			plan.RUnr, plan.NextRLockStage, plan.NewStop, expectedLockPrice)
-	} else if plan.ExecGap {
-		t.Logf("⚠️  EXEC_GAP延后更新: %s", plan.Note)
-	} else {
-		t.Logf("未触发更新: reasons=%v, note=%s", plan.Reasons, plan.Note)
 	}
 }
 

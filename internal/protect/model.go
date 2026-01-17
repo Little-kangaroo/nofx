@@ -39,8 +39,8 @@ type PositionState struct {
 
 	// 状态机持久化（避免反复触发判定）
 	ROIArmed        bool // ROI锁盈已触发
-	BreakEvenArmed  bool // Break-even保护已触发
-	RLockStage      int  // R_lock里程碑阶段（0=未触发，1=第1级，2=第2级...）
+	BreakEvenArmed  bool // [V-20.0 DEPRECATED] Break-even保护已触发（已移除，保留字段用于兼容）
+	RLockStage      int  // [V-20.0 DEPRECATED] R_lock里程碑阶段（已移除，保留字段用于兼容）
 }
 
 // MarketSnapshot 市场快照（高频循环从PriceCache读取）
@@ -63,14 +63,14 @@ type FeeModel struct {
 type ReasonCode string
 
 const (
-	ReasonCooldown     ReasonCode = "COOLDOWN"       // 冷却期内
-	ReasonStepTooSmall ReasonCode = "STEP_TOO_SMALL" // 移动距离不足
-	ReasonExecGap      ReasonCode = "EXEC_GAP"       // 可执行边界冲突
-	ReasonROIArm       ReasonCode = "ROI_LOCK_ARMED" // ROI锁盈触发
-	ReasonBreakEven    ReasonCode = "BREAK_EVEN_ARMED" // Break-even触发
-	ReasonRLock        ReasonCode = "R_LOCK"         // R_lock里程碑触发
-	ReasonNoChange     ReasonCode = "NO_CHANGE"      // 无改善
-	ReasonInvalidInput ReasonCode = "INVALID_INPUT"  // 输入数据无效
+	ReasonCooldown     ReasonCode = "COOLDOWN"           // 冷却期内
+	ReasonStepTooSmall ReasonCode = "STEP_TOO_SMALL"     // 移动距离不足
+	ReasonExecGap      ReasonCode = "EXEC_GAP"           // 可执行边界冲突
+	ReasonROIArm       ReasonCode = "ROI_LOCK_ARMED"     // ROI锁盈触发
+	ReasonBreakEven    ReasonCode = "BREAK_EVEN_ARMED"   // [V-20.0 DEPRECATED] Break-even触发（已移除）
+	ReasonRLock        ReasonCode = "R_LOCK"             // [V-20.0 DEPRECATED] R_lock里程碑触发（已移除）
+	ReasonNoChange     ReasonCode = "NO_CHANGE"          // 无改善
+	ReasonInvalidInput ReasonCode = "INVALID_INPUT"      // 输入数据无效
 )
 
 // StopUpdatePlan 止损更新计划（包含armed/stage回写字段）
@@ -99,8 +99,8 @@ type StopUpdatePlan struct {
 
 	// 状态机回写（即使本次未更新，也需保持armed/stage状态）
 	NextROIArmed       bool // 下次ROIArmed状态
-	NextBreakEvenArmed bool // 下次BreakEvenArmed状态
-	NextRLockStage     int  // 下次RLockStage状态
+	NextBreakEvenArmed bool // [V-20.0 DEPRECATED] 下次BreakEvenArmed状态（已移除，保留字段用于兼容）
+	NextRLockStage     int  // [V-20.0 DEPRECATED] 下次RLockStage状态（已移除，保留字段用于兼容）
 }
 
 // ExecBounds 可执行边界（止损价格必须在此范围内）
