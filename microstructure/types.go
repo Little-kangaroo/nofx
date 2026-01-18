@@ -183,18 +183,25 @@ type MicrostructureConfig struct {
 	CVDWindowDuration    time.Duration `json:"cvd_window_duration"`    // CVD计算窗口（默认1小时）
 	CVDCleanupInterval   time.Duration `json:"cvd_cleanup_interval"`   // 清理间隔（默认5分钟）
 	CVDDivergenceThreshold float64     `json:"cvd_divergence_threshold"` // 背离阈值（默认0.1）
-	
+
 	// 盘口配置
 	OrderBookDepth       int           `json:"orderbook_depth"`        // 盘口深度（默认20）
 	WallThresholdMultiple float64     `json:"wall_threshold_multiple"` // 挂单墙阈值倍数（默认5.0）
 	ImbalanceSmoothing   int           `json:"imbalance_smoothing"`    // 失衡平滑周期（默认5）
-	
+
 	// 数据源配置
 	SpotWsURL            string        `json:"spot_ws_url"`            // 现货WebSocket地址
 	FuturesWsURL         string        `json:"futures_ws_url"`         // 合约WebSocket地址
 	ReconnectInterval    time.Duration `json:"reconnect_interval"`     // 重连间隔
 	StaleDataThreshold   time.Duration `json:"stale_data_threshold"`   // 数据过期阈值
-	
+
+	// 🔥 T10新增：历史数据与内存管理
+	HistoryRetention     time.Duration `json:"history_retention"`      // 历史数据保留时长（默认24小时）
+	MaxRecordsPerSymbol  int           `json:"max_records_per_symbol"` // 每个币种最大记录数（默认1440=24h*60m）
+	MemoryLimitMB        int           `json:"memory_limit_mb"`        // 内存上限MB（默认100MB）
+	MetricsInterval      time.Duration `json:"metrics_interval"`       // 指标采集间隔（默认1分钟）
+	EnableMetrics        bool          `json:"enable_metrics"`         // 启用监控指标（默认true）
+
 	// 功能开关
 	EnableCVDAnalysis    bool          `json:"enable_cvd_analysis"`    // 启用CVD分析
 	EnableOrderBook      bool          `json:"enable_orderbook"`       // 启用盘口分析
@@ -207,16 +214,23 @@ func DefaultMicrostructureConfig() *MicrostructureConfig {
 		CVDWindowDuration:      time.Hour,
 		CVDCleanupInterval:     5 * time.Minute,
 		CVDDivergenceThreshold: 0.1,
-		
+
 		OrderBookDepth:        20,
 		WallThresholdMultiple: 5.0,
 		ImbalanceSmoothing:    5,
-		
+
 		SpotWsURL:    "wss://stream.binance.com/ws/",
 		FuturesWsURL: "wss://fstream.binance.com/ws/",
 		ReconnectInterval:    30 * time.Second,
 		StaleDataThreshold:   2 * time.Minute,
-		
+
+		// 🔥 T10新增：默认历史数据与内存管理配置
+		HistoryRetention:     24 * time.Hour, // 保留24小时历史
+		MaxRecordsPerSymbol:  1440,           // 24小时*60分钟=1440记录
+		MemoryLimitMB:        100,            // 100MB内存上限
+		MetricsInterval:      1 * time.Minute,// 每分钟采集一次指标
+		EnableMetrics:        true,           // 启用监控
+
 		EnableCVDAnalysis:     true,
 		EnableOrderBook:       true,
 		EnableSignalDetection: true,
@@ -235,3 +249,35 @@ const (
 	CVDSignalSpotLeading      = "spot_leading"        // 现货领先
 	CVDSignalFuturesLeading   = "futures_leading"     // 合约领先
 )
+
+// ===== 🔥 T10新增：监控指标结构 =====
+
+// MemoryMetrics 内存使用指标
+type MemoryMetrics struct {
+	TotalAllocMB     float64 `json:"total_alloc_mb"`      // 总分配内存(MB)
+	HeapAllocMB      float64 `json:"heap_alloc_mb"`       // 堆分配内存(MB)
+	HeapInUseMB      float64 `json:"heap_in_use_mb"`      // 堆使用中内存(MB)
+	NumGC            uint32  `json:"num_gc"`              // GC次数
+	LastGCPauseMs    float64 `json:"last_gc_pause_ms"`    // 最后一次GC暂停时间(ms)
+	Timestamp        time.Time `json:"timestamp"`         // 采集时间
+}
+
+// ComponentMetrics 组件级别指标
+type ComponentMetrics struct {
+	SymbolCount      int       `json:"symbol_count"`        // 跟踪的币种数量
+	TotalRecords     int       `json:"total_records"`       // 总记录数
+	AvgRecordsPerSymbol float64 `json:"avg_records_per_symbol"` // 平均每币种记录数
+	OldestRecordAge  time.Duration `json:"oldest_record_age"` // 最老记录年龄
+	CleanupCount     int64     `json:"cleanup_count"`       // 清理次数
+	LastCleanupTime  time.Time `json:"last_cleanup_time"`   // 最后清理时间
+	EstimatedMemoryMB float64  `json:"estimated_memory_mb"` // 估算内存占用(MB)
+}
+
+// MicrostructureMetrics 微观结构整体指标（T10新增）
+type MicrostructureMetrics struct {
+	Memory          MemoryMetrics    `json:"memory"`          // 内存指标
+	CVDComponent    ComponentMetrics `json:"cvd_component"`   // CVD组件指标
+	OIComponent     ComponentMetrics `json:"oi_component"`    // OI组件指标
+	OrderBookComponent ComponentMetrics `json:"orderbook_component"` // OrderBook组件指标
+	Timestamp       time.Time        `json:"timestamp"`       // 指标采集时间
+}

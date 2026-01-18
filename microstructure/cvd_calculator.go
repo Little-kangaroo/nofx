@@ -40,12 +40,24 @@ func validateFinancialData(price, quantity float64) bool {
 }
 
 // NewCVDCalculator 创建CVD计算器
+// CVDCalculator CVD计算器（滑动窗口）（types.go中定义结构）
+// 添加清理统计字段（不修改types.go）
+// 注: CVDCalculator结构定义在types.go中，这里只是注释说明
+
 func NewCVDCalculator(symbol string, windowDuration time.Duration) *CVDCalculator {
 	now := time.Now()
+
+	// 🔥 T10修复：基于窗口大小动态预分配容量
+	// 假设每秒1笔交易，根据窗口大小计算容量
+	capacity := int(windowDuration.Seconds())
+	if capacity < 100 {
+		capacity = 100 // 最小100条
+	}
+
 	return &CVDCalculator{
 		symbol:           symbol,
-		spotDeltas:       make([]CVDDelta, 0, 3600), // 预分配1小时的容量（假设每秒1笔交易）
-		futuresDeltas:    make([]CVDDelta, 0, 3600),
+		spotDeltas:       make([]CVDDelta, 0, capacity), // 🔥 T10：动态容量
+		futuresDeltas:    make([]CVDDelta, 0, capacity), // 🔥 T10：动态容量
 		windowDuration:   windowDuration,
 		lastCleanup:      now,
 		currentSpotCVD:   0,
@@ -125,7 +137,11 @@ func (calc *CVDCalculator) ProcessTrade(trade *TradeData) {
 // cleanupExpiredData 清理过期的CVD数据
 func (calc *CVDCalculator) cleanupExpiredData() {
 	cutoffTime := time.Now().Add(-calc.windowDuration)
-	
+
+	// 🔥 T10修复：记录清理前的统计数据
+	beforeSpot := len(calc.spotDeltas)
+	beforeFutures := len(calc.futuresDeltas)
+
 	// 清理现货数据
 	calc.currentSpotCVD = 0
 	validSpotDeltas := make([]CVDDelta, 0, len(calc.spotDeltas))
@@ -148,8 +164,19 @@ func (calc *CVDCalculator) cleanupExpiredData() {
 	}
 	calc.futuresDeltas = validFuturesDeltas
 
-	log.Printf("🧹 [%s] CVD数据清理完成 - 现货记录:%d, 合约记录:%d", 
-		calc.symbol, len(calc.spotDeltas), len(calc.futuresDeltas))
+	// 🔥 T10修复：增强清理日志，显示清理前后对比
+	afterSpot := len(calc.spotDeltas)
+	afterFutures := len(calc.futuresDeltas)
+	cleanedSpot := beforeSpot - afterSpot
+	cleanedFutures := beforeFutures - afterFutures
+
+	if cleanedSpot > 0 || cleanedFutures > 0 {
+		log.Printf("🧹 [%s] CVD数据清理 - 现货:%d→%d(-%d), 合约:%d→%d(-%d), 窗口:%.0fm",
+			calc.symbol,
+			beforeSpot, afterSpot, cleanedSpot,
+			beforeFutures, afterFutures, cleanedFutures,
+			calc.windowDuration.Minutes())
+	}
 }
 
 // GetCurrentCVD 获取当前CVD数据
@@ -170,8 +197,8 @@ func (calc *CVDCalculator) GetCurrentCVD() *CVDData {
 		FuturesCVD1H:  calc.currentFuturesCVD,
 		CVDDivergence: divergence,
 		Signal:        signal,
-		LastUpdate:    time.Now(),
-		IsStale:       isStale, // 🔧 修复：使用实际的过期判断而非硬编码false
+		LastUpdate:    calc.lastDataUpdate, // 🔥 T03修复：使用真实数据更新时间，而非time.Now()
+		IsStale:       isStale,
 	}
 }
 
@@ -1243,17 +1270,22 @@ func (calc *CVDCalculator) GetPriceAtTime(targetTime time.Time) float64 {
 	return calc.findPriceAtTime(targetTime)
 }
 
-// CalculateVolatility 🔧 P0-01修复：计算指定时间窗口的价格波动率
+// CalculateVolatility 🔧 P0-01修复：计算指定时间窗口的价格波动率（兼容版本）
 func (calc *CVDCalculator) CalculateVolatility(window time.Duration) float64 {
+	return calc.CalculateVolatilityAt(window, time.Now())
+}
+
+// CalculateVolatilityAt 🔥 T01修复：基于refTime计算指定时间窗口的价格波动率
+func (calc *CVDCalculator) CalculateVolatilityAt(window time.Duration, refTime time.Time) float64 {
 	calc.mu.RLock()
 	defer calc.mu.RUnlock()
-	
+
 	if len(calc.priceHistory) < 2 {
 		return 0.0
 	}
-	
-	now := time.Now()
-	cutoffTime := now.Add(-window)
+
+	// 🔥 T01修复：使用refTime而非time.Now()
+	cutoffTime := refTime.Add(-window)
 	
 	// 收集时间窗口内的价格变化率
 	var returns []float64

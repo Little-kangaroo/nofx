@@ -17,6 +17,96 @@ import (
 
 // ===== 订单流管理器主结构 =====
 
+// OIFetchStrategy 🔥 T07新增：OI拉取策略（退避与限流）
+type OIFetchStrategy struct {
+	mu                 sync.RWMutex
+	consecutiveFailures int           // 连续失败次数
+	lastFetchTime      time.Time     // 上次拉取时间
+	lastSuccessTime    time.Time     // 上次成功时间
+	currentInterval    time.Duration // 当前拉取间隔
+	baseInterval       time.Duration // 基础间隔（30秒）
+	maxInterval        time.Duration // 最大间隔（5分钟）
+	minInterval        time.Duration // 最小间隔（10秒，限流用）
+	backoffMultiplier  float64       // 退避倍数（2.0）
+}
+
+// NewOIFetchStrategy 🔥 T07新增：创建OI拉取策略
+func NewOIFetchStrategy() *OIFetchStrategy {
+	return &OIFetchStrategy{
+		consecutiveFailures: 0,
+		baseInterval:       30 * time.Second,
+		currentInterval:    30 * time.Second,
+		maxInterval:        5 * time.Minute,
+		minInterval:        10 * time.Second,
+		backoffMultiplier:  2.0,
+		lastSuccessTime:    time.Now(),
+	}
+}
+
+// ShouldFetch 🔥 T07新增：判断是否应该发起拉取（限流检查）
+func (s *OIFetchStrategy) ShouldFetch() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// 限流：距离上次拉取必须超过最小间隔
+	if time.Since(s.lastFetchTime) < s.minInterval {
+		return false
+	}
+
+	// 退避：距离上次拉取必须超过当前间隔
+	return time.Since(s.lastFetchTime) >= s.currentInterval
+}
+
+// RecordSuccess 🔥 T07新增：记录成功拉取
+func (s *OIFetchStrategy) RecordSuccess() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.consecutiveFailures = 0
+	s.currentInterval = s.baseInterval // 重置为基础间隔
+	s.lastFetchTime = time.Now()
+	s.lastSuccessTime = time.Now()
+}
+
+// RecordFailure 🔥 T07新增：记录失败拉取（应用退避策略）
+func (s *OIFetchStrategy) RecordFailure() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.consecutiveFailures++
+	s.lastFetchTime = time.Now()
+
+	// 指数退避：interval = baseInterval * (backoffMultiplier ^ failures)
+	newInterval := time.Duration(float64(s.baseInterval) * math.Pow(s.backoffMultiplier, float64(s.consecutiveFailures)))
+
+	// 限制在最大间隔内
+	if newInterval > s.maxInterval {
+		newInterval = s.maxInterval
+	}
+
+	s.currentInterval = newInterval
+}
+
+// GetCurrentInterval 🔥 T07新增：获取当前间隔
+func (s *OIFetchStrategy) GetCurrentInterval() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.currentInterval
+}
+
+// GetStats 🔥 T07新增：获取统计信息
+func (s *OIFetchStrategy) GetStats() map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return map[string]interface{}{
+		"consecutive_failures": s.consecutiveFailures,
+		"current_interval_sec": s.currentInterval.Seconds(),
+		"last_fetch_ago_sec":   time.Since(s.lastFetchTime).Seconds(),
+		"last_success_ago_sec": time.Since(s.lastSuccessTime).Seconds(),
+	}
+}
+
 // OrderFlowManager 订单流分析管理器（统一管理所有组件）
 type OrderFlowManager struct {
 	// 核心组件
@@ -35,6 +125,9 @@ type OrderFlowManager struct {
 	// 🆕 协程监控
 	activeOIGoroutines   map[string]time.Time // symbol -> 上次活动时间
 	goroutineCheckTicker *time.Ticker         // 协程检查定时器
+
+	// 🔥 T07新增：OI拉取策略管理
+	oiFetchStrategy map[string]*OIFetchStrategy // symbol -> 拉取策略
 
 	// 🔧 修复: 数据流健康监控
 	dataFlowHealth map[string]map[string]time.Time // symbol -> {trade/depth -> 最后数据时间}
@@ -58,6 +151,7 @@ func NewOrderFlowManager(config *MicrostructureConfig) *OrderFlowManager {
 		latestPriceContext: make(map[string]*PriceContext),
 		activeOIGoroutines: make(map[string]time.Time),            // 🆕 初始化协程监控
 		dataFlowHealth:     make(map[string]map[string]time.Time), // 🔧 修复: 初始化数据流监控
+		oiFetchStrategy:    make(map[string]*OIFetchStrategy),     // 🔥 T07新增：初始化OI拉取策略
 	}
 
 	// 初始化各个组件
@@ -129,8 +223,8 @@ func (ofm *OrderFlowManager) setupWebSocketHandlers() {
 			log.Printf("⚠️ CVDManager为nil，跳过交易数据处理: %s", tradeData.Symbol)
 		}
 
-		// 更新价格上下文
-		ofm.updatePriceContext(tradeData.Symbol, tradeData.Price)
+		// 🔥 T01修复：更新价格上下文时传递时间戳
+		ofm.updatePriceContext(tradeData.Symbol, tradeData.Price, tradeData.Timestamp)
 
 		// 🔧 修复: 检测数据流中断
 		ofm.updateDataFlowHealth(tradeData.Symbol, "trade")
@@ -164,8 +258,8 @@ func (ofm *OrderFlowManager) setupWebSocketHandlers() {
 	log.Printf("✅ WebSocket数据处理器设置完成（增强错误处理）")
 }
 
-// updatePriceContext 更新价格上下文
-func (ofm *OrderFlowManager) updatePriceContext(symbol string, currentPrice float64) {
+// updatePriceContext 🔥 T01修复：更新价格上下文（使用事件时间）
+func (ofm *OrderFlowManager) updatePriceContext(symbol string, currentPrice float64, eventTime time.Time) {
 	ofm.mu.Lock()
 	defer ofm.mu.Unlock()
 
@@ -186,9 +280,9 @@ func (ofm *OrderFlowManager) updatePriceContext(symbol string, currentPrice floa
 		ofm.calculateAndUpdatePriceChanges(priceCtx, symbol, currentPrice)
 	}
 
-	// 🔧 修复：同时更新CVD管理器的价格历史，确保CVD计算器能正确计算价格变化
+	// 🔥 T01修复：同时更新CVD管理器的价格历史，使用eventTime而非time.Now()
 	if ofm.cvdManager != nil {
-		ofm.cvdManager.UpdatePrice(symbol, currentPrice, time.Now())
+		ofm.cvdManager.UpdatePrice(symbol, currentPrice, eventTime)
 	}
 }
 
@@ -301,12 +395,18 @@ func (ofm *OrderFlowManager) SubscribeSymbol(symbol string) error {
 	return nil
 }
 
-// subscribeOIStream 订阅OI数据流（内部方法）
+// subscribeOIStream 订阅OI数据流（内部方法）- 🔥 T07修复：支持退避与限流
 func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
+	// 🔥 T07新增：初始化拉取策略
+	ofm.mu.Lock()
+	ofm.oiFetchStrategy[symbol] = NewOIFetchStrategy()
+	ofm.mu.Unlock()
+
 	// 启动定期获取OI数据的协程
 	go func() {
-		log.Printf("🔄 [%s] OI更新协程启动", symbol)
-		ticker := time.NewTicker(30 * time.Second) // 🔧 修复：提升OI数据更新频率至30秒
+		log.Printf("🔄 [%s] OI更新协程启动（支持退避策略）", symbol)
+		// 🔥 T07修复：使用基础间隔的ticker，实际拉取由策略控制
+		ticker := time.NewTicker(10 * time.Second) // 检查间隔10秒，实际拉取由策略判断
 		defer ticker.Stop()
 
 		// 🆕 增强的协程退出检测和日志
@@ -346,6 +446,7 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 			ofm.mu.RLock()
 			globalRunning := ofm.isRunning
 			symbolSubscribed := ofm.subscribedSymbols[symbol]
+			strategy := ofm.oiFetchStrategy[symbol] // 🔥 T07新增：获取拉取策略
 			ofm.mu.RUnlock()
 
 			//log.Printf("🔄 [%s] 检查状态: 全局运行=%v, 币种订阅=%v", symbol, globalRunning, symbolSubscribed)
@@ -367,6 +468,12 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 				return
 			}
 
+			// 🔥 T07新增：检查是否应该拉取（退避与限流）
+			if strategy == nil || !strategy.ShouldFetch() {
+				// 不应拉取，跳过此次
+				continue
+			}
+
 			//log.Printf("🔄 [%s] 开始获取OI数据", symbol)
 			ofm.fetchAndProcessOIData(symbol)
 			//log.Printf("🔄 [%s] OI数据获取完成", symbol)
@@ -376,11 +483,19 @@ func (ofm *OrderFlowManager) subscribeOIStream(symbol string) error {
 	return nil
 }
 
-// fetchAndProcessOIData 获取并处理OI数据
+// fetchAndProcessOIData 获取并处理OI数据 - 🔥 T07修复：支持退避策略
 func (ofm *OrderFlowManager) fetchAndProcessOIData(symbol string) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("❌ 获取OI数据异常 %s: %v", symbol, r)
+			// 🔥 T07新增：记录失败
+			ofm.mu.RLock()
+			if strategy, exists := ofm.oiFetchStrategy[symbol]; exists {
+				strategy.RecordFailure()
+				log.Printf("⚠️ [%s] OI拉取失败，应用退避策略，下次间隔: %.1fs",
+					symbol, strategy.GetCurrentInterval().Seconds())
+			}
+			ofm.mu.RUnlock()
 		}
 	}()
 
@@ -393,11 +508,28 @@ func (ofm *OrderFlowManager) fetchAndProcessOIData(symbol string) {
 	oiData, err := ofm.getOpenInterestFromAPI(symbol)
 	if err != nil {
 		log.Printf("❌ 获取OI数据失败 %s: %v", symbol, err)
+		// 🔥 T07新增：记录失败
+		ofm.mu.RLock()
+		if strategy, exists := ofm.oiFetchStrategy[symbol]; exists {
+			strategy.RecordFailure()
+			stats := strategy.GetStats()
+			log.Printf("⚠️ [%s] OI拉取失败 (连续失败: %d次)，应用退避策略，下次间隔: %.1fs",
+				symbol, stats["consecutive_failures"], strategy.GetCurrentInterval().Seconds())
+		}
+		ofm.mu.RUnlock()
 		return
 	}
 
 	// 传递给OI管理器处理
 	ofm.oiManager.ProcessOIData(symbol, oiData)
+
+	// 🔥 T07新增：记录成功
+	ofm.mu.RLock()
+	if strategy, exists := ofm.oiFetchStrategy[symbol]; exists {
+		strategy.RecordSuccess()
+	}
+	ofm.mu.RUnlock()
+
 	log.Printf("✅ 成功获取并处理OI数据 %s: %.0f", symbol, oiData.OpenInterest)
 }
 
@@ -470,8 +602,8 @@ func (ofm *OrderFlowManager) GetMarketSnapshotAt(symbol string, eventTime time.T
 
 	// 获取各个组件的数据
 	cvdData := ofm.cvdManager.GetCVDData(symbol)
-	oiAnalysis := ofm.oiManager.GetOIAnalysis(symbol)
-	orderBookData := ofm.orderBookManager.GetCurrentOrderBookData(symbol, 5)
+	oiAnalysis := ofm.oiManager.GetOIAnalysisAt(symbol, eventTime) // 🔥 T04修复：使用refTime版本
+	orderBookData := ofm.orderBookManager.GetCurrentOrderBookDataAt(symbol, 5, eventTime) // 🔥 T05修复：使用refTime版本
 
 	// 获取价格上下文
 	ofm.mu.RLock()
@@ -494,19 +626,19 @@ func (ofm *OrderFlowManager) GetMarketSnapshotAt(symbol string, eventTime time.T
 					Change4H:     0,
 					Volatility:   0,
 				}
-				
-				// 计算变化率
-				now := time.Now()
-				price1HourAgo := calc.GetPriceAtTime(now.Add(-1 * time.Hour))
-				price4HourAgo := calc.GetPriceAtTime(now.Add(-4 * time.Hour))
-				
+
+				// 🔥 T01修复：使用eventTime而非time.Now()计算变化率
+				price1HourAgo := calc.GetPriceAtTime(eventTime.Add(-1 * time.Hour))
+				price4HourAgo := calc.GetPriceAtTime(eventTime.Add(-4 * time.Hour))
+
 				if price1HourAgo > 0 {
 					priceContext.Change1H = ((latestPrice - price1HourAgo) / price1HourAgo) * 100
 				}
 				if price4HourAgo > 0 {
 					priceContext.Change4H = ((latestPrice - price4HourAgo) / price4HourAgo) * 100
 				}
-				priceContext.Volatility = calc.CalculateVolatility(1 * time.Hour)
+				// 🔥 T01修复：使用eventTime计算波动率
+				priceContext.Volatility = calc.CalculateVolatilityAt(1*time.Hour, eventTime)
 			} else {
 				// 如果没有价格历史，返回空上下文
 				priceContext = &PriceContext{
@@ -537,8 +669,8 @@ func (ofm *OrderFlowManager) GetMarketSnapshotAt(symbol string, eventTime time.T
 	// 生成宏观趋势数据
 	macroTrend := ofm.generateMacroTrendData(symbol, cvdData, oiAnalysis)
 
-	// 计算数据质量评估
-	dataQuality := ofm.calculateDataQuality(symbol, cvdData, oiAnalysis, orderBookData)
+	// 🔥 T06修复：计算数据质量评估，使用eventTime作为时间基准
+	dataQuality := ofm.calculateDataQualityAt(symbol, cvdData, oiAnalysis, orderBookData, eventTime)
 
 	return &MarketSnapshot{
 		Symbol: symbol,
@@ -745,14 +877,17 @@ type MarketSnapshot struct {
 	DataQuality *DataQualityInfo `json:"data_quality"` // 数据质量评估
 }
 
-// ToAIPayload 转换为AI输入的JSON格式（V2.0结构 + V-12.2增强）
+// ToAIPayload 🔥 T02修复：转换为AI输入的JSON格式（禁止二次取样）
 func (ms *MarketSnapshot) ToAIPayload() map[string]interface{} {
 	// 优先使用V-12.2 AI接口
 	aiInterface := GetGlobalAIInterfaceV12()
 	if aiInterface != nil {
-		if contextV12, err := aiInterface.GenerateAIContext(ms.Symbol); err == nil {
+		// 🔥 T02修复：使用 GenerateAIContextFromSnapshot，禁止调用 GenerateAIContext(symbol)
+		contextV12, err := aiInterface.GenerateAIContextFromSnapshot(ms)
+		if err == nil {
 			return contextV12.ToAIPromptFormat()
 		}
+		log.Printf("⚠️ [T02] AI接口可用但生成失败，降级到V2.0格式: %v", err)
 	}
 
 	// V2.0兜底格式
@@ -1125,7 +1260,14 @@ func (ofm *OrderFlowManager) generateMacroTrendData(symbol string, cvdData *CVDD
 }
 
 // calculateDataQuality 计算数据质量评估（V-12.3 P0-06修复版本 - 真实组件更新时间）
+// calculateDataQuality 🔥 T06修复：计算数据质量（使用refTime作为时间基准）
 func (ofm *OrderFlowManager) calculateDataQuality(symbol string, cvdData *CVDData, oiAnalysis *OIAnalysis, orderBookData *OrderBookData) *DataQualityInfo {
+	// 兼容性：如果调用方未传入refTime，使用time.Now()
+	return ofm.calculateDataQualityAt(symbol, cvdData, oiAnalysis, orderBookData, time.Now())
+}
+
+// calculateDataQualityAt 🔥 T06修复：使用明确的refTime计算数据质量
+func (ofm *OrderFlowManager) calculateDataQualityAt(symbol string, cvdData *CVDData, oiAnalysis *OIAnalysis, orderBookData *OrderBookData, refTime time.Time) *DataQualityInfo {
 	// CVD数据可靠性
 	cvdReliability := ofm.calculateCVDReliability(cvdData)
 
@@ -1167,21 +1309,21 @@ func (ofm *OrderFlowManager) calculateDataQuality(symbol string, cvdData *CVDDat
 			}
 		}
 	} else {
-		// 兜底：如果所有组件都无效，使用当前时间
-		lastDataUpdate = time.Now()
+		// 兜底：如果所有组件都无效，使用refTime
+		lastDataUpdate = refTime
 	}
 
-	// 🔥 P0-06修复：DataLagMs = now - min(组件时间) 衡量"最老组件落后多少"
+	// 🔥 T06修复：DataLagMs = refTime - min(组件时间) 衡量"最老组件落后多少"
+	// 关键修复：使用refTime而非time.Now()，确保eventTime触发时的一致性
 	var dataLagMs int64
 	if len(componentTimes) > 0 {
-		now := time.Now()
 		oldestComponentTime := componentTimes[0]
 		for _, t := range componentTimes[1:] {
 			if t.Before(oldestComponentTime) {
 				oldestComponentTime = t
 			}
 		}
-		dataLagMs = now.Sub(oldestComponentTime).Milliseconds()
+		dataLagMs = refTime.Sub(oldestComponentTime).Milliseconds()
 	} else {
 		// 兜底：如果没有有效组件，延迟设为最大值
 		dataLagMs = 60000 // 1分钟

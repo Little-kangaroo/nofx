@@ -82,21 +82,35 @@ func GetStandardizedFieldMapping() *StandardizedFieldMapping {
 	}
 }
 
-// GenerateStandardizedAIPayload 🔥 P0-07修复：生成标准化AI输出
+// GenerateStandardizedAIPayload 🔥 T02修复：生成标准化AI输出（禁止二次取样）
 func GenerateStandardizedAIPayload(ms *MarketSnapshot) *AIPayloadStandard {
+	if ms == nil {
+		return &AIPayloadStandard{
+			Version:       "T02-fixed",
+			QualityStatus: "FATAL",
+			CompatMode:    "ERROR",
+			SystemStatus: AISystemStatus{
+				AIInterfaceAvailable: false,
+				SystemMode:           "FATAL",
+				DegradationReason:    "MarketSnapshot为nil",
+			},
+		}
+	}
+
 	mapping := GetStandardizedFieldMapping()
-	timestamp := time.Now()
-	
+	// 🔥 T02修复：使用 ms.Timestamp 而非 time.Now()
+	timestamp := ms.Timestamp
+
 	// 🔥 P0-07修复：检测AI接口状态
 	aiInterface := GetGlobalAIInterfaceV12()
 	systemStatus := evaluateAISystemStatus(aiInterface, timestamp)
-	
+
 	var mainContent map[string]interface{}
 	var compatMode string
-	
+
 	if systemStatus.AIInterfaceAvailable {
-		// 主路径：V-12.2 AI接口
-		if contextV12, err := aiInterface.GenerateAIContext(ms.Symbol); err == nil {
+		// 🔥 T02修复：主路径使用 GenerateAIContextFromSnapshot，禁止二次取样
+		if contextV12, err := aiInterface.GenerateAIContextFromSnapshot(ms); err == nil {
 			mainContent = contextV12.ToAIPromptFormat()
 			compatMode = "V12.2"
 		} else {
@@ -112,18 +126,18 @@ func GenerateStandardizedAIPayload(ms *MarketSnapshot) *AIPayloadStandard {
 		mainContent = generateFallbackContentWithStandardFields(ms, mapping)
 		compatMode = "V2.0_FALLBACK"
 	}
-	
+
 	// 🔥 P0-07修复：确定质量状态
 	qualityStatus := determineQualityStatus(systemStatus, ms.DataQuality)
-	
+
 	return &AIPayloadStandard{
-		Version:      "P0-07-fixed",
-		Symbol:       ms.Symbol,
-		Timestamp:    timestamp,
-		SystemStatus: systemStatus,
-		MainContent:  mainContent,
+		Version:       "T02-fixed",
+		Symbol:        ms.Symbol,
+		Timestamp:     timestamp, // 🔥 T02修复：使用快照时间戳
+		SystemStatus:  systemStatus,
+		MainContent:   mainContent,
 		QualityStatus: qualityStatus,
-		CompatMode:   compatMode,
+		CompatMode:    compatMode,
 	}
 }
 

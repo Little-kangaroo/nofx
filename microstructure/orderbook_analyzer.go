@@ -67,16 +67,27 @@ type OrderBookCalculator struct {
 	wallThreshold  float64                         // 挂单墙阈值倍数（默认5倍平均档位量）
 	maxHistorySize int                             // 最大历史记录数量
 	pressureMode   PressureCalculationMode         // 🔧 P2-1新增：压力计算模式
+	exchangeInfo   *ExchangeInfoManager            // 🔥 T08新增：交易所信息管理器
 }
 
 // NewOrderBookCalculator 创建盘口计算器（支持多交易对）
 func NewOrderBookCalculator(wallThreshold float64) *OrderBookCalculator {
-	return &OrderBookCalculator{
+	calc := &OrderBookCalculator{
 		symbolData:     make(map[string]*SymbolOrderBookData),
 		wallThreshold:  wallThreshold,
 		maxHistorySize: 100,
 		pressureMode:   PressureModeDeep, // 🔧 P2-1修复：默认使用深度模式，比简单模式更准确
+		exchangeInfo:   NewExchangeInfoManager(), // 🔥 T08新增：初始化交易所信息管理器
 	}
+
+	// 🔥 T08新增：启动时获取一次交易所信息
+	go func() {
+		if err := calc.exchangeInfo.FetchExchangeInfo(); err != nil {
+			log.Printf("⚠️ 初始化交易所信息失败: %v，将使用兜底配置", err)
+		}
+	}()
+
+	return calc
 }
 
 // NewOrderBookCalculatorWithMode 创建带模式的盘口计算器（🔧 P2-1新增）
@@ -120,9 +131,16 @@ func (calc *OrderBookCalculator) getOrCreateSymbolData(symbol string) *SymbolOrd
 	return data
 }
 
-// calculateTickSize 动态计算价格分桶大小
+// calculateTickSize 🔥 T08修复：从ExchangeInfo动态获取分桶大小
 func (calc *OrderBookCalculator) calculateTickSize(symbol string) float64 {
-	// 🔧 修复：基于币种动态计算分桶大小，解决浮点数陷阱
+	if calc.exchangeInfo != nil {
+		bucketSize := calc.exchangeInfo.GetBucketSize(symbol)
+		if bucketSize > 0 {
+			return bucketSize
+		}
+	}
+
+	// 🔥 T08兜底：如果ExchangeInfo不可用，使用智能默认值
 	if symbol == "BTCUSDT" {
 		return 10.0 // BTC: 10USD为一个分桶
 	} else if symbol == "ETHUSDT" {
@@ -155,8 +173,9 @@ func (calc *OrderBookCalculator) ProcessDepthData(symbol string, depthData *Dept
 	symbolData := calc.getOrCreateSymbolData(symbol)
 
 	// 🔥 P0-03修复：强制排序和同价位合并，确保数据正确性
-	processedBids := calc.processAndSortOrderBookLevels(depthData.Bids, "bids")
-	processedAsks := calc.processAndSortOrderBookLevels(depthData.Asks, "asks")
+	// 🔥 T09修复：传递symbol以获取正确的tickSize
+	processedBids := calc.processAndSortOrderBookLevels(depthData.Bids, "bids", symbol)
+	processedAsks := calc.processAndSortOrderBookLevels(depthData.Asks, "asks", symbol)
 
 	// 更新盘口数据（使用处理后的数据）
 	symbolData.currentBids = processedBids
@@ -181,7 +200,7 @@ func (calc *OrderBookCalculator) ProcessDepthData(symbol string, depthData *Dept
 		calc.recordOrderBookHealth(symbol, bestBid, bestAsk, len(processedBids), len(processedAsks))
 	}
 
-	// V2.0: 检查5分钟周期重置
+	// 🔥 T05修复：检查5分钟周期重置，使用depthData.Timestamp而非time.Now()
 	if depthData.Timestamp.Sub(symbolData.last5mReset) >= 5*time.Minute {
 		symbolData.wallChangeCount5m = 0
 		symbolData.last5mReset = depthData.Timestamp
@@ -198,15 +217,23 @@ func (calc *OrderBookCalculator) ProcessDepthData(symbol string, depthData *Dept
 	})
 }
 
-// processAndSortOrderBookLevels 处理和排序订单簿档位（V-12.3 P0-03修复版本）
-// 🔥 P0-03修复：强制排序、同价位合并、确保数据正确性
-func (calc *OrderBookCalculator) processAndSortOrderBookLevels(levels []OrderBookLevel, side string) []OrderBookLevel {
+// processAndSortOrderBookLevels 🔥 T09修复：处理和排序订单簿档位（使用tickIndex避免浮点数陷阱）
+func (calc *OrderBookCalculator) processAndSortOrderBookLevels(levels []OrderBookLevel, side string, symbol string) []OrderBookLevel {
 	if len(levels) == 0 {
 		return levels
 	}
 
-	// 第一步：使用map合并同价位数量
-	priceMap := make(map[float64]float64)
+	// 🔥 T09修复：从ExchangeInfo获取真实的tickSize
+	tickSize := 0.01 // 默认值
+	if calc.exchangeInfo != nil {
+		if realTickSize := calc.exchangeInfo.GetTickSize(symbol); realTickSize > 0 {
+			tickSize = realTickSize
+		}
+	}
+
+	// 🔥 T09修复：第一步：使用tickIndex map合并同价位数量，避免浮点数精度问题
+	priceIndexMap := make(map[int64]float64) // tickIndex -> 累计数量
+	priceMap := make(map[int64]float64)      // tickIndex -> 代表价格
 
 	for _, level := range levels {
 		// 跳过无效数据
@@ -214,16 +241,24 @@ func (calc *OrderBookCalculator) processAndSortOrderBookLevels(levels []OrderBoo
 			continue
 		}
 
-		// 同价位累加数量
-		priceMap[level.Price] += level.Quantity
+		// 🔥 T09修复：将价格转换为tickIndex
+		tickIndex := int64(math.Round(level.Price / tickSize))
+
+		// 同tickIndex累加数量
+		priceIndexMap[tickIndex] += level.Quantity
+
+		// 保存代表价格（使用第一次遇到的价格）
+		if _, exists := priceMap[tickIndex]; !exists {
+			priceMap[tickIndex] = level.Price
+		}
 	}
 
 	// 第二步：转换回slice
-	result := make([]OrderBookLevel, 0, len(priceMap))
-	for price, totalQty := range priceMap {
+	result := make([]OrderBookLevel, 0, len(priceIndexMap))
+	for tickIndex, totalQty := range priceIndexMap {
 		if totalQty > 0 { // 确保合并后数量仍为正
 			result = append(result, OrderBookLevel{
-				Price:    price,
+				Price:    priceMap[tickIndex], // 使用代表价格
 				Quantity: totalQty,
 			})
 		}
@@ -551,8 +586,13 @@ func (calc *OrderBookCalculator) getSmoothedImbalance(symbol string, smoothPerio
 	return sum / float64(count)
 }
 
-// GetCurrentOrderBookData 获取当前盘口分析数据（V2.0 - 集成缓存）
+// GetCurrentOrderBookData 获取当前盘口分析数据（兼容版本，使用当前时间）
 func (calc *OrderBookCalculator) GetCurrentOrderBookData(symbol string, smoothPeriods int) *OrderBookData {
+	return calc.GetCurrentOrderBookDataAt(symbol, smoothPeriods, time.Now())
+}
+
+// GetCurrentOrderBookDataAt 🔥 T05修复：基于refTime获取盘口分析数据
+func (calc *OrderBookCalculator) GetCurrentOrderBookDataAt(symbol string, smoothPeriods int, refTime time.Time) *OrderBookData {
 	calc.mu.RLock()
 	defer calc.mu.RUnlock()
 
@@ -585,14 +625,13 @@ func (calc *OrderBookCalculator) GetCurrentOrderBookData(symbol string, smoothPe
 	bidPressure := calc.calculatePressureEnhanced(symbol, symbolData.currentBids, true)
 	askPressure := calc.calculatePressureEnhanced(symbol, symbolData.currentAsks, false)
 
-	// 检查数据是否过期 - 🔧 修复：使用更合理的过期判断，盘口数据应该更严格
-	// 盘口数据是实时的，5分钟无更新就应该标记为过期
-	isStale := time.Since(symbolData.lastUpdate) > 5*time.Minute
+	// 🔥 T05修复：使用refTime检查数据是否过期，而非time.Now()
+	isStale := refTime.Sub(symbolData.lastUpdate) > 5*time.Minute
 
 	// V2.0: 计算额外的市场微观结构指标
 	imbalanceTrend := calc.calculateImbalanceTrend(symbol)
-	// 🔥 P0-04修复：使用symbolData.lastUpdate而非time.Now()
-	pressureDelta5m := calc.calculatePressureDelta5mFixed(symbol, bidPressure, askPressure, symbolData.lastUpdate)
+	// 🔥 T05修复：使用refTime而非symbolData.lastUpdate
+	pressureDelta5m := calc.calculatePressureDelta5mFixed(symbol, bidPressure, askPressure, refTime)
 	spoofingRisk := calc.calculateSpoofingRisk(symbol)
 	liquidityScore := calc.calculateLiquidityScore(symbol)
 

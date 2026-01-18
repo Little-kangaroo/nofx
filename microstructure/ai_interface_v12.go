@@ -244,22 +244,37 @@ func NewAIInterfaceV12() *AIInterfaceV12 {
 	}
 }
 
-// GenerateAIContext 生成V-12.2 AI分析上下文
+// GenerateAIContext 生成V-12.2 AI分析上下文（⚠️ Deprecated: 使用 GenerateAIContextFromSnapshot）
 func (ai *AIInterfaceV12) GenerateAIContext(symbol string) (*AIContextV12, error) {
+	log.Printf("⚠️ Deprecated: GenerateAIContext(symbol) - 建议使用 GenerateAIContextFromSnapshot 避免二次取样")
+
 	if ai.orderFlowManager == nil {
 		return nil, fmt.Errorf("订单流管理器未初始化")
 	}
-	
-	// 获取市场快照
+
+	// 🔥 T02修复：获取市场快照，使用 time.Now() 作为兼容路径
 	snapshot := ai.orderFlowManager.GetMarketSnapshot(symbol)
 	if snapshot == nil {
 		return nil, fmt.Errorf("无法获取%s的市场快照", symbol)
 	}
-	
+
+	// 🔥 T02修复：转调新接口，避免重复实现
+	return ai.GenerateAIContextFromSnapshot(snapshot)
+}
+
+// GenerateAIContextFromSnapshot 🔥 T02修复：基于快照生成AI上下文（推荐）
+func (ai *AIInterfaceV12) GenerateAIContextFromSnapshot(snapshot *MarketSnapshot) (*AIContextV12, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("快照不能为nil")
+	}
+
+	// 🔥 T02修复：使用 snapshot.Timestamp 而非 time.Now()
+	symbol := snapshot.Symbol
+
 	// 构建AI上下文
 	context := &AIContextV12{
 		Symbol:          symbol,
-		Timestamp:       time.Now(),
+		Timestamp:       snapshot.Timestamp, // 🔥 关键修复：使用快照时间戳
 		ProtocolVersion: "v12.2",
 	}
 	

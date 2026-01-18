@@ -65,11 +65,18 @@ type BinanceOIMsg struct {
 
 // NewOICalculator 创建OI计算器
 func NewOICalculator(symbol string, windowDuration time.Duration) *OICalculator {
+	// 🔥 T10修复：基于窗口大小动态计算容量和最大记录数
+	// OI数据通常每30秒更新一次
+	capacity := int(windowDuration.Minutes() * 2) // 每分钟2条记录
+	if capacity < 100 {
+		capacity = 100 // 最小100条
+	}
+
 	return &OICalculator{
 		symbol:         symbol,
-		changes:        make([]OIChange, 0, 1440), // 预分配24小时的容量（假设每分钟1次更新）
+		changes:        make([]OIChange, 0, capacity), // 🔥 T10：动态容量
 		windowDuration: windowDuration,
-		maxRecords:     1440, // 保留24小时的记录
+		maxRecords:     capacity, // 🔥 T10：与容量保持一致
 		lastUpdate:     time.Now(),
 	}
 }
@@ -104,16 +111,22 @@ func (calc *OICalculator) ProcessOIData(oiData *OIData) {
 	// 更新当前持仓量
 	calc.current = oiData.OpenInterest
 
+	// 🔥 T04修复：记录变化时，优先使用ExchangeTime用于窗口计算，兜底到Timestamp
+	recordTime := oiData.ExchangeTime
+	if recordTime.IsZero() {
+		recordTime = oiData.Timestamp // 兜底：使用接收时间
+	}
+
 	// 记录变化
 	oiChange := OIChange{
-		Timestamp:    oiData.Timestamp,
+		Timestamp:    recordTime,    // 🔥 T04修复：使用ExchangeTime用于窗口对齐
 		OpenInterest: oiData.OpenInterest,
 		Change:       change,
 		ChangeRate:   changeRate,
 	}
 
 	calc.changes = append(calc.changes, oiChange)
-	calc.lastUpdate = oiData.Timestamp
+	calc.lastUpdate = oiData.Timestamp // 健康度检查仍使用接收时间
 
 	// 清理过期数据
 	calc.cleanupExpiredData()
@@ -122,10 +135,15 @@ func (calc *OICalculator) ProcessOIData(oiData *OIData) {
 		calc.symbol, oiData.OpenInterest, change, changeRate)
 }
 
-// cleanupExpiredData 清理过期数据
+// cleanupExpiredData 清理过期数据（使用当前时间作为基准）
 func (calc *OICalculator) cleanupExpiredData() {
-	cutoffTime := time.Now().Add(-calc.windowDuration)
-	
+	calc.cleanupExpiredDataAt(time.Now())
+}
+
+// cleanupExpiredDataAt 🔥 T04修复：基于refTime清理过期数据
+func (calc *OICalculator) cleanupExpiredDataAt(refTime time.Time) {
+	cutoffTime := refTime.Add(-calc.windowDuration)
+
 	// 找到第一个有效记录的位置
 	validStart := -1 // 初始化为-1，表示没有找到有效记录
 	for i, change := range calc.changes {
@@ -151,14 +169,19 @@ func (calc *OICalculator) cleanupExpiredData() {
 	}
 }
 
-// GetOIAnalysis 获取持仓量分析结果
+// GetOIAnalysis 获取持仓量分析结果（兼容版本，使用当前时间）
 func (calc *OICalculator) GetOIAnalysis() *OIAnalysis {
+	return calc.GetOIAnalysisAt(time.Now())
+}
+
+// GetOIAnalysisAt 🔥 T04修复：基于refTime获取持仓量分析结果
+func (calc *OICalculator) GetOIAnalysisAt(refTime time.Time) *OIAnalysis {
 	calc.mu.RLock()
 	defer calc.mu.RUnlock()
 
 	if len(calc.changes) == 0 {
 		// 检查数据是否过期 - 即使没有历史变化数据，也要基于lastUpdate判断
-		isStale := time.Since(calc.lastUpdate) > 5*time.Minute // 🔧 修复：OI数据每30秒更新，5分钟无更新标记过期
+		isStale := refTime.Sub(calc.lastUpdate) > 5*time.Minute // 🔧 修复：OI数据每30秒更新，5分钟无更新标记过期
 		return &OIAnalysis{
 			Current:     calc.current,
 			Change1H:    0,
@@ -171,15 +194,15 @@ func (calc *OICalculator) GetOIAnalysis() *OIAnalysis {
 		}
 	}
 
-	// 计算1小时和4小时的变化
-	change1H, changeRate1H := calc.calculateChange(time.Hour)
-	change4H, changeRate4H := calc.calculateChange(4 * time.Hour)
+	// 🔥 T04修复：计算1小时和4小时的变化，使用refTime
+	change1H, changeRate1H := calc.calculateChangeAt(time.Hour, refTime)
+	change4H, changeRate4H := calc.calculateChangeAt(4*time.Hour, refTime)
 
 	// 判断趋势
 	trend := calc.determineTrend(changeRate1H)
 
-	// 检查数据是否过期 - 调整为30分钟阈值，给数据更新留足时间
-	isStale := time.Since(calc.lastUpdate) > 5*time.Minute // 🔧 修复：OI数据每30秒更新，5分钟无更新标记过期
+	// 🔥 T04修复：检查数据是否过期，使用refTime作为基准
+	isStale := refTime.Sub(calc.lastUpdate) > 5*time.Minute
 
 	return &OIAnalysis{
 		Current:      calc.current,
@@ -193,18 +216,24 @@ func (calc *OICalculator) GetOIAnalysis() *OIAnalysis {
 	}
 }
 
-// calculateChange 计算指定时间窗口的变化
+// calculateChange 计算指定时间窗口的变化（兼容版本，使用当前时间）
 func (calc *OICalculator) calculateChange(duration time.Duration) (change, changeRate float64) {
+	return calc.calculateChangeAt(duration, time.Now())
+}
+
+// calculateChangeAt 🔥 T04修复：基于refTime计算指定时间窗口的变化
+func (calc *OICalculator) calculateChangeAt(duration time.Duration, refTime time.Time) (change, changeRate float64) {
 	if len(calc.changes) == 0 {
 		return 0, 0
 	}
 
-	cutoffTime := time.Now().Add(-duration)
-	
+	// 🔥 T04修复：使用refTime作为基准计算窗口
+	cutoffTime := refTime.Add(-duration)
+
 	// 找到时间窗口开始时的OI值
 	var startOI float64
 	found := false
-	
+
 	for _, record := range calc.changes {
 		if record.Timestamp.After(cutoffTime) {
 			startOI = record.OpenInterest
@@ -279,8 +308,14 @@ func (manager *OIManager) GetOrCreateCalculator(symbol string) *OICalculator {
 		return calc
 	}
 
+	// 🔥 T10修复：使用配置化的历史保留时长
+	windowDuration := 24 * time.Hour // 默认24小时
+	if manager.config != nil && manager.config.HistoryRetention > 0 {
+		windowDuration = manager.config.HistoryRetention
+	}
+
 	// 创建新的计算器
-	calc := NewOICalculator(symbol, 24*time.Hour) // 保留24小时数据
+	calc := NewOICalculator(symbol, windowDuration)
 	manager.calculators[symbol] = calc
 	
 	log.Printf("✨ 创建OI计算器: %s", symbol)
@@ -300,11 +335,16 @@ func (manager *OIManager) ProcessOIMessage(message []byte) error {
 		return err
 	}
 
+	// 🔥 T04修复：设置双时间戳
+	exchangeTime := time.Unix(0, msg.Time*int64(time.Millisecond))      // 交易所统计时间
+	receivedTime := time.Unix(0, msg.EventTime*int64(time.Millisecond)) // 事件接收时间
+
 	// 创建OI数据
 	oiData := &OIData{
 		Symbol:       msg.Symbol,
 		OpenInterest: oi,
-		Timestamp:    time.Unix(0, msg.EventTime*int64(time.Millisecond)),
+		Timestamp:    receivedTime,  // 接收时间，用于健康度检查
+		ExchangeTime: exchangeTime,  // 交易所时间，用于事件对齐
 	}
 
 	// 处理数据
@@ -328,6 +368,11 @@ func (manager *OIManager) ProcessOIData(symbol string, oiData *OIData) {
 
 // GetOIAnalysis 获取指定币种的OI分析
 func (manager *OIManager) GetOIAnalysis(symbol string) *OIAnalysis {
+	return manager.GetOIAnalysisAt(symbol, time.Now())
+}
+
+// GetOIAnalysisAt 🔥 T04修复：基于refTime获取指定币种的OI分析
+func (manager *OIManager) GetOIAnalysisAt(symbol string, refTime time.Time) *OIAnalysis {
 	manager.mu.RLock()
 	calc, exists := manager.calculators[symbol]
 	manager.mu.RUnlock()
@@ -345,7 +390,7 @@ func (manager *OIManager) GetOIAnalysis(symbol string) *OIAnalysis {
 		}
 	}
 
-	return calc.GetOIAnalysis()
+	return calc.GetOIAnalysisAt(refTime)
 }
 
 // GetAllOIAnalysis 获取所有币种的OI分析
@@ -368,26 +413,29 @@ func (manager *OIManager) Cleanup() {
 
 	log.Printf("🧹 开始清理OI过期数据...")
 	cleanedCount := 0
-	
+	totalCleaned := 0
+
 	for symbol, calc := range manager.calculators {
 		calc.mu.Lock()
 		beforeChanges := len(calc.changes)
-		
+
 		// 调用内部清理方法
 		calc.cleanupExpiredData()
-		
+
 		afterChanges := len(calc.changes)
 		calc.mu.Unlock()
-		
-		// 记录清理情况
-		if beforeChanges != afterChanges {
-			log.Printf("🗑️  [%s] OI数据清理: 变化记录 %d→%d", 
-				symbol, beforeChanges, afterChanges)
+
+		// 🔥 T10修复：增强清理日志
+		cleaned := beforeChanges - afterChanges
+		if cleaned > 0 {
+			log.Printf("🗑️  [%s] OI数据清理: %d→%d (-%d), 窗口:%.0fh",
+				symbol, beforeChanges, afterChanges, cleaned, calc.windowDuration.Hours())
 			cleanedCount++
+			totalCleaned += cleaned
 		}
 	}
-	
-	log.Printf("✅ OI数据清理完成，清理了 %d 个币种的过期数据", cleanedCount)
+
+	log.Printf("✅ OI数据清理完成，清理了 %d 个币种，共 %d 条记录", cleanedCount, totalCleaned)
 }
 
 // ===== 🔧 修复: OI数据验证和异常处理方法 =====
