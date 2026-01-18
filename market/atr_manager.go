@@ -70,37 +70,46 @@ func (am *ATRManager) GetATR14(klines []Kline, timeframe string, currentPrice fl
 }
 
 // calculateATR14Standard 标准14周期ATR计算
+// 🔥 P0-02修复：统一使用Wilder平滑方法，与data.go的calculateATR保持完全一致
+// 修复前：使用最后14个TR的简单平均（SMA），导致ATR值不一致
+// 修复后：使用Wilder's Smoothing方法（RMA），确保所有模块的ATR计算一致
 func (am *ATRManager) calculateATR14Standard(klines []Kline) float64 {
-	if len(klines) < 14 {
+	period := 14
+
+	// 数据充足性检查：至少需要 period+1 根K线
+	if len(klines) < period+1 {
 		return 0
 	}
-	
-	var trs []float64
+
+	// 计算True Range序列
+	trs := make([]float64, len(klines))
 	for i := 1; i < len(klines); i++ {
 		high := klines[i].High
 		low := klines[i].Low
 		prevClose := klines[i-1].Close
-		
+
 		tr1 := high - low
 		tr2 := math.Abs(high - prevClose)
 		tr3 := math.Abs(low - prevClose)
-		
-		tr := math.Max(tr1, math.Max(tr2, tr3))
-		trs = append(trs, tr)
+
+		trs[i] = math.Max(tr1, math.Max(tr2, tr3))
 	}
-	
-	// 计算最后14个TR的平均值
-	start := len(trs) - 14
-	if start < 0 {
-		start = 0
-	}
-	
+
+	// 🔥 关键修复：初始ATR = 前14个TR的简单平均（SMA）
 	sum := 0.0
-	for i := start; i < len(trs); i++ {
+	for i := 1; i <= period; i++ {
 		sum += trs[i]
 	}
-	
-	return sum / 14.0
+	atr := sum / float64(period)
+
+	// 🔥 关键修复：使用Wilder平滑方法迭代到最后一根K线
+	// 公式：ATR[t] = ((ATR[t-1] × (period-1)) + TR[t]) / period
+	// 这与data.go的calculateATR完全一致，确保ATR口径统一
+	for i := period + 1; i < len(klines); i++ {
+		atr = (atr*float64(period-1) + trs[i]) / float64(period)
+	}
+
+	return atr
 }
 
 // isATRValid 检查ATR是否合理

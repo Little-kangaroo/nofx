@@ -1,6 +1,7 @@
 package market
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,16 @@ import (
 	"strings"
 	"time"
 )
+
+// 🔥 P1-01修复：统一HTTP客户端，设置2秒超时避免阻塞主链路
+var httpClientWithTimeout = &http.Client{
+	Timeout: 2 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:       10,
+		IdleConnTimeout:    30 * time.Second,
+		DisableCompression: true,
+	},
+}
 
 // Get 获取指定代币的市场数据
 func Get(symbol string) (*Data, error) {
@@ -109,13 +120,22 @@ func GetWithTimeAnchor(symbol string, anchorTime time.Time) (*Data, error) {
 		}
 	}
 
-	// 4小时价格变化 = 使用4小时K线的锚点裁剪数据
+	// 🔥 P0-01修复：4小时价格变化 - 严格回看48根5分钟K线（48*5m = 240m = 4小时）
+	// 修复原因：之前使用4h K线的len-2，导致时间跨度在4-8小时之间不确定
 	priceChange4h := 0.0
-	if len(klines4h) >= 2 { // 至少需要2根K线（当前已收盘 + 上一根）
-		price4hAgo := klines4h[len(klines4h)-2].Close
+	const lookback4hBars = 48 // 48 * 5分钟 = 240分钟 = 4小时
+	if len(klines5m) > lookback4hBars {
+		price4hAgo := klines5m[len(klines5m)-1-lookback4hBars].Close
 		if price4hAgo > 0 {
 			priceChange4h = ((currentPrice - price4hAgo) / price4hAgo) * 100
 		}
+	} else if len(klines5m) >= 2 {
+		// 数据不足48根时的降级策略：使用可用的最早K线
+		price4hAgo := klines5m[0].Close
+		if price4hAgo > 0 {
+			priceChange4h = ((currentPrice - price4hAgo) / price4hAgo) * 100
+		}
+		log.Printf("⚠️ [%s] change_4h数据不足: 需要49根5m K线，实际%d根，使用降级计算", symbol, len(klines5m))
 	}
 
 	// 获取OI数据
@@ -518,7 +538,33 @@ func calculateEMASlope(klines []Kline, period int, lookback int) float64 {
 	return ((currentEMA - prevEMA) / prevEMA) * 100
 }
 
+// calculateAverageVolume 计算指定周期的平均成交量
+// 🔥 P0-03修复：支持标准周期（20/50），避免使用全部K线导致的长周期均值失真
+// period: 均值周期（如20、50）
+// 返回：最后period根K线的平均成交量
+func calculateAverageVolume(klines []Kline, period int) float64 {
+	if len(klines) == 0 || period <= 0 {
+		return 0
+	}
+
+	// 如果K线数量小于周期，使用实际数量
+	actualPeriod := period
+	if len(klines) < period {
+		actualPeriod = len(klines)
+	}
+
+	// 从最后actualPeriod根K线开始计算
+	start := len(klines) - actualPeriod
+	sum := 0.0
+	for i := start; i < len(klines); i++ {
+		sum += klines[i].Volume
+	}
+
+	return sum / float64(actualPeriod)
+}
+
 // calculateIntradaySeries 计算日内系列数据
+// 🔥 P0-04修复：优化指标序列计算，从O(n²)降低到O(n)
 func calculateIntradaySeries(klines []Kline) *IntradayData {
 	data := &IntradayData{
 		MidPrices:   make([]float64, 0, 10),
@@ -528,39 +574,191 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 		RSI14Values: make([]float64, 0, 10),
 	}
 
-	// 获取最近10个数据点
+	if len(klines) == 0 {
+		return data
+	}
+
+	// 🔥 优化策略：一次性计算完整序列，然后截取最后10个
+	// 避免在循环中重复计算，时间复杂度从O(n²)降低到O(n)
+
+	// 获取最后10个数据点的起始索引
 	start := len(klines) - 10
 	if start < 0 {
 		start = 0
 	}
 
+	// MidPrices直接提取（O(1)操作）
 	for i := start; i < len(klines); i++ {
 		data.MidPrices = append(data.MidPrices, klines[i].Close)
+	}
 
-		// 计算每个点的EMA20
-		if i >= 19 {
-			ema20 := calculateEMA(klines[:i+1], 20)
-			data.EMA20Values = append(data.EMA20Values, ema20)
+	// 🔥 关键优化：计算EMA20序列 - 一次遍历完整K线，得到所有时间点的EMA20
+	if len(klines) >= 20 {
+		ema20Series := calculateEMASeriesOptimized(klines, 20)
+		// 只保留最后10个
+		if len(ema20Series) > 0 {
+			startIdx := len(ema20Series) - 10
+			if startIdx < 0 {
+				startIdx = 0
+			}
+			data.EMA20Values = ema20Series[startIdx:]
 		}
+	}
 
-		// 计算每个点的MACD
-		if i >= 25 {
-			macd := calculateMACD(klines[:i+1])
-			data.MACDValues = append(data.MACDValues, macd)
+	// 🔥 关键优化：计算MACD序列 - 一次遍历
+	if len(klines) >= 26 {
+		macdSeries := calculateMACDSeriesOptimized(klines)
+		// 只保留最后10个
+		if len(macdSeries) > 0 {
+			startIdx := len(macdSeries) - 10
+			if startIdx < 0 {
+				startIdx = 0
+			}
+			data.MACDValues = macdSeries[startIdx:]
 		}
+	}
 
-		// 计算每个点的RSI
-		if i >= 7 {
-			rsi7 := calculateRSI(klines[:i+1], 7)
-			data.RSI7Values = append(data.RSI7Values, rsi7)
+	// 🔥 关键优化：计算RSI7序列 - 一次遍历
+	if len(klines) >= 8 {
+		rsi7Series := calculateRSISeriesOptimized(klines, 7)
+		// 只保留最后10个
+		if len(rsi7Series) > 0 {
+			startIdx := len(rsi7Series) - 10
+			if startIdx < 0 {
+				startIdx = 0
+			}
+			data.RSI7Values = rsi7Series[startIdx:]
 		}
-		if i >= 14 {
-			rsi14 := calculateRSI(klines[:i+1], 14)
-			data.RSI14Values = append(data.RSI14Values, rsi14)
+	}
+
+	// 🔥 关键优化：计算RSI14序列 - 一次遍历
+	if len(klines) >= 15 {
+		rsi14Series := calculateRSISeriesOptimized(klines, 14)
+		// 只保留最后10个
+		if len(rsi14Series) > 0 {
+			startIdx := len(rsi14Series) - 10
+			if startIdx < 0 {
+				startIdx = 0
+			}
+			data.RSI14Values = rsi14Series[startIdx:]
 		}
 	}
 
 	return data
+}
+
+// calculateEMASeriesOptimized 优化的EMA序列计算
+// 🔥 P0-04: 一次遍历计算所有时间点的EMA，返回完整序列
+func calculateEMASeriesOptimized(klines []Kline, period int) []float64 {
+	if len(klines) < period {
+		return nil
+	}
+
+	result := make([]float64, 0, len(klines)-period+1)
+
+	// 初始EMA（使用SMA）
+	sum := 0.0
+	for i := 0; i < period; i++ {
+		sum += klines[i].Close
+	}
+	ema := sum / float64(period)
+	result = append(result, ema)
+
+	// 迭代计算后续EMA
+	multiplier := 2.0 / float64(period+1)
+	for i := period; i < len(klines); i++ {
+		ema = (klines[i].Close-ema)*multiplier + ema
+		result = append(result, ema)
+	}
+
+	return result
+}
+
+// calculateMACDSeriesOptimized 优化的MACD序列计算
+// 🔥 P0-04: 一次遍历计算所有时间点的MACD
+func calculateMACDSeriesOptimized(klines []Kline) []float64 {
+	minRequired := 26
+	if len(klines) < minRequired {
+		return nil
+	}
+
+	// 计算EMA12和EMA26序列
+	ema12Series := calculateEMASeriesOptimized(klines, 12)
+	ema26Series := calculateEMASeriesOptimized(klines, 26)
+
+	if ema12Series == nil || ema26Series == nil {
+		return nil
+	}
+
+	// MACD = EMA12 - EMA26
+	// 注意：ema12从第12根开始，ema26从第26根开始
+	// 所以MACD从第26根开始
+	offset := len(ema12Series) - len(ema26Series)
+	result := make([]float64, 0, len(ema26Series))
+
+	for i := 0; i < len(ema26Series); i++ {
+		macd := ema12Series[i+offset] - ema26Series[i]
+		result = append(result, macd)
+	}
+
+	return result
+}
+
+// calculateRSISeriesOptimized 优化的RSI序列计算
+// 🔥 P0-04: 一次遍历计算所有时间点的RSI
+func calculateRSISeriesOptimized(klines []Kline, period int) []float64 {
+	minRequired := period + 1
+	if len(klines) < minRequired {
+		return nil
+	}
+
+	result := make([]float64, 0, len(klines)-period)
+
+	// 计算初始平均涨跌幅
+	gains := 0.0
+	losses := 0.0
+	for i := 1; i <= period; i++ {
+		change := klines[i].Close - klines[i-1].Close
+		if change > 0 {
+			gains += change
+		} else {
+			losses += -change
+		}
+	}
+	avgGain := gains / float64(period)
+	avgLoss := losses / float64(period)
+
+	// 计算第一个RSI
+	var rsi float64
+	if avgLoss == 0 {
+		rsi = 100
+	} else {
+		rs := avgGain / avgLoss
+		rsi = 100 - (100 / (1 + rs))
+	}
+	result = append(result, rsi)
+
+	// 使用Wilder平滑方法计算后续RSI
+	for i := period + 1; i < len(klines); i++ {
+		change := klines[i].Close - klines[i-1].Close
+		if change > 0 {
+			avgGain = (avgGain*float64(period-1) + change) / float64(period)
+			avgLoss = (avgLoss * float64(period-1)) / float64(period)
+		} else {
+			avgGain = (avgGain * float64(period-1)) / float64(period)
+			avgLoss = (avgLoss*float64(period-1) + (-change)) / float64(period)
+		}
+
+		if avgLoss == 0 {
+			rsi = 100
+		} else {
+			rs := avgGain / avgLoss
+			rsi = 100 - (100 / (1 + rs))
+		}
+		result = append(result, rsi)
+	}
+
+	return result
 }
 
 // calculateLongerTermData 计算长期数据
@@ -581,12 +779,9 @@ func calculateLongerTermData(klines []Kline) *LongerTermData {
 	// 计算成交量
 	if len(klines) > 0 {
 		data.CurrentVolume = klines[len(klines)-1].Volume
-		// 计算平均成交量
-		sum := 0.0
-		for _, k := range klines {
-			sum += k.Volume
-		}
-		data.AverageVolume = sum / float64(len(klines))
+		// 🔥 P0-03修复：使用20周期均值（标准短期均值），替代全K线均值
+		// 原因：全K线均值（通常1000根）无法反映当前成交量regime
+		data.AverageVolume = calculateAverageVolume(klines, 20)
 	}
 
 	// 计算MACD和RSI序列
@@ -610,18 +805,27 @@ func calculateLongerTermData(klines []Kline) *LongerTermData {
 }
 
 // getOpenInterestData 获取OI数据
+// 🔥 P1-01修复：添加2秒超时控制，避免网络问题阻塞主链路
 func getOpenInterestData(symbol string) (*OIData, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/openInterest?symbol=%s", symbol)
 
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("创建OI请求失败: %w", err)
+	}
+
+	resp, err := httpClientWithTimeout.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("获取OI失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("读取OI响应失败: %w", err)
 	}
 
 	var result struct {
@@ -631,10 +835,14 @@ func getOpenInterestData(symbol string) (*OIData, error) {
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("解析OI失败: %w", err)
 	}
 
-	oi, _ := strconv.ParseFloat(result.OpenInterest, 64)
+	// 🔥 P1-01修复：检查ParseFloat错误，避免静默失败
+	oi, err := strconv.ParseFloat(result.OpenInterest, 64)
+	if err != nil {
+		return nil, fmt.Errorf("OI字符串转换失败: %w", err)
+	}
 
 	return &OIData{
 		Latest:  oi,
@@ -643,18 +851,27 @@ func getOpenInterestData(symbol string) (*OIData, error) {
 }
 
 // getFundingRate 获取资金费率
+// 🔥 P1-01修复：添加2秒超时控制，避免网络问题阻塞主链路
 func getFundingRate(symbol string) (float64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/premiumIndex?symbol=%s", symbol)
 
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("创建Funding请求失败: %w", err)
+	}
+
+	resp, err := httpClientWithTimeout.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("获取Funding失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("读取Funding响应失败: %w", err)
 	}
 
 	var result struct {
@@ -668,10 +885,15 @@ func getFundingRate(symbol string) (float64, error) {
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("解析Funding失败: %w", err)
 	}
 
-	rate, _ := strconv.ParseFloat(result.LastFundingRate, 64)
+	// 🔥 P1-01修复：检查ParseFloat错误，避免静默失败
+	rate, err := strconv.ParseFloat(result.LastFundingRate, 64)
+	if err != nil {
+		return 0, fmt.Errorf("Funding字符串转换失败: %w", err)
+	}
+
 	return rate, nil
 }
 
@@ -1055,12 +1277,19 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		// === 成交量指标 ===
 		if len(klines) > 0 {
 			tfData["volume"] = klines[len(klines)-1].Volume
-			// 平均成交量
+
+			// 🔥 P0-03修复：输出多个周期的均值，供AI选择合适的参考周期
+			// 短期均值（20周期）：反映近期成交量regime
+			tfData["avg_volume_20"] = calculateAverageVolume(klines, 20)
+			// 中期均值（50周期）：反映中期成交量趋势
+			tfData["avg_volume_50"] = calculateAverageVolume(klines, 50)
+
+			// 保留全周期均值作为长期参考（可选）
 			sum := 0.0
 			for _, k := range klines {
 				sum += k.Volume
 			}
-			tfData["avg_volume"] = sum / float64(len(klines))
+			tfData["avg_volume_all"] = sum / float64(len(klines))
 		}
 
 		// === OHLC数据 - 已屏蔽，trigger_context已包含K线形态信息 ===
@@ -1108,6 +1337,43 @@ func calculateMultiTimeframeBasicIndicators(data *Data, timeframeKlines map[stri
 		// }
 
 		// 只有当有数据时才添加到结果中
+		// === 数据质量元信息 ===
+		// 🔥 P1-02修复：添加_meta字段，标识数据有效性和质量，防止AI误用不充分数据
+		if len(klines) > 0 {
+			tfData["_meta"] = map[string]interface{}{
+				"n_bars":           len(klines),
+				"last_close_time":  klines[len(klines)-1].CloseTime,
+				"oldest_open_time": klines[0].OpenTime,
+				"time_span_hours":  float64(klines[len(klines)-1].CloseTime-klines[0].OpenTime) / (60 * 60 * 1000),
+
+				// 指标有效性标识（基于建议的最小K线数量）
+				"indicators_valid": map[string]bool{
+					"ema20":      len(klines) >= 70,  // 20*3.5 达到99%精度
+					"ema50":      len(klines) >= 175, // 50*3.5
+					"ema100":     len(klines) >= 350, // 100*3.5
+					"ema200":     len(klines) >= 700, // 200*3.5
+					"macd":       len(klines) >= 91,  // 26*3.5
+					"rsi7":       len(klines) >= 21,  // 7*3
+					"rsi14":      len(klines) >= 42,  // 14*3
+					"atr14":      len(klines) >= 28,  // 14*2
+					"ema_slopes": len(klines) >= 53,  // 最小ema50_slope需要
+				},
+
+				// 数据充足性评级（供AI判断是否降权）
+				"data_quality": func() string {
+					if len(klines) >= 700 {
+						return "excellent" // 可计算所有指标
+					} else if len(klines) >= 175 {
+						return "good" // 可计算EMA50及以下
+					} else if len(klines) >= 70 {
+						return "fair" // 可计算EMA20及以下
+					} else {
+						return "poor" // 数据不足，谨慎使用
+					}
+				}(),
+			}
+		}
+
 		if len(tfData) > 0 {
 			result[tf] = tfData
 		}
@@ -2538,15 +2804,11 @@ func calculateMediumTermData(klines []Kline, timeframe string) *MediumTermData {
 	// 计算ATR
 	data.ATR14 = calculateATR(klines, 14)
 
-	// 🔥 P0-01修复：成交量计算使用锚点裁剪后的数据
+	// 🔥 P0-03修复：成交量计算使用标准20周期均值
 	if len(klines) > 0 {
 		data.CurrentVolume = klines[len(klines)-1].Volume // 使用最后一根K线的成交量
-		// 计算平均成交量
-		sum := 0.0
-		for _, k := range klines {
-			sum += k.Volume
-		}
-		data.AverageVolume = sum / float64(len(klines))
+		// 使用20周期均值替代全K线均值
+		data.AverageVolume = calculateAverageVolume(klines, 20)
 	}
 
 	// 🔥 P0-01修复：OHLC数据提取使用锚点裁剪后的数据
