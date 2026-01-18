@@ -38,10 +38,12 @@ func (fcs *FibonacciContextScoring) CalculateContextScores(allRetracements []*Fi
 }
 
 // calculateSingleRetracementContext 计算单个斐波纳契回调的上下文评分
+// 🔥 P0-05: 设置validity flags
 func (fcs *FibonacciContextScoring) calculateSingleRetracementContext(retracement *FibRetracement, allStrengths []float64, allTrendLengths []float64, contextCalc *ContextCalculator) *ContextMetrics {
 	// 1. 计算强度标准分 (strength_z)
 	// >1.5 为强，>2.0 为极强
-	strengthZ := contextCalc.CalculateStrengthZ(retracement.Strength, allStrengths)
+	// 🔥 P0-05: 获取validity flag
+	strengthZ, strengthZReady := contextCalc.CalculateStrengthZ(retracement.Strength, allStrengths)
 
 	// 2. 计算趋势长度相对ATR的倍数 (width_atr)
 	// 对于斐波纳契，我们用趋势长度表示"宽度"概念
@@ -50,7 +52,9 @@ func (fcs *FibonacciContextScoring) calculateSingleRetracementContext(retracemen
 
 	// 3. 计算成交量比率 (vol_ratio)
 	// 斐波纳契分析中，我们可以使用当前市场的成交量比率
+	// 🔥 P0-05: Fibonacci暂无具体成交量数据，标记为无效
 	volRatio := 1.0 // 默认值，可以根据斐波纳契级别的触及成交量来计算
+	volRatioReady := false // Fibonacci暂无vol_ratio
 
 	// 4. 判断是否新鲜 (is_fresh)
 	// 新鲜的斐波纳契回调通常具有更强的有效性
@@ -58,7 +62,7 @@ func (fcs *FibonacciContextScoring) calculateSingleRetracementContext(retracemen
 	maxAge := int64(fcs.analyzer.config.MaxRetracementAge) * 3600 * 1000 // 小时转换为毫秒
 	isFresh := contextCalc.IsFresh(retracement.CreatedAt, maxAge)
 
-	// 5. 计算时间评分 (time_score) 
+	// 5. 计算时间评分 (time_score)
 	// 时间衰减评分，越新鲜评分越高
 	timeScore := contextCalc.CalculateTimeScore(retracement.CreatedAt, maxAge)
 
@@ -67,12 +71,14 @@ func (fcs *FibonacciContextScoring) calculateSingleRetracementContext(retracemen
 	rankPct := contextCalc.CalculateRankPercentile(retracement.Strength, allStrengths)
 
 	return &ContextMetrics{
-		StrengthZ: strengthZ,
-		WidthATR:  widthATR,  
-		VolRatio:  volRatio,
-		IsFresh:   isFresh,
-		TimeScore: timeScore,
-		RankPct:   rankPct,
+		StrengthZ:      strengthZ,
+		WidthATR:       widthATR,
+		VolRatio:       volRatio,
+		IsFresh:        isFresh,
+		TimeScore:      timeScore,
+		RankPct:        rankPct,
+		StrengthZReady: strengthZReady, // 🔥 P0-05
+		VolRatioReady:  volRatioReady,  // 🔥 P0-05
 	}
 }
 

@@ -165,15 +165,17 @@ func (dc *DataCleaner) CleanSupplyDemandData(sdData *SupplyDemandData) (*SupplyD
 	// 重新计算统计信息
 	newStats := calculateCleanedStatistics(cleanSupplyZones, cleanDemandZones, cleanActiveZones)
 
-	// 创建清洗后的数据
-	cleanedData := &SupplyDemandData{
+	// 创建清洗后的数据 - 使用InitializeSupplyDemandData确保slice非null
+	// 🔥 P0-01: 保持Timeframe字段
+	cleanedData := InitializeSupplyDemandData(&SupplyDemandData{
+		Timeframe:    sdData.Timeframe, // 🔥 P0-01: 保持原始timeframe
 		SupplyZones:  cleanSupplyZones,
 		DemandZones:  cleanDemandZones,
 		ActiveZones:  cleanActiveZones,
 		Config:       sdData.Config,
 		Statistics:   newStats,
 		LastAnalysis: sdData.LastAnalysis,
-	}
+	})
 
 	// 【新增】生成数据质量分析报告
 	if dc.config.EnableLogging && len(allOutliers) > 0 {
@@ -201,10 +203,11 @@ func (dc *DataCleaner) CleanSupplyDemandData(sdData *SupplyDemandData) (*SupplyD
 // 返回：清洗后的区域列表，异常信息列表，分桶统计，clamp统计
 func (dc *DataCleaner) cleanZoneList(zones []*SupplyDemandZone, zoneType string) ([]*SupplyDemandZone, []OutlierInfo, map[string]int, int, int) {
 	if len(zones) == 0 {
-		return zones, nil, make(map[string]int), 0, 0
+		// 返回空slice而不是nil，确保JSON序列化为[]
+		return []*SupplyDemandZone{}, nil, make(map[string]int), 0, 0
 	}
 
-	var cleanZones []*SupplyDemandZone
+	var cleanZones = make([]*SupplyDemandZone, 0)
 	var outliers []OutlierInfo
 	filterReasonBuckets := make(map[string]int)
 	clampedZonesCount := 0

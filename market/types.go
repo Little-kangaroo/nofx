@@ -794,12 +794,13 @@ var fallbackVPVRConfig = VPVRConfig{
 
 // Supply/Demand Zone 供给/需求区相关数据结构
 type SupplyDemandData struct {
-	SupplyZones  []*SupplyDemandZone `json:"supply_zones"`  // 供给区
-	DemandZones  []*SupplyDemandZone `json:"demand_zones"`  // 需求区
-	ActiveZones  []*SupplyDemandZone `json:"active_zones"`  // 活跃区域
-	Config       *SDConfig           `json:"config"`        // 配置
-	Statistics   *SDStatistics       `json:"statistics"`    // 统计信息
-	LastAnalysis int64               `json:"last_analysis"` // 最后分析时间
+	Timeframe    string              `json:"timeframe,omitempty"` // 🔥 P0-01新增：数据所属时间框架
+	SupplyZones  []*SupplyDemandZone `json:"supply_zones"`        // 供给区
+	DemandZones  []*SupplyDemandZone `json:"demand_zones"`        // 需求区
+	ActiveZones  []*SupplyDemandZone `json:"active_zones"`        // 活跃区域
+	Config       *SDConfig           `json:"config"`              // 配置
+	Statistics   *SDStatistics       `json:"statistics"`          // 统计信息
+	LastAnalysis int64               `json:"last_analysis"`       // 最后分析时间
 }
 
 // SupplyDemandZone 供给/需求区
@@ -934,6 +935,93 @@ type SDConfig struct {
 	TimeFrames         []string `json:"time_frames"`         // 分析时间框架
 	EnableValidation   bool    `json:"enable_validation"`    // 是否启用验证
 	QualityThreshold   float64 `json:"quality_threshold"`    // 质量阈值
+
+	// 🔥 P0-06: 交互判定和距离阈值配置化
+	Interaction InteractionThresholds `json:"interaction"` // 交互判定阈值
+	Distance    DistanceThresholds    `json:"distance"`    // 距离阈值
+	Strength    StrengthWeights       `json:"strength"`    // 强度评分权重
+	Signal      SignalDistances       `json:"signal"`      // 信号生成距离
+}
+
+// 🔥 P0-06: 交互判定阈值配置
+type InteractionThresholds struct {
+	// ATR缓冲系数 - 用于真假突破判定
+	ATRBuffer0_1        float64 `json:"atr_buffer_0_1"`         // 轻微测试穿透 (默认0.1)
+	ATRBuffer0_2        float64 `json:"atr_buffer_0_2"`         // 标准缓冲区 (默认0.2)
+	ATRBuffer0_5        float64 `json:"atr_buffer_0_5"`         // 真突破最小值 (默认0.5)
+
+	// 模糊逻辑配置
+	FuzzyToleranceZoneWidthPct   float64 `json:"fuzzy_tolerance_zone_width_pct"`    // 区域宽度的百分比 (默认0.1 = 10%)
+	FuzzyToleranceATRPct         float64 `json:"fuzzy_tolerance_atr_pct"`           // ATR的百分比 (默认0.05 = 5%)
+	FuzzyToleranceMinATRPct      float64 `json:"fuzzy_tolerance_min_atr_pct"`       // 最小ATR百分比 (默认0.02 = 2%)
+	FuzzyBreakATRMultiplier      float64 `json:"fuzzy_break_atr_multiplier"`        // 破坏判定ATR倍数 (默认0.2)
+
+	// 区域重叠和触及
+	ZoneOverlapThreshold     float64 `json:"zone_overlap_threshold"`      // 区域重叠比例阈值 (默认0.7 = 70%)
+	TouchCountWeakenThreshold int    `json:"touch_count_weaken_threshold"` // 触及次数弱化阈值 (默认3)
+	DeepPenetrationPct       float64 `json:"deep_penetration_pct"`        // 深度穿透百分比 (默认50.0)
+	DeepTouchWeakenThreshold int     `json:"deep_touch_weaken_threshold"` // 深度触及弱化阈值 (默认2)
+
+	// 时间和间隔
+	RecentBarThreshold   int `json:"recent_bar_threshold"`    // 近期区域判定阈值（K线数，默认10）
+	MinTouchInterval     int `json:"min_touch_interval"`      // 触及事件最小间隔（K线数，默认5）
+}
+
+// 🔥 P0-06: 距离阈值配置
+type DistanceThresholds struct {
+	// 最大距离（ATR倍数）
+	MaxValidDistance   float64 `json:"max_valid_distance"`    // 验证区域位置最大距离 (默认5.0 ATR)
+	MaxActiveDistance  float64 `json:"max_active_distance"`   // 活跃筛选最大距离 (默认5.0 ATR)
+
+	// 距离判定百分比
+	NoInteractionPct   float64 `json:"no_interaction_pct"`    // 超过此距离不算交互 (默认0.01 = 1%)
+	ProximityPct       float64 `json:"proximity_pct"`         // 接近区域的距离百分比 (默认0.05 = 5%)
+	FreshZoneProximityPct float64 `json:"fresh_zone_proximity_pct"` // 新鲜区域接近距离 (默认0.03 = 3%)
+}
+
+// 🔥 P0-06: 强度评分权重配置
+type StrengthWeights struct {
+	// 基础分数
+	BaseScore           float64 `json:"base_score"`             // 所有区域基础分数 (默认25.0)
+	MinScore            float64 `json:"min_score"`              // 最低分数下限 (默认15.0)
+	MaxScore            float64 `json:"max_score"`              // 最高分数上限 (默认100.0)
+
+	// 冲击和成交量权重
+	ImpulseMoveWeight   float64 `json:"impulse_move_weight"`    // 冲击移动权重 (默认30.0，降低自30)
+	VolumeWeight        float64 `json:"volume_weight"`          // 成交量权重 (默认8.0，降低自10)
+
+	// 宽度评分
+	WidthScoreBase      float64 `json:"width_score_base"`       // 宽度评分基础 (默认10.0)
+	WidthScoreMin       float64 `json:"width_score_min"`        // 最宽区域最少分数 (默认2.0)
+
+	// 模式类型加分
+	RallyBaseDropBonus  float64 `json:"rally_base_drop_bonus"`  // Rally-Base-Drop模式加分 (默认20.0)
+	DropBaseRallyBonus  float64 `json:"drop_base_rally_bonus"`  // Drop-Base-Rally模式加分 (默认18.0)
+	SimplePatternBonus  float64 `json:"simple_pattern_bonus"`   // 简单模式加分 (默认15.0)
+
+	// 成交量不平衡阈值
+	VolumeImbalanceSell float64 `json:"volume_imbalance_sell"`  // 供给区卖盘占优 (默认0.8)
+	VolumeImbalanceBuy  float64 `json:"volume_imbalance_buy"`   // 需求区买盘占优 (默认1.2)
+}
+
+// 🔥 P0-06: 信号生成距离配置
+type SignalDistances struct {
+	// 供需区信号距离（百分比）
+	SDApproachDistance      float64 `json:"sd_approach_distance"`       // 接近区域信号距离 (默认0.05 = 5%)
+	SDFreshZoneDistance     float64 `json:"sd_fresh_zone_distance"`     // 新鲜区域信号距离 (默认0.03 = 3%)
+
+	// FVG信号距离（百分比）
+	FVGEntryDistance        float64 `json:"fvg_entry_distance"`         // FVG入场信号距离 (默认0.01 = 1%)
+	FVGRejectionDistance    float64 `json:"fvg_rejection_distance"`     // FVG拒绝信号距离 (默认0.005 = 0.5%)
+
+	// 信号强度权重
+	BounceSignalWeight      float64 `json:"bounce_signal_weight"`       // 反弹信号权重 (默认0.8)
+	EntrySignalWeight       float64 `json:"entry_signal_weight"`        // 进入信号权重 (默认0.7)
+	FreshZoneSignalWeight   float64 `json:"fresh_zone_signal_weight"`   // 新鲜区域信号权重 (默认0.9)
+	FreshZoneSignalBonus    float64 `json:"fresh_zone_signal_bonus"`    // 新鲜区域信号奖励 (默认15.0)
+	FVGReactionWeight       float64 `json:"fvg_reaction_weight"`        // FVG反应信号权重 (默认0.9)
+	FVGRejectionWeight      float64 `json:"fvg_rejection_weight"`       // FVG拒绝信号权重 (默认0.85)
+	FVGRejectionMultiplier  float64 `json:"fvg_rejection_multiplier"`   // FVG拒绝信号倍数 (默认100.0)
 }
 
 // SDStatistics 供需区统计
@@ -988,6 +1076,57 @@ var defaultSDConfig = SDConfig{
 	TimeFrames:         []string{"5m", "15m", "30m", "1h", "4h"},
 	EnableValidation:   false,  // 暂时关闭验证，提升识别率
 	QualityThreshold:   0.15,   // 15%质量阈值 (已移除硬过滤，AI自主判断)
+
+	// 🔥 P0-06: 交互判定和距离阈值配置化
+	Interaction: InteractionThresholds{
+		ATRBuffer0_1:                  0.1,  // 轻微测试穿透系数
+		ATRBuffer0_2:                  0.2,  // 标准缓冲系数
+		ATRBuffer0_5:                  0.5,  // 真突破最小系数
+		FuzzyToleranceZoneWidthPct:    0.1,  // 区域宽度10%
+		FuzzyToleranceATRPct:          0.05, // ATR的5%
+		FuzzyToleranceMinATRPct:       0.02, // 最小2%ATR
+		FuzzyBreakATRMultiplier:       0.2,  // 破坏判定0.2倍ATR
+		ZoneOverlapThreshold:          0.7,  // 70%重叠认为互斥
+		TouchCountWeakenThreshold:     3,    // 3次触及开始弱化
+		DeepPenetrationPct:            50.0, // 50%穿透为深度触及
+		DeepTouchWeakenThreshold:      2,    // 2次深度触及弱化
+		RecentBarThreshold:            10,   // 10根K线内为近期区域
+		MinTouchInterval:              5,    // 触及间隔5根K线
+	},
+	Distance: DistanceThresholds{
+		MaxValidDistance:      5.0,   // 5倍ATR最大验证距离
+		MaxActiveDistance:     5.0,   // 5倍ATR最大活跃距离
+		NoInteractionPct:      0.01,  // 1%距离外不算交互
+		ProximityPct:          0.05,  // 5%为接近区域
+		FreshZoneProximityPct: 0.03,  // 3%为新鲜区域接近
+	},
+	Strength: StrengthWeights{
+		BaseScore:          25.0,  // 基础25分
+		MinScore:           15.0,  // 最低15分
+		MaxScore:           100.0, // 最高100分
+		ImpulseMoveWeight:  30.0,  // 冲击移动权重30
+		VolumeWeight:       8.0,   // 成交量权重8
+		WidthScoreBase:     10.0,  // 宽度评分基础10
+		WidthScoreMin:      2.0,   // 最宽区域最少2分
+		RallyBaseDropBonus: 20.0,  // RBD模式+20分
+		DropBaseRallyBonus: 18.0,  // DBR模式+18分
+		SimplePatternBonus: 15.0,  // 简单模式+15分
+		VolumeImbalanceSell: 0.8,  // 供给区卖盘占优0.8
+		VolumeImbalanceBuy:  1.2,  // 需求区买盘占优1.2
+	},
+	Signal: SignalDistances{
+		SDApproachDistance:     0.05,  // 5%接近距离
+		SDFreshZoneDistance:    0.03,  // 3%新鲜区域距离
+		FVGEntryDistance:       0.01,  // 1% FVG入场距离
+		FVGRejectionDistance:   0.005, // 0.5% FVG拒绝距离
+		BounceSignalWeight:     0.8,   // 反弹信号权重
+		EntrySignalWeight:      0.7,   // 进入信号权重
+		FreshZoneSignalWeight:  0.9,   // 新鲜区域信号权重
+		FreshZoneSignalBonus:   15.0,  // 新鲜区域奖励
+		FVGReactionWeight:      0.9,   // FVG反应权重
+		FVGRejectionWeight:     0.85,  // FVG拒绝权重
+		FVGRejectionMultiplier: 100.0, // FVG拒绝倍数
+	},
 }
 
 // Fair Value Gap (FVG) 公平价值缺口相关数据结构

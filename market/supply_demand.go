@@ -6,7 +6,7 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"time"
+	// 🔥 P0-03: 移除time包，不再使用time.Now()
 )
 
 // SupplyDemandAnalyzer 供给需求区分析器
@@ -37,14 +37,19 @@ func (sda *SupplyDemandAnalyzer) Analyze(klines []Kline) *SupplyDemandData {
 func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timeframe string) *SupplyDemandData {
 	if len(klines) < 10 {
 		// 返回空数据结构而不是nil，避免后续处理报错
-		return &SupplyDemandData{
-			SupplyZones:  []*SupplyDemandZone{},
-			DemandZones:  []*SupplyDemandZone{},
-			ActiveZones:  []*SupplyDemandZone{},
+		// 使用InitializeSupplyDemandData确保slice非null
+		// 🔥 P0-03: 使用klines时间或0（无K线时）作为LastAnalysis，而非time.Now()
+		lastAnalysisTime := int64(0)
+		if len(klines) > 0 {
+			lastAnalysisTime = klines[len(klines)-1].CloseTime
+		}
+
+		return InitializeSupplyDemandData(&SupplyDemandData{
+			Timeframe:    timeframe, // 🔥 P0-01: 即使空数据也设置timeframe
 			Config:       &sda.config,
 			Statistics:   &SDStatistics{},
-			LastAnalysis: time.Now().UnixMilli(),
-		}
+			LastAnalysis: lastAnalysisTime, // 🔥 P0-03: SSOT
+		})
 	}
 
 	// 🔥 P0修复：切片初始化避免JSON null输出
@@ -95,10 +100,10 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 
 	// 合并并排序所有区域
 	allZones := append(supplyZones, demandZones...)
-	sda.updateZoneStatuses(allZones, klines)
+	sda.updateZoneStatuses(allZones, klines, timeframe) // 🔥 P0-02: 传递timeframe
 
 	// 筛选活跃区域
-	activeZones := sda.filterActiveZones(allZones)
+	activeZones := sda.filterActiveZones(allZones, klines, timeframe) // 🔥 P0-02
 
 	// 如果复杂模式识别没有找到足够的区域，使用简单的高低点方法作为补充
 	// 修复备用机��悖论：不管主算法找到多少个，都启用备用机制增强识别
@@ -133,16 +138,17 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 
 	// 计算上下文评分 (在所有供需区创建后进行)
 	contextCalc := NewContextCalculator(klines)
-	sda.CalculateContextScores(allZones, contextCalc)
+	sda.CalculateContextScores(allZones, contextCalc, timeframe) // 🔥 P0-02: 传递timeframe
 
 	// 【P2修复】异常数据清洗：过滤极端width_atr和vol_ratio值
+	// 🔥 P0-03: 使用最后K线的CloseTime作为LastAnalysis
 	dataData := &SupplyDemandData{
 		SupplyZones:  supplyZones,
 		DemandZones:  demandZones,
 		ActiveZones:  activeZones,
 		Config:       &sda.config,
 		Statistics:   &SDStatistics{}, // 临时统计，将被重新计算
-		LastAnalysis: time.Now().UnixMilli(),
+		LastAnalysis: klines[len(klines)-1].CloseTime, // 🔥 P0-03: SSOT
 	}
 
 	// 应用数据清洗
@@ -162,13 +168,33 @@ func (sda *SupplyDemandAnalyzer) AnalyzeWithSymbol(klines []Kline, symbol, timef
 
 	// 🔥 P0-1修复：应用统一JSON契约初始化，确保slice字段输出[]而非null
 	result := InitializeSupplyDemandData(&SupplyDemandData{
+		Timeframe:    timeframe, // 🔥 P0-01: 设置时间框架
 		SupplyZones:  supplyZones,
 		DemandZones:  demandZones,
 		ActiveZones:  activeZones,
 		Config:       &sda.config,
 		Statistics:   stats,
-		LastAnalysis: time.Now().UnixMilli(),
+		LastAnalysis: klines[len(klines)-1].CloseTime, // 🔥 P0-03: SSOT
 	})
+
+	// 🔥 P0-01: 确保所有zone的Origin.TimeFrame与数据timeframe一致
+	if timeframe != "" {
+		for _, zone := range result.SupplyZones {
+			if zone != nil && zone.Origin != nil {
+				zone.Origin.TimeFrame = timeframe
+			}
+		}
+		for _, zone := range result.DemandZones {
+			if zone != nil && zone.Origin != nil {
+				zone.Origin.TimeFrame = timeframe
+			}
+		}
+		for _, zone := range result.ActiveZones {
+			if zone != nil && zone.Origin != nil {
+				zone.Origin.TimeFrame = timeframe
+			}
+		}
+	}
 
 	return result
 }
@@ -889,9 +915,9 @@ func (sda *SupplyDemandAnalyzer) calculateOverlapRatio(zone1, zone2 *SupplyDeman
 }
 
 // zonesOverlap 检查两个区域是否重叠（使用 overlap_ratio 阈值）
-// 只有当交集比例超过阈值（默认0.7）时才认为是强重叠，需要互斥
+// 🔥 P0-06: 使用配置化的重叠阈值
 func (sda *SupplyDemandAnalyzer) zonesOverlap(zone1, zone2 *SupplyDemandZone) bool {
-	const overlapRatioThreshold = 0.7 // 交集占较窄区域的70%以上才互斥
+	overlapRatioThreshold := sda.config.Interaction.ZoneOverlapThreshold // 🔥 P0-06: 从配置读取（默认0.7）
 
 	// 首先判断是否有任何交集
 	if zone1.UpperBound < zone2.LowerBound || zone2.UpperBound < zone1.LowerBound {
@@ -901,7 +927,7 @@ func (sda *SupplyDemandAnalyzer) zonesOverlap(zone1, zone2 *SupplyDemandZone) bo
 	// 计算交集比例
 	ratio := sda.calculateOverlapRatio(zone1, zone2)
 
-	// 只有交集比例超过阈值才认为是强重叠
+	// 只有交集比例超过配置阈值才认为是强重叠
 	return ratio >= overlapRatioThreshold
 }
 
@@ -911,14 +937,14 @@ func (sda *SupplyDemandAnalyzer) calculateZoneStrength(zone *SupplyDemandZone, k
 	strength := 0.0
 
 	// 修复1: 基于冲击移动的强度 (权重降低，避免过严)
-	strength += zone.Origin.ImpulseMove * 30 // 从50降到30
+	strength += zone.Origin.ImpulseMove * sda.config.Strength.ImpulseMoveWeight // 🔥 P0-06: 从配置读取（默认30）
 
 	// 修复2: 基于成交量的强度 (更宽松的成交量要求)
 	avgVolume := sda.calculateAverageVolume(klines, 0, len(klines)-1)
 	if avgVolume > 0 {
 		volumeRatio := zone.Volume / avgVolume
 		// 成交量权重降低，且设置更合理的上限
-		strength += math.Min(volumeRatio, 3.0) * 8 // 从10降到8，上限从5降到3
+		strength += math.Min(volumeRatio, 3.0) * sda.config.Strength.VolumeWeight // 🔥 P0-06: 从配置读取（默认8）
 	}
 
 	// 修复3: 基于区域宽度的强度 (更加友好的评分)
@@ -1072,7 +1098,8 @@ func (sda *SupplyDemandAnalyzer) assessZoneQuality(zone *SupplyDemandZone) {
 }
 
 // updateZoneStatuses 更新区域状态（修复数据层稳定性）
-func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, klines []Kline) {
+// 🔥 P0-02: MaxZoneAge从"小时"语义改为"K线数"语义
+func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, klines []Kline, timeframe string) {
 	if len(klines) == 0 {
 		return
 	}
@@ -1083,12 +1110,19 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 	// 计算ATR用于准确的突破判定
 	atr := sda.calculateATR(klines, 14)
 
+	// 🔥 P0-02: 根据timeframe推断K线间隔，用于bars计算
+	intervalMs := sda.inferIntervalMs(timeframe)
+
 	for _, zone := range zones {
-		// 检查年龄
-		age := int((currentTime - zone.CreationTime) / (3600 * 1000)) // 小时
-		if age > sda.config.MaxZoneAge {
+		// 🔥 P0-02: 检查年龄 - 改用"K线数"语义而不是"小时"
+		ageMs := currentTime - zone.CreationTime
+		ageBars := int(ageMs / intervalMs) // K线数 = 时间差 / 单根K线间隔
+
+		if ageBars > sda.config.MaxZoneAge {
 			zone.Status = StatusExpired
 			zone.IsActive = false
+			// log.Printf("⏰ [P0-02] Zone %s expired: age=%d bars (max=%d), timeframe=%s",
+			//	zone.ID, ageBars, sda.config.MaxZoneAge, timeframe)
 			continue
 		}
 
@@ -1121,13 +1155,13 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 				zone.Status = StatusBroken
 				zone.IsBroken = true
 				zone.BreakTime = currentTime
-				// 【修复】给予破损区域短暂观察期，防止误判
-				if age < 2 { // 2小时内的新区域即使破损也暂时保持活跃
+				// 🔥 P0-02: 使用ageBars替代age，"2小时"改为"10根K线"
+				if ageBars < 10 { // 10根K线内的新区域即使破损也暂时保持活跃
 					zone.IsActive = true
-					log.Printf("⚡ [新区域保护] 新区域%s虽破损但给予观察期，保持活跃", zone.ID)
+					log.Printf("⚡ [新区域保护] 新区域%s虽破损但给予观察期，保持活跃 (age=%d bars)", zone.ID, ageBars)
 				} else {
 					zone.IsActive = false
-					log.Printf("❌ [区域失效] 区域%s真正突破失效", zone.ID)
+					log.Printf("❌ [区域失效] 区域%s真正突破失效 (age=%d bars)", zone.ID, ageBars)
 				}
 				continue
 			}
@@ -1357,7 +1391,8 @@ func (sda *SupplyDemandAnalyzer) analyzePriceAction(klines []Kline, start, end i
 }
 
 // filterActiveZones 筛选活跃区域（修复数据层稳定性）
-func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone) []*SupplyDemandZone {
+// 🔥 P0-02: 传递klines和timeframe用于isRecentZone的bars计算
+func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone, klines []Kline, timeframe string) []*SupplyDemandZone {
 	var active []*SupplyDemandZone
 
 	for _, zone := range zones {
@@ -1365,7 +1400,7 @@ func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone) []
 		shouldKeepActive := zone.IsActive ||
 			zone.Status == StatusTesting || // Testing状态必须保留
 			zone.Status == StatusWeakened || // Weakened状态也给AI判断机会
-			(zone.Status == StatusBroken && sda.isRecentZone(zone)) // 新区域即使Broken也给观察期
+			(zone.Status == StatusBroken && sda.isRecentZone(zone, klines, timeframe)) // 🔥 P0-02: 传递参数
 
 		if shouldKeepActive {
 			active = append(active, zone)
@@ -1378,7 +1413,7 @@ func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone) []
 				reason = "Testing状态保护"
 			} else if zone.Status == StatusWeakened {
 				reason = "Weakened状态保护"
-			} else if zone.Status == StatusBroken && sda.isRecentZone(zone) {
+			} else if zone.Status == StatusBroken && sda.isRecentZone(zone, klines, timeframe) { // 🔥 P0-02
 				reason = "新区域观察期保护"
 			}
 
@@ -1393,11 +1428,22 @@ func (sda *SupplyDemandAnalyzer) filterActiveZones(zones []*SupplyDemandZone) []
 	return active
 }
 
-// isRecentZone 判断是否为近期创建的区域（2小时内）
-func (sda *SupplyDemandAnalyzer) isRecentZone(zone *SupplyDemandZone) bool {
-	currentTime := time.Now().UnixMilli()
-	age := int((currentTime - zone.CreationTime) / (3600 * 1000)) // 小时
-	return age < 2
+// isRecentZone 判断是否为近期创建的区域
+// 🔥 P0-02: 从"2小时内"改为"最近10根K线内"（跨时间框架语义统一）
+func (sda *SupplyDemandAnalyzer) isRecentZone(zone *SupplyDemandZone, klines []Kline, timeframe string) bool {
+	if len(klines) == 0 {
+		return false
+	}
+
+	currentTime := klines[len(klines)-1].OpenTime // 🔥 P0-03预备: 用lastCloseTime替代time.Now()
+	intervalMs := sda.inferIntervalMs(timeframe)
+
+	ageMs := currentTime - zone.CreationTime
+	ageBars := int(ageMs / intervalMs)
+
+	// "近期"定义为最近10根K线内（无论什么时间框架，语义统一）
+	const recentBarThreshold = 10
+	return ageBars < recentBarThreshold
 }
 
 // calculateStatistics 计算统计信息
@@ -1469,13 +1515,14 @@ func (sda *SupplyDemandAnalyzer) GetConfig() SDConfig {
 }
 
 // GenerateSignals 生成基于供需区的交易信号
+// 🔥 P0-03: 使用sdData.LastAnalysis作为时间戳而非time.Now()
 func (sda *SupplyDemandAnalyzer) GenerateSignals(sdData *SupplyDemandData, currentPrice float64) []*SDSignal {
 	if sdData == nil {
 		return nil
 	}
 
 	var signals []*SDSignal
-	timestamp := time.Now().UnixMilli()
+	timestamp := sdData.LastAnalysis // 🔥 P0-03: SSOT - 使用分析时的时间戳
 
 	// 检查活跃区域的信号
 	for _, zone := range sdData.ActiveZones {
@@ -1864,7 +1911,7 @@ func (sda *SupplyDemandAnalyzer) identifyBasicZonesWithSymbol(klines []Kline, sy
 				PatternType:   FreshSupply,
 				ImpulseMove:   0.02, // 提升到2%默认冲击，增强重要性
 				ImpulseVolume: klines[highestIndex].Volume,
-				TimeFrame:     "basic",
+				TimeFrame:     timeframe, // 🔥 P0-01: 使用传入的真实timeframe，不再是"basic"
 				Confirmation:  false,
 			},
 			Status:       StatusFresh,
@@ -1914,7 +1961,7 @@ func (sda *SupplyDemandAnalyzer) identifyBasicZonesWithSymbol(klines []Kline, sy
 				PatternType:   FreshDemand,
 				ImpulseMove:   0.02, // 提升到2%默认冲击，增强重要性
 				ImpulseVolume: klines[lowestIndex].Volume,
-				TimeFrame:     "basic",
+				TimeFrame:     timeframe, // 🔥 P0-01: 使用传入的真实timeframe，不再是"basic"
 				Confirmation:  false,
 			},
 			Status:       StatusFresh,
@@ -1956,8 +2003,9 @@ func (sda *SupplyDemandAnalyzer) inferSymbolTimeframe(klines []Kline) (string, s
 
 // validateZonePosition 验证区域位置的合理性（P0修复：使用距离过滤替代方向过滤）
 // 作用：确保供需区与当前价格的距离在合理范围内，避免过度过滤正在被测试的区域
+// 🔥 P0-06: 使用配置化的最大距离阈值
 func (sda *SupplyDemandAnalyzer) validateZonePosition(zone *SupplyDemandZone, currentPrice float64, atr float64) bool {
-	maxDistanceATR := 5.0 // 最大距离为5倍ATR
+	maxDistanceATR := sda.config.Distance.MaxValidDistance // 🔥 P0-06: 从配置读取（默认5.0）
 	bufferDistance := maxDistanceATR * atr
 
 	// 🔥 P1-2修复：改为计算到最近边界的距离（而非中心点距离）
@@ -1974,7 +2022,7 @@ func (sda *SupplyDemandAnalyzer) validateZonePosition(zone *SupplyDemandZone, cu
 		)
 	}
 
-	// 距离验证：区域最近边界距离当前价格不能超过5倍ATR
+	// 距离验证：区域最近边界距离当前价格不能超过配置的ATR倍数
 	isWithinRange := distance <= bufferDistance
 
 	if !isWithinRange {
@@ -2027,13 +2075,39 @@ func (sda *SupplyDemandAnalyzer) calculateATR(klines []Kline, period int) float6
 	return atr
 }
 
+// inferIntervalMs 根据timeframe推断K线间隔（毫秒）
+// 🔥 P0-02: 用于MaxZoneAge从"小时"语义转换为"K线数"语义
+func (sda *SupplyDemandAnalyzer) inferIntervalMs(timeframe string) int64 {
+	switch timeframe {
+	case "1m":
+		return 60 * 1000
+	case "5m":
+		return 5 * 60 * 1000
+	case "15m":
+		return 15 * 60 * 1000
+	case "30m":
+		return 30 * 60 * 1000
+	case "1h":
+		return 60 * 60 * 1000
+	case "4h":
+		return 4 * 60 * 60 * 1000
+	case "1d":
+		return 24 * 60 * 60 * 1000
+	default:
+		// 未知时间框架，默认5分钟
+		log.Printf("⚠️ [P0-02] 未知timeframe=%s，默认使用5m间隔", timeframe)
+		return 5 * 60 * 1000
+	}
+}
+
 // isTrueBreakout 判断是否为真正的突破（带ATR缓冲区） - P0修复核心逻辑
 // 作用：区分真突破和假突破(SFP)，防止误判导致错误的区域类型转换
+// 🔥 P0-06: 使用配置化的ATR缓冲系数
 func (sda *SupplyDemandAnalyzer) isTrueBreakout(zone *SupplyDemandZone, currentPrice float64, atr float64) bool {
-	bufferDistance := 0.2 * atr // 0.2倍ATR作为缓冲距离，这是经验值，可以过滤掉大部分假突破
+	bufferDistance := sda.config.Interaction.ATRBuffer0_2 * atr // 🔥 P0-06: 从配置读取（默认0.2）
 
 	if zone.Type == DemandZone {
-		// 需求区突破判定：价格必须跌破 (区域下沿 - 0.2*ATR) 才算真正突破
+		// 需求区突破判定：价格必须跌破 (区域下沿 - 缓冲距离) 才算真正突破
 		breakoutThreshold := zone.LowerBound - bufferDistance
 		isTrue := currentPrice < breakoutThreshold
 
@@ -2043,7 +2117,7 @@ func (sda *SupplyDemandAnalyzer) isTrueBreakout(zone *SupplyDemandZone, currentP
 
 		return isTrue
 	} else if zone.Type == SupplyZone {
-		// 供给区突破判定：价格必须突破 (区域上沿 + 0.2*ATR) 才算真正突破
+		// 供给区突破判定：价格必须突破 (区域上沿 + 缓冲距离) 才算真正突破
 		breakoutThreshold := zone.UpperBound + bufferDistance
 		isTrue := currentPrice > breakoutThreshold
 
@@ -2110,26 +2184,34 @@ func (sda *SupplyDemandAnalyzer) ValidateZonePositions(sdData *SupplyDemandData,
 	log.Printf("✅ [P0全面验证完成] 移除供给区%d个, 需求区%d个, 剩余活跃区域%d个",
 		removedSupplyCount, removedDemandCount, len(validActiveZones))
 
-	return &SupplyDemandData{
+	// 🔥 P0-03: 使用klines的最后时间或保持原LastAnalysis
+	lastAnalysisTime := sdData.LastAnalysis
+	if len(klines) > 0 {
+		lastAnalysisTime = klines[len(klines)-1].CloseTime
+	}
+
+	// 使用InitializeSupplyDemandData确保slice非null
+	return InitializeSupplyDemandData(&SupplyDemandData{
 		SupplyZones:  validSupplyZones,
 		DemandZones:  validDemandZones,
 		ActiveZones:  validActiveZones,
 		Config:       sdData.Config,
 		Statistics:   stats,
-		LastAnalysis: time.Now().UnixMilli(),
-	}
+		LastAnalysis: lastAnalysisTime, // 🔥 P0-03: SSOT
+	})
 }
 
 // ===== 数据层稳定性修复：Zone交互分析增强 =====
 
 // analyzeZoneInteraction 分析价格与区域的交互状态（修复数据层稳定性核心函数）
 // 返回：no_interaction, testing, true_breakout
+// 🔥 P0-06: 使用配置化的交互判定阈值
 func (sda *SupplyDemandAnalyzer) analyzeZoneInteraction(zone *SupplyDemandZone, currentPrice float64, atr float64) string {
 	// 计算价格到区域的距离
 	distanceToZone := sda.calculateDistanceToZone(zone, currentPrice)
 
-	// 级别1：未接触区域 - 价格距离区域超过1%
-	if distanceToZone > 0.01 { // 1%以外不算交互
+	// 级别1：未接触区域 - 价格距离区域超过配置的阈值
+	if distanceToZone > sda.config.Distance.NoInteractionPct { // 🔥 P0-06: 从配置读取（默认0.01 = 1%）
 		return "no_interaction"
 	}
 
@@ -2149,9 +2231,9 @@ func (sda *SupplyDemandAnalyzer) analyzeZoneInteraction(zone *SupplyDemandZone, 
 		penetrationDistance = currentPrice - zone.UpperBound
 	}
 
-	// 设置ATR缓冲标准
-	minPenetrationForTesting := 0.1 * atr  // 0.1*ATR以内算轻微测试
-	minPenetrationForBreakout := 0.5 * atr // 0.5*ATR以上才考虑真突破
+	// 🔥 P0-06: 使用配置化的ATR缓冲标准
+	minPenetrationForTesting := sda.config.Interaction.ATRBuffer0_1 * atr   // 轻微测试（默认0.1）
+	minPenetrationForBreakout := sda.config.Interaction.ATRBuffer0_5 * atr  // 真突破（默认0.5）
 
 	if penetrationDistance <= minPenetrationForTesting {
 		// 轻微刺破 = Testing状态

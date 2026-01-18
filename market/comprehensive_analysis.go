@@ -2288,9 +2288,19 @@ func (ca *ComprehensiveAnalyzer) applyStructureSourceFallback(
 		for _, fallbackTF := range fallbackTimeframes {
 			if tfData, exists := mtfAnalysis.Timeframes[fallbackTF]; exists && tfData.SupplyDemand != nil {
 				*supplyDemandData = tfData.SupplyDemand
+				// 🔥 P0-01: 如果降级数据缺少timeframe，补写
+				if (*supplyDemandData).Timeframe == "" {
+					(*supplyDemandData).Timeframe = fallbackTF
+				}
 				log.Printf("📉 [Gate2 P0-04] 供需区数据降级: %s -> %s", primaryTimeframe, fallbackTF)
 				break
 			}
+		}
+	} else {
+		// 🔥 P0-01: 即使没有降级，也确保timeframe已设置
+		if (*supplyDemandData).Timeframe == "" {
+			(*supplyDemandData).Timeframe = primaryTimeframe
+			log.Printf("🔧 [Gate2 P0-01] 补写供需区timeframe=%s", primaryTimeframe)
 		}
 	}
 	

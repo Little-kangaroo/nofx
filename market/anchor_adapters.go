@@ -10,44 +10,52 @@ import (
 // fromSupplyDemand 从供需区数据提取锚点候选
 func (ae *AnchorEngine) fromSupplyDemand(data *SupplyDemandData, timeframes map[string][]Kline) []AnchorCandidate {
 	var candidates []AnchorCandidate
-	
+
 	if data == nil || len(data.ActiveZones) == 0 {
 		return candidates
 	}
-	
+
 	for _, zone := range data.ActiveZones {
-		// 判断时间框架（使用默认推断，因为Context没有TimeFrame字段）
-		tf := "1h" // 默认时间框架
-		// 可以根据zone的其他属性推断时间框架，比如从Meta信息或ID中获取
-		
+		// 🔥 P0-01修复：优先从data.Timeframe读取，其次从zone.Origin.TimeFrame
+		tf := data.Timeframe
+		if tf == "" && zone.Origin != nil {
+			tf = zone.Origin.TimeFrame
+		}
+		if tf == "" {
+			tf = "unknown" // 避免默认1h误导
+			log.Printf("⚠️ [P0-01] 供需区zone %s 缺少timeframe，标记为unknown", zone.ID)
+		}
+
 		// 确定锚点类型：4h/1h为HTF，其他为MTF
+		// unknown默认为MTF避免误判为HTF
 		anchorType := AnchorZoneMTF
 		if tf == "4h" || tf == "1h" {
 			anchorType = AnchorHTFZone
 		}
-		
+
 		// 确定方向：供给区为SHORT(阻力)，需求区为LONG(支撑)
 		dir := "LONG"
 		if zone.Type == SupplyZone {
 			dir = "SHORT"
 		}
-		
-		// 提取强度信息
+
+		// 🔥 P0-05预留：只有StrengthZReady时才传递strengthZ
 		var strengthZ *float64
-		if zone.Context != nil {
+		if zone.StrengthZReady && zone.Context != nil {
 			strengthZ = &zone.Context.StrengthZ
 		}
-		
-		// 提取量能信息
+
+		// 🔥 P0-05预留：只有VolRatioValid时才传递volRatio（待P0-05实现）
 		var volRatio *float64
 		if zone.Context != nil {
+			// TODO P0-05: 增加VolRatioValid检查
 			volRatio = &zone.Context.VolRatio
 		}
-		
+
 		candidate := AnchorCandidate{
 			Dir:       dir,
 			Type:      anchorType,
-			TF:        tf,
+			TF:        tf, // 🔥 P0-01: 使用真实TF
 			Level:     (zone.LowerBound + zone.UpperBound) / 2, // 区域中心作为锚点
 			BandLo:    zone.LowerBound,
 			BandHi:    zone.UpperBound,
@@ -55,18 +63,20 @@ func (ae *AnchorEngine) fromSupplyDemand(data *SupplyDemandData, timeframes map[
 			StrengthZ: strengthZ,
 			VolRatio:  volRatio,
 			Meta: map[string]interface{}{
-				"source_type":   "supply_demand",
-				"zone_id":       zone.ID,
-				"touch_count":   zone.TouchCount,
-				"zone_strength": zone.Strength,
-				"status":        zone.Status,
-				"zone_type":     string(zone.Type),
+				"source_type":      "supply_demand",
+				"zone_id":          zone.ID,
+				"touch_count":      zone.TouchCount,
+				"zone_strength":    zone.Strength,
+				"status":           zone.Status,
+				"zone_type":        string(zone.Type),
+				"strength_z_ready": zone.StrengthZReady, // 🔥 新增：标记Z分数可靠性
+				"sample_count":     zone.SampleCount,
 			},
 		}
-		
+
 		candidates = append(candidates, candidate)
 	}
-	
+
 	return candidates
 }
 

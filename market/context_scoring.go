@@ -14,6 +14,10 @@ type ContextMetrics struct {
 	IsFresh    bool    `json:"is_fresh"`    // 是否新鲜
 	TimeScore  float64 `json:"time_score"`  // 时间衰减评分 (0-1)
 	RankPct    float64 `json:"rank_pct"`    // 在同类数据中的排名百分位 (0-1)
+
+	// 🔥 P0-05: Validity flags - 指示字段是否有效可用
+	StrengthZReady bool `json:"strength_z_ready"` // StrengthZ是否可用（样本量>=15）
+	VolRatioReady  bool `json:"vol_ratio_ready"`  // VolRatio是否可用（基线有效）
 }
 
 // MarketContext 市场环境上下文
@@ -288,36 +292,38 @@ func (cc *ContextCalculator) CalculateWidthATR(width float64) float64 {
 }
 
 // CalculateVolumeRatio 计算成交量比率 (使用中位数基线抵御极端值)
-func (cc *ContextCalculator) CalculateVolumeRatio(volume float64) float64 {
-	// 标准模式：零成交量返回0比率
+// 🔥 P0-05: 返回比率和是否有效（基线是否可靠）
+func (cc *ContextCalculator) CalculateVolumeRatio(volume float64) (float64, bool) {
+	// 标准模式：零成交量返回0比率，无效
 	if !cc.useLogVolume && volume == 0 {
-		return 0
+		return 0, false
 	}
-	
+
 	// 如果启用对数处理
 	if cc.useLogVolume {
-		// 对数模式下无法处理零成交量，返回默认值
+		// 对数模式下无法处理零成交量，返回默认值，无效
 		if volume <= 0 {
-			return 1.0
+			return 1.0, false
 		}
-		
+
 		// 对数空间中的比率计算
 		logCurrentVolume := math.Log(volume)
 		logBaselineVolume := cc.market.MedianVolume20 // 已经是对数值
-		
+
 		if logBaselineVolume != 0 {
-			return math.Exp(logCurrentVolume - logBaselineVolume)
+			return math.Exp(logCurrentVolume - logBaselineVolume), true
 		}
-		return 1.0
+		return 1.0, false
 	}
-	
-	// 基线为零的情况（数据不足）
+
+	// 基线为零的情况（数据不足），无效
 	if cc.market.MedianVolume20 == 0 {
-		return 1.0
+		return 1.0, false
 	}
-	
+
 	// 标准比率计算 (基于中位数基线)
-	return volume / cc.market.MedianVolume20
+	ratio := volume / cc.market.MedianVolume20
+	return ratio, true
 }
 
 // CalculateVolumeRatioWithPeriod 使用指定周期计算成交量比率
@@ -337,8 +343,16 @@ func (cc *ContextCalculator) CalculateVolumeRatioWithPeriod(volume float64, peri
 }
 
 // CalculateStrengthZ 计算强度标准分
-func (cc *ContextCalculator) CalculateStrengthZ(strength float64, allStrengths []float64) float64 {
-	return cc.calculateZScore(strength, allStrengths)
+// 🔥 P0-05: 返回Z-Score和是否有效（样本量>=15）
+func (cc *ContextCalculator) CalculateStrengthZ(strength float64, allStrengths []float64) (float64, bool) {
+	// 🔥 P0-05: 样本量不足时，Z-Score无效
+	const minSampleSize = 15
+	if len(allStrengths) < minSampleSize {
+		return 0, false
+	}
+
+	zScore := cc.calculateZScore(strength, allStrengths)
+	return zScore, true
 }
 
 // CalculateTimeScore 计算时间评分 (越新鲜评分越高)

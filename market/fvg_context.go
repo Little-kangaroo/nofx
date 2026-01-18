@@ -57,12 +57,14 @@ func (fcs *FVGContextScoring) CalculateContextScores(allFVGs []*FairValueGap, co
 }
 
 // calculateSingleFVGContext 计算单个FVG的上下文评分
+// 🔥 P0-05: 设置validity flags
 func (fcs *FVGContextScoring) calculateSingleFVGContext(gap *FairValueGap, allStrengths []float64, allWidths []float64, contextCalc *ContextCalculator) *ContextMetrics {
 	// 1. 计算强度标准分 (strength_z)
 	// >1.5 为强，>2.0 为极强
-	strengthZ := contextCalc.CalculateStrengthZ(gap.Strength, allStrengths)
+	// 🔥 P0-05: 获取validity flag
+	strengthZ, strengthZReady := contextCalc.CalculateStrengthZ(gap.Strength, allStrengths)
 
-	// 🔥 P0-05修复：计算宽度相对ATR的倍数 (width_atr) 
+	// 🔥 P0-05修复：计算宽度相对ATR的倍数 (width_atr)
 	// 优先使用gap.WidthATR（基于FormationATR计算），避免时空错配
 	// 如果gap.WidthATR可用，直接使用；否则降级到当前ATR计算
 	var widthATR float64
@@ -77,17 +79,19 @@ func (fcs *FVGContextScoring) calculateSingleFVGContext(gap *FairValueGap, allSt
 	// 3. 计算成交量比率 (vol_ratio)
 	// 表示形成FVG时的成交量相对平均成交量的倍数
 	// >2.0 表示异常放量
+	// 🔥 P0-05: 获取validity flag
 	volRatio := 1.0
+	volRatioReady := false
 	if gap.VolumeContext != nil {
-		volRatio = contextCalc.CalculateVolumeRatio(gap.VolumeContext.FormationVolume)
+		volRatio, volRatioReady = contextCalc.CalculateVolumeRatio(gap.VolumeContext.FormationVolume)
 	}
 
 	// 4. 判断是否新鲜 (is_fresh)
 	// 新鲜的FVG通常具有更强的支撑/阻力效果
-	maxAge := int64(fcs.analyzer.config.MaxAge * 3600 * 1000) // 转换为毫秒 
+	maxAge := int64(fcs.analyzer.config.MaxAge * 3600 * 1000) // 转换为毫秒
 	isFresh := contextCalc.IsFresh(gap.CreationTime, maxAge)
 
-	// 5. 计算时间评分 (time_score) 
+	// 5. 计算时间评分 (time_score)
 	// 时间衰减评分，越新鲜评分越高
 	timeScore := contextCalc.CalculateTimeScore(gap.CreationTime, maxAge)
 
@@ -96,12 +100,14 @@ func (fcs *FVGContextScoring) calculateSingleFVGContext(gap *FairValueGap, allSt
 	rankPct := contextCalc.CalculateRankPercentile(gap.Strength, allStrengths)
 
 	return &ContextMetrics{
-		StrengthZ: strengthZ,
-		WidthATR:  widthATR,  
-		VolRatio:  volRatio,
-		IsFresh:   isFresh,
-		TimeScore: timeScore,
-		RankPct:   rankPct,
+		StrengthZ:      strengthZ,
+		WidthATR:       widthATR,
+		VolRatio:       volRatio,
+		IsFresh:        isFresh,
+		TimeScore:      timeScore,
+		RankPct:        rankPct,
+		StrengthZReady: strengthZReady, // 🔥 P0-05
+		VolRatioReady:  volRatioReady,  // 🔥 P0-05
 	}
 }
 
