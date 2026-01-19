@@ -4,8 +4,21 @@ import (
 	"log"
 	"math"
 	"sort"
+	"sync"
 	"time"
 )
+
+// 🔥 P0-01: 时间常量定义
+const msPerDay = 24 * 60 * 60 * 1000
+
+// 🔥 P0-01: 统一的趋势线取值函数（使用时间戳坐标系）
+// expectedPriceAt 根据时间戳计算趋势线在该时刻的预期价格
+func expectedPriceAt(line *TrendLine, t int64) float64 {
+	return line.Slope*float64(t) + line.Intercept
+}
+
+// 🔥 P0-09: 配置并发安全保护
+var dowCfgMu sync.RWMutex
 
 // DowTheoryAnalyzer 道氏理论分析器
 type DowTheoryAnalyzer struct {
@@ -266,16 +279,13 @@ func (dta *DowTheoryAnalyzer) calculateSwingPointStrength(klines []Kline, index 
 		// 计算高点的价格范围和成交量权重
 		priceRange = (klines[index].High - klines[index].Low) / klines[index].Low
 
-		// 向前向后各看几个周期计算相对高度
+		// 🔥 P0-08: 只向前看，不使用未来数据
 		maxRange := 10
 		start := index - maxRange
 		if start < 0 {
 			start = 0
 		}
-		end := index + maxRange
-		if end >= len(klines) {
-			end = len(klines) - 1
-		}
+		end := index  // 🔥 P0-08: 不再使用 index + maxRange
 
 		var maxHigh, minLow float64
 		for i := start; i <= end; i++ {
@@ -299,10 +309,7 @@ func (dta *DowTheoryAnalyzer) calculateSwingPointStrength(klines []Kline, index 
 		if start < 0 {
 			start = 0
 		}
-		end := index + maxRange
-		if end >= len(klines) {
-			end = len(klines) - 1
-		}
+		end := index  // 🔥 P0-08: 不再使用 index + maxRange
 
 		var maxHigh, minLow float64
 		for i := start; i <= end; i++ {
@@ -319,15 +326,16 @@ func (dta *DowTheoryAnalyzer) calculateSwingPointStrength(klines []Kline, index 
 		}
 	}
 
-	// 计算成交量权重（相对于平均成交量）
+	// 🔥 P0-08: 计算成交量权重（只使用历史数据）
 	volumeSum := 0.0
 	volumeCount := 0
 	start := index - 20
 	if start < 0 {
 		start = 0
 	}
+	volEnd := index  // 🔥 P0-08: 不再使用 index + 20
 
-	for i := start; i < index+20 && i < len(klines); i++ {
+	for i := start; i <= volEnd; i++ {
 		volumeSum += klines[i].Volume
 		volumeCount++
 	}
@@ -339,11 +347,15 @@ func (dta *DowTheoryAnalyzer) calculateSwingPointStrength(klines []Kline, index 
 		}
 	}
 
-	// 🔥 修复：使用配置的成交量权重
+	// 🔥 P0-08: 使用对数缩放替代硬截断
 	// 综合计算强度：价格范围和成交量权重按配置比例
 	priceWeight := 1.0 - dta.config.VolumeConfig.WeightInStrength
 	volumeWeightRatio := dta.config.VolumeConfig.WeightInStrength
-	strength := priceRange*priceWeight + math.Min(volumeWeight, 3.0)*volumeWeightRatio
+
+	// 使用对数缩放，避免极端值
+	volumeScore := math.Log(1+volumeWeight) / math.Log(4) * 10
+	strength := priceRange*priceWeight + volumeScore*volumeWeightRatio
+
 	return math.Min(strength, 10.0) // 限制最大强度
 }
 
@@ -387,7 +399,32 @@ func (dta *DowTheoryAnalyzer) calculateTrendLines(swingPoints []*SwingPoint) []*
 	return trendLines
 }
 
+// 🔥 P0-04: 新增 - 先统计touches，再计算strength
+// collectTrendLineTouches 统计趋势线的触及点
+func (dta *DowTheoryAnalyzer) collectTrendLineTouches(
+	line *TrendLine,
+	points []*SwingPoint,
+) (touches int, lastTouch int64, touched []*SwingPoint) {
+
+	maxDistance := dta.config.TrendLineConfig.MaxDistance
+
+	for _, p := range points {
+		exp := expectedPriceAt(line, p.Time)
+		dist := math.Abs(p.Price-exp) / p.Price
+
+		if dist <= maxDistance {
+			touches++
+			touched = append(touched, p)
+			if p.Time > lastTouch {
+				lastTouch = p.Time
+			}
+		}
+	}
+	return
+}
+
 // findTrendLinesFromPoints 从摆动点中找到趋势线
+// 🔥 P0-05: 修复时序错误 - 先统计touches，再计算strength
 func (dta *DowTheoryAnalyzer) findTrendLinesFromPoints(points []*SwingPoint, lineType TrendLineType) []*TrendLine {
 	if len(points) < 2 {
 		return nil
@@ -405,8 +442,11 @@ func (dta *DowTheoryAnalyzer) findTrendLinesFromPoints(points []*SwingPoint, lin
 			slope := (point2.Price - point1.Price) / float64(point2.Time-point1.Time)
 			intercept := point1.Price - slope*float64(point1.Time)
 
-			// 检查斜率是否满足要求
-			if math.Abs(slope) < dta.config.TrendLineConfig.MinSlope {
+			// 🔥 P0-05: 先检查斜率（使用归一化斜率）
+			refPrice := (point1.Price + point2.Price) / 2
+			slopePctPerDay := (slope * msPerDay) / refPrice
+
+			if math.Abs(slopePctPerDay) < dta.config.TrendLineConfig.MinSlopePctPerDay {
 				continue
 			}
 
@@ -415,19 +455,22 @@ func (dta *DowTheoryAnalyzer) findTrendLinesFromPoints(points []*SwingPoint, lin
 				Points:    []*SwingPoint{point1, point2},
 				Slope:     slope,
 				Intercept: intercept,
-				Touches:   2,
-				LastTouch: point2.Time,
 			}
 
-			// 计算趋势线强度
-			trendLine.Strength = dta.calculateTrendLineStrength(trendLine, points)
+			// 🔥 P0-05修复：先统计touches
+			touches, lastTouch, touchedPoints := dta.collectTrendLineTouches(trendLine, points)
 
-			// 检查是否有足够的触及点
-			touches := dta.countTrendLineTouches(trendLine, points)
-			if touches >= dta.config.TrendLineConfig.MinTouches {
-				trendLine.Touches = touches
-				trendLines = append(trendLines, trendLine)
+			if touches < dta.config.TrendLineConfig.MinTouches {
+				continue
 			}
+
+			// 🔥 P0-05修复：再计算strength（此时touches是真实值）
+			trendLine.Touches = touches
+			trendLine.LastTouch = lastTouch
+			trendLine.Points = touchedPoints  // 使用所有触及点
+			trendLine.Strength = dta.calculateTrendLineStrengthV2(trendLine, touchedPoints)
+
+			trendLines = append(trendLines, trendLine)
 		}
 	}
 
@@ -460,6 +503,47 @@ func (dta *DowTheoryAnalyzer) calculateTrendLineStrength(trendLine *TrendLine, a
 	// 角度适中加分（不要太陡峭也不要太平）
 	angle := math.Atan(math.Abs(trendLine.Slope)) * 180 / math.Pi
 	if angle > 15 && angle < 75 {
+		strength += 0.5
+	}
+
+	return strength
+}
+
+// 🔥 P0-07: 新增 - 使用归一化斜率和所有触及点计算强度
+// calculateTrendLineStrengthV2 计算趋势线强度（V2版本）
+func (dta *DowTheoryAnalyzer) calculateTrendLineStrengthV2(
+	trendLine *TrendLine,
+	touchedPoints []*SwingPoint,
+) float64 {
+
+	strength := 0.0
+
+	// 1. 基础强度：触及次数
+	strength += float64(trendLine.Touches) * 1.0
+
+	// 2. 时间跨度
+	if len(touchedPoints) >= 2 {
+		timeSpan := float64(touchedPoints[len(touchedPoints)-1].Time - touchedPoints[0].Time)
+		timeSpanDays := timeSpan / msPerDay
+		strength += math.Min(timeSpanDays/10, 2.0)
+	}
+
+	// 3. 摆动点强度（使用所有触及点）
+	pointStrengthSum := 0.0
+	for _, point := range touchedPoints {
+		pointStrengthSum += point.Strength
+	}
+	if len(touchedPoints) > 0 {
+		strength += (pointStrengthSum / float64(len(touchedPoints))) * 0.5
+	}
+
+	// 4. 🔥 P0-07: 斜率适中加分（使用归一化斜率）
+	refPrice := (touchedPoints[0].Price + touchedPoints[len(touchedPoints)-1].Price) / 2
+	slopePctPerDay := (trendLine.Slope * msPerDay) / refPrice
+	absSlope := math.Abs(slopePctPerDay)
+
+	// 0.2%/天 到 8%/天 认为是适中斜率
+	if absSlope >= 0.002 && absSlope <= 0.08 {
 		strength += 0.5
 	}
 
@@ -1383,6 +1467,9 @@ func (dta *DowTheoryAnalyzer) generateTradingSignal(klines3m []Kline, currentPri
 		}
 	}
 
+	// 🔥 P0-03: 统一时间锚点
+	anchorTime := klines3m[len(klines3m)-1].CloseTime
+
 	// 优先基于趋势跟随信号（道氏理论核心）
 	trendSignal := dta.generateTrendFollowingSignal(currentPrice, trendStrength, nil)
 	if trendSignal != nil && trendSignal.Confidence >= dta.config.SignalConfig.MinConfidence {
@@ -1390,7 +1477,8 @@ func (dta *DowTheoryAnalyzer) generateTradingSignal(klines3m []Kline, currentPri
 	}
 
 	// 检查突破信号
-	breakoutSignal := dta.generateBreakoutSignal(klines3m, currentPrice, trendLines, trendStrength)
+	// 🔥 P0-03: 传递anchorTime参数
+	breakoutSignal := dta.generateBreakoutSignal(klines3m, currentPrice, trendLines, trendStrength, anchorTime)
 	if breakoutSignal != nil && breakoutSignal.Confidence >= dta.config.SignalConfig.MinConfidence {
 		return breakoutSignal
 	}
@@ -1400,7 +1488,7 @@ func (dta *DowTheoryAnalyzer) generateTradingSignal(klines3m []Kline, currentPri
 		Action:      ActionHold,
 		Confidence:  30, // 降低默认信心度
 		Description: "趋势不明确，建议观望等待明确信号",
-		Timestamp:   time.Now().UnixMilli(),
+		Timestamp:   anchorTime, // 🔥 P0-03: 使用anchorTime
 	}
 }
 
@@ -1494,14 +1582,13 @@ func (dta *DowTheoryAnalyzer) generateChannelSignal(currentPrice float64, channe
 }
 
 // generateBreakoutSignal 生成突破信号
+// 🔥 P0-02: 新增anchorTime参数，统一使用时间戳坐标系
 func (dta *DowTheoryAnalyzer) generateBreakoutSignal(klines []Kline, currentPrice float64,
-	trendLines []*TrendLine, trendStrength *TrendStrength) *TradingSignal {
+	trendLines []*TrendLine, trendStrength *TrendStrength, anchorTime int64) *TradingSignal {
 
 	if len(trendLines) == 0 || len(klines) < 5 {
 		return nil
 	}
-
-	currentTime := time.Now().UnixMilli()
 
 	// 检查是否突破重要趋势线
 	for _, line := range trendLines {
@@ -1509,10 +1596,17 @@ func (dta *DowTheoryAnalyzer) generateBreakoutSignal(klines []Kline, currentPric
 			continue
 		}
 
-		// 🔥 P0-B1修复：使用当前K线索引而不是时间戳计算预期价格
-	currentIndex := len(klines) - 1 // 最新K线的索引
-	expectedPrice := line.Slope*float64(currentIndex) + line.Intercept
-		breakoutStrength := math.Abs(currentPrice-expectedPrice) / expectedPrice
+		// 🔥 P0-02修复：使用时间戳坐标系计算预期价格
+		expectedPrice := expectedPriceAt(line, anchorTime)
+
+		// 🔥 P0-02: 数值稳定性保护
+		if math.IsNaN(expectedPrice) || math.IsInf(expectedPrice, 0) || expectedPrice <= 0 {
+			continue
+		}
+
+		// 🔥 P0-02: 分母保护
+		denom := math.Max(math.Abs(expectedPrice), currentPrice*1e-6)
+		breakoutStrength := math.Abs(currentPrice-expectedPrice) / denom
 
 		if breakoutStrength > dta.config.SignalConfig.BreakoutStrength {
 			var signal *TradingSignal
@@ -1528,7 +1622,7 @@ func (dta *DowTheoryAnalyzer) generateBreakoutSignal(klines []Kline, currentPric
 					TakeProfit:    currentPrice * 0.97,
 					Description:   "突破重要支撑线，建议卖出",
 					BreakoutBased: true,
-					Timestamp:     currentTime,
+					Timestamp:     anchorTime, // 🔥 P0-02: 使用anchorTime
 				}
 			} else if line.Type == ResistanceLine && currentPrice > expectedPrice*1.01 {
 				// 突破阻力线向上
@@ -1541,7 +1635,7 @@ func (dta *DowTheoryAnalyzer) generateBreakoutSignal(klines []Kline, currentPric
 					TakeProfit:    currentPrice * 1.03,
 					Description:   "突破重要阻力线，建议买入",
 					BreakoutBased: true,
-					Timestamp:     currentTime,
+					Timestamp:     anchorTime, // 🔥 P0-02: 使用anchorTime
 				}
 			}
 
@@ -1712,12 +1806,19 @@ func (dta *DowTheoryAnalyzer) confirmWithVolume(klines []Kline) float64 {
 }
 
 // GetDowTheoryConfig 获取道氏理论配置
+// GetDowTheoryConfig 获取道氏理论配置（并发安全）
+// 🔥 P0-09: 添加并发安全保护
 func GetDowTheoryConfig() DowTheoryConfig {
+	dowCfgMu.RLock()
+	defer dowCfgMu.RUnlock()
 	return dowConfig
 }
 
-// UpdateDowTheoryConfig 更新道氏理论配置
+// UpdateDowTheoryConfig 更新道氏理论配置（并发安全）
+// 🔥 P0-09: 添加并发安全保护
 func UpdateDowTheoryConfig(newConfig DowTheoryConfig) {
+	dowCfgMu.Lock()
+	defer dowCfgMu.Unlock()
 	dowConfig = newConfig
 }
 

@@ -472,11 +472,12 @@ type SwingPointConfig struct {
 }
 
 type TrendLineConfig struct {
-	MinTouches     int     `json:"min_touches"`     // 最少触及次数
-	MaxDistance    float64 `json:"max_distance"`    // 最大距离百分比
-	BreakThreshold float64 `json:"break_threshold"` // 突破阈值百分比
-	MinSlope       float64 `json:"min_slope"`       // 最小斜率
-	MaxAge         int     `json:"max_age"`         // 最大存活周期
+	MinTouches        int     `json:"min_touches"`          // 最少触及次数
+	MaxDistance       float64 `json:"max_distance"`         // 最大距离百分比
+	BreakThreshold    float64 `json:"break_threshold"`      // 突破阈值百分比
+	MinSlope          float64 `json:"min_slope"`            // 最小斜率（废弃但保留兼容）
+	MinSlopePctPerDay float64 `json:"min_slope_pct_per_day"` // 🔥 P0-06: 新增 - 最小斜率百分比/天
+	MaxAge            int     `json:"max_age"`              // 最大存活周期
 }
 
 type ChannelConfig struct {
@@ -545,11 +546,12 @@ var dowConfig = DowTheoryConfig{
 		FractalReduction: 0.7,  // 分形强度降低30%
 	},
 	TrendLineConfig: TrendLineConfig{
-		MinTouches:     2,
-		MaxDistance:    0.02, // 2%
-		BreakThreshold: 0.01, // 1%
-		MinSlope:       0.0001,
-		MaxAge:         50,
+		MinTouches:        2,
+		MaxDistance:       0.02,   // 2%
+		BreakThreshold:    0.01,   // 1%
+		MinSlope:          0.0001, // 废弃但保留
+		MinSlopePctPerDay: 0.002,  // 🔥 P0-06: 新增 - 0.2%/天
+		MaxAge:            50,
 	},
 	ChannelConfig: ChannelConfig{
 		MinWidth:          0.02, // 2%
