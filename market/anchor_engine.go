@@ -15,6 +15,7 @@ const (
 	AnchorHTFZone   AnchorType = "HTF_ZONE"      // 4h/1h supply/demand
 	AnchorVPVRBound AnchorType = "VPVR_BOUND"    // VAH/VAL retest
 	AnchorSRFlip    AnchorType = "SR_FLIP"       // 支撑阻力转换
+	AnchorSRLevel   AnchorType = "SR_LEVEL"      // 🔥 P0-05B新增：普通支撑阻力位
 	AnchorZoneMTF   AnchorType = "MTF_ZONE"      // 30m/15m zone
 	AnchorFVG       AnchorType = "FVG"           // Fair Value Gap
 	AnchorFib       AnchorType = "FIB"           // Fibonacci levels

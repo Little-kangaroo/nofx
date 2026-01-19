@@ -2,6 +2,7 @@ package market
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"time"
@@ -75,12 +76,14 @@ type FlipContext struct {
 }
 
 // SupportResistanceData 支撑阻力分析结果
+// 🔥 P0-02A修复：增加 UsedTimeFrame 字段，避免下游硬编码
 type SupportResistanceData struct {
-	KeyLevels    []*SRLevel    `json:"key_levels"`    // 3根关键水平线
-	SRFlips      []*SRFlip     `json:"sr_flips"`      // 🔥 新增：支撑阻力转换线
-	Statistics   *SRStatistics `json:"statistics"`    // 统计信息
-	Config       *SRConfig     `json:"config"`        // 配置信息
-	LastAnalysis int64         `json:"last_analysis"` // 最后分析时间
+	UsedTimeFrame string        `json:"used_timeframe"` // 🔥 新增：分析使用的时间框架（如 5m/15m/1h/4h）
+	KeyLevels     []*SRLevel    `json:"key_levels"`     // 3根关键水平线
+	SRFlips       []*SRFlip     `json:"sr_flips"`       // 🔥 新增：支撑阻力转换线
+	Statistics    *SRStatistics `json:"statistics"`     // 统计信息
+	Config        *SRConfig     `json:"config"`         // 配置信息
+	LastAnalysis  int64         `json:"last_analysis"`  // 最后分析时间
 }
 
 // SRStatistics 支撑阻力统计
@@ -109,40 +112,125 @@ func NewSupportResistanceAnalyzer() *SupportResistanceAnalyzer {
 	}
 }
 
-// Analyze 分析支撑阻力转换线
-func (sra *SupportResistanceAnalyzer) Analyze(klines []Kline) *SupportResistanceData {
+// AnalyzeWithMeta 分析支撑阻力转换线（显式传入时间框架和元数据）
+// 🔥 P0-02B修复：显式传入 timeframe/nowMs/atr14，确保回测一致性和 ATR 容差准确性
+// @param klines: K线数据
+// @param timeframe: 时间框架（如 "5m"/"15m"/"1h"/"4h"）
+// @param nowMs: 分析时间戳（毫秒），建议使用最后一根K线的 CloseTime
+// @param atr14: 14期ATR值，用于自适应容差计算
+func (sra *SupportResistanceAnalyzer) AnalyzeWithMeta(klines []Kline, timeframe string, nowMs int64, atr14 float64) *SupportResistanceData {
 	if len(klines) == 0 {
 		return &SupportResistanceData{
-			KeyLevels:    []*SRLevel{},
-			Statistics:   &SRStatistics{},
-			Config:       &sra.config,
-			LastAnalysis: time.Now().UnixMilli(),
+			UsedTimeFrame: timeframe,
+			KeyLevels:     []*SRLevel{},
+			SRFlips:       []*SRFlip{},
+			Statistics:    &SRStatistics{},
+			Config:        &sra.config,
+			LastAnalysis:  nowMs,
 		}
 	}
 
-	// 1. 计算支撑阻力转换线
-	levels := sra.computeSRLevels(klines)
+	// 🔥 P0-02B：时间戳校验和兜底
+	if nowMs <= 0 {
+		nowMs = klines[len(klines)-1].CloseTime
+		if nowMs <= 0 {
+			nowMs = klines[len(klines)-1].OpenTime
+		}
+		log.Printf("[SR-INFO] nowMs未传入或为0，使用最后K线时间: %d", nowMs)
+	}
 
-	// 2. 🔥 新增：识别SR Flip转换线
-	srFlips := sra.identifySRFlips(levels, klines)
+	// 校验 nowMs 不应早于最后一根K线的开盘时间
+	lastKline := klines[len(klines)-1]
+	if nowMs < lastKline.OpenTime {
+		log.Printf("[SR-WARN] nowMs(%d) 早于最后K线开盘时间(%d)，强制使用K线时间",
+			nowMs, lastKline.OpenTime)
+		nowMs = lastKline.CloseTime
+		if nowMs <= 0 {
+			nowMs = lastKline.OpenTime
+		}
+	}
+
+	// 🔥 P0-04：ATR 异常保护（传入后续聚类和交互判定使用）
+	currentPrice := klines[len(klines)-1].Close
+	if atr14 <= 0 || currentPrice <= 0 {
+		log.Printf("[SR-WARN] ATR或价格异常: atr14=%.2f, price=%.2f，使用默认容差", atr14, currentPrice)
+		// 继续执行，但容差计算会退化到默认值
+	}
+
+	// 1. 计算支撑阻力级别（传入 ATR 和当前价格）
+	levels := sra.computeSRLevels(klines, atr14, currentPrice)
+
+	// 2. 🔥 P0-02C：识别SR Flip转换线（传入 nowMs）
+	srFlips := sra.identifySRFlips(levels, klines, nowMs)
 
 	// 3. 计算统计信息
 	statistics := sra.calculateStatistics(levels)
 
 	// 4. 筛选活跃级别（只返回最重要的3根水平线）
-	activeLevels := sra.selectKeyLevels(levels, klines[len(klines)-1].Close, 3)
+	activeLevels := sra.selectKeyLevels(levels, currentPrice, 3)
 
 	return &SupportResistanceData{
-		KeyLevels:    activeLevels,
-		SRFlips:      srFlips, // 🔥 新增：包含SR Flip数据
-		Statistics:   statistics,
-		Config:       &sra.config,
-		LastAnalysis: time.Now().UnixMilli(),
+		UsedTimeFrame: timeframe,         // 🔥 新增：记录时间框架
+		KeyLevels:     activeLevels,
+		SRFlips:       srFlips,
+		Statistics:    statistics,
+		Config:        &sra.config,
+		LastAnalysis:  nowMs,              // 🔥 修复：使用K线时间而非机器时间
 	}
 }
 
-// computeSRLevels 计算支撑阻力转换线（按照标准算法）
-func (sra *SupportResistanceAnalyzer) computeSRLevels(klines []Kline) []*SRLevel {
+// Analyze 分析支撑阻力转换线（向后兼容方法）
+// 🔥 P0-02B：保留原签名以兼容旧代码，内部调用 AnalyzeWithMeta
+// 注意：此方法无法提供 timeframe 和精确的 nowMs，建议使用 AnalyzeWithMeta
+func (sra *SupportResistanceAnalyzer) Analyze(klines []Kline) *SupportResistanceData {
+	if len(klines) == 0 {
+		return &SupportResistanceData{
+			UsedTimeFrame: "unknown",
+			KeyLevels:     []*SRLevel{},
+			SRFlips:       []*SRFlip{},
+			Statistics:    &SRStatistics{},
+			Config:        &sra.config,
+			LastAnalysis:  time.Now().UnixMilli(),
+		}
+	}
+
+	// 使用最后一根K线的时间
+	nowMs := klines[len(klines)-1].CloseTime
+	if nowMs <= 0 {
+		nowMs = klines[len(klines)-1].OpenTime
+	}
+
+	// 简化ATR估算（仅用于兼容，建议外部调用 AnalyzeWithMeta）
+	atr14 := estimateATR(klines, 14)
+
+	return sra.AnalyzeWithMeta(klines, "unknown", nowMs, atr14)
+}
+
+// estimateATR 简化的ATR估算（仅用于向后兼容）
+func estimateATR(klines []Kline, period int) float64 {
+	if len(klines) < period {
+		return 0
+	}
+
+	trSum := 0.0
+	for i := len(klines) - period; i < len(klines); i++ {
+		tr := klines[i].High - klines[i].Low
+		if i > 0 {
+			highLowClose := math.Max(
+				math.Abs(klines[i].High-klines[i-1].Close),
+				math.Abs(klines[i].Low-klines[i-1].Close),
+			)
+			tr = math.Max(tr, highLowClose)
+		}
+		trSum += tr
+	}
+
+	return trSum / float64(period)
+}
+
+// computeSRLevels 计算支撑阻力级别（按照标准算法）
+// 🔥 P0-04修复：接受 atr14 和 currentPrice 参数，用于自适应容差计算
+func (sra *SupportResistanceAnalyzer) computeSRLevels(klines []Kline, atr14, currentPrice float64) []*SRLevel {
 	N := len(klines)
 	if N == 0 {
 		return []*SRLevel{}
@@ -154,7 +242,7 @@ func (sra *SupportResistanceAnalyzer) computeSRLevels(klines []Kline) []*SRLevel
 	if N-sra.config.LookbackPeriods > startIndex {
 		startIndex = N - sra.config.LookbackPeriods
 	}
-	
+
 	if endIndex <= startIndex {
 		return []*SRLevel{}
 	}
@@ -167,14 +255,14 @@ func (sra *SupportResistanceAnalyzer) computeSRLevels(klines []Kline) []*SRLevel
 		return pivotPoints[i].Price < pivotPoints[j].Price
 	})
 
-	// 4. 聚类：把价格靠近的转折点合并
-	clusters := sra.clusterPivotPoints(pivotPoints)
+	// 4. 🔥 P0-04修复：聚类时传入 ATR 和当前价格
+	clusters := sra.clusterPivotPoints(pivotPoints, atr14, currentPrice)
 
 	// 5. 过滤：只保留命中次数足够多的簇
 	validClusters := sra.filterClusters(clusters)
 
 	// 6. 生成最终的支撑阻力级别
-	levels := sra.generateLevels(validClusters, klines[len(klines)-1].Close)
+	levels := sra.generateLevels(validClusters, currentPrice)
 
 	// 7. 按价格排序
 	sort.Slice(levels, func(i, j int) bool {
@@ -185,48 +273,61 @@ func (sra *SupportResistanceAnalyzer) computeSRLevels(klines []Kline) []*SRLevel
 }
 
 // findPivotPoints 寻找转折点
-// 🔥 修复：实现渐进确认机制，消除未来函数问题，确保回测/实盘一致性
+// 🔥 P0-03修复：严格遵守 endIndex 边界，避免隐性未来窥探
+// 🔥 实现渐进确认机制，消除未来函数问题，确保回测/实盘一致性
 func (sra *SupportResistanceAnalyzer) findPivotPoints(klines []Kline, startIndex, endIndex int) []*PivotPoint {
 	var pivotPoints []*PivotPoint
-	
-	// 🔥 修复：扩展扫描范围，包含最近的K线（但使用渐进确认）
-	extendedEndIndex := len(klines) - 1 // 包含到最新的K线
-	
-	for i := startIndex; i <= extendedEndIndex; i++ {
+
+	// 🔥 P0-03修复：边界保护，确保不越界
+	if endIndex > len(klines)-1 {
+		endIndex = len(klines) - 1
+	}
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	if endIndex < startIndex {
+		return pivotPoints
+	}
+
+	// 🔥 P0-03修复：严格使用 endIndex 作为扫描上界，不扩展
+	// 渐进确认机制会在 checkPivot* 函数内部处理置信度
+	for i := startIndex; i <= endIndex; i++ {
 		// 🔥 修复：渐进确认高点
-		if pivotHigh := sra.checkPivotHighWithConfidence(klines, i); pivotHigh != nil {
+		if pivotHigh := sra.checkPivotHighWithConfidence(klines, i, endIndex); pivotHigh != nil {
 			pivotPoints = append(pivotPoints, pivotHigh)
 		}
-		
+
 		// 🔥 修复：渐进确认低点
-		if pivotLow := sra.checkPivotLowWithConfidence(klines, i); pivotLow != nil {
+		if pivotLow := sra.checkPivotLowWithConfidence(klines, i, endIndex); pivotLow != nil {
 			pivotPoints = append(pivotPoints, pivotLow)
 		}
 	}
-	
+
 	return pivotPoints
 }
 
 // checkPivotHighWithConfidence 渐进确认高点检查
-// 🔥 修复：解决未来函数问题的核心算法
-func (sra *SupportResistanceAnalyzer) checkPivotHighWithConfidence(klines []Kline, index int) *PivotPoint {
+// 🔥 P0-03修复：接受 boundaryIndex 参数，确保右侧确认不超过边界
+// 🔥 解决未来函数问题的核心算法
+func (sra *SupportResistanceAnalyzer) checkPivotHighWithConfidence(klines []Kline, index int, boundaryIndex int) *PivotPoint {
 	if index < sra.config.PivotLeft {
 		return nil // 左侧数据不足
 	}
-	
+
 	currentHigh := klines[index].High
-	
+
 	// 1. 检查左侧 - 必须满足
 	for j := index - sra.config.PivotLeft; j < index; j++ {
 		if klines[j].High > currentHigh {
 			return nil // 左侧有更高点，不是pivot
 		}
 	}
-	
-	// 2. 检查右侧 - 渐进确认
-	availableRightBars := len(klines) - 1 - index
+
+	// 2. 检查右侧 - 渐进确认（受 boundaryIndex 约束）
+	// 🔥 P0-03修复：右侧K线数量受 boundaryIndex 限制
+	availableRightBars := boundaryIndex - index
 	rightBarsToCheck := minInt(availableRightBars, sra.config.PivotRight)
-	
+
 	if rightBarsToCheck == 0 {
 		// 🔥 修复：当前K线，无右侧确认，但可以作为潜在pivot
 		return &PivotPoint{
@@ -234,34 +335,34 @@ func (sra *SupportResistanceAnalyzer) checkPivotHighWithConfidence(klines []Klin
 			Type:           "H",
 			Index:          index,
 			Timestamp:      klines[index].OpenTime,
-			Confidence:     0.1,  // 极低置信度
+			Confidence:     0.1, // 极低置信度
 			MinConfirmed:   false,
 			FullConfirmed:  false,
 			RightBarsCount: 0,
 		}
 	}
-	
+
 	// 检查可用的右侧K线
 	isValidPivot := true
-	for j := index + 1; j <= index + rightBarsToCheck; j++ {
+	for j := index + 1; j <= index+rightBarsToCheck; j++ {
 		if klines[j].High > currentHigh {
 			isValidPivot = false
 			break
 		}
 	}
-	
+
 	if !isValidPivot {
 		return nil // 右侧有更高点，不是pivot
 	}
-	
+
 	// 3. 🔥 修复：计算确认置信度
 	confidence := float64(rightBarsToCheck) / float64(sra.config.PivotRight)
 	minConfirmed := rightBarsToCheck >= 1
 	fullConfirmed := rightBarsToCheck >= sra.config.PivotRight
-	
+
 	return &PivotPoint{
 		Price:          currentHigh,
-		Type:           "H", 
+		Type:           "H",
 		Index:          index,
 		Timestamp:      klines[index].OpenTime,
 		Confidence:     confidence,
@@ -272,25 +373,27 @@ func (sra *SupportResistanceAnalyzer) checkPivotHighWithConfidence(klines []Klin
 }
 
 // checkPivotLowWithConfidence 渐进确认低点检查
-// 🔥 修复：解决未来函数问题的核心算法
-func (sra *SupportResistanceAnalyzer) checkPivotLowWithConfidence(klines []Kline, index int) *PivotPoint {
+// 🔥 P0-03修复：接受 boundaryIndex 参数，确保右侧确认不超过边界
+// 🔥 解决未来函数问题的核心算法
+func (sra *SupportResistanceAnalyzer) checkPivotLowWithConfidence(klines []Kline, index int, boundaryIndex int) *PivotPoint {
 	if index < sra.config.PivotLeft {
 		return nil // 左侧数据不足
 	}
-	
+
 	currentLow := klines[index].Low
-	
+
 	// 1. 检查左侧 - 必须满足
 	for j := index - sra.config.PivotLeft; j < index; j++ {
 		if klines[j].Low < currentLow {
 			return nil // 左侧有更低点，不是pivot
 		}
 	}
-	
-	// 2. 检查右侧 - 渐进确认
-	availableRightBars := len(klines) - 1 - index
+
+	// 2. 检查右侧 - 渐进确认（受 boundaryIndex 约束）
+	// 🔥 P0-03修复：右侧K线数量受 boundaryIndex 限制
+	availableRightBars := boundaryIndex - index
 	rightBarsToCheck := minInt(availableRightBars, sra.config.PivotRight)
-	
+
 	if rightBarsToCheck == 0 {
 		// 🔥 修复：当前K线，无右侧确认，但可以作为潜在pivot
 		return &PivotPoint{
@@ -298,31 +401,31 @@ func (sra *SupportResistanceAnalyzer) checkPivotLowWithConfidence(klines []Kline
 			Type:           "L",
 			Index:          index,
 			Timestamp:      klines[index].OpenTime,
-			Confidence:     0.1,  // 极低置信度
+			Confidence:     0.1, // 极低置信度
 			MinConfirmed:   false,
 			FullConfirmed:  false,
 			RightBarsCount: 0,
 		}
 	}
-	
+
 	// 检查可用的右侧K线
 	isValidPivot := true
-	for j := index + 1; j <= index + rightBarsToCheck; j++ {
+	for j := index + 1; j <= index+rightBarsToCheck; j++ {
 		if klines[j].Low < currentLow {
 			isValidPivot = false
 			break
 		}
 	}
-	
+
 	if !isValidPivot {
 		return nil // 右侧有更低点，不是pivot
 	}
-	
+
 	// 3. 🔥 修复：计算确认置信度
 	confidence := float64(rightBarsToCheck) / float64(sra.config.PivotRight)
 	minConfirmed := rightBarsToCheck >= 1
 	fullConfirmed := rightBarsToCheck >= sra.config.PivotRight
-	
+
 	return &PivotPoint{
 		Price:          currentLow,
 		Type:           "L",
@@ -336,11 +439,12 @@ func (sra *SupportResistanceAnalyzer) checkPivotLowWithConfidence(klines []Kline
 }
 
 // clusterPivotPoints 聚类转折点（V-10.0优化版：严格控制HitCount）
+// 🔥 P0-04修复：接受真实 ATR，替代经验估算
 // 🔥 修复：增强置信度过滤，优先使用高置信度的Pivot点 + 动态边界稳定性修复
-func (sra *SupportResistanceAnalyzer) clusterPivotPoints(pivotPoints []*PivotPoint) []*PriceCluster {
+func (sra *SupportResistanceAnalyzer) clusterPivotPoints(pivotPoints []*PivotPoint, atr14, currentPrice float64) []*PriceCluster {
 	var clusters []*PriceCluster
 	maxClusterSize := 8 // 【关键优化】每个簇最多8个pivot点，适配AI V-10.0严格规则
-	
+
 	// 🔥 修复：按置信度排序，优先处理高置信度的点
 	sort.Slice(pivotPoints, func(i, j int) bool {
 		if pivotPoints[i].Confidence == pivotPoints[j].Confidence {
@@ -349,8 +453,8 @@ func (sra *SupportResistanceAnalyzer) clusterPivotPoints(pivotPoints []*PivotPoi
 		return pivotPoints[i].Confidence > pivotPoints[j].Confidence
 	})
 
-	// 🔥 新增：计算动态聚类容差（基于ATR的稳定边界）
-	adaptiveTolerance := sra.calculateAdaptiveClusterTolerance(pivotPoints)
+	// 🔥 P0-04修复：计算动态聚类容差（使用真实ATR）
+	adaptiveTolerance := sra.calculateAdaptiveClusterTolerance(pivotPoints, atr14, currentPrice)
 
 	for _, point := range pivotPoints {
 		// 🔥 修复：最低置信度过滤
@@ -491,12 +595,16 @@ func (sra *SupportResistanceAnalyzer) analyzeLevelType(cluster *PriceCluster, cu
 }
 
 // calculateLevelStrength 计算级别强度
+// 🔥 P0-01修复：统一返回 0-100 范围（与 SRFlip.FlipStrength 同口径）
 func (sra *SupportResistanceAnalyzer) calculateLevelStrength(cluster *PriceCluster) float64 {
-	// 基于命中次数的强度，归一化到0-1
+	// 基于命中次数的强度，归一化到0-100
 	baseStrength := math.Min(float64(cluster.Count)/10.0, 1.0)
 
+	// 转换为 0-100 范围
+	strength := baseStrength * 100.0
+
 	// 可以添加其他因素，如时间跨度、价格波动等
-	return baseStrength
+	return strength
 }
 
 // calculateLevelConfidence 计算级别置信度
@@ -658,30 +766,32 @@ func (sra *SupportResistanceAnalyzer) GetConfig() SRConfig {
 
 // identifySRFlips 识别支撑阻力转换线（SR Flip）
 // 🔥 核心算法："曾经是支撑，现在是阻力"（或者反之）的精确识别
-func (sra *SupportResistanceAnalyzer) identifySRFlips(levels []*SRLevel, klines []Kline) []*SRFlip {
+// identifySRFlips 识别支撑阻力转换线（SR Flip）
+// 🔥 P0-02C修复：接受 nowMs 参数，避免使用 time.Now() 导致回测不确定性
+// 核心算法："曾经是支撑，现在是阻力"（或者反之）的精确识别
+func (sra *SupportResistanceAnalyzer) identifySRFlips(levels []*SRLevel, klines []Kline, nowMs int64) []*SRFlip {
 	var srFlips []*SRFlip
-	
+
 	if len(levels) == 0 || len(klines) < 50 {
 		return srFlips
 	}
-	
+
 	currentPrice := klines[len(klines)-1].Close
-	currentTime := time.Now().UnixMilli()
-	
+
 	// 🔥 步骤1：为每个级别建立历史交互记录
 	for _, level := range levels {
 		flipCandidate := sra.analyzeLevelForFlip(level, klines, currentPrice)
 		if flipCandidate != nil {
-			flipCandidate.ID = fmt.Sprintf("sr_flip_%d_%s", 
+			flipCandidate.ID = fmt.Sprintf("sr_flip_%d_%s",
 				int(level.Price*1000), flipCandidate.FlippedType)
-			flipCandidate.FlipTime = currentTime
+			flipCandidate.FlipTime = nowMs // 🔥 P0-02C修复：使用传入的 nowMs
 			srFlips = append(srFlips, flipCandidate)
 		}
 	}
-	
+
 	// 🔥 步骤2：验证和过滤SR Flip（确保质量）
 	validatedFlips := sra.validateSRFlips(srFlips, klines)
-	
+
 	return validatedFlips
 }
 
@@ -1078,66 +1188,83 @@ func (sra *SupportResistanceAnalyzer) validateSRFlips(srFlips []*SRFlip, klines 
 	return validatedFlips
 }
 
-// calculateAdaptiveClusterTolerance 计算自适应聚类容差（基于ATR的稳定边界）
-// 🔥 修复：解决聚类算法的动态边界不稳定问题
-func (sra *SupportResistanceAnalyzer) calculateAdaptiveClusterTolerance(pivotPoints []*PivotPoint) float64 {
+// calculateAdaptiveClusterTolerance 计算自适应聚类容差（基于真实ATR）
+// 🔥 P0-04修复：接受真实 ATR 参数，替代经验估算
+// 🔥 解决聚类算法的动态边界不稳定问题
+func (sra *SupportResistanceAnalyzer) calculateAdaptiveClusterTolerance(pivotPoints []*PivotPoint, atr14, currentPrice float64) float64 {
 	if len(pivotPoints) < 10 {
 		return sra.config.ClusterTolerance // 数据不足时使用默认值
 	}
-	
+
 	// 🔥 方法1：基于价格分布的方差计算自适应容差
 	var prices []float64
 	for _, point := range pivotPoints {
 		prices = append(prices, point.Price)
 	}
-	
+
 	// 计算价格标准差
 	mean := 0.0
 	for _, price := range prices {
 		mean += price
 	}
 	mean /= float64(len(prices))
-	
+
 	variance := 0.0
 	for _, price := range prices {
 		variance += math.Pow(price-mean, 2)
 	}
 	stdDev := math.Sqrt(variance / float64(len(prices)))
-	
-	// 🔥 方法2：基于ATR归一化的容差计算
-	atrBasedTolerance := sra.calculateATRBasedTolerance(mean)
-	
+
+	// 🔥 P0-04修复：方法2 - 使用真实ATR归一化的容差计算
+	atrBasedTolerance := sra.calculateATRBasedTolerance(atr14, currentPrice)
+
 	// 🔥 方法3：基于置信度分布的容差调整
 	confidenceAdjustment := sra.calculateConfidenceBasedTolerance(pivotPoints)
-	
+
 	// 🔥 综合计算：取加权平均，确保稳定性
-	stdDevTolerance := stdDev / mean                    // 标准差容差（相对）
-	atrTolerance := atrBasedTolerance                  // ATR容差
-	confidenceTolerance := confidenceAdjustment       // 置信度调整
-	
+	stdDevTolerance := stdDev / mean     // 标准差容差（相对）
+	atrTolerance := atrBasedTolerance    // ATR容差
+	confidenceTolerance := confidenceAdjustment // 置信度调整
+
 	// 加权组合：40% 标准差 + 40% ATR + 20% 置信度调整
 	adaptiveTolerance := stdDevTolerance*0.4 + atrTolerance*0.4 + confidenceTolerance*0.2
-	
+
 	// 🔥 边界稳定性保护：限制在合理范围内，避免极端值
 	minTolerance := sra.config.ClusterTolerance * 0.5  // 最小不低于默认的50%
 	maxTolerance := sra.config.ClusterTolerance * 3.0  // 最大不超过默认的300%
-	
+
 	adaptiveTolerance = math.Max(minTolerance, math.Min(maxTolerance, adaptiveTolerance))
-	
+
 	return adaptiveTolerance
 }
 
-// calculateATRBasedTolerance 基于ATR计算容差
-func (sra *SupportResistanceAnalyzer) calculateATRBasedTolerance(meanPrice float64) float64 {
-	// 这里需要ATR值，但support_resistance分析器没有直接访问K线
-	// 使用简化方法：基于价格水平的相对ATR估算
-	
-	// 假设ATR约为价格的1-3%（经验值）
-	estimatedATRPercent := 0.015 // 1.5%的估算ATR
-	
-	// ATR容差：0.5倍估算ATR作为聚类容差
-	atrTolerance := estimatedATRPercent * 0.5
-	
+// calculateATRBasedTolerance 基于真实ATR计算容差
+// 🔥 P0-04修复：使用真实ATR值，替代经验估算
+func (sra *SupportResistanceAnalyzer) calculateATRBasedTolerance(atr14, currentPrice float64) float64 {
+	// 🔥 P0-04修复：使用传入的真实ATR值
+	if atr14 <= 0 || currentPrice <= 0 {
+		// ATR异常，退化到默认容差
+		log.Printf("[SR-DEBUG] ATR异常(%.2f)或价格异常(%.2f)，使用默认容差", atr14, currentPrice)
+		return sra.config.ClusterTolerance
+	}
+
+	// 🔥 计算ATR相对于当前价格的百分比
+	atrPercent := atr14 / currentPrice
+
+	// 🔥 边界保护：防止极端波动导致容差过大/过小
+	if atrPercent > 0.10 { // 10%
+		log.Printf("[SR-WARN] ATR容差过大(%.2f%%), 限制为10%%", atrPercent*100)
+		atrPercent = 0.10
+	}
+	if atrPercent < 0.001 { // 0.1%
+		log.Printf("[SR-WARN] ATR容差过小(%.2f%%), 限制为0.1%%", atrPercent*100)
+		atrPercent = 0.001
+	}
+
+	// ATR容差：0.5倍ATR作为聚类容差（可配置）
+	atrMultiplier := 0.5
+	atrTolerance := atrPercent * atrMultiplier
+
 	return atrTolerance
 }
 

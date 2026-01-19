@@ -554,8 +554,24 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 	}
 
 	// 执行支撑阻力转换线分析
+	// 🔥 P0-02修复：使用 AnalyzeWithMeta 传入 timeframe/nowMs/atr14
 	if ca.config.EnableSupportResistance && len(klines4h) > 20 {
-		result.SupportResistance = ca.srAnalyzer.Analyze(klines4h)
+		nowMs := klines4h[len(klines4h)-1].CloseTime
+		if nowMs <= 0 {
+			nowMs = klines4h[len(klines4h)-1].OpenTime
+		}
+
+		// 计算4h时间框架的ATR14
+		atrManager := GetGlobalATRManager()
+		atr14 := 0.0
+		if len(klines4h) >= 14 {
+			atrEntry := atrManager.GetATR14(klines4h, "4h", currentPrice)
+			atr14 = atrEntry.Value
+		} else {
+			atr14 = currentPrice * 0.005
+		}
+
+		result.SupportResistance = ca.srAnalyzer.AnalyzeWithMeta(klines4h, "4h", nowMs, atr14)
 	}
 
 	// 生成统一信号
@@ -1664,8 +1680,25 @@ func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe, symbol string
 	}
 
 	// 支撑阻力转换线分析
+	// 🔥 P0-02修复：使用 AnalyzeWithMeta 传入 timeframe/nowMs/atr14
 	if ca.config.EnableSupportResistance {
-		tfAnalysis.SupportResistance = ca.srAnalyzer.Analyze(klines)
+		nowMs := klines[len(klines)-1].CloseTime
+		if nowMs <= 0 {
+			nowMs = klines[len(klines)-1].OpenTime
+		}
+
+		// 计算 ATR14
+		atrManager := GetGlobalATRManager()
+		atr14 := 0.0
+		if len(klines) >= 14 {
+			atrEntry := atrManager.GetATR14(klines, timeframe, currentPrice)
+			atr14 = atrEntry.Value
+		} else {
+			// 数据不足时，使用价格的0.5%作为保守ATR
+			atr14 = currentPrice * 0.005
+		}
+
+		tfAnalysis.SupportResistance = ca.srAnalyzer.AnalyzeWithMeta(klines, timeframe, nowMs, atr14)
 	}
 
 	// 计算可靠性评分

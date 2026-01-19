@@ -216,52 +216,109 @@ func (ae *AnchorEngine) fromVPVR(data *VolumeProfile, timeframes map[string][]Kl
 }
 
 // fromSR 从支撑阻力数据提取锚点候选
+// 🔥 P0-05修复：修复TF硬编码、类型混淆、StrengthZ计算错误、IsFresh逻辑问题
 func (ae *AnchorEngine) fromSR(data *SupportResistanceData, timeframes map[string][]Kline) []AnchorCandidate {
 	var candidates []AnchorCandidate
-	
-	if data == nil || len(data.KeyLevels) == 0 {
+
+	if data == nil {
 		return candidates
 	}
-	
+
+	// 🔥 P0-05A修复：获取真实时间框架，避免硬编码
+	TF := data.UsedTimeFrame
+	if TF == "" {
+		TF = "4h" // 兜底：保持可用（假设默认4h分析）
+		log.Printf("[SR-WARN] SR分析未提供UsedTimeFrame，使用默认值: %s", TF)
+	}
+
+	// 🔥 P0-05B修复：处理 KeyLevels（普通支撑阻力位）
 	for _, level := range data.KeyLevels {
 		// 确定方向
 		dir := "LONG"
 		if level.Type == "resistance" {
 			dir = "SHORT"
 		}
-		
-		// 判断是否为转换线（flip）- 支撑阻力转换是SR的核心特征
-		anchorType := AnchorSRFlip
-		
+
+		// 🔥 P0-05B修复：KeyLevels 应为 AnchorSRLevel，而非 AnchorSRFlip
 		candidate := AnchorCandidate{
 			Dir:    dir,
-			Type:   anchorType,
-			TF:     "30m", // SR通常基于中等时间框架
+			Type:   AnchorSRLevel, // 🔥 修复：普通级别不是 Flip
+			TF:     TF,             // 🔥 P0-05A修复：使用真实时间框架
 			Level:  level.Price,
 			BandLo: level.Price,
 			BandHi: level.Price,
 			Meta: map[string]interface{}{
-				"source_type": "support_resistance",
-				"level_type":  level.Type,
-				"hit_count":   level.HitCount,
-				"strength":    level.Strength,
+				"sr_kind":   "level",       // 区分是level还是flip
+				"role":      level.Type,    // support/resistance
+				"hit_count": level.HitCount,
+				"strength":  level.Strength, // 0-100范围
 			},
 		}
-		
-		// 基于hit_count判断是否fresh (触碰次数少的更fresh)
+
+		// 🔥 P0-05C修复：StrengthZ计算
+		// 简单归一化：strength/100 作为临时方案（理想情况应使用zscore）
+		if level.Strength > 0 {
+			// 方案1：简单归一化（强度已经是0-100）
+			strengthZ := level.Strength / 100.0
+			candidate.StrengthZ = &strengthZ
+
+			// TODO P1：升级为滑动窗口zscore统计
+		}
+
+		// 🔥 IsFresh判断保留（基于hit_count）
+		// 注意：MinHits默认为3，所以hit_count<=2意味着刚形成
 		if level.HitCount <= 2 {
 			candidate.IsFresh = true
 		}
-		
-		// 基于strength设置strengthZ (简单映射：假设50为均值，20为标准差)
-		if level.Strength > 0 {
-			strengthZ := (level.Strength - 50) / 20
-			candidate.StrengthZ = &strengthZ
-		}
-		
+
 		candidates = append(candidates, candidate)
 	}
-	
+
+	// 🔥 P0-05B修复：单独处理 SRFlips（支撑阻力转换）
+	for _, flip := range data.SRFlips {
+		// 确定方向（基于转换后的类型）
+		dir := "LONG"
+		if flip.FlippedType == "resistance" {
+			dir = "SHORT"
+		}
+
+		candidate := AnchorCandidate{
+			Dir:    dir,
+			Type:   AnchorSRFlip, // 🔥 正确：这才是真正的Flip
+			TF:     TF,
+			Level:  flip.FlipPrice,
+			BandLo: flip.FlipPrice,
+			BandHi: flip.FlipPrice,
+			Meta: map[string]interface{}{
+				"sr_kind":         "flip",
+				"from":            flip.OriginalType,
+				"to":              flip.FlippedType,
+				"flip_strength":   flip.FlipStrength, // 0-100
+				"flip_confirmed":  flip.FlipConfirmation,
+				"pre_touches":     flip.PreFlipTouches,
+				"post_touches":    flip.PostFlipTouches,
+			},
+		}
+
+		// 🔥 P0-05C修复：Flip的StrengthZ（基于FlipStrength）
+		if flip.FlipStrength > 0 {
+			strengthZ := flip.FlipStrength / 100.0
+			candidate.StrengthZ = &strengthZ
+		}
+
+		// 🔥 IsFresh判断（基于FlipTime距离现在的时间）
+		// TODO P1：实现基于时间戳的freshness判断
+		if flip.FlipConfirmation {
+			// 已确认的flip可能不那么fresh
+			candidate.IsFresh = false
+		} else {
+			// 未确认的flip比较fresh
+			candidate.IsFresh = true
+		}
+
+		candidates = append(candidates, candidate)
+	}
+
 	return candidates
 }
 
