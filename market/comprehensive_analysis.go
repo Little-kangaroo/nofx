@@ -443,7 +443,8 @@ func (ca *ComprehensiveAnalyzer) AnalyzeMultiTimeframe(symbol string, klines5m, 
 	}
 
 	// 生成统一信号
-	result.UnifiedSignals = ca.generateUnifiedSignals(result, currentPrice)
+	// 🔥 P0-04修复：传入 klines4h 和 timeframe
+	result.UnifiedSignals = ca.generateUnifiedSignals(result, currentPrice, klines4h, "4h")
 
 	// 分析市场结构
 	result.MarketStructure = ca.analyzeMarketStructure(result)
@@ -551,6 +552,10 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 	// 执行斐波纳契分析
 	if ca.config.EnableFibonacci && len(klines4h) > 15 {
 		result.Fibonacci = ca.fibonacciAnalyzer.Analyze(klines4h)
+		// 🔥 P0-01修复：补齐 Timeframe
+		if result.Fibonacci != nil {
+			result.Fibonacci.Timeframe = "4h"
+		}
 	}
 
 	// 执行支撑阻力转换线分析
@@ -575,7 +580,8 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 	}
 
 	// 生成统一信号
-	result.UnifiedSignals = ca.generateUnifiedSignals(result, currentPrice)
+	// 🔥 P0-04修复：传入 klines4h 和 timeframe
+	result.UnifiedSignals = ca.generateUnifiedSignals(result, currentPrice, klines4h, "4h")
 
 	// 分析市场结构
 	result.MarketStructure = ca.analyzeMarketStructure(result)
@@ -593,7 +599,8 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 }
 
 // generateUnifiedSignals 生成统一交易信号
-func (ca *ComprehensiveAnalyzer) generateUnifiedSignals(result *ComprehensiveResult, currentPrice float64) []*UnifiedSignal {
+// 🔥 P0-04修复：添加 klines 和 timeframe 参数
+func (ca *ComprehensiveAnalyzer) generateUnifiedSignals(result *ComprehensiveResult, currentPrice float64, klines []Kline, timeframe string) []*UnifiedSignal {
 	var allSignals []*UnifiedSignal
 
 	// 收集各个分析模块的信号
@@ -601,7 +608,8 @@ func (ca *ComprehensiveAnalyzer) generateUnifiedSignals(result *ComprehensiveRes
 	vpvrSignals := ca.collectVPVRSignals(result.VolumeProfile, currentPrice)
 	sdSignals := ca.collectSupplyDemandSignals(result.SupplyDemand, currentPrice)
 	fvgSignals := ca.collectFVGSignals(result.FairValueGaps, currentPrice)
-	fibSignals := ca.collectFibonacciSignals(result.Fibonacci, currentPrice)
+	// 🔥 P0-04修复：传入真实 klines 和 timeframe
+	fibSignals := ca.collectFibonacciSignals(result.Fibonacci, klines, timeframe)
 
 	// 合并所有信号
 	allSignals = append(allSignals, dowSignals...)
@@ -889,15 +897,16 @@ func (ca *ComprehensiveAnalyzer) collectFVGSignals(fvgData *FVGData, currentPric
 }
 
 // collectFibonacciSignals 收集斐波纳契信号
-func (ca *ComprehensiveAnalyzer) collectFibonacciSignals(fibData *FibonacciData, currentPrice float64) []*UnifiedSignal {
+// 🔥 P0-04修复：修改函数签名，传入真实 klines 和 timeframe
+func (ca *ComprehensiveAnalyzer) collectFibonacciSignals(fibData *FibonacciData, klines []Kline, timeframe string) []*UnifiedSignal {
 	var signals []*UnifiedSignal
 
-	if fibData == nil {
+	if fibData == nil || len(klines) == 0 {
 		return signals
 	}
 
-	// 生成斐波纳契信号
-	fibSignals := ca.fibonacciAnalyzer.GenerateSignals(fibData, []Kline{{Close: currentPrice}})
+	// 🔥 P0-04修复：传入真实 klines 而非伪造的单个 Close
+	fibSignals := ca.fibonacciAnalyzer.GenerateSignals(fibData, klines)
 
 	for _, signal := range fibSignals {
 		// 安全获取第一个止盈目标
@@ -924,7 +933,7 @@ func (ca *ComprehensiveAnalyzer) collectFibonacciSignals(fibData *FibonacciData,
 				},
 			},
 			Description: signal.Context,
-			TimeFrame:   "4h",
+			TimeFrame:   timeframe, // 🔥 P0-04修复：使用真实 timeframe
 			Timestamp:   signal.Timestamp,
 		}
 
@@ -1677,6 +1686,10 @@ func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe, symbol string
 	// 斐波纳契分析
 	if ca.config.EnableFibonacci {
 		tfAnalysis.Fibonacci = ca.fibonacciAnalyzer.Analyze(klines)
+		// 🔥 P0-01修复：补齐 Timeframe
+		if tfAnalysis.Fibonacci != nil {
+			tfAnalysis.Fibonacci.Timeframe = timeframe
+		}
 	}
 
 	// 支撑阻力转换线分析

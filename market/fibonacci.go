@@ -85,6 +85,7 @@ func (fa *FibonacciAnalyzer) identifySwingPoints(klines []Kline) []PricePoint {
 
 // identifyHistoricalSwingPoints 使用固定窗口识别历史摆动点
 // 用于确保历史斐波纳契分析的稳定性
+// 🔥 P0-05修复：仅使用左侧窗口确认，避免 lookahead
 func (fa *FibonacciAnalyzer) identifyHistoricalSwingPoints(klines []Kline) []PricePoint {
 	var swingPoints []PricePoint
 	lookback := fa.config.SwingLookback
@@ -97,44 +98,52 @@ func (fa *FibonacciAnalyzer) identifyHistoricalSwingPoints(klines []Kline) []Pri
 
 	for i := lookback; i < historicalEnd; i++ {
 		current := klines[i]
-		
-		// 检查是否为摆动高点
+
+		// 🔥 P0-05修复：仅使用左侧窗口确认（避免 lookahead）
 		isSwingHigh := true
-		for j := i - lookback; j <= i+lookback; j++ {
-			if j != i && klines[j].High >= current.High {
+		for j := i - lookback; j < i; j++ { // 注意：j < i，不包含右侧
+			if klines[j].High >= current.High {
 				isSwingHigh = false
 				break
 			}
 		}
-		
-		// 检查是否为摆动低点
+
 		isSwingLow := true
-		for j := i - lookback; j <= i+lookback; j++ {
-			if j != i && klines[j].Low <= current.Low {
+		for j := i - lookback; j < i; j++ { // 注意：j < i，不包含右侧
+			if klines[j].Low <= current.Low {
 				isSwingLow = false
 				break
 			}
 		}
-		
+
+		// 🔥 P0-05修复：计算右侧可用根数，作为置信度
+		rightAvailable := len(klines) - i - 1
+		confidence := 1.0
+		if rightAvailable < lookback {
+			confidence = float64(rightAvailable) / float64(lookback)
+		}
+
 		// ATR自适应过滤
 		if isSwingHigh || isSwingLow {
 			if !fa.passesATRFilter(klines, i, lookback) {
 				continue
 			}
 		}
-		
+
 		// 添加摆动点
 		if isSwingHigh {
 			swingPoints = append(swingPoints, PricePoint{
-				Price:     current.High,
-				Timestamp: current.OpenTime,
-				Index:     i,
+				Price:      current.High,
+				Timestamp:  current.OpenTime,
+				Index:      i,
+				Confidence: confidence, // 🔥 P0-05: 添加置信度字段
 			})
 		} else if isSwingLow {
 			swingPoints = append(swingPoints, PricePoint{
-				Price:     current.Low,
-				Timestamp: current.OpenTime,
-				Index:     i,
+				Price:      current.Low,
+				Timestamp:  current.OpenTime,
+				Index:      i,
+				Confidence: confidence, // 🔥 P0-05: 添加置信度字段
 			})
 		}
 	}
@@ -274,15 +283,19 @@ func (fa *FibonacciAnalyzer) performZigZagAnalysis(klines []Kline, threshold flo
 }
 
 // calculateATR 计算平均真实波幅
+// 🔥 P2-05修复：更安全的索引计算，避免越界
 func (fa *FibonacciAnalyzer) calculateATR(klines []Kline, period int) float64 {
 	if len(klines) < period+1 {
 		return 0
 	}
 
 	var sum float64
+	// 🔥 P2-05修复：更安全的索引计算
 	for i := 1; i <= period && i < len(klines); i++ {
-		if len(klines)-i-1 >= 0 {
-			tr := fa.calculateTrueRange(klines[len(klines)-i], klines[len(klines)-i-1])
+		idx := len(klines) - i
+		prevIdx := idx - 1
+		if prevIdx >= 0 && idx < len(klines) { // 双重边界检查
+			tr := fa.calculateTrueRange(klines[idx], klines[prevIdx])
 			sum += tr
 		}
 	}
@@ -873,18 +886,14 @@ func (fa *FibonacciAnalyzer) identifyValidBaseWaves(swingPoints []PricePoint, kl
 		
 		candidates = append(candidates, candidate)
 	}
-	
+
 	// 🔥 修复5：按有效性评分排序，只保留最优候选
 	if len(candidates) > 0 {
-		// 简单排序：按ValidityScore降序
-		for i := 0; i < len(candidates)-1; i++ {
-			for j := i + 1; j < len(candidates); j++ {
-				if candidates[j].ValidityScore > candidates[i].ValidityScore {
-					candidates[i], candidates[j] = candidates[j], candidates[i]
-				}
-			}
-		}
-		
+		// 🔥 P2-04修复：使用标准库排序替代冒泡排序
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].ValidityScore > candidates[j].ValidityScore
+		})
+
 		// 限制候选数量，避免过多无意义计算
 		maxCandidates := 5
 		if len(candidates) > maxCandidates {
@@ -1197,20 +1206,17 @@ func (fa *FibonacciAnalyzer) filterAndRankExtensions(extensions []*FibExtension)
 	}
 	
 	// 按置信度排序（降序）
-	for i := 0; i < len(extensions)-1; i++ {
-		for j := i + 1; j < len(extensions); j++ {
-			if extensions[j].Confidence > extensions[i].Confidence {
-				extensions[i], extensions[j] = extensions[j], extensions[i]
-			}
-		}
-	}
-	
+	// 🔥 P2-04修复：使用标准库排序替代冒泡排序
+	sort.Slice(extensions, func(i, j int) bool {
+		return extensions[i].Confidence > extensions[j].Confidence
+	})
+
 	// 限制扩展数量，保留最优的
 	maxExtensions := 8
 	if len(extensions) > maxExtensions {
 		extensions = extensions[:maxExtensions]
 	}
-	
+
 	return extensions
 }
 

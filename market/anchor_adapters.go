@@ -2,6 +2,7 @@ package market
 
 import (
 	"log"
+	"time"
 )
 
 // === 各结构分析器适配器 ===
@@ -385,24 +386,40 @@ func (ae *AnchorEngine) fromFVG(data *FVGData, timeframes map[string][]Kline) []
 }
 
 // fromFib 从斐波纳契数据提取锚点候选
+// 🔥 P0-02 & P0-03修复：修复 TF/IsFresh/StrengthZ/VolRatio
 func (ae *AnchorEngine) fromFib(data *FibonacciData, timeframes map[string][]Kline) []AnchorCandidate {
 	var candidates []AnchorCandidate
-	
+
 	if data == nil {
 		return candidates
 	}
-	
+
+	// 🔥 P0-02修复：从 data.Timeframe 读取真实TF
+	fibTF := data.Timeframe
+	if fibTF == "" {
+		fibTF = "unknown"
+		log.Printf("⚠️ [P0-02] FibonacciData 缺少 Timeframe，标记为 unknown")
+	}
+
 	// 从回调级别提取
 	for _, retracement := range data.Retracements {
 		if !retracement.IsActive {
 			continue
 		}
-		
+
+		// 🔥 P0-02修复：计算 IsFresh（基于 Age 和 Context）
+		isFresh := false
+		if retracement.Context != nil {
+			isFresh = retracement.Context.IsFresh
+		} else if retracement.Age <= data.Config.MaxRetracementAge {
+			isFresh = true
+		}
+
 		for _, level := range retracement.Levels {
 			if level.Importance < 0.5 { // 只选择重要级别
 				continue
 			}
-			
+
 			// 确定方向：基于回调类型和级别
 			dir := "LONG"
 			if retracement.TrendType == TrendDownward {
@@ -418,70 +435,99 @@ func (ae *AnchorEngine) fromFib(data *FibonacciData, timeframes map[string][]Kli
 					dir = "SHORT"
 				}
 			}
-			
+
+			// 🔥 P0-03修复：透传 StrengthZ 和 VolRatio（遵守 Ready flags）
+			var strengthZ *float64
+			var volRatio *float64
+
+			if retracement.Context != nil {
+				if retracement.Context.StrengthZReady {
+					strengthZ = &retracement.Context.StrengthZ
+				}
+				if retracement.Context.VolRatioReady {
+					volRatio = &retracement.Context.VolRatio
+				}
+			}
+
+			// 🔥 P0-03修复：仅在 Context 为 nil 时使用启发式 StrengthZ
+			if strengthZ == nil && level.IsGoldenRatio {
+				heuristicZ := 1.5
+				strengthZ = &heuristicZ
+			}
+
 			candidate := AnchorCandidate{
-				Dir:    dir,
-				Type:   AnchorFib,
-				TF:     "30m", // 斐波纳契通常基于中等时间框架
-				Level:  level.Price,
-				BandLo: level.Price,
-				BandHi: level.Price,
-				IsFresh: true, // 斐波纳契级别通常认为是"fresh"的
+				Dir:       dir,
+				Type:      AnchorFib,
+				TF:        fibTF,      // 🔥 P0-02: 使用真实TF
+				Level:     level.Price,
+				BandLo:    level.Price,
+				BandHi:    level.Price,
+				IsFresh:   isFresh,    // 🔥 P0-02: 使用真实 IsFresh
+				StrengthZ: strengthZ,  // 🔥 P0-03: 透传或启发式
+				VolRatio:  volRatio,   // 🔥 P0-03: 透传
 				Meta: map[string]interface{}{
-					"source_type":    "fibonacci",
-					"level_ratio":    level.Ratio,
-					"importance":     level.Importance,
-					"is_golden":      level.IsGoldenRatio,
-					"trend_type":     retracement.TrendType.String(),
+					"source_type":          "fibonacci",
+					"level_ratio":          level.Ratio,
+					"importance":           level.Importance,
+					"is_golden":            level.IsGoldenRatio,
+					"trend_type":           retracement.TrendType.String(),
 					"retracement_strength": retracement.Strength,
+					"retracement_age":      retracement.Age,
+					"heuristic_strengthz":  strengthZ != nil && retracement.Context == nil, // 🔥 标记是否为启发式
 				},
 			}
-			
-			// 黄金比例级别额外加分：设置较高的隐含强度
-			if level.IsGoldenRatio {
-				strengthZ := 1.5
-				candidate.StrengthZ = &strengthZ
-			}
-			
+
 			candidates = append(candidates, candidate)
 		}
 	}
-	
+
 	// 从黄金口袋提取（如果存在）
 	if data.GoldenPocket != nil && data.GoldenPocket.IsActive {
 		pocket := data.GoldenPocket
-		
+
+		// 🔥 P0-02修复：计算黄金口袋的 IsFresh
+		// 注意：GoldenPocket 当前没有 Context，使用 LastUpdate 和 MaxRetracementAge 估算
+		isFresh := false
+		if pocket.LastUpdate > 0 {
+			ageMs := time.Now().UnixMilli() - pocket.LastUpdate
+			ageHours := int(ageMs / (3600 * 1000))
+			isFresh = ageHours <= data.Config.MaxRetracementAge
+		}
+
 		// 黄金口袋方向基于趋势上下文
 		dir := "LONG"
 		if pocket.TrendContext == TrendDownward {
 			dir = "SHORT"
 		}
-		
+
+		// 🔥 P0-03修复：黄金口袋的 StrengthZ（启发式，因为没有 Context）
+		heuristicZ := 2.0
+		strengthZ := &heuristicZ
+
 		candidate := AnchorCandidate{
-			Dir:    dir,
-			Type:   AnchorFib,
-			TF:     "30m",
-			Level:  pocket.CenterPrice,
-			BandLo: pocket.PriceRange.Low,
-			BandHi: pocket.PriceRange.High,
-			IsFresh: true, // 黄金口袋总是被认为是fresh
+			Dir:       dir,
+			Type:      AnchorFib,
+			TF:        fibTF,      // 🔥 P0-02: 使用真实TF
+			Level:     pocket.CenterPrice,
+			BandLo:    pocket.PriceRange.Low,
+			BandHi:    pocket.PriceRange.High,
+			IsFresh:   isFresh,    // 🔥 P0-02: 使用真实 IsFresh
+			StrengthZ: strengthZ,  // 🔥 P0-03: 启发式
+			VolRatio:  nil,        // 🔥 P0-03: 黄金口袋暂无 VolRatio
 			Meta: map[string]interface{}{
-				"source_type":     "fibonacci",
-				"level_type":      "golden_pocket",
-				"pocket_strength": pocket.Strength,
-				"quality":         pocket.Quality,
-				"trend_context":   pocket.TrendContext.String(),
-				"touch_count":     len(pocket.TouchEvents),
+				"source_type":          "fibonacci",
+				"level_type":           "golden_pocket",
+				"pocket_strength":      pocket.Strength,
+				"quality":              pocket.Quality,
+				"trend_context":        pocket.TrendContext.String(),
+				"touch_count":          len(pocket.TouchEvents),
+				"heuristic_strengthz":  true, // 🔥 标记为启发式
 			},
 		}
-		
-		// 黄金口袋给予高强度评分
-		strengthZ := 2.0
-		candidate.StrengthZ = &strengthZ
-		
+
 		candidates = append(candidates, candidate)
 	}
-	
+
 	return candidates
 }
 

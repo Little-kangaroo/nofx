@@ -1340,12 +1340,13 @@ var defaultFVGConfig = FVGConfig{
 
 // FibonacciData 斐波纳契分析主数据结构
 type FibonacciData struct {
-	Retracements []*FibRetracement `json:"retracements"` // 回调分析
-	Extensions   []*FibExtension   `json:"extensions"`   // 扩展分析
-	Clusters     []*FibCluster     `json:"clusters"`     // 斐波聚集区
-	GoldenPocket *GoldenPocket     `json:"golden_pocket"` // 0.618黄金口袋
-	Statistics   *FibStatistics    `json:"statistics"`   // 统计信息
-	Config       FibonacciConfig   `json:"config"`       // 配置信息
+	Timeframe    string            `json:"timeframe,omitempty"` // 🔥 P0-01: 所属时间周期（如"5m", "30m", "4h"）
+	Retracements []*FibRetracement `json:"retracements"`        // 回调分析
+	Extensions   []*FibExtension   `json:"extensions"`          // 扩展分析
+	Clusters     []*FibCluster     `json:"clusters"`            // 斐波聚集区
+	GoldenPocket *GoldenPocket     `json:"golden_pocket"`       // 0.618黄金口袋
+	Statistics   *FibStatistics    `json:"statistics"`          // 统计信息
+	Config       FibonacciConfig   `json:"config"`              // 配置信息
 }
 
 // FibRetracement 斐波纳契回调
@@ -1415,9 +1416,10 @@ type FibLevel struct {
 
 // PricePoint 价格点
 type PricePoint struct {
-	Price     float64 `json:"price"`
-	Timestamp int64   `json:"timestamp"`
-	Index     int     `json:"index"`  // K线索引
+	Price      float64 `json:"price"`
+	Timestamp  int64   `json:"timestamp"`
+	Index      int     `json:"index"`                 // K线索引
+	Confidence float64 `json:"confidence,omitempty"` // 🔥 P0-05: 置信度（0-1），用于标记右侧确认不足的点
 }
 
 // PriceWave 价格波段
