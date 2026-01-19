@@ -83,25 +83,31 @@ func (ae *AnchorEngine) fromSupplyDemand(data *SupplyDemandData, timeframes map[
 // fromVPVR 从VPVR数据提取锚点候选
 func (ae *AnchorEngine) fromVPVR(data *VolumeProfile, timeframes map[string][]Kline) []AnchorCandidate {
 	var candidates []AnchorCandidate
-	
+
 	if data == nil {
 		return candidates
 	}
-	
+
+	// 🔥 P0-04修复：从data.UsedTimeFrame读取真实timeframe，避免硬编码"1h"
+	vpvrTF := "unknown"
+	if data.UsedTimeFrame != "" {
+		vpvrTF = data.UsedTimeFrame
+	}
+
 	// VAH作为阻力锚点
 	if data.VAH > 0 {
 		var strengthZ *float64
 		var volRatio *float64
-		
+
 		if data.Context != nil {
 			strengthZ = &data.Context.StrengthZ
 			volRatio = &data.Context.VolRatio
 		}
-		
+
 		vahCandidate := AnchorCandidate{
 			Dir:       "SHORT",
 			Type:      AnchorVPVRBound,
-			TF:        "1h", // VPVR通常基于较高时间框架
+			TF:        vpvrTF, // 🔥 P0-04修复：使用真实TF
 			Level:     data.VAH,
 			BandLo:    data.VAH,
 			BandHi:    data.VAH,
@@ -119,24 +125,24 @@ func (ae *AnchorEngine) fromVPVR(data *VolumeProfile, timeframes map[string][]Kl
 				}(),
 			},
 		}
-		
+
 		candidates = append(candidates, vahCandidate)
 	}
-	
+
 	// VAL作为支撑锚点
 	if data.VAL > 0 {
 		var strengthZ *float64
 		var volRatio *float64
-		
+
 		if data.Context != nil {
 			strengthZ = &data.Context.StrengthZ
 			volRatio = &data.Context.VolRatio
 		}
-		
+
 		valCandidate := AnchorCandidate{
 			Dir:       "LONG",
 			Type:      AnchorVPVRBound,
-			TF:        "1h",
+			TF:        vpvrTF, // 🔥 P0-04修复：使用真实TF
 			Level:     data.VAL,
 			BandLo:    data.VAL,
 			BandHi:    data.VAL,
@@ -154,25 +160,25 @@ func (ae *AnchorEngine) fromVPVR(data *VolumeProfile, timeframes map[string][]Kl
 				}(),
 			},
 		}
-		
+
 		candidates = append(candidates, valCandidate)
 	}
-	
+
 	// POC作为双向锚点（根据价格位置决定方向）
 	if data.POC != nil && data.POC.Price > 0 {
 		var strengthZ *float64
 		var volRatio *float64
-		
+
 		if data.Context != nil {
 			strengthZ = &data.Context.StrengthZ
 			volRatio = &data.Context.VolRatio
 		}
-		
+
 		// POC可以作为双向锚点，这里创建两个候选
 		pocLongCandidate := AnchorCandidate{
 			Dir:       "LONG",
 			Type:      AnchorVPVRBound,
-			TF:        "1h",
+			TF:        vpvrTF, // 🔥 P0-04修复：使用真实TF
 			Level:     data.POC.Price,
 			BandLo:    data.POC.Price,
 			BandHi:    data.POC.Price,
@@ -185,11 +191,11 @@ func (ae *AnchorEngine) fromVPVR(data *VolumeProfile, timeframes map[string][]Kl
 				"volume_percent":  data.POC.VolumePercent,
 			},
 		}
-		
+
 		pocShortCandidate := AnchorCandidate{
 			Dir:       "SHORT",
 			Type:      AnchorVPVRBound,
-			TF:        "1h",
+			TF:        vpvrTF, // 🔥 P0-04修复：使用真实TF
 			Level:     data.POC.Price,
 			BandLo:    data.POC.Price,
 			BandHi:    data.POC.Price,
@@ -202,10 +208,10 @@ func (ae *AnchorEngine) fromVPVR(data *VolumeProfile, timeframes map[string][]Kl
 				"volume_percent":  data.POC.VolumePercent,
 			},
 		}
-		
+
 		candidates = append(candidates, pocLongCandidate, pocShortCandidate)
 	}
-	
+
 	return candidates
 }
 

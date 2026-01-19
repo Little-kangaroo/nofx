@@ -32,11 +32,12 @@ func NewVPVRAnalyzer() *VPVRAnalyzer {
 	}
 }
 
-// 🔥 P0-04修复：新增动态配置构造函数，根据ExchangeMeta和timeframe动态构建VPVR配置
+// 🔥 P0-04/P0-05修复：新增动态配置构造函数，根据ExchangeMeta、symbol和timeframe动态构建VPVR配置
 // NewVPVRAnalyzerWithDynamicConfig 使用动态配置创建VPVR分析器（推荐方式）
-func NewVPVRAnalyzerWithDynamicConfig(exchangeMeta *ExchangeMeta, timeframe string) *VPVRAnalyzer {
+// 🔥 P0-05修复：增加symbol参数避免symbol/timeframe混淆
+func NewVPVRAnalyzerWithDynamicConfig(exchangeMeta *ExchangeMeta, symbol string, timeframe string) *VPVRAnalyzer {
 	return &VPVRAnalyzer{
-		config: GetDynamicVPVRConfig(exchangeMeta, timeframe), // 使用动态配置避免硬编码扭曲
+		config: GetDynamicVPVRConfig(exchangeMeta, symbol, timeframe), // 🔥 P0-05修复：传入symbol参数
 		historicalKlines: []Kline{}, // 空的历史数据
 	}
 }
@@ -80,7 +81,8 @@ func (va *VPVRAnalyzer) Analyze(klines []Kline) *VolumeProfile {
 	}
 
 	// 计算价格级别
-	levels := va.calculatePriceLevels(klines)
+	// 🔥 P0-02/P0-03修复：接收bucketOrigin、bucketCount和stabilizedTickSize返回值
+	levels, bucketOrigin, bucketCount, stabilizedTickSize := va.calculatePriceLevels(klines)
 	if len(levels) == 0 {
 		return nil
 	}
@@ -98,13 +100,6 @@ func (va *VPVRAnalyzer) Analyze(klines []Kline) *VolumeProfile {
 	// 标记价值区域内的级别
 	va.markValueAreaLevels(levels, val, vah)
 
-	// 确定价格范围
-	minPrice, maxPrice := va.findPriceRange(klines)
-
-	// 🔧 Task 7: 修复动态TickSize调整导致的数据抖动问题
-	// 使用稳定的TickSize计算策略
-	stabilizedTickSize := va.calculateStabilizedTickSize(minPrice, maxPrice, klines)
-
 	// 🔥 P0级新修复：为VPVR添加Context计算，解决StrengthZ和VolRatio为null的问题
 	context := va.calculateVPVRContext(levels, stats, poc, vah, val)
 
@@ -120,43 +115,53 @@ func (va *VPVRAnalyzer) Analyze(klines []Kline) *VolumeProfile {
 		Context:   context,  // 🔥 添加Context字段
 		// 🔥 P0-04修复：明确标注实际使用的配置参数
 		UsedTimeFrame: va.config.TimeFrame,        // 实际使用的时间框架
-		UsedTickSize:  stabilizedTickSize,         // 实际使用的tick_size（可能经过动态调整）
+		UsedTickSize:  stabilizedTickSize,         // 🔥 P0-03修复：使用calculatePriceLevels返回的实际tick_size
+		// 🔥 P0-02修复：记录网格对齐信息
+		BucketOrigin:  bucketOrigin,               // 价格级别起点（对齐到tick网格）
+		BucketCount:   bucketCount,                // 实际价格级别数量
 	}
 
 	return volumeProfile
 }
 
 // calculatePriceLevels 计算每个价格级别的成交量
-func (va *VPVRAnalyzer) calculatePriceLevels(klines []Kline) []*PriceLevel {
+// 🔥 P0-03修复：返回实际使用的stabilizedTickSize
+func (va *VPVRAnalyzer) calculatePriceLevels(klines []Kline) ([]*PriceLevel, float64, int, float64) {
 	if len(klines) == 0 {
-		return nil
+		return nil, 0, 0, 0
 	}
 
 	// 确定价格范围
 	minPrice, maxPrice := va.findPriceRange(klines)
-	
+
 	// 🔧 Task 7: 修复动态TickSize调整导致的数据抖动问题
 	// 使用稳定的TickSize计算策略
 	stabilizedTickSize := va.calculateStabilizedTickSize(minPrice, maxPrice, klines)
-	
-	// 计算价格级别数量
-	priceRange := maxPrice - minPrice
+
+	// 🔥 P0-02修复：计算对齐到交易所tick网格的bucket起点
+	bucketOrigin := va.calculateBucketOrigin(minPrice, stabilizedTickSize)
+
+	// 计算价格级别数量 (从bucketOrigin开始)
+	priceRange := maxPrice - bucketOrigin
 	levelCount := int(priceRange / stabilizedTickSize)
-	
+
 	// 限制最大级别数以避免过度分割
 	maxLevels := 200
 	if levelCount > maxLevels {
 		// 不直接修改config.TickSize，而是使用计算出的稳定TickSize
 		stabilizedTickSize = priceRange / float64(maxLevels)
 		levelCount = maxLevels
+		// 🔥 P0-02修复：重新计算bucketOrigin以适应调整后的tickSize
+		bucketOrigin = va.calculateBucketOrigin(minPrice, stabilizedTickSize)
 	}
 
 	// 初始化价格级别映射
 	levelMap := make(map[float64]*PriceLevel)
 
 	// 遍历每根K线，计算每个价格级别的成交量
+	// 🔥 P0-02修复：传递bucketOrigin替代minPrice
 	for _, kline := range klines {
-		va.distributePriceVolumeStabilized(kline, levelMap, minPrice, stabilizedTickSize)
+		va.distributePriceVolumeStabilized(kline, levelMap, bucketOrigin, stabilizedTickSize)
 	}
 
 	// 转换为切片并排序
@@ -188,7 +193,8 @@ func (va *VPVRAnalyzer) calculatePriceLevels(klines []Kline) []*PriceLevel {
 		va.smoothVolumes(levels)
 	}
 
-	return levels
+	// 🔥 P0-02/P0-03修复：返回bucketOrigin、levelCount和stabilizedTickSize
+	return levels, bucketOrigin, levelCount, stabilizedTickSize
 }
 
 // findPriceRange 找到价格范围
@@ -206,6 +212,20 @@ func (va *VPVRAnalyzer) findPriceRange(klines []Kline) (float64, float64) {
 	}
 
 	return minPrice, maxPrice
+}
+
+// calculateBucketOrigin 计算对齐到交易所tick网格的bucket起点
+// 🔥 P0-02修复：确保价格级别与交易所tick网格对齐，避免精度损失
+func (va *VPVRAnalyzer) calculateBucketOrigin(minPrice float64, tickSize float64) float64 {
+	if tickSize <= 0 {
+		return minPrice // 降级：tick无效时直接使用minPrice
+	}
+
+	// 核心公式：bucketOrigin = floor(minPrice / tickSize) * tickSize
+	// 确保起点落在tick网格上
+	bucketOrigin := math.Floor(minPrice/tickSize) * tickSize
+
+	return bucketOrigin
 }
 
 // distributePriceVolume 将K线的成交量分配到相应的价格级别（修复版 - 填充空洞效应）
@@ -259,19 +279,27 @@ func (va *VPVRAnalyzer) distributePriceVolume(kline Kline, levelMap map[float64]
 }
 
 // distributeVolumeAcrossLevels 在多个价格级别间插值分配成交量
+// 🔥 P0-01修复：权重归一化确保成交量守恒
 func (va *VPVRAnalyzer) distributeVolumeAcrossLevels(kline Kline, buyVolume, sellVolume float64, lowLevelPrice, highLevelPrice float64, levelCount int, levelMap map[float64]*PriceLevel, minPrice float64) {
 	totalVolume := kline.Volume
-	
+
 	// 计算关键价位的权重
 	ohlcWeights := va.calculateOHLCWeights(kline, lowLevelPrice, highLevelPrice)
-	
-	// 为每个价格级别分配成交量
+
+	// 🔥 P0-01修复步骤1: 先收集所有级别的未归一化权重
+	rawWeights := make([]float64, levelCount)
 	for i := 0; i < levelCount; i++ {
 		levelPrice := lowLevelPrice + float64(i)*va.config.TickSize
-		
-		// 计算该级别的成交量权重
-		volumeWeight := va.calculateLevelVolumeWeight(levelPrice, kline, ohlcWeights, levelCount)
-		
+		rawWeights[i] = va.calculateLevelVolumeWeight(levelPrice, kline, ohlcWeights, levelCount)
+	}
+
+	// 🔥 P0-01修复步骤2: 归一化权重，确保sum(weights) = 1.0
+	normalizedWeights := normalizeWeights(rawWeights)
+
+	// 🔥 P0-01修复步骤3: 使用归一化后的权重分配成交量
+	for i := 0; i < levelCount; i++ {
+		levelPrice := lowLevelPrice + float64(i)*va.config.TickSize
+
 		// 分配成交量
 		level, exists := levelMap[levelPrice]
 		if !exists {
@@ -280,11 +308,12 @@ func (va *VPVRAnalyzer) distributeVolumeAcrossLevels(kline Kline, buyVolume, sel
 			}
 			levelMap[levelPrice] = level
 		}
-		
-		volumeToAdd := totalVolume * volumeWeight
+
+		// 使用归一化权重分配，确保总量守恒
+		volumeToAdd := totalVolume * normalizedWeights[i]
 		level.Volume += volumeToAdd
-		level.BuyVolume += buyVolume * volumeWeight
-		level.SellVolume += sellVolume * volumeWeight
+		level.BuyVolume += buyVolume * normalizedWeights[i]
+		level.SellVolume += sellVolume * normalizedWeights[i]
 		level.Transactions++
 	}
 }
@@ -334,6 +363,39 @@ func (va *VPVRAnalyzer) calculateLevelVolumeWeight(levelPrice float64, kline Kli
 	
 	// 确保权重为正数
 	return math.Max(finalWeight, 0.001)
+}
+
+// normalizeWeights 归一化权重，确保sum(weights) = 1.0
+// 🔥 P0-01修复：解决distributeVolumeAcrossLevels中成交量不守恒问题
+func normalizeWeights(weights []float64) []float64 {
+	if len(weights) == 0 {
+		return weights
+	}
+
+	// 计算权重总和
+	sum := 0.0
+	for _, w := range weights {
+		sum += w
+	}
+
+	// 避免除零
+	if sum <= 1e-10 {
+		// 权重全为0的情况，返回均匀分布
+		uniform := 1.0 / float64(len(weights))
+		normalized := make([]float64, len(weights))
+		for i := range normalized {
+			normalized[i] = uniform
+		}
+		return normalized
+	}
+
+	// 归一化：每个权重除以总和
+	normalized := make([]float64, len(weights))
+	for i, w := range weights {
+		normalized[i] = w / sum
+	}
+
+	return normalized
 }
 
 // addVolumeToSingleLevel 将成交量添加到单一价格级别

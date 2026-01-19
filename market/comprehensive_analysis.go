@@ -258,11 +258,12 @@ func NewComprehensiveAnalyzerWithExchange(exchangeMeta *ExchangeMeta, config *Co
 		config = defaultComprehensiveConfig
 	}
 	
-	// 🔥 P0-04核心修复：使用ExchangeMeta创建动态配置的VPVR分析器
+	// 🔥 P0-04/P0-05核心修复：使用ExchangeMeta创建动态配置的VPVR分析器
 	// 注意：这里使用"4h"作为默认timeframe，在实际分析时会在analyzeSingleTimeframe中使用正确的timeframe
 	var vpvrAnalyzer *VPVRAnalyzer
 	if exchangeMeta != nil {
-		vpvrAnalyzer = NewVPVRAnalyzerWithDynamicConfig(exchangeMeta, "4h") // 默认timeframe，实际使用时动态调整
+		// 🔥 P0-05修复：传入symbol参数（从exchangeMeta.Symbol获取）
+		vpvrAnalyzer = NewVPVRAnalyzerWithDynamicConfig(exchangeMeta, exchangeMeta.Symbol, "4h") // 默认timeframe，实际使用时动态调整
 	} else {
 		vpvrAnalyzer = NewVPVRAnalyzer() // 降级到fallback配置
 	}
@@ -518,7 +519,8 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 				TickSize: existingConfig.TickSize,
 				Symbol:   symbol,
 			}
-			currentVPVRAnalyzer = NewVPVRAnalyzerWithDynamicConfig(exchangeMeta, "4h")
+			// 🔥 P0-05修复：传入symbol参数
+			currentVPVRAnalyzer = NewVPVRAnalyzerWithDynamicConfig(exchangeMeta, symbol, "4h")
 		} else {
 			// 使用现有分析器（可能是fallback配置）
 			currentVPVRAnalyzer = ca.vpvrAnalyzer
@@ -683,6 +685,12 @@ func (ca *ComprehensiveAnalyzer) collectVPVRSignals(vpData *VolumeProfile, curre
 	vpvrSignals := ca.vpvrAnalyzer.GenerateSignals(vpData, currentPrice)
 
 	for _, signal := range vpvrSignals {
+		// 🔥 P0-04修复：从vpData.UsedTimeFrame读取真实timeframe，避免硬编码"4h"
+		vpvrTF := "unknown"
+		if vpData.UsedTimeFrame != "" {
+			vpvrTF = vpData.UsedTimeFrame
+		}
+
 		unifiedSignal := &UnifiedSignal{
 			ID:         fmt.Sprintf("vpvr_%d", time.Now().UnixNano()),
 			Action:     signal.Action,
@@ -697,7 +705,7 @@ func (ca *ComprehensiveAnalyzer) collectVPVRSignals(vpData *VolumeProfile, curre
 				},
 			},
 			Description: signal.Description,
-			TimeFrame:   "4h",
+			TimeFrame:   vpvrTF, // 🔥 P0-04修复：使用真实TF
 			Timestamp:   signal.Timestamp,
 		}
 
@@ -1621,7 +1629,8 @@ func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe, symbol string
 				TickSize: existingConfig.TickSize,
 				Symbol:   symbol,
 			}
-			currentVPVRAnalyzer = NewVPVRAnalyzerWithDynamicConfig(exchangeMeta, timeframe)
+			// 🔥 P0-05修复：传入symbol参数
+			currentVPVRAnalyzer = NewVPVRAnalyzerWithDynamicConfig(exchangeMeta, symbol, timeframe)
 		} else {
 			// 使用现有分析器（可能是fallback配置）
 			currentVPVRAnalyzer = ca.vpvrAnalyzer

@@ -597,10 +597,14 @@ type VolumeProfile struct {
 	Config    *VPVRConfig     `json:"config"`     // VPVR配置
 	Stats     *VolumeStats    `json:"stats"`      // 成交量统计
 	Context   *ContextMetrics `json:"ctx"`        // 上下文评分
-	
+
 	// 🔥 P0-04修复：VPVR配置标注，便于复盘和一致性校验
 	UsedTimeFrame string  `json:"used_timeframe"` // 实际使用的时间框架
 	UsedTickSize  float64 `json:"used_tick_size"` // 实际使用的tick_size
+
+	// 🔥 P0-02修复：记录网格对齐信息，便于复盘和校验
+	BucketOrigin float64 `json:"bucket_origin"` // 价格级别起点（对齐到tick网格）
+	BucketCount  int     `json:"bucket_count"`  // 实际价格级别数量
 }
 
 // PriceLevel 价格级别
@@ -743,9 +747,10 @@ const (
 // 🔥 P0-04修复：移除硬编码的defaultVPVRConfig，替换为动态构建函数
 // 避免硬编码TickSize=0.01、TimeFrame="4h"导致的VPVR结构系统性扭曲
 
-// GetDynamicVPVRConfig 根据ExchangeMeta和timeframe动态构建VPVR配置
+// GetDynamicVPVRConfig 根据ExchangeMeta、symbol和timeframe动态构建VPVR配置
 // 避免对不同symbol（BTC/ETH/山寨）和不同周期使用相同硬编码参数导致的价格分桶扭曲
-func GetDynamicVPVRConfig(exchangeMeta *ExchangeMeta, timeframe string) VPVRConfig {
+// 🔥 P0-05修复：增加symbol参数，避免symbol/timeframe参数混淆
+func GetDynamicVPVRConfig(exchangeMeta *ExchangeMeta, symbol string, timeframe string) VPVRConfig {
 	config := VPVRConfig{
 		ValueAreaPercent: 0.70,   // 70%价值区域（标准值）
 		MinVolume:        0.001,  // 最小成交量（标准值）
@@ -753,15 +758,15 @@ func GetDynamicVPVRConfig(exchangeMeta *ExchangeMeta, timeframe string) VPVRConf
 		SmoothingFactor:  1.0,    // 无平滑（标准值）
 		TimeFrame:        timeframe, // 使用传入的实际时间框架
 	}
-	
+
 	// 🔥 核心修复：根据ExchangeMeta动态设置TickSize
 	if exchangeMeta != nil && exchangeMeta.TickSize > 0 {
 		config.TickSize = exchangeMeta.TickSize // 使用交易所真实tick_size
 	} else {
-		// 🔥 降级方案：根据symbol类型智能推断tick_size，避免0.01一刀切
-		config.TickSize = getSmartTickSizeBySymbol(timeframe)
+		// 🔥 P0-05修复：降级方案使用symbol参数（而非timeframe）调用getSmartTickSizeBySymbol
+		config.TickSize = getSmartTickSizeBySymbol(symbol)
 	}
-	
+
 	return config
 }
 
