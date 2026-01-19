@@ -262,40 +262,46 @@ func (ae *AnchorEngine) fromSR(data *SupportResistanceData, timeframes map[strin
 // fromFVG 从FVG数据提取锚点候选
 func (ae *AnchorEngine) fromFVG(data *FVGData, timeframes map[string][]Kline) []AnchorCandidate {
 	var candidates []AnchorCandidate
-	
+
 	if data == nil || len(data.ActiveFVGs) == 0 {
 		return candidates
 	}
-	
+
 	for _, fvg := range data.ActiveFVGs {
 		// 确定方向：看涨FVG为LONG(支撑)，看跌FVG为SHORT(阻力)
 		dir := "LONG"
 		if fvg.Type == BearishFVG {
 			dir = "SHORT"
 		}
-		
-		// 提取强度信息
-		var strengthZ *float64
-		if fvg.Context != nil {
-			strengthZ = &fvg.Context.StrengthZ
+
+		// 🔥 P0-01修复：从fvg.Origin.TimeFrame获取真实timeframe，避免硬编码
+		candTF := "unknown"
+		if fvg.Origin != nil && fvg.Origin.TimeFrame != "" {
+			candTF = fvg.Origin.TimeFrame
 		}
-		
-		// 提取量能信息
+
+		// 🔥 P1-03修复：只有ready时才传递StrengthZ/VolRatio
+		var strengthZ *float64
 		var volRatio *float64
 		if fvg.Context != nil {
-			volRatio = &fvg.Context.VolRatio
+			if fvg.Context.StrengthZReady {
+				strengthZ = &fvg.Context.StrengthZ
+			}
+			if fvg.Context.VolRatioReady {
+				volRatio = &fvg.Context.VolRatio
+			}
 		}
-		
+
 		candidate := AnchorCandidate{
 			Dir:       dir,
 			Type:      AnchorFVG,
-			TF:        "15m", // FVG通常基于较小时间框架
+			TF:        candTF, // 🔥 P0-01：使用真实TF
 			Level:     fvg.CenterPrice,
 			BandLo:    fvg.LowerBound,
 			BandHi:    fvg.UpperBound,
 			IsFresh:   fvg.Context != nil && fvg.Context.IsFresh,
-			StrengthZ: strengthZ,
-			VolRatio:  volRatio,
+			StrengthZ: strengthZ, // 🔥 P1-03：尊重ready flag
+			VolRatio:  volRatio,  // 🔥 P1-03：尊重ready flag
 			Meta: map[string]interface{}{
 				"source_type":    "fvg",
 				"fvg_id":         fvg.ID,
@@ -304,12 +310,14 @@ func (ae *AnchorEngine) fromFVG(data *FVGData, timeframes map[string][]Kline) []
 				"width_percent":  fvg.WidthPercent,
 				"quality":        fvg.Quality,
 				"status":         fvg.Status,
+				"strength_z_ready": fvg.Context != nil && fvg.Context.StrengthZReady, // 🔥 P1-03：标记可靠性
+				"vol_ratio_ready":  fvg.Context != nil && fvg.Context.VolRatioReady,  // 🔥 P1-03：标记可靠性
 			},
 		}
-		
+
 		candidates = append(candidates, candidate)
 	}
-	
+
 	return candidates
 }
 

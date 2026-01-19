@@ -26,8 +26,9 @@ func NewFVGAnalyzerWithConfig(config FVGConfig) *FVGAnalyzer {
 	}
 }
 
-// Analyze 分析K线数据识别FVG
-func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
+// AnalyzeWithTimeframe 分析K线数据识别FVG（带时间框架参数）
+// 🔥 P0-01修复：新增接口，确保TimeFrame正确传递到FVG.Origin
+func (fvg *FVGAnalyzer) AnalyzeWithTimeframe(klines []Kline, tf string) *FVGData {
 	if len(klines) < 3 {
 		return nil
 	}
@@ -40,13 +41,13 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 
 	// 扫描所有K线寻找FVG（从第2根K线开始，需要前两根作为参考）
 	for i := 2; i < len(klines); i++ {
-		// 检查看涨FVG
-		if bullishGap := fvg.identifyBullishFVG(klines, i, contextCalc); bullishGap != nil {
+		// 检查看涨FVG - 传入timeframe
+		if bullishGap := fvg.identifyBullishFVG(klines, i, tf, contextCalc); bullishGap != nil {
 			bullishFVGs = append(bullishFVGs, bullishGap)
 		}
 
-		// 检查看跌FVG
-		if bearishGap := fvg.identifyBearishFVG(klines, i, contextCalc); bearishGap != nil {
+		// 检查看跌FVG - 传入timeframe
+		if bearishGap := fvg.identifyBearishFVG(klines, i, tf, contextCalc); bearishGap != nil {
 			bearishFVGs = append(bearishFVGs, bearishGap)
 		}
 	}
@@ -68,23 +69,25 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 		}
 	}
 
-	// 计算上下文评分 (在所有FVG创建后进行)
-	fvg.CalculateContextScores(allFVGs, contextCalc)
+	// 计算上下文评分 (在所有FVG创建后进行，传入timeframe用于MaxAge计算)
+	fvg.CalculateContextScoresWithTF(allFVGs, contextCalc, tf)
 
 	// 【P2级数据清洗】对FVG数据进行清洗以过滤异常值
+	// 使用最后一根K线的时间作为LastAnalysis（回测/实盘一致性）
+	lastTs := klines[len(klines)-1].OpenTime
 	tempFVGData := &FVGData{
 		BullishFVGs:  bullishFVGs,
 		BearishFVGs:  bearishFVGs,
 		ActiveFVGs:   append(bullishFVGs, bearishFVGs...), // 先暂时包含所有FVG
 		Config:       &fvg.config,
 		Statistics:   &FVGStatistics{}, // 临时统计
-		LastAnalysis: time.Now().UnixMilli(),
+		LastAnalysis: lastTs,
 	}
 
 	// 创建数据清洗器并进行FVG清洗
 	dataCleaner := NewDataCleaner()
 	cleanedFVGData, cleaningStats := dataCleaner.CleanFVGData(tempFVGData)
-	
+
 	if cleaningStats.FilteredZones > 0 {
 		// 更新清洗后的数据
 		bullishFVGs = cleanedFVGData.BullishFVGs
@@ -93,15 +96,9 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 	}
 
 	// 使用新的过滤逻辑筛选活跃FVG
-	var activeFVGs []*FairValueGap
-	if len(klines) > 0 {
-		currentPrice := klines[len(klines)-1].Close
-		atr := fvg.calculateATR(klines, 14) // 使用14期ATR
-		activeFVGs = fvg.filterActiveFVGsWithContext(allFVGs, currentPrice, atr, klines)
-	} else {
-		// 降级处理：如果没有价格数据，使用原有逻辑
-		activeFVGs = fvg.filterActiveFVGs(allFVGs)
-	}
+	currentPrice := klines[len(klines)-1].Close
+	atr := fvg.calculateATR(klines, 14) // 使用14期ATR
+	activeFVGs := fvg.filterActiveFVGsWithContext(allFVGs, currentPrice, atr, klines)
 
 	// 计算统计信息
 	statistics := fvg.calculateStatistics(bullishFVGs, bearishFVGs, activeFVGs)
@@ -113,10 +110,16 @@ func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
 		ActiveFVGs:   activeFVGs,
 		Config:       &fvg.config,
 		Statistics:   statistics,
-		LastAnalysis: time.Now().UnixMilli(),
+		LastAnalysis: lastTs,
 	})
-	
+
 	return result
+}
+
+// Analyze 分析K线数据识别FVG（兼容旧接口，自动推断timeframe）
+func (fvg *FVGAnalyzer) Analyze(klines []Kline) *FVGData {
+	tf := inferTimeframeEnhanced(klines)
+	return fvg.AnalyzeWithTimeframe(klines, tf)
 }
 
 // calculateATR 计算ATR（内部辅助方法）
@@ -143,7 +146,8 @@ func (fvg *FVGAnalyzer) calculateTrueRange(current, previous Kline) float64 {
 }
 
 // identifyBullishFVG 识别看涨FVG（支持Body Gap模式）
-func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCalc *ContextCalculator) *FairValueGap {
+// 🔥 P0-01修复：添加timeframe参数，确保写入正确的TimeFrame
+func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, tf string, contextCalc *ContextCalculator) *FairValueGap {
 	if index < 2 || index >= len(klines) {
 		return nil
 	}
@@ -245,7 +249,7 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCal
 		WidthPercent: gapWidthPercent,
 		// 🔥 修复：保存形成时ATR，避免时空错配
 		FormationATR: formationATR,
-		WidthATR:     gapWidth / formationATR, // 使用形成时ATR计算相对宽度
+		WidthATR:     safeFloatForJSON(gapWidth / math.Max(formationATR, 0.000001)), // 🔥 P0-02修复：防NaN/Inf
 		Origin: &FVGOrigin{
 			KlineIndex:     index,
 			PreviousCandle: fvg.createCandleInfo(&firstCandle, index-2),
@@ -254,7 +258,7 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCal
 			// 修正：计算整个FVG形成过���的价格冲击力
 			// 从第一根K线低点到当前K线高点的总体冲击幅度
 			ImpulsiveMove: fvg.calculateBullishImpulsiveMove(firstCandle, middleCandle, currentCandle),
-			TimeFrame:     fvg.config.TimeFrames[0],
+			TimeFrame:     tf, // 🔥 P0-01修复：使用传入的timeframe参数
 			FormationType: formationType,
 		},
 		Status:       FVGStatusFresh,
@@ -272,7 +276,8 @@ func (fvg *FVGAnalyzer) identifyBullishFVG(klines []Kline, index int, contextCal
 }
 
 // identifyBearishFVG 识别看跌FVG（支持Body Gap模式）
-func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, contextCalc *ContextCalculator) *FairValueGap {
+// 🔥 P0-01修复：添加timeframe参数，确保写入正确的TimeFrame
+func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, tf string, contextCalc *ContextCalculator) *FairValueGap {
 	if index < 2 || index >= len(klines) {
 		return nil
 	}
@@ -374,7 +379,7 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, contextCal
 		WidthPercent: gapWidthPercent,
 		// 🔥 修复：保存形成时ATR，避免时空错配
 		FormationATR: formationATR,
-		WidthATR:     gapWidth / formationATR, // 使用形成时ATR计算相对宽度
+		WidthATR:     safeFloatForJSON(gapWidth / math.Max(formationATR, 0.000001)), // 🔥 P0-02修复：防NaN/Inf
 		Origin: &FVGOrigin{
 			KlineIndex:     index,
 			PreviousCandle: fvg.createCandleInfo(&firstCandle, index-2),
@@ -383,7 +388,7 @@ func (fvg *FVGAnalyzer) identifyBearishFVG(klines []Kline, index int, contextCal
 			// 修正：计算整个FVG形成过程的价格冲击力
 			// 从第一根K线高点到当前K线低点的总体冲击幅度
 			ImpulsiveMove: fvg.calculateBearishImpulsiveMove(firstCandle, middleCandle, currentCandle),
-			TimeFrame:     fvg.config.TimeFrames[0],
+			TimeFrame:     tf, // 🔥 P0-01修复：使用传入的timeframe参数
 			FormationType: formationType,
 		},
 		Status:       FVGStatusFresh,
@@ -543,7 +548,6 @@ func (fvg *FVGAnalyzer) updateFVGStatuses(gaps []*FairValueGap, klines []Kline) 
 	}
 
 	currentTime := klines[len(klines)-1].OpenTime
-	currentPrice := klines[len(klines)-1].Close
 
 	for _, gap := range gaps {
 		// 计算年龄
@@ -577,20 +581,21 @@ func (fvg *FVGAnalyzer) updateFVGStatuses(gaps []*FairValueGap, klines []Kline) 
 			gap.IsPartialFill = true
 		}
 
-		// 计算触及次数
-		touchCount := fvg.countTouches(gap, klines)
-		gap.TouchCount = touchCount
+		// 🔥 P0-04修复：计算触及session数和最后触及时间
+		start := gap.Origin.KlineIndex
+		touches, lastTouch := fvg.countTouchSessions(gap, klines, start)
 
-		if touchCount > fvg.config.MaxTouchCount {
-			gap.IsActive = false
-		} else if touchCount > 0 {
-			gap.Status = FVGStatusTested
-			gap.LastTouch = currentTime
+		gap.TouchCount = touches
+		if lastTouch > 0 {
+			gap.LastTouch = lastTouch
+			// 有触及且状态不是终态时，标记为Tested
+			if gap.Status != FVGStatusFilled && gap.Status != FVGStatusExpired {
+				gap.Status = FVGStatusTested
+			}
 		}
 
-		// 检查当前价格是否在FVG内
-		if currentPrice >= gap.LowerBound && currentPrice <= gap.UpperBound {
-			gap.LastTouch = currentTime
+		if touches > fvg.config.MaxTouchCount {
+			gap.IsActive = false
 		}
 	}
 }
@@ -634,66 +639,86 @@ func (fvg *FVGAnalyzer) calculateAge(gap *FairValueGap, klines []Kline) int {
 }
 
 // calculateFillProgress 计算填补进度
+// 🔥 P0-03修复：改为计算"进入缺口的填补深度"而非"穿越边界后的超出量"
 func (fvg *FVGAnalyzer) calculateFillProgress(gap *FairValueGap, klines []Kline, startIndex int) float64 {
-	if startIndex >= len(klines)-1 {
+	if gap == nil || gap.Width <= 0 || startIndex >= len(klines)-1 {
 		return 0
 	}
 
-	maxPenetration := 0.0
-	gapWidth := gap.Width
-
-	// 从FVG形成后开始检查价格对缺口的填补程度
-	for i := startIndex + 1; i < len(klines); i++ {
-		kline := klines[i]
-
-		if gap.Type == BullishFVG {
-			// 看涨FVG：检查价格向下填补到LowerBound的程度
-			if kline.Low <= gap.LowerBound {
-				penetration := gap.LowerBound - kline.Low
-				if penetration > maxPenetration {
-					maxPenetration = penetration
-				}
-			}
-		} else {
-			// 看跌FVG：检查价格向上填补到UpperBound的程���
-			if kline.High >= gap.UpperBound {
-				penetration := kline.High - gap.UpperBound
-				if penetration > maxPenetration {
-					maxPenetration = penetration
-				}
+	if gap.Type == BullishFVG {
+		// 看涨FVG：寻找形成后的最低价，计算从UpperBound向LowerBound填补的深度
+		minLow := math.Inf(1)
+		for i := startIndex + 1; i < len(klines); i++ {
+			if klines[i].Low < minLow {
+				minLow = klines[i].Low
 			}
 		}
+		// 计算进入深度：从上边界向下填补了多少
+		depth := gap.UpperBound - minLow
+		if depth < 0 {
+			depth = 0
+		}
+		if depth > gap.Width {
+			depth = gap.Width // clamp到缺口宽度
+		}
+		return depth / gap.Width * 100
 	}
 
-	if gapWidth <= 0 {
-		return 0
+	// 看跌FVG：寻找形成后的最高价，计算从LowerBound向UpperBound填补的深度
+	maxHigh := math.Inf(-1)
+	for i := startIndex + 1; i < len(klines); i++ {
+		if klines[i].High > maxHigh {
+			maxHigh = klines[i].High
+		}
 	}
-
-	return (maxPenetration / gapWidth) * 100
+	// 计算进入深度：从下边界向上填补了多少
+	depth := maxHigh - gap.LowerBound
+	if depth < 0 {
+		depth = 0
+	}
+	if depth > gap.Width {
+		depth = gap.Width // clamp到缺口宽度
+	}
+	return depth / gap.Width * 100
 }
 
-// countTouches 计算FVG触及次数
-func (fvg *FVGAnalyzer) countTouches(gap *FairValueGap, klines []Kline) int {
-	if gap.Origin.KlineIndex >= len(klines)-1 {
-		return 0
+// countTouchSessions 计算FVG触及session数（🔥 P0-04修复）
+// 改为session计数而非candle计数，避免横盘连续触及放大TouchCount
+// 返回：(session数, 最后触及时间)
+func (fvg *FVGAnalyzer) countTouchSessions(gap *FairValueGap, klines []Kline, startIndex int) (touches int, lastTouch int64) {
+	if startIndex >= len(klines)-1 {
+		return 0, 0
 	}
 
-	touches := 0
-	startIndex := gap.Origin.KlineIndex + 1
+	inTouch := false
+	lastTouch = 0
 
-	for i := startIndex; i < len(klines); i++ {
-		kline := klines[i]
+	for i := startIndex + 1; i < len(klines); i++ {
+		touched := fvg.doesCandleTouchFVG(klines[i], gap)
 
-		// 检查K线是否触及FVG区域
-		if fvg.doesCandleTouchFVG(kline, gap) {
-			touches++
+		if touched {
+			lastTouch = klines[i].OpenTime
+
+			// 只在进入新session时计数
+			if !inTouch {
+				touches++
+			}
+
 			// 记录触及时的成交量
 			if gap.VolumeContext != nil {
-				gap.VolumeContext.TouchVolumes = append(gap.VolumeContext.TouchVolumes, kline.Volume)
+				gap.VolumeContext.TouchVolumes = append(gap.VolumeContext.TouchVolumes, klines[i].Volume)
 			}
 		}
+
+		inTouch = touched
 	}
 
+	return touches, lastTouch
+}
+
+// countTouches 计算FVG触及次数（🔥 已废弃：改用countTouchSessions）
+func (fvg *FVGAnalyzer) countTouches(gap *FairValueGap, klines []Kline) int {
+	touches, _ := fvg.countTouchSessions(gap, klines, gap.Origin.KlineIndex)
 	return touches
 }
 
@@ -730,14 +755,19 @@ func (fvg *FVGAnalyzer) filterActiveFVGsWithContext(gaps []*FairValueGap, curren
 
 	// 第一阶段：硬截断 - 基础过滤
 	for _, gap := range gaps {
-		// 基础有效性检查
-		if !gap.IsActive || gap.IsFilled {
+		// 🔥 P0-05修复：基础有效性检查
+		if !gap.IsActive {
 			continue
 		}
 
-		// 完全回补检查
-		if gap.FillProgress >= 95.0 {
-			continue // 几乎完全回补，直接过滤
+		// 🔥 P0-05修复：允许Inversion FVG进入active（即使IsFilled=true）
+		if gap.IsFilled && gap.Status != FVGStatusInversion {
+			continue // 普通filled FVG排除，但Inversion保留
+		}
+
+		// 完全回补检查（但Inversion除外）
+		if gap.FillProgress >= 95.0 && gap.Status != FVGStatusInversion {
+			continue // 几乎完全回补，直接过滤（Inversion除外）
 		}
 
 		// 距离硬截断（5 ATR）

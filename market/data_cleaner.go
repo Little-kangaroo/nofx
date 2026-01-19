@@ -423,7 +423,7 @@ func (dc *DataCleaner) shouldKeepZone(zone *SupplyDemandZone, outliers []Outlier
 
 	// 🔥 P0-06修复：FVG强度尺度统一到0-20 - 将80阈值调整为16
 	// 如果区域具有高价值特征，即使有mild/moderate异常也保留
-	if zone.Quality == QualityStrong || zone.Strength > 16 {
+	if zone.Quality == QualityStrong || zone.Strength >= 60 {
 		return true
 	}
 
@@ -610,13 +610,13 @@ func (dc *DataCleaner) calculateQualityScore(zones []*SupplyDemandZone) float64 
 
 		// 🔥 P0-06修复：FVG强度尺度统一到0-20 - 调整所有强度阈值
 		// 强度评分 (0-30分) - 阈值从0-100缩放到0-20
-		if zone.Strength > 16 {  // 原80 -> 16 (80% * 20)
+		if zone.Strength >= 60 {  // 原80 -> 16 (80% * 20)
 			score += 30.0
-		} else if zone.Strength > 12 {  // 原60 -> 12 (60% * 20)
+		} else if zone.Strength >= 80 {  // 原60 -> 12 (60% * 20)
 			score += 25.0
-		} else if zone.Strength > 8 {   // 原40 -> 8 (40% * 20)
+		} else if zone.Strength >= 40 {   // 原40 -> 8 (40% * 20)
 			score += 15.0
-		} else if zone.Strength > 4 {   // 原20 -> 4 (20% * 20)
+		} else if zone.Strength >= 20 {   // 原20 -> 4 (20% * 20)
 			score += 10.0
 		}
 
@@ -984,7 +984,7 @@ func (dc *DataCleaner) shouldKeepFVG(fvg *FairValueGap, outliers []OutlierInfo) 
 
 	// 🔥 P0-06修复：FVG强度尺度统一到0-20 - 将80阈值调整为16  
 	// 如果FVG具有高价值特征，即使有mild/moderate异常也保留
-	if fvg.Quality == FVQualityHigh || fvg.Strength > 16 {
+	if fvg.Quality == FVQualityHigh || fvg.Strength >= 60 {
 		return true
 	}
 
@@ -1040,13 +1040,13 @@ func (dc *DataCleaner) calculateFVGQualityScore(fvgs []*FairValueGap) float64 {
 
 		// 🔥 P0-06修复：FVG强度尺度统一到0-20 - 调整所有强度阈值
 		// 强度评分 - 阈值从0-100缩放到0-20
-		if fvg.Strength > 16 {   // 原80 -> 16 (80% * 20)
+		if fvg.Strength >= 60 {   // 原80 -> 16 (80% * 20)
 			score += 30.0
-		} else if fvg.Strength > 12 {  // 原60 -> 12 (60% * 20)
+		} else if fvg.Strength >= 80 {  // 原60 -> 12 (60% * 20)
 			score += 25.0
-		} else if fvg.Strength > 8 {   // 原40 -> 8 (40% * 20)
+		} else if fvg.Strength >= 40 {   // 原40 -> 8 (40% * 20)
 			score += 15.0
-		} else if fvg.Strength > 4 {   // 原20 -> 4 (20% * 20)
+		} else if fvg.Strength >= 20 {   // 原20 -> 4 (20% * 20)
 			score += 10.0
 		}
 

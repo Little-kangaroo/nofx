@@ -13,7 +13,19 @@ func NewFVGContextScoring(analyzer *FVGAnalyzer) *FVGContextScoring {
 }
 
 // CalculateContextScores 计算所有FVG的上下文评分（修复样本偏差问题）
+// 🔥 保持兼容性：使用默认时间推断
 func (fcs *FVGContextScoring) CalculateContextScores(allFVGs []*FairValueGap, contextCalc *ContextCalculator) {
+	// 推断timeframe（如果FVG有Origin.TimeFrame则使用第一个）
+	tf := "1h" // fallback默认值
+	if len(allFVGs) > 0 && allFVGs[0].Origin != nil && allFVGs[0].Origin.TimeFrame != "" {
+		tf = allFVGs[0].Origin.TimeFrame
+	}
+	fcs.CalculateContextScoresWithTF(allFVGs, contextCalc, tf)
+}
+
+// CalculateContextScoresWithTF 计算所有FVG的上下文评分（带timeframe参数）
+// 🔥 P0-06修复：支持timeframe参数，用于正确计算MaxAge
+func (fcs *FVGContextScoring) CalculateContextScoresWithTF(allFVGs []*FairValueGap, contextCalc *ContextCalculator, tf string) {
 	if len(allFVGs) == 0 {
 		return
 	}
@@ -51,14 +63,15 @@ func (fcs *FVGContextScoring) CalculateContextScores(allFVGs []*FairValueGap, co
 			continue
 		}
 
-		// 计算上下文评分
-		gap.Context = fcs.calculateSingleFVGContext(gap, allStrengths, allWidths, contextCalc)
+		// 计算上下文评分，传入timeframe用于MaxAge计算
+		gap.Context = fcs.calculateSingleFVGContext(gap, allStrengths, allWidths, contextCalc, tf)
 	}
 }
 
 // calculateSingleFVGContext 计算单个FVG的上下文评分
 // 🔥 P0-05: 设置validity flags
-func (fcs *FVGContextScoring) calculateSingleFVGContext(gap *FairValueGap, allStrengths []float64, allWidths []float64, contextCalc *ContextCalculator) *ContextMetrics {
+// 🔥 P0-06: 添加tf参数用于MaxAge计算
+func (fcs *FVGContextScoring) calculateSingleFVGContext(gap *FairValueGap, allStrengths []float64, allWidths []float64, contextCalc *ContextCalculator, tf string) *ContextMetrics {
 	// 1. 计算强度标准分 (strength_z)
 	// >1.5 为强，>2.0 为极强
 	// 🔥 P0-05: 获取validity flag
@@ -88,7 +101,12 @@ func (fcs *FVGContextScoring) calculateSingleFVGContext(gap *FairValueGap, allSt
 
 	// 4. 判断是否新鲜 (is_fresh)
 	// 新鲜的FVG通常具有更强的支撑/阻力效果
-	maxAge := int64(fcs.analyzer.config.MaxAge * 3600 * 1000) // 转换为毫秒
+	// 🔥 P0-06修复：MaxAge单位换算（根数转毫秒）
+	ms, ok := TimeframeMillis(tf)
+	if !ok {
+		ms = 60 * 60 * 1000 // fallback到1h
+	}
+	maxAge := int64(fcs.analyzer.config.MaxAge) * ms // MaxAge配置为"根数"，换算为毫秒
 	isFresh := contextCalc.IsFresh(gap.CreationTime, maxAge)
 
 	// 5. 计算时间评分 (time_score)
@@ -113,18 +131,17 @@ func (fcs *FVGContextScoring) calculateSingleFVGContext(gap *FairValueGap, allSt
 
 // 为现有的FVG分析器添加扩展方法
 // getHistoricalStrengthBaseline 获取历史强度基准（经验值）
+// 🔥 P1-01修复：Strength尺度保持0-100，调整基准分布
 func (fcs *FVGContextScoring) getHistoricalStrengthBaseline() []float64 {
-	// 🔥 修复：基于大量历史数据总结的FVG强度分布
+	// 基于大量历史数据总结的FVG强度分布（0-100尺度）
 	// 这些值代表了不同市场环境下的典型FVG强度范围
 	return []float64{
-		// 弱强度FVG (低波动期常见)
-		0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2,
-		// 中等强度FVG (正常市场)
-		1.5, 1.6, 1.8, 2.0, 2.2, 2.5, 2.8, 3.0,
-		// 高强度FVG (高波动期)
-		3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0,
-		// 极强FVG (极端市场条件)
-		10.0, 12.0, 15.0, 20.0,
+		// 弱强度FVG (低波动期常见) - 70%的FVG
+		5, 10, 15, 20, 25, 30, 35, 40, 45,
+		// 中等强度FVG (正常市场) - 20%的FVG
+		50, 55, 60, 65, 70,
+		// 高强度FVG (高波动期) - 10%的FVG
+		75, 80, 85, 90, 95, 100,
 	}
 }
 
@@ -146,8 +163,15 @@ func (fcs *FVGContextScoring) getHistoricalWidthBaseline() []float64 {
 	}
 }
 
-// FVGAnalyzer扩展方法：调用上下文评分计算器
+// FVGAnalyzer扩展方法：调用上下文评分计算器（兼容旧接口）
 func (fvg *FVGAnalyzer) CalculateContextScores(allFVGs []*FairValueGap, contextCalc *ContextCalculator) {
 	scorer := NewFVGContextScoring(fvg)
 	scorer.CalculateContextScores(allFVGs, contextCalc)
+}
+
+// CalculateContextScoresWithTF 扩展方法：调用上下文评分计算器（带timeframe参数）
+// 🔥 P0-06修复：支持timeframe参数用于MaxAge计算
+func (fvg *FVGAnalyzer) CalculateContextScoresWithTF(allFVGs []*FairValueGap, contextCalc *ContextCalculator, tf string) {
+	scorer := NewFVGContextScoring(fvg)
+	scorer.CalculateContextScoresWithTF(allFVGs, contextCalc, tf)
 }
