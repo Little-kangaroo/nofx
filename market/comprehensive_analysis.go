@@ -501,7 +501,7 @@ func (ca *ComprehensiveAnalyzer) Analyze(symbol string, klines5m, klines4h []Kli
 	// 执行道氏理论分析
 	if ca.config.EnableDowTheory && len(klines4h) > 20 {
 		result.DowTheory = ca.dowAnalyzer.Analyze(klines5m, klines4h, currentPrice)
-		result.ChannelAnalysis = ca.channelAnalyzer.Analyze(klines4h, currentPrice)
+		result.ChannelAnalysis = ca.channelAnalyzer.Analyze(klines4h, currentPrice, "4h") // 🔥 P0-CH-01修复：传入timeframe
 	}
 
 	// 执行VPVR分析
@@ -1635,7 +1635,7 @@ func (ca *ComprehensiveAnalyzer) analyzeSingleTimeframe(timeframe, symbol string
 	}
 
 	// 通道分析
-	tfAnalysis.ChannelAnalysis = ca.channelAnalyzer.Analyze(klines, currentPrice)
+	tfAnalysis.ChannelAnalysis = ca.channelAnalyzer.Analyze(klines, currentPrice, timeframe) // 🔥 P0-CH-01修复：传入timeframe
 
 	// VPVR分析
 	// 🔥 P0-04修复：为每个时间框架使用正确的动态VPVR配置

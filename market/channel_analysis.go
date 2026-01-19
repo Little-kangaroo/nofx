@@ -21,17 +21,26 @@ type ChannelAnalysisConfig struct {
 	MaxChannelWidth   float64 // 最大通道宽度
 	ParallelTolerance float64 // 平行容忍度
 	QualityThreshold  float64 // 质量阈值
-	
+
 	// 🔥 新增：ATR动态宽度标准
 	EnableATRWidthStandards bool    // 启用ATR宽度标准
 	MinChannelWidthATR      float64 // 最小通道宽度（ATR倍数）
 	MaxChannelWidthATR      float64 // 最大通道宽度（ATR倍数）
 	OptimalWidthATRMin      float64 // 最优宽度下限（ATR倍数）
 	OptimalWidthATRMax      float64 // 最优宽度上限（ATR倍数）
+
+	// 🔥 P0-CH-05修复：平行度判定稳定性参数
+	SlopeEpsilon float64 // 斜率最小阈值，避免水平通道判定失败（默认1e-6）
 }
 
 // ChannelData 通道分析数据
 type ChannelData struct {
+	// 🔥 P0-CH-01修复：坐标系标注字段
+	Timeframe   string `json:"timeframe"`    // 时间框架（5m/15m/1h/4h）
+	Coord       string `json:"coord"`        // 坐标系类型（固定"index"）
+	RefIndex    int    `json:"ref_index"`    // 参考索引（len(klines)-1）
+	RefOpenTime int64  `json:"ref_open_time,omitempty"` // 参考K线开盘时间
+
 	ActiveChannel   *Channel      `json:"active_channel"`   // 当前有效通道
 	TrendLines      []*TrendLine  `json:"trend_lines"`      // 所有趋势线
 	CurrentPosition string        `json:"current_position"` // 当前价格位置
@@ -39,11 +48,27 @@ type ChannelData struct {
 	Quality         float64       `json:"quality"`          // 通道质量评分
 	Direction       string        `json:"direction"`        // 通道方向
 	Analysis        string        `json:"analysis"`         // 分析描述
-	
+
 	// 🔥 新增：ATR分析字段
 	WidthATR        float64       `json:"width_atr"`        // 通道宽度（ATR倍数）
 	ATRGrade        string        `json:"atr_grade"`        // ATR评级（A/B/C/D）
 	ATRAnalysis     string        `json:"atr_analysis"`     // ATR分析描述
+
+	// 🔥 P0-CH-02修复：ATR来源标注
+	ATRMode         string        `json:"atr_mode,omitempty"` // ATR计算模式（normal/fallback_pct）
+	ATRConfidence   float64       `json:"atr_confidence,omitempty"` // ATR置信度
+
+	// 🔥 P1-CH-06修复：突破强度与距离信息
+	RawRatio            float64 `json:"raw_ratio"`              // 原始比例（不clamp）
+	DistanceToUpper     float64 `json:"distance_to_upper"`      // 到上轨距离（绝对值）
+	DistanceToLower     float64 `json:"distance_to_lower"`      // 到下轨距离（绝对值）
+	DistanceToUpperATR  float64 `json:"distance_to_upper_atr"`  // 到上轨距离（ATR倍数）
+	DistanceToLowerATR  float64 `json:"distance_to_lower_atr"`  // 到下轨距离（ATR倍数）
+	BreakoutDistance    float64 `json:"breakout_distance"`      // 突破距离（绝对值，0表示未突破）
+	BreakoutDistanceATR float64 `json:"breakout_distance_atr"`  // 突破距离（ATR倍数）
+
+	// 诊断信息
+	Notes           []string      `json:"notes,omitempty"`  // 诊断信息
 }
 
 // Channel 通道结构
@@ -54,7 +79,23 @@ type Channel struct {
 	Width      float64    `json:"width"`
 	Quality    float64    `json:"quality"`
 	Direction  string     `json:"direction"`
-	Age        int64      `json:"age"` // 通道存在时间（毫秒）
+
+	// 🔥 P0-CH-04修复：Age语义拆分
+	AgeBars    int        `json:"age_bars"`    // 通道存在时间（K线根数）
+	AgeMs      int64      `json:"age_ms,omitempty"` // 通道存在时间（毫秒，可选）
+}
+
+// 🔥 P1-CH-06新增：价格位置详细信息
+type ChannelPositionInfo struct {
+	Position            string  // Inside/BreakUp/BreakDown
+	PriceRatio          float64 // clamp到[0,1]
+	RawRatio            float64 // 不clamp
+	DistanceToUpper     float64
+	DistanceToLower     float64
+	DistanceToUpperATR  float64
+	DistanceToLowerATR  float64
+	BreakoutDistance    float64
+	BreakoutDistanceATR float64
 }
 
 // NewChannelAnalyzer 创建通道分析器
@@ -69,29 +110,50 @@ func NewChannelAnalyzer() *ChannelAnalyzer {
 			MaxChannelWidth:   0.18,  // 18%最大宽度（传统模式）
 			ParallelTolerance: 0.08,  // 8%平行容忍度
 			QualityThreshold:  0.75,  // 75%质量阈值
-			
+
 			// 🔥 新增：ATR动态宽度标准配置
 			EnableATRWidthStandards: true,  // 启用ATR标准
 			MinChannelWidthATR:      0.8,   // 最小0.8倍ATR
 			MaxChannelWidthATR:      4.0,   // 最大4.0倍ATR
 			OptimalWidthATRMin:      1.2,   // 最优下限1.2倍ATR
 			OptimalWidthATRMax:      2.5,   // 最优上限2.5倍ATR
+
+			// 🔥 P0-CH-05修复：平行度判定稳定性
+			SlopeEpsilon:            1e-6,  // 斜率最小阈值
 		},
 	}
 }
 
 // Analyze 执行通道分析
-// 🔥 修复：增加ATR动态宽度标准支持
-func (ca *ChannelAnalyzer) Analyze(klines []Kline, currentPrice float64) *ChannelData {
-	if len(klines) < 50 {
+// 🔥 P0-CH-01/02修复：增加timeframe参数，统一ATR口径，标注坐标系
+func (ca *ChannelAnalyzer) Analyze(klines []Kline, currentPrice float64, timeframe string) *ChannelData {
+	// 输入验证
+	if klines == nil || len(klines) < 50 {
 		return &ChannelData{
-			Analysis: "数据不足，无法进行通道分析",
+			Timeframe: timeframe,
+			Coord:     "index",
+			Analysis:  "数据不足，无法进行通道分析",
+			Notes:     []string{"insufficient_data"},
 		}
 	}
 
-	// 🔥 新增：计算ATR用于动态宽度标准
-	atr14 := ca.calculateATR(klines, 14)
-	
+	if currentPrice <= 0 {
+		return &ChannelData{
+			Timeframe: timeframe,
+			Coord:     "index",
+			Analysis:  "无效的当前价格",
+			Notes:     []string{"invalid_price"},
+		}
+	}
+
+	// 🔥 P0-CH-02修复：使用全局ATRManager统一ATR计算
+	atrEntry := GetGlobalATRManager().GetATR14(klines, timeframe, currentPrice)
+	atr14 := atrEntry.Value
+
+	// 坐标系参考点
+	refIndex := len(klines) - 1
+	refOpenTime := klines[refIndex].OpenTime
+
 	// 使用全部K线进行分析（最大优化结构视野）
 	analysisData := klines
 
@@ -99,7 +161,14 @@ func (ca *ChannelAnalyzer) Analyze(klines []Kline, currentPrice float64) *Channe
 	swingPoints := ca.identifySwingPoints(analysisData)
 	if len(swingPoints) < 4 {
 		return &ChannelData{
-			Analysis: "摆动点不足，无法构建通道",
+			Timeframe:     timeframe,
+			Coord:         "index",
+			RefIndex:      refIndex,
+			RefOpenTime:   refOpenTime,
+			Analysis:      "摆动点不足，无法构建通道",
+			ATRMode:       atrEntry.Mode,
+			ATRConfidence: atrEntry.Confidence,
+			Notes:         []string{"insufficient_swing_points"},
 		}
 	}
 
@@ -107,42 +176,79 @@ func (ca *ChannelAnalyzer) Analyze(klines []Kline, currentPrice float64) *Channe
 	trendLines := ca.calculateTrendLines(swingPoints)
 	if len(trendLines) < 2 {
 		return &ChannelData{
-			Analysis: "趋势线不足，无法构建通道",
+			Timeframe:     timeframe,
+			Coord:         "index",
+			RefIndex:      refIndex,
+			RefOpenTime:   refOpenTime,
+			TrendLines:    trendLines,
+			Analysis:      "趋势线不足，无法构建通道",
+			ATRMode:       atrEntry.Mode,
+			ATRConfidence: atrEntry.Confidence,
+			Notes:         []string{"insufficient_trend_lines"},
 		}
 	}
 
 	// 3. 构建最佳通道（包含ATR宽度验证）
-	currentIndex := len(klines) - 1
-	channel := ca.findBestChannelWithATR(trendLines, swingPoints, currentPrice, currentIndex, atr14)
+	channel := ca.findBestChannelWithATR(trendLines, swingPoints, currentPrice, refIndex, atr14)
 	if channel == nil {
 		return &ChannelData{
-			TrendLines: trendLines,
-			Analysis:   "未找到有效通道",
+			Timeframe:     timeframe,
+			Coord:         "index",
+			RefIndex:      refIndex,
+			RefOpenTime:   refOpenTime,
+			TrendLines:    trendLines,
+			Analysis:      "未找到有效通道",
+			ATRMode:       atrEntry.Mode,
+			ATRConfidence: atrEntry.Confidence,
+			Notes:         []string{"no_valid_channel"},
 		}
 	}
 
 	// 4. 计算当前价格位置
-	position, ratio := ca.calculatePricePosition(currentPrice, channel, currentIndex)
+	posInfo := ca.calculatePricePosition(currentPrice, channel, refIndex, atr14)
 
-	// 🔥 P0-C1修复：计算ATR分析 - 传入正确的currentIndex
-	widthATR, atrGrade, atrAnalysis := ca.calculateATRAnalysis(channel, currentPrice, atr14, currentIndex)
+	// 🔥 P0-CH-01修复：计算ATR分析 - 传入正确的refIndex
+	widthATR, atrGrade, atrAnalysis := ca.calculateATRAnalysis(channel, currentPrice, atr14, refIndex)
 
 	// 5. 生成分析描述（整合ATR分析）
-	analysis := ca.generateAnalysisWithATR(channel, position, ratio, atrGrade, atrAnalysis)
+	analysis := ca.generateAnalysisWithATR(channel, posInfo.Position, posInfo.PriceRatio, atrGrade, atrAnalysis)
+
+	// 构建诊断信息
+	notes := []string{}
+	if atrEntry.Mode != "normal" {
+		notes = append(notes, "atr_fallback_used")
+	}
 
 	return &ChannelData{
+		Timeframe:       timeframe,
+		Coord:           "index",
+		RefIndex:        refIndex,
+		RefOpenTime:     refOpenTime,
 		ActiveChannel:   channel,
 		TrendLines:      trendLines,
-		CurrentPosition: position,
-		PriceRatio:      ratio,
+		CurrentPosition: posInfo.Position,
+		PriceRatio:      posInfo.PriceRatio,
 		Quality:         channel.Quality,
 		Direction:       channel.Direction,
 		Analysis:        analysis,
-		
-		// 🔥 新增：ATR分析结果
-		WidthATR:    widthATR,
-		ATRGrade:    atrGrade,
-		ATRAnalysis: atrAnalysis,
+
+		// ATR分析结果
+		WidthATR:      widthATR,
+		ATRGrade:      atrGrade,
+		ATRAnalysis:   atrAnalysis,
+		ATRMode:       atrEntry.Mode,
+		ATRConfidence: atrEntry.Confidence,
+
+		// 🔥 P1-CH-06新增：突破距离与位置信息
+		RawRatio:            posInfo.RawRatio,
+		DistanceToUpper:     posInfo.DistanceToUpper,
+		DistanceToLower:     posInfo.DistanceToLower,
+		DistanceToUpperATR:  posInfo.DistanceToUpperATR,
+		DistanceToLowerATR:  posInfo.DistanceToLowerATR,
+		BreakoutDistance:    posInfo.BreakoutDistance,
+		BreakoutDistanceATR: posInfo.BreakoutDistanceATR,
+
+		Notes:         notes,
 	}
 }
 
@@ -268,6 +374,8 @@ func (ca *ChannelAnalyzer) calculateSwingStrength(klines []Kline, index int, isH
 }
 
 // calculateATR 计算平均真实波幅
+// 🔥 P0-CH-03修复：边界条件检查
+// 注意：此函数仅作为fallback，主要应使用ATRManager
 func (ca *ChannelAnalyzer) calculateATR(klines []Kline, period int) float64 {
 	if len(klines) < period+1 {
 		return 0
@@ -275,28 +383,29 @@ func (ca *ChannelAnalyzer) calculateATR(klines []Kline, period int) float64 {
 
 	var trSum float64
 	count := 0
-	
+
 	for i := len(klines) - period; i < len(klines); i++ {
-		if i <= 0 {
+		// 🔥 P0-CH-03修复：边界检查修正
+		if i < 1 {  // 需要访问i-1，所以i必须>=1
 			continue
 		}
-		
+
 		current := klines[i]
 		previous := klines[i-1]
-		
+
 		tr1 := current.High - current.Low
 		tr2 := math.Abs(current.High - previous.Close)
 		tr3 := math.Abs(current.Low - previous.Close)
-		
+
 		tr := math.Max(tr1, math.Max(tr2, tr3))
 		trSum += tr
 		count++
 	}
-	
+
 	if count == 0 {
 		return 0
 	}
-	
+
 	return trSum / float64(count)
 }
 
@@ -459,20 +568,13 @@ func (ca *ChannelAnalyzer) findBestChannelWithATR(trendLines []*TrendLine, swing
 	return bestChannel
 }
 
-// findBestChannel 寻找最佳通道（兼容性保留）
-// 🔥 修复：添加当前索引参数，消除time.Now()回测不一致问题
+// findBestChannel 寻找最佳通道（已废弃，保留仅为兼容）
+// 🔥 P0-CH-03修复：此函数已废弃，请使用findBestChannelWithATR
+// 如果必须使用，请确保传入正确的klines和atr14
 func (ca *ChannelAnalyzer) findBestChannel(trendLines []*TrendLine, swingPoints []*SwingPoint, currentPrice float64, currentIndex int) *Channel {
-	// 如果启用ATR标准，调用ATR版本
-	if ca.config.EnableATRWidthStandards {
-		// 计算ATR14用于分析
-		atr14 := ca.calculateATR([]Kline{}, 14) // 需要klines参数，这里简化处理
-		if atr14 > 0 {
-			return ca.findBestChannelWithATR(trendLines, swingPoints, currentPrice, currentIndex, atr14)
-		}
-	}
-	
-	// 降级到传统方法
-	return ca.findBestChannelTraditional(trendLines, swingPoints, currentPrice, currentIndex)
+	// 直接返回nil，强制使用ATR版本
+	// 如果有调用此函数的地方，应该改为调用findBestChannelWithATR
+	return nil
 }
 
 // findBestChannelTraditional 传统方法寻找最佳通道
@@ -509,14 +611,22 @@ func (ca *ChannelAnalyzer) findBestChannelTraditional(trendLines []*TrendLine, s
 }
 
 // canFormChannel 检查两条线是否能形成通道
+// 🔥 P0-CH-05修复：平行度判定支持水平通道
 func (ca *ChannelAnalyzer) canFormChannel(line1, line2 *TrendLine) bool {
 	// 必须是不同类型的线
 	if line1.Type == line2.Type {
 		return false
 	}
 
+	// 🔥 P0-CH-05修复：使用带下限的归一化差，避免水平通道判定失败
+	s1, s2 := line1.Slope, line2.Slope
+	maxSlope := math.Max(math.Abs(s1), math.Abs(s2))
+
+	// 使用SlopeEpsilon作为最小阈值，避免除以接近0的数
+	denominator := math.Max(maxSlope, ca.config.SlopeEpsilon)
+
 	// 检查平行度
-	if math.Abs(line1.Slope-line2.Slope) > ca.config.ParallelTolerance*math.Max(math.Abs(line1.Slope), math.Abs(line2.Slope)) {
+	if math.Abs(s1-s2) > ca.config.ParallelTolerance*denominator {
 		return false
 	}
 
@@ -585,11 +695,21 @@ func (ca *ChannelAnalyzer) createChannelWithATR(line1, line2 *TrendLine, current
 		}
 	}
 
-	// 🔥 修复：基于索引计算通道年龄
+	// 🔥 P0-CH-04修复：Age语义拆分
 	upperStartIndex := upperLine.Points[0].Index
 	lowerStartIndex := lowerLine.Points[0].Index
 	channelStartIndex := minInt(upperStartIndex, lowerStartIndex)
-	age := int64(currentIndex - channelStartIndex) // 索引差作为年龄
+	ageBars := currentIndex - channelStartIndex
+
+	// 可选：计算真实毫秒差
+	ageMs := int64(0)
+	if len(upperLine.Points) > 0 && len(lowerLine.Points) > 0 {
+		startTime := minInt64(upperLine.Points[0].Time, lowerLine.Points[0].Time)
+		// 注意：这里需要klines数据才能获取currentIndex对应的时间
+		// 暂时设为0，如果需要可以传入klines参数
+		// ageMs = klines[currentIndex].OpenTime - startTime
+		_ = startTime // 避免未使用警告
+	}
 
 	return &Channel{
 		UpperLine:  upperLine,
@@ -597,7 +717,8 @@ func (ca *ChannelAnalyzer) createChannelWithATR(line1, line2 *TrendLine, current
 		MiddleLine: middleLine,
 		Width:      percentageWidth, // 保持百分比宽度用于兼容性
 		Direction:  direction,
-		Age:        age,
+		AgeBars:    ageBars,  // 🔥 修复：使用AgeBars
+		AgeMs:      ageMs,    // 🔥 修复：可选的毫秒差
 	}
 }
 
@@ -613,8 +734,8 @@ func (ca *ChannelAnalyzer) scoreChannelWithATR(channel *Channel, swingPoints []*
 	totalHits := channel.UpperLine.Touches + channel.LowerLine.Touches
 	score += float64(totalHits) * 0.5
 
-	// 🔥 修复：基于索引的通道年龄评分，避免毫秒转换误差
-	ageInIndices := float64(channel.Age) // channel.Age现在是索引差
+	// 🔥 P0-CH-04修复：基于索引的通道年龄评分，避免毫秒转换误差
+	ageInIndices := float64(channel.AgeBars) // channel.AgeBars现在是索引差
 	if ageInIndices <= 50 { // 50根K线内认为是新通道
 		score += 2.0
 	} else if ageInIndices <= 200 { // 200根K线内认为是较新通道
@@ -700,11 +821,14 @@ func (ca *ChannelAnalyzer) createChannel(line1, line2 *TrendLine, currentPrice f
 		}
 	}
 
-	// 🔥 修复：基于索引计算通道年龄
+	// 🔥 P0-CH-04修复：Age语义拆分
 	upperStartIndex := upperLine.Points[0].Index
 	lowerStartIndex := lowerLine.Points[0].Index
 	channelStartIndex := minInt(upperStartIndex, lowerStartIndex)
-	age := int64(currentIndex - channelStartIndex) // 索引差作为年龄
+	ageBars := currentIndex - channelStartIndex
+
+	// 可选：计算真实毫秒差（暂时设为0）
+	ageMs := int64(0)
 
 	return &Channel{
 		UpperLine:  upperLine,
@@ -712,7 +836,8 @@ func (ca *ChannelAnalyzer) createChannel(line1, line2 *TrendLine, currentPrice f
 		MiddleLine: middleLine,
 		Width:      width,
 		Direction:  direction,
-		Age:        age,
+		AgeBars:    ageBars,  // 🔥 修复：使用AgeBars
+		AgeMs:      ageMs,    // 🔥 修复：可选的毫秒差
 	}
 }
 
@@ -727,8 +852,8 @@ func (ca *ChannelAnalyzer) scoreChannel(channel *Channel, swingPoints []*SwingPo
 	totalHits := channel.UpperLine.Touches + channel.LowerLine.Touches
 	score += float64(totalHits) * 0.5
 
-	// 🔥 修复：基于索引的通道年龄评分，避免毫秒转换误差
-	ageInIndices := float64(channel.Age) // channel.Age现在是索引差
+	// 🔥 P0-CH-04修复：基于索引的通道年龄评分，避免毫秒转换误差
+	ageInIndices := float64(channel.AgeBars) // channel.AgeBars现在是索引差
 	if ageInIndices <= 50 { // 50根K线内认为是新通道
 		score += 2.0
 	} else if ageInIndices <= 200 { // 200根K线内认为是较新通道
@@ -745,30 +870,76 @@ func (ca *ChannelAnalyzer) scoreChannel(channel *Channel, swingPoints []*SwingPo
 }
 
 // calculatePricePosition 计算价格在通道中的位置
-// 🔥 修复：使用索引坐标系统，消除time.Now()回测/实盘不一致问题
-func (ca *ChannelAnalyzer) calculatePricePosition(currentPrice float64, channel *Channel, currentIndex int) (string, float64) {
+// 🔥 P1-CH-06修复：返回完整的位置信息，包括突破距离
+func (ca *ChannelAnalyzer) calculatePricePosition(currentPrice float64, channel *Channel, currentIndex int, atr14 float64) *ChannelPositionInfo {
 	// 🔥 修复：使用当前索引替代time.Now()
 	currentIndexFloat := float64(currentIndex)
 	upperPrice := channel.UpperLine.Slope*currentIndexFloat + channel.UpperLine.Intercept
 	lowerPrice := channel.LowerLine.Slope*currentIndexFloat + channel.LowerLine.Intercept
 
-	// 计算比例
-	ratio := (currentPrice - lowerPrice) / (upperPrice - lowerPrice)
-	ratio = math.Max(0, math.Min(1, ratio))
-
-	// 确定位置
-	position := "middle"
-	if ratio > 0.8 {
-		position = "upper"
-	} else if ratio < 0.2 {
-		position = "lower"
-	} else if currentPrice > upperPrice*1.01 {
-		position = "break_up"
-	} else if currentPrice < lowerPrice*0.99 {
-		position = "break_down"
+	// 防御性检查：避免除零
+	if math.Abs(upperPrice-lowerPrice) < 1e-8 {
+		return &ChannelPositionInfo{
+			Position:   "unknown",
+			PriceRatio: 0.5,
+			RawRatio:   0.5,
+		}
 	}
 
-	return position, ratio
+	// 计算原始比例（不clamp）
+	rawRatio := (currentPrice - lowerPrice) / (upperPrice - lowerPrice)
+
+	// 计算clamp后的比例（兼容旧版）
+	clampedRatio := math.Max(0, math.Min(1, rawRatio))
+
+	// 计算到上下轨的距离
+	distToUpper := math.Abs(currentPrice - upperPrice)
+	distToLower := math.Abs(currentPrice - lowerPrice)
+
+	// ATR归一化距离
+	distToUpperATR := 0.0
+	distToLowerATR := 0.0
+	if atr14 > 0 {
+		distToUpperATR = distToUpper / atr14
+		distToLowerATR = distToLower / atr14
+	}
+
+	// 确定位置和突破距离
+	position := "middle"
+	breakoutDist := 0.0
+	breakoutDistATR := 0.0
+
+	if currentPrice > upperPrice*1.01 {
+		// 向上突破
+		position = "break_up"
+		breakoutDist = currentPrice - upperPrice
+		if atr14 > 0 {
+			breakoutDistATR = breakoutDist / atr14
+		}
+	} else if currentPrice < lowerPrice*0.99 {
+		// 向下突破
+		position = "break_down"
+		breakoutDist = lowerPrice - currentPrice
+		if atr14 > 0 {
+			breakoutDistATR = breakoutDist / atr14
+		}
+	} else if rawRatio > 0.8 {
+		position = "upper"
+	} else if rawRatio < 0.2 {
+		position = "lower"
+	}
+
+	return &ChannelPositionInfo{
+		Position:            position,
+		PriceRatio:          clampedRatio,
+		RawRatio:            rawRatio,
+		DistanceToUpper:     distToUpper,
+		DistanceToLower:     distToLower,
+		DistanceToUpperATR:  distToUpperATR,
+		DistanceToLowerATR:  distToLowerATR,
+		BreakoutDistance:    breakoutDist,
+		BreakoutDistanceATR: breakoutDistATR,
+	}
 }
 
 // generateAnalysis 生成分析描述
@@ -910,4 +1081,21 @@ func (ca *ChannelAnalyzer) generateAnalysisWithATR(channel *Channel, position st
 	}
 
 	return analysis
+}
+// 🔥 P0-CH-01修复：趋势线价格计算辅助函数（强制使用索引坐标系）
+// TrendLinePriceAtIndex 计算趋势线在指定索引处的价格
+// 此函数确保所有消费端使用统一的索引坐标系，禁止使用时间戳
+func TrendLinePriceAtIndex(line *TrendLine, index int) float64 {
+	if line == nil {
+		return 0
+	}
+	return line.Slope*float64(index) + line.Intercept
+}
+
+// 🔥 P0-CH-04修复：辅助函数（minInt已在utils.go中定义）
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
