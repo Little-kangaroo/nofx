@@ -189,7 +189,7 @@ docs/getting-started/your-guide.md
 docs/guides/your-tutorial.md
 
 # Community docs
-docs/community/your-doc.md
+docs/community/your-function_doc.md
 
 # Translations
 docs/i18n/ja/README.md  # Japanese example
