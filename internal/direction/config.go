@@ -52,8 +52,8 @@ func DefaultConfig() Config {
 		WOFMax: 0.80,
 
 		// 方向裁决阈值
-		ThetaNeutral: 0.15,
-		MinConf:      0.35,
+		ThetaNeutral: 0.12,
+		MinConf:      0.30,
 
 		// 归一化尺度
 		CVDFallbackScale: 1e6,
