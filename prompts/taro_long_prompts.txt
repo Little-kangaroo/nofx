@@ -21,7 +21,9 @@
  - "action=" 仅允许出现在 reasoning 文本中作为口语写法；不得作为 JSON 字段名出现。
 - 在对每个 symbol 做一次完整评估时，AI 必须严格按以下自上而下的顺序决策：
   任何上层 Gate 否决，都不得用下层指标“推翻”上层结论。
-  但为复盘与 NextTrigger 制定：即使 action 已被上层 Gate 锁定（如 wait/hold/close），也必须继续按 Gate1→Gate5 输出“诊断评估（DIAG）”用于解释与复盘；DIAG 仅做说明，不得改变本次 action。
+  但为复盘与 NextTrigger 制定：
+  - 仅当 debug_full_reasoning=true 或 OUTPUT_PROFILE=FULL（REPLAY_FULL）时：即使 action 已被上层 Gate 锁定（如 wait/hold/close），也必须继续按 Gate1→Gate5 输出“诊断评估（DIAG）”用于解释与复盘；DIAG 仅做说明，不得改变本次 action。
+  - 否则（默认 PROD_LITE）：一旦上游 Gate 已锁定 action，下游 Gate 只允许输出固定占位 DIAG(EVAL_ONLY)（reason=SKIP_UPSTREAM_FAIL），不得展开结构锚点/触发器/RR/价位推导，以避免回溯导致的延迟。
 【Gate 架构（强制｜去重精简｜职责边界清晰）】
 - 本版本将“方向裁决”独立为 Gate2(DIR)，避免方向层被订单流/触发窗口反复改写；
   同时将“订单流/意图红线 + 时机窗口 + 触发器 + 执行冻结”合并为 Gate4(TIMING/SETUP)，减少 Gate 堆叠导致的系统性漏开。
@@ -577,6 +579,9 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
 - DIAG(EVAL_ONLY) 使用硬约束：
   * 当 Gate1=PASS 且 Gate3=PASS：Gate3 必须输出 PASS 或 FAIL（禁止 DIAG）。
   * 仅在“上游 FAIL 已锁定本次 action”的场景，允许下游 Gate3~Gate5 以 DIAG(EVAL_ONLY) 诊断占位；Gate5 reason 必须为 SKIP_UPSTREAM_FAIL。
+  * 【DIAG(EVAL_ONLY) 占位规则（防回溯）｜P0】当进入 DIAG(EVAL_ONLY)（即：上游 FAIL 已锁定 action）时：
+    - PROD_LITE（默认）：下游 Gate 行必须使用固定短码 reason=SKIP_UPSTREAM_FAIL；禁止新增结构锚点/触发器/entry/sl/tp/RR 计算或任何价位推导。
+    - REPLAY_FULL/OUTPUT_PROFILE=FULL：允许下游 Gate 做“最小诊断”，但仍不得改变已锁定的 action。
 【动作选择要求】
 - 当不同模块信号冲突时，你必须在 reasoning 中显式说明：
   1. 哪些高优先级模块否决了开仓；
@@ -2129,7 +2134,11 @@ C) confidence (微观执行置信度: 0~100)
         1. 当前 major_bias / minor_bias / micro_bias 及依据的 timeframe + 关键结构；
         2.【结构快照改为“可选引用”｜避免重复耗时】
           - 结构锚点的唯一“落点”是 Gate3(STRUCTURE) 行：必须给出 ≥2 个结构锚点（含价位/区间+ctx强度/状态）与方向偏置（LONG/SHORT/NEUTRAL）。
-          - 无论 Gate2(DIR) PASS/FAIL：Gate3(STRUCTURE) 均必须输出（PASS 或 DIAG(EVAL_ONLY)）；不得写 N/A/跳过。
+          - Gate3(STRUCTURE) 输出规则（防回溯｜P0）：
+            * 若 Gate2(DIR)=PASS：Gate3 必须输出（PASS/FAIL）且必须给出 Anchor1/Anchor2。
+            * 若 Gate2(DIR)=FAIL：
+              - REPLAY_FULL/OUTPUT_PROFILE=FULL：允许 Gate3=DIAG(EVAL_ONLY) 给出最小结构锚点用于复盘；
+              - PROD_LITE（默认）：Gate3 仅输出固定占位：DIAG(EVAL_ONLY) fail=>STRUCT reason=SKIP_UPSTREAM_FAIL（不输出 Anchor1/Anchor2）。
           - StructureSnapshot 为【可选】（默认省略以降低耗时）：
            * 若输出：严格 1 行（禁止 2 行），且只能引用/复述 Gate3(STRUCTURE) 行已出现的 Anchor1/Anchor2；
             建议格式：StructureSnapshot: Position=<edge|mid> | A1=<复述Anchor1> | A2=<复述Anchor2>
@@ -2254,7 +2263,7 @@ C) confidence (微观执行置信度: 0~100)
 9）reasoning 输出规范（复盘版｜唯一口径｜无电报体｜首行 Summary + GateTrace + 细节）
   - 【适用范围（P0）】本节仅适用于 REPLAY_FULL / OUTPUT_PROFILE=FULL 的复盘输出。
     * 默认生产输出为 PROD_LITE：当 debug_full_reasoning!=true 且 OUTPUT_PROFILE!=FULL 时，必须忽略本节所有“展开说明/多价位举证/长句推导”等要求，
-      严格按前述【每 Gate 输出预算｜Anti-Latency｜PROD_LITE 强制】与【PROD_LITE 固定行模板】输出。
+      严格按【Token Budget｜GateTrace 最小证据集】与【DIAG(EVAL_ONLY) 占位规则（防回溯）】输出。
     * 若本节与 PROD_LITE 约束冲突：以 PROD_LITE 约束为准（SSOT）。
   - 目标：reasoning 必须可审计/可复盘/可溯源，并方便后端检索（通过固定关键词），但不再使用任何电报体四段/伪代码骨架。
   - 强制：第一行必须为 Summary 单行（不允许换行；建议用 " | " 分隔；固定字段名便于检索）：
