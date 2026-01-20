@@ -1103,10 +1103,10 @@ func FormatAsCompactData(data *Data) string {
 
 	result := map[string]interface{}{
 		data.Symbol: map[string]interface{}{
-			"基础指标":              calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
-			"多时间框架分析":        mtfData,
-			"订单流分析":            orderflowData,
-			"trigger_context":      getTriggerContextForAI(data, timeframeKlines),
+			"基础指标":       calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
+			"多时间框架分析": mtfData,
+			//"订单流分析":            orderflowData,
+			"trigger_context":       getTriggerContextForAI(data, timeframeKlines),
 			"direction_arbitration": directionArbitration,
 			// 🔥 P0-1新增：输出交易所元数据，解决 ctxNA_lot_size / ctxNA_execution_params
 			"ExchangeMeta": extractExchangeMetaForAI(data),
@@ -3409,8 +3409,8 @@ func extractCompactSupportResistance(data *SupportResistanceData, symbol string,
 				"support_lines":    0,
 				"resistance_lines": 0,
 				// 🔥 P0-B新增：拥挤度元数据
-				"cluster_density":  0.0,
-				"has_congestion":   false,
+				"cluster_density": 0.0,
+				"has_congestion":  false,
 			},
 		}
 	}
@@ -3423,8 +3423,8 @@ func extractCompactSupportResistance(data *SupportResistanceData, symbol string,
 			"support_lines":    0,
 			"resistance_lines": 0,
 			// 🔥 P0-B新增：拥挤度元数据
-			"cluster_density":  0.0,
-			"has_congestion":   false,
+			"cluster_density": 0.0,
+			"has_congestion":  false,
 		},
 	}
 
@@ -3469,12 +3469,12 @@ func extractCompactSupportResistance(data *SupportResistanceData, symbol string,
 
 	result["support_resistance_lines"] = lines
 	result["summary"] = map[string]interface{}{
-		"total_lines":      totalCount,        // 总数保持不变
-		"support_lines":    supportCount,      // TopN中的支撑数
-		"resistance_lines": resistanceCount,   // TopN中的阻力数
+		"total_lines":      totalCount,      // 总数保持不变
+		"support_lines":    supportCount,    // TopN中的支撑数
+		"resistance_lines": resistanceCount, // TopN中的阻力数
 		// 🔥 P0-B新增：拥挤度元数据
-		"cluster_density":  FormatByDataTypeAndSymbol(avgDistance, "ratio", symbol), // 平均距离（ATR倍数）
-		"has_congestion":   hasCongestion,
+		"cluster_density": FormatByDataTypeAndSymbol(avgDistance, "ratio", symbol), // 平均距离（ATR倍数）
+		"has_congestion":  hasCongestion,
 	}
 
 	return result
@@ -4500,12 +4500,12 @@ func getTriggerContextForAI(data *Data, timeframeKlines map[string][]Kline) map[
 
 	triggerContext := map[string]interface{}{
 		// V-16.4 标准字段
-		"is_kline_closed":   true, // 5m收盘触发
-		"trigger_tf":        result.TF,
-		"trigger_flags":     result.AIFlags,   // 🔥 P0-2修复：使用 ai_flags（BorderlineMin过滤）用于Gate3窗口
-		"trigger_primary":   primary,          // 🔥 P1-3修复：从 AIFlags 中选质量最高（与 flags/quality 对齐）
-		"trigger_quality":   formattedQuality, // 🔥 改造：格式化为2位小数
-		"trigger_key_level": FormatByDataTypeAndSymbol(result.KeyLevel, "price", data.Symbol),
+		"is_kline_closed":        true, // 5m收盘触发
+		"trigger_tf":             result.TF,
+		"trigger_flags":          result.AIFlags,   // 🔥 P0-2修复：使用 ai_flags（BorderlineMin过滤）用于Gate3窗口
+		"trigger_primary":        primary,          // 🔥 P1-3修复：从 AIFlags 中选质量最高（与 flags/quality 对齐）
+		"trigger_quality":        formattedQuality, // 🔥 改造：格式化为2位小数
+		"trigger_key_level":      FormatByDataTypeAndSymbol(result.KeyLevel, "price", data.Symbol),
 		"trigger_key_level_type": result.KeyType,
 		// 🔥 P0新增：window_state字段（窗口状态）
 		"window_state": windowState,
@@ -4514,8 +4514,8 @@ func getTriggerContextForAI(data *Data, timeframeKlines map[string][]Kline) map[
 			"atr_5m":   FormatByDataTypeAndSymbol(atr5m, "price", data.Symbol),
 		},
 		// 🔥 P1-1新增：窗口检测字段
-		"trigger_age_bars":          ageBars,                                     // 触发器年龄（0=当前bar，1=上一根，2=上上根，-1=无触发）
-		"trigger_bar_close_time_ms": barCloseTimeMs,                              // 触发器所在K线的收盘时间（毫秒时间戳）
+		"trigger_age_bars":          ageBars,        // 触发器年龄（0=当前bar，1=上一根，2=上上根，-1=无触发）
+		"trigger_bar_close_time_ms": barCloseTimeMs, // 触发器所在K线的收盘时间（毫秒时间戳）
 		// 🔥 P1-2新增：pattern hint 字段
 		"trigger_pattern_hint": triggers.GetPatternHintFromFlags(result.AIFlags), // 触发器pattern类型提示（"SFP", "Engulf", "MOM_BREAK", ""）
 		// 🔥 新增：触发K线收盘价
@@ -4532,7 +4532,7 @@ func getTriggerContextForAI(data *Data, timeframeKlines map[string][]Kline) map[
 		"strict_quality": result.StrictQuality, // Strict层质量评分
 		// 元数据
 		"klines_count": len(triggerKlines),
-		"状态":          "正常",
+		"状态":         "正常",
 	}
 
 	// 🔥 P0-修复：最后兜底 - 规范化所有 slice/map 字段，确保非 nil（避免 JSON 序列化为 null）
@@ -4578,7 +4578,7 @@ func buildEmptyTriggerContext(reason string) map[string]interface{} {
 		"strict_quality": map[string]float64{},
 		// 元数据
 		"klines_count": 0,
-		"状态":          reason,
+		"状态":         reason,
 	}
 
 	// 🔥 P0-修复：最后兜底 - 规范化所有 slice/map 字段
@@ -4657,4 +4657,3 @@ func buildTouchInfoFromAnchors(anchors []AnchorCandidate, side string, currentPr
 
 	return touches
 }
-
