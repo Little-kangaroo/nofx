@@ -45,9 +45,14 @@
      - has_position=0：若 planned_dir ∈ {LONG, SHORT} 则视为 block_entry=0；否则视为 block_entry=1（保守：禁新开仓）；
      - has_position=1：视为 block_entry=0（仅管理仓位，不作为开仓许可）。
   c) has_position=1 时：
-     - Gate2 允许 PASS reason=POS_MGMT；
+     - Gate2 必须输出 DIAG(EVAL_ONLY) reason=POS_MGMT（仅管理仓位，不代表开仓许可）；
      - planned_dir 允许为 {LONG, SHORT, UNKNOWN}（推荐：与持仓方向一致；若无法确定则 UNKNOWN）；
      - 但无论 planned_dir 为何：持仓时顶层 action 仅允许 ∈ {"hold","close"}（绝对禁止 open_* 与 wait）。
+- 输入一致性纠错（P0｜必须执行｜强制收敛 planned_dir=NEUTRAL 的口径）:
+  a) 若 has_position=0 且 planned_dir ∈ {NEUTRAL, UNKNOWN}：必须将 block_entry 视为 1（即使输入给了 0 也必须覆盖），并在 Gate2 行输出 FAIL。
+     - 若输入给了 block_entry=0：reason 必须写 DIR_INPUT_INCONSISTENT（用于标注后端脏数据）；否则 reason=NO_PLAN_DIR。
+  b) 若 has_position=0 且 planned_dir ∈ {LONG, SHORT}：允许进入后续 Gate，但仅当 block_entry=0 才能 Gate2=PASS；若 block_entry=1 则 Gate2=FAIL reason=ENTRY_BLOCKED。
+  c) has_position=1：Gate2 仅用于‘仓位管理语境’，必须输出 DIAG(EVAL_ONLY) reason=POS_MGMT；严禁用 PASS/FAIL 表达开仓许可。
 - Gate2 方向裁决（仅当后端未提供 planned_dir 时启用；后端提供则以其为 SSOT）：
   1) 先判“不可裁决”（直接 NEUTRAL + block_entry=1）：
      - HTF 方向投票冲突严重，
@@ -63,7 +68,10 @@
      - planned_dir ∈ {NEUTRAL, UNKNOWN} → block_entry=1；
      - planned_dir ∈ {LONG, SHORT} → block_entry=0（仍需 Gate1 与 Gate3~Gate5 审查；Gate1/3/4/5 任一 FAIL 均可否决开仓）。
 - 硬约束（P0｜必须执行）：
-  1) 若 planned_dir ∈ {NEUTRAL, UNKNOWN} 且 has_position=0：action 必须为 "wait"；Gate2(DIR)=FAIL fail=>DIR reason=NO_PLAN_DIR；Gate3~Gate5 只允许 DIAG(EVAL_ONLY)。
+- Gate2 状态语义（许可性｜P0｜必须执行）：
+  has_position=0 时：Gate2(DIR)=PASS 当且仅当 planned_dir∈{LONG,SHORT} 且 block_entry=0；其余一律 Gate2(DIR)=FAIL（禁止用 PASS 或 DIAG(EVAL_ONLY) 伪装）。
+
+  1) 若 planned_dir ∈ {NEUTRAL, UNKNOWN} 且 has_position=0：action 必须为 "wait"；Gate2(DIR)=FAIL fail=>DIR reason ∈ {NO_PLAN_DIR, DIR_INPUT_INCONSISTENT}；Gate3~Gate5 只允许 DIAG(EVAL_ONLY)。
   2) 若 block_entry=1 且 has_position=0：action 必须为 "wait"；Gate2(DIR)=FAIL fail=>DIR reason=ENTRY_BLOCKED；Gate3~Gate5 只允许 DIAG(EVAL_ONLY)。
   3) Gate3~Gate5 只能评估 planned_dir 方向是否“具备开仓资格”；严禁输出与 planned_dir 相反方向的 open_*。
   4) 可观测性：Summary 必须包含 plan/block；GateTrace 必须按 Gate1→Gate5 顺序输出；Gate2 行必须输出 planned_dir/block_entry/reason（订单流字段如需出现，仅作为可选注释，不得改变 Gate2 的方向结论）。
@@ -1057,9 +1065,11 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
                 · 小仓位 LTF_scalp 顺势空，且必须满足较高的 edge_score / R_clean；
                 · 或干脆 action="wait"，直到价格移动到 FAVORABLE / DANGER 区再做较大决策。
               - HTF_swing 在 SHORT_NEUTRAL 区域应极为克制，若 R 空间不足或结构不干净，直接放弃。
-             【P0-NEUTRAL 区域的 B档开仓通道｜多空对称｜提升频率但降风险】
+             【P0-STRUCT_NEUTRAL 结构中性区的 B档开仓通道｜多空对称｜提升频率但降风险】
+              注意：此处的“NEUTRAL/中性”仅指 struct_state_*（结构状态中性区），并不等于 planned_dir=NEUTRAL。
+              若 Gate2 的 planned_dir ∈ {NEUTRAL, UNKNOWN}（无方向/不可裁决）：必须 Gate2=FAIL 且 action=wait，禁止因结构中性区规则而开仓。
               当 struct_state_short="SHORT_NEUTRAL" 或 struct_state_long="LONG_NEUTRAL" 时：
-              【P0-Range Mode 放宽NEUTRAL区域条件 - 允许mid-range交易】
+              【P0-Range Mode 放宽 STRUCT_NEUTRAL 条件 - 允许 mid-range 交易】
               * 若 market_regime=range（震荡市）：
                 - 允许"B档 LTF_scalp"开仓（小仓试单），条件如下（LONG/SHORT 对称）：
                   1) trade_style 必须为 "LTF_scalp"（HTF_swing 仍默认放弃）
@@ -1071,18 +1081,18 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
                   7) 风险控制：risk_pct = 常规的一半，setup_grade 自动设为 C
                   8) order_type=LIMIT（禁止追价）
                 - 若任一条件不满足：action="wait"
-                - 必须在 reasoning 中注明："Range Mode 震荡市 NEUTRAL 区域小仓试单，已降低仓位风险"
+                - 必须在 reasoning 中注明："Range Mode 震荡市 STRUCT_NEUTRAL（结构中性区）小仓试单，已降低仓位风险"
               * 若 market_regime=trend/mixed（趋势市/默认）：
                 - 允许"B档 LTF_scalp"开仓（小仓试单），但必须满足全部条件（LONG/SHORT 对称）：
                   1) trade_style 必须为 "LTF_scalp"（HTF_swing 仍默认放弃）；
                   2) pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}；
                   3) 必须出现 5m Trigger（SFP/Engulfing/InsideBarBreakout/MomentumIgnition 任一）；
-                  4) R_clean ≥ 0.8（比常规更紧的空间门槛，防止 NEUTRAL 里硬做）；
+                  4) R_clean ≥ 0.8（比常规更紧的空间门槛，防止结构中性区硬做）；
                   5) edge_score ≥ 0.65 且：
                      - confidence ≥ 70：通过；
                      - confidence ∈ [60,70)：允许但降级（risk_pct=常规的 1/3，且必须 LIMIT）；
                      - confidence < 60：不通过；
-                  6) 风险控制：risk_pct = 常规的一半（必须在 entry_plan 中写明"NEUTRAL-B 档减半风险"）。
+                  6) 风险控制：risk_pct = 常规的一半（必须在 entry_plan 中写明"STRUCT_NEUTRAL-B 档减半风险"）。
                 - 若任一条件不满足：action="wait"。
            5）LONG 方向与上述规则完全对称：
               - struct_state_long="LONG_FAVORABLE" 时优先寻找多头机会；
@@ -2252,7 +2262,7 @@ C) confidence (微观执行置信度: 0~100)
     - 强制：从第二行开始必须出现 GateTrace（顺序固定 Gate1→Gate5；每行一个 Gate；PASS/FAIL/DIAG(EVAL_ONLY) 必须明确；禁止写 N/A/跳过）：
         GateTrace:
               - Gate1(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
-              - Gate2(DIR): PASS/FAIL [fail=>DIR] 证据（planned_dir/block_entry/reason 必须明确；订单流红线/否决必须写在 Gate4(TIMING/SETUP) 并给出触发条件与解除条件）
+              - Gate2(DIR): PASS/FAIL [fail=>DIR] 证据（planned_dir/block_entry/reason 必须明确；has_position=0 时 PASS 仅允许：planned_dir∈{LONG,SHORT} 且 block_entry=0；任意 planned_dir∈{NEUTRAL,UNKNOWN} 或 block_entry=1 必须写 FAIL，不得写 PASS/DIAG；订单流红线/否决必须写在 Gate4(TIMING/SETUP) 并给出触发条件与解除条件）
               - Gate3(STRUCTURE): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>STRUCT 可选] 证据（至少2个结构锚点+价位/区间；edge+space）
               - Gate4(TIMING/SETUP): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>OF 或 fail=>TIME 或 fail=>SETUP 或 fail=>xF 可选] 证据（5m 收盘锚点/触发窗口/触发器/入场参数冻结；RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向）
               - Gate5(EXEC/RR): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>RR 可选] 证据（可执行性/滑点追价/成本；R_clean 必须给可核验算式）
