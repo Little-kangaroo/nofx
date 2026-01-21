@@ -50,6 +50,45 @@
      - Gate2 必须输出 DIAG(EVAL_ONLY) reason=POS_MGMT（仅管理仓位，不代表开仓许可）；
      - planned_dir 允许为 {LONG, SHORT, UNKNOWN}（推荐：与持仓方向一致；若无法确定则 UNKNOWN）；
      - 但无论 planned_dir 为何：持仓时顶层 action 仅允许 ∈ {"hold","close"}（绝对禁止 open_* 与 wait）。
+【P0｜方向一致性自检与有限翻转（Plan Sanity & Limited Flip｜提升盈利机会捕捉）】
+- 背景：后端 direction_arbitration.plan_side（下称 suggested_dir）可能在“极值区 + 反向触发”场景下滞后；若仍强制沿 suggested_dir 评估，Gate4 会频繁出现 NO_TRIGGER_FOR_DIR，导致有效机会被动丢失。
+- 目标：在不破坏 Gate1→Gate5 架构的前提下，让 Gate2 产出“最终执行方向 planned_dir”，并在严格条件下允许从 suggested_dir 进行有限翻转（countertrend 仅用于快进快出）。
+
+【定义｜Gate2 输入/输出口径（SSOT）】
+- suggested_dir：direction_arbitration.plan_side（或等价字段），仅作为建议方向，不再视为强制执行方向。
+- planned_dir：Gate2 最终输出方向 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}，作为 Gate3~Gate5 的唯一方向口径。
+- block_entry：仍为后端硬否决（1=禁止新开仓；0=允许进入后续 Gate 审查）。Gate2 不得把 block_entry=1 改回 0。
+
+【冲突判定（只用于“自检/翻转”，不允许在 Gate2 输出结构锚点）】
+- trig_dir：由 trigger_context.trigger_primary 推导：
+  - *_BULL -> LONG
+  - *_BEAR -> SHORT
+  - 缺失/无法推导 -> UNKNOWN
+- edge_type：trigger_context.trigger_type（若缺失则忽略）；重点使用 edge_support / edge_resistance。
+- q：trigger_context.trigger_quality[trigger_primary]（缺失则取 0）。
+- htf_exhaustion：若输入提供 HTF RSI14（4h 优先，其次 1h），用于判断“极端超买/超卖”：
+  - RSI14 ≤ 30 -> 倾向 LONG 反转
+  - RSI14 ≥ 70 -> 倾向 SHORT 反转
+
+【有限翻转许可（仅 has_position=0 且 block_entry=0）】
+- SHORT -> LONG（COUNTERTREND_LONG）：
+  - suggested_dir=SHORT
+  - trig_dir=LONG 且 edge_type=edge_support
+  - q ≥ 0.82
+  - 且满足 htf_exhaustion(≤30) 或（缺失 RSI 时）q ≥ 0.88
+  -> 则 Gate2 允许输出 planned_dir=LONG，并标记 mode=COUNTERTREND。
+- LONG -> SHORT（COUNTERTREND_SHORT）：对称条件（edge_resistance / RSI≥70）。
+
+【冲突但不满足翻转】
+- 若 suggested_dir 与 trig_dir 明显冲突（LONG vs SHORT），但不满足上面翻转阈值：
+  -> Gate2 输出 planned_dir=NEUTRAL 且 block_entry=1；reason=DIR_CONFLICT_NO_FLIP。
+  目的：避免把冲突留给 Gate4 以 NO_TRIGGER_FOR_DIR 形式表现，从而反复“看见触发但不交易”。
+
+【翻转后的风控硬约束（P0｜必须执行）】
+- 仅允许 trade_style=LTF_scalp；必须 downgrade=on；order_type=LIMIT；risk_down ≤ 0.5；
+- rr_min 允许下调至 0.35~0.40，但 Gate5 必须要求 TP1 快速兑现（close_pct ≥ 0.5）；
+- 若 Gate3 识别到反向 HTF_BARRIER_NEAR，则翻转单也必须放弃（Gate3=FAIL）。
+
 - 输入一致性纠错（P0｜必须执行｜强制收敛 planned_dir=NEUTRAL 的口径）:
   a) 若 has_position=0 且 planned_dir ∈ {NEUTRAL, UNKNOWN}：必须将 block_entry 视为 1（即使输入给了 0 也必须覆盖），并在 Gate2 行输出 FAIL。
      - 若输入给了 block_entry=0：reason 必须写 DIR_INPUT_INCONSISTENT（用于标注后端脏数据）；否则 reason=NO_PLAN_DIR。
@@ -122,109 +161,96 @@ Gate3）结构格局门槛（Structural Context Gate｜Gate3(STRUCTURE)）
      - planned_dir=LONG 且 1h/4h 明确 SZ/强阻力/VAH 压制距离过近（结构空间不足）→ Gate3=FAIL reason=HTF_BARRIER_NEAR；
      - planned_dir=SHORT 且 1h/4h 明确 DZ/强支撑/VAL 承接距离过近 → Gate3=FAIL reason=HTF_BARRIER_NEAR。
 Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓住“可盈利窗口”，减少漏开与追价）
-- 本段替换原 Gate4-A/B 全部内容（不改变 Gate1→Gate5 总架构，不新增 JSON 字段）。
-- Gate4 只做两件事（P0｜必须执行）：
-  1) TIMING：判断“此刻是否处于可执行窗口”（window_state）并产出本轮唯一同向触发器 dir_trigger；
-  2) SETUP FREEZE：把“触发器 + 市场状态”映射为一组冻结执行参数（pattern/tier/downgrade/order_type/risk_down/trade_style/rr_min），供 Gate5 计算可执行与成本后 RR。
-- 硬禁令（P0｜必须执行）：
-  - Gate4 严禁读取/引用任何订单流/环境字段（candle_intent/spoofing_risk/of_redline/alerts/...）；环境/意图红线否决由后端折叠进 Gate2.block_entry（SSOT）。
-  - Gate4 不得重新裁方向（方向只归 Gate2）；不得新增/替换结构锚点（结构只归 Gate3）；不得计算成本后 RR（只归 Gate5）。
-  - trigger_context.is_kline_closed 仅允许作为诊断注释；不得作为 PASS/FAIL 条件。
+- 本段替换原 Gate4-A/B 全部内容（重写｜不改变 Gate1→Gate5 总架构，不新增顶层 JSON 字段）。
+【P0｜Gate4 职责边界（必须遵守）】
+- Gate4 只做两件事（SSOT）：
+  1) TIMING：判定本轮 window（in/out/no_trigger/...），并产出本轮唯一同向触发器 dir_trigger；
+  2) SETUP FREEZE：把“dir_trigger + 市场状态 +（可选）Gate2.mode”映射为冻结执行参数：
+     pattern / tier / downgrade / order_type / risk_down / trade_style / rr_min
+     （冻结后不得在 Gate5 回头改 trade_style/order_type/risk_down/rr_min）。
+- 硬禁令（P0）：
+  - 严禁读取/引用任何订单流/环境字段（candle_intent/spoofing_risk/of_redline/alerts/...）；环境/意图红线否决已折叠进 Gate2.block_entry（SSOT）。
+  - 不得重新裁方向（方向只归 Gate2）；不得新增/替换结构锚点（结构只归 Gate3）；不得计算成本后 RR（只归 Gate5）。
+  - trigger_context.is_kline_closed 仅允许作为诊断注释，不得作为 PASS/FAIL 条件。
 
-【P0｜Gate4 输入最小集合（Token-Lite 但可复核）】
-- 必需输入（任一缺失→ Gate4=FAIL fail=>xF，仅禁新开仓，仍需 NextTrigger 提示缺失项）：
+【P0｜Gate4 输入最小集合（缺失则 xF）】
+- 必需（任一缺失 -> Gate4=FAIL fail=>xF；仅禁新开仓，仍需 NextTrigger 提示缺失项）：
   1) trigger_context（对象存在）
   2) trigger_context.last_price（或等价 last_price）
   3) trigger_context.trigger_bar_close_time_ms
-  4) trigger_context.trigger_quality, trigger_context.quality_min, trigger_context.borderline_min（用于 tiering；若缺失则视为 q=0 且直接 LOW_Q）
-  5) （推荐）trigger_context.window_state；trigger_context.dir_trigger 或 trigger_context.trigger_flags（二选一，至少其一）
-- Gate4 只以 trigger_context 为 SSOT；不得因 MarketSnapshot/ohlc 缺失而判定缺失。
+  4) trigger_context.trigger_primary（或至少 trigger_flags/dir_trigger 之一）
+  5) trigger_context.trigger_quality / strict_min / borderline_min（至少其一可用于 tiering；否则视为 q=0）
+  6) trigger_context.window_state（推荐；缺失时按下述保守规则推导）
 
-【P0｜Gate4 单行输出模板（GateTrace 只能 1 行）】
-Gate4(TIMING/SETUP): <PASS/FAIL/DIAG> fail=><TIME|SETUP|xF>?; window=<in|out|no_trigger|no_trigger_for_dir|unknown>; trigger=<dir_trigger|NONE>; pattern=<none|EDGE|BO_RETEST|MOMENTUM_BREAK>; tier=<na|low|borderline|good>; downgrade=<on|off>; order_type=<LIMIT|MARKET>; risk_down=<0.3~1.0>; trade_style=<LTF_scalp|HTF_swing>; rr_min=<0.35~0.60>; key=<trigger_key_level 可选>
-
-【P0｜步骤 0：上游锁定动作时的 Gate4 行为（防止“下游推翻上游”）】
-- 若 has_position=1：Gate4 必须输出 DIAG(EVAL_ONLY) reason=POS_MGMT（不代表开仓许可），并保留冻结字段占位：trade_style=LTF_scalp; rr_min=0.50; order_type=LIMIT; downgrade=on; tier=na; trigger=NONE; window=unknown。
-- 若 has_position=0 且 Gate2(DIR)=FAIL 或 Gate3(STRUCTURE)=FAIL：默认输出 DIAG(EVAL_ONLY) reason=SKIP_UPSTREAM_FAIL（PROD_LITE），不得展开触发器细节；debug_full_reasoning=true 时才允许展开诊断。
-
-【P0｜步骤 1：window_state（时机窗口）判定（SSOT）】
-- window_state 优先级：
-  1) 若 trigger_context.window_state 存在：window := trigger_context.window_state（必须原样映射，不得把 no_trigger 写成 in）
+【P0｜Step 1：window_state（可执行窗口）判定（SSOT）】
+- window 的来源优先级：
+  1) 若 trigger_context.window_state 存在：window := trigger_context.window_state（必须原样映射）
   2) 否则（window_state 缺失）：
-     - 若 trigger_context.trigger_flags 为空/缺失：window := no_trigger
-     - 若 trigger_context.trigger_flags 非空：window := in（保守允许继续；最终是否开仓由 Gate5 决定）
-- window 不在 “in”：
-  - 若 has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS：Gate4=FAIL fail=>TIME; reason=DEFER（必须输出 NextTrigger + PendingSetup；见《DEFER 机制》）
-  - 否则：Gate4=FAIL fail=>TIME; reason=OUT_OF_WINDOW（无需 PendingSetup）
-  - 注：Gate4 的 TIME 类 FAIL 只表示“时机未到/窗口不在”，不是否定方向与结构。
+     - 若 trigger_flags 为空/缺失：window := no_trigger
+     - 若 trigger_flags 非空：window := in（保守允许继续；最终是否开仓由 Gate5 决定）
+- window 不在 "in"：
+  - 若 has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS：
+      -> Gate4=FAIL fail=>TIME reason=DEFER（必须输出 NextTrigger + PendingSetup；见《DEFER 机制》）
+  - 否则：Gate4=FAIL fail=>TIME reason=OUT_OF_WINDOW（无需 PendingSetup）
 
-【P0｜步骤 2：dir_trigger（同向唯一触发器）产出（SSOT）】
+【P0｜Step 2：dir_trigger（同向唯一触发器）产出（SSOT）】
 - 输入优先级（从上到下，存在则直接使用）：
   1) 若 trigger_context.dir_trigger 已提供且非空：dir_trigger := trigger_context.dir_trigger
-  2) 否则：从 trigger_context.trigger_flags 中做方向过滤并选 1 个作为 dir_trigger：
+  2) 否则：从 trigger_context.trigger_flags 过滤并选 1 个：
      - planned_dir=LONG  => 仅保留包含 "_BULL" 或 "_LONG" 的触发器
      - planned_dir=SHORT => 仅保留包含 "_BEAR" 或 "_SHORT" 的触发器
-     - 过滤后为空：dir_trigger := NONE；并置 window:=no_trigger_for_dir
-- 若 window=in 且 dir_trigger=NONE：
-  - has_position=0：Gate4=FAIL fail=>SETUP; reason=NO_TRIGGER_FOR_DIR（并输出 NextTrigger + PendingSetup，避免“看起来有结构但触发器永远对不上”）
-  - has_position=1：仅 DIAG（不影响持仓管理）
-- Gate4/NextTrigger 只引用 dir_trigger；禁止罗列 trigger_flags 列表；禁止“根据 K 线/指标脑补一个未给出的触发器”。
+     - planned_dir∈{NEUTRAL,UNKNOWN} => dir_trigger := NONE
+     - 过滤后为空：dir_trigger := NONE
+- dir_trigger=NONE 的处理（P0）：
+  - 若 has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS：
+      -> Gate4=FAIL fail=>SETUP reason=NO_TRIGGER_FOR_DIR；必须输出 NextTrigger + PendingSetup（DEFER 机制）
+  - 否则：Gate4=FAIL fail=>SETUP reason=NO_TRIGGER_FOR_DIR（无需 PendingSetup）
+  - 注：若 Gate2 已按“DIR_CONFLICT_NO_FLIP”置 planned_dir=NEUTRAL，则本轮应在 Gate2 结束（Gate2=FAIL），不得把冲突留给 Gate4。
 
-【P0｜步骤 3：pattern（触发器→形态分类）映射（taxonomy 防漂移）】
-- pattern 只允许取值：{none, EDGE, BO_RETEST, MOMENTUM_BREAK}（case-sensitive）。
-- 若 dir_trigger=NONE：pattern=none
-- 否则按关键字映射（仅取其一，优先级自上而下）：
-  1) 若 dir_trigger 含 "BO_RETEST" 或 "RETEST" 或 "PULLBACK"：pattern=BO_RETEST
-  2) 若 dir_trigger 含 "MOMO" 或 "MOM" 或 "BREAK" 或 "IBB"：pattern=MOMENTUM_BREAK
-  3) 其余同向触发器：pattern=EDGE
-
-【P0｜步骤 4：触发质量 tiering（q/阈值来自输入，不得模板硬编码抬高门槛）】
-- 定义：
-  q := trigger_context.trigger_quality
-  quality_min := trigger_context.quality_min
-  borderline_min := trigger_context.borderline_min
-- 判定：
-  1) 若 pattern=none：Gate4=FAIL fail=>SETUP; reason=NO_TRIGGER
-  2) 若 q < borderline_min：Gate4=FAIL fail=>SETUP; tier=low; reason=LOW_Q
-  3) 若 borderline_min ≤ q < quality_min：Gate4=PASS; tier=borderline; downgrade=on（必须降级路径）
-  4) 若 q ≥ quality_min：Gate4=PASS; tier=good; downgrade=off（但仍可能因市场状态/追价保护被强制 LIMIT 或 downgrade=on）
-
-【P0｜步骤 5：冻结执行参数（抓住盈利机会的关键：避免追价、允许回踩、RR 门槛随市场状态自适应）】
-- 统一默认（P0）：
-  order_type=LIMIT（默认禁止追价）；trade_style=LTF_scalp；risk_down=1.0；rr_min=0.50（仅兜底）
-- 市场状态归一（沿用模板已有 market_regime_norm 口径；缺失视为 mixed）：
-  - range：优先吃“区间边缘 + 回踩确认”机会，放宽 rr_min，但强制降级与快出
-  - mixed：谨慎；允许 LTF_scalp；rr_min 稍放宽以减少“好机会差一点RR就丢”
-  - trend：顺势优先；允许在条件满足时升级 HTF_swing
-- rr_min 规则（P0｜单一口径｜Gate5 只读 Gate4 rr_min）：
-  * market_regime_norm=range：rr_min=0.35；downgrade=on；trade_style=LTF_scalp；order_type=LIMIT；risk_down ≥ 0.5
-  * market_regime_norm=mixed：
-      - pattern∈{EDGE,BO_RETEST}：rr_min=0.45
-      - pattern=MOMENTUM_BREAK：rr_min=0.50
-      - 默认 downgrade=on（除非 tier=good 且 Gate3 显示结构空间充足）
-  * market_regime_norm=trend：
-      - 默认 rr_min=0.50（EDGE/BO_RETEST）
-      - pattern=MOMENTUM_BREAK：rr_min=0.60（避免追涨杀跌）
-- 追价保护（P0｜减少“追进就回撤”的假机会）：
-  - 定义 chase_max = max(0.30*ATR14(5m), last_price*0.0010)（若 ATR14 缺失则用 last_price*0.0010）
+【P0｜Step 3：SETUP FREEZE（冻结执行参数）】
+- q（触发质量）：
+  - 优先用 trigger_quality[trigger_primary]；若缺失则取 0
+- tier（严格分层，P0）：
+  - strict_min := trigger_context.strict_min（缺失则 0.75）
+  - borderline_min := trigger_context.borderline_min（缺失则 0.60）
+  - 若 q ≥ strict_min      -> tier=good
+  - 否则若 q ≥ borderline_min -> tier=borderline（必须 downgrade=on）
+  - 否则 -> Gate4=FAIL fail=>SETUP reason=LOW_Q（不进入 Gate5）
+- pattern（短码）：
+  - 取 trigger_context.trigger_pattern_hint（若存在），否则按 trigger_primary 前缀推导：
+    EDGE_* -> EDGE；SFP_* -> SFP；ENGULF_* -> ENGULF；MOM_BREAK_* -> MOMENTUM_BREAK；BO_* -> BO_RETEST；未知 -> none
+- Gate2.mode（可选）：
+  - 若 Gate2 输出 mode=COUNTERTREND：强制 trade_style=LTF_scalp；downgrade=on；order_type=LIMIT；risk_down≤0.5；rr_min=0.35~0.40
+  - 否则（TREND 默认为顺势）：按 tier 与 regime 决定 trade_style 与 rr_min（见下）
+- trade_style / rr_min（P0）：
+  - 若 tier=good 且 market_regime_norm=trend 且 Gate3 提供 ≥1 个 HTF 锚点（1h/4h）且未触发 HTF_BARRIER_NEAR：
+      * pattern∈{BO_RETEST,EDGE} -> trade_style=HTF_swing；rr_min=0.55（默认 LIMIT）
+      * pattern=MOMENTUM_BREAK  -> trade_style=LTF_scalp（除非 Gate5 能给出 Real_R_eval≥2.0 且 R_clean_eval≥1.5）
+  - 其余情况 -> trade_style=LTF_scalp；rr_min=0.45
+- downgrade（P0）：
+  - tier=borderline => downgrade=on（强制）；否则 downgrade=off
+- order_type（P0）：
+  - 缺省 LIMIT
+  - 仅当 trade_style=LTF_scalp 且 pattern=MOMENTUM_BREAK 且 tier=good 且未触发 chase 风险时，允许 STOP_LIMIT；默认仍优先 LIMIT
+- chase 风险（若输入可用，P0）：
   - 若 trigger_key_level 存在且 |last_price - trigger_key_level| > chase_max：
-      -> 强制 order_type=LIMIT（即使 tier=good 也不得 MARKET）；并在 NextTrigger 写“need_retest key”
-- HTF_swing 允许条件（P0｜避免把 swing 当 scalp、也避免漏掉真正顺势大波段）：
-  - 仅当 market_regime_norm=trend 且 tier=good 且 Gate3 提供 ≥1 个 HTF 锚点（1h/4h）且 Gate3 未触发 HTF_BARRIER_NEAR
-  - 且 pattern∈{EDGE,BO_RETEST}（MOMENTUM_BREAK 默认仍走 LTF_scalp；除非你能在 Gate5 给出 Real_R_eval≥2.0 且 R_clean_eval≥1.5）
-  - 满足则：trade_style=HTF_swing；order_type=LIMIT；downgrade=off（若 q 仅 borderline 则 downgrade=on 且禁止 HTF_swing）
-- Borderline 降级硬约束（P0｜必须执行）：
-  - 若 tier=borderline：必须 downgrade=on；trade_style 必须为 LTF_scalp；order_type=LIMIT；risk_down ≥ 0.5；
-    setup_grade 最高 "B"；edge_score 必须 ≥ 0.35；并要求“TP1 快速兑现”：Gate5 必须输出 TP1 close_pct ≥0.5 的计划（否则视为不满足，回退 wait）。
+      -> 强制 order_type=LIMIT；并在 NextTrigger 写“need_retest key”
+- risk_down（P0）：
+  - tier=good 且 downgrade=off -> risk_down=1.0（除非后端已给风险降级建议）
+  - tier=borderline（downgrade=on）-> risk_down≥0.5
+  - mode=COUNTERTREND -> risk_down≤0.5（与上条取更严格）
 
-【P0｜DEFER 机制（机会保留：把“时机未到/需回踩”变成可执行下一步，而不是一次性丢弃）】
-- 触发条件：has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS 且 Gate4 以 fail=>TIME 或 NO_TRIGGER_FOR_DIR 未通过
+【P0｜DEFER 机制（机会保留：把“时机未到/需回踩”变成下一步，而不是一次性丢弃）】
+- 触发条件：has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS 且 Gate4 以 fail=>TIME/SETUP 未通过（OUT_OF_WINDOW/DEFER/NO_TRIGGER_FOR_DIR/LOW_Q）
 - 必须输出（均 1 行，≤110 字符，不含具体 SL/TP 数字）：
   1) NextTrigger: need_window=in; need_trig=<dir_trigger候选>; price_cond=<retest key/Anchor1>; expire_bars=<1~3>
-  2) PendingSetup: plan=<LONG/SHORT>; key=<Anchor1/trigger_key_level>; invalidation=<结构失效短语>; ttl=<1~3 bars>
-- 说明：DEFER 只保留机会；若后续 1~3 根 5m 内未满足 NextTrigger，则该 setup 作废（后端应清理）。
+  2) PendingSetup: plan=<planned_dir>; key=<Anchor1/关键区>; invalidation=<一句话>; ttl=<1~3 bars>
 
-（Gate4 结束；Gate5 仅沿用 Gate4 冻结参数，不得回头改 trade_style/order_type/risk_down/rr_min。）
+【Gate4 输出行模板（强约束，便于日志检索）】
+- PASS：
+  Gate4(TIMING/SETUP): PASS window=in; trigger=<dir_trigger>; pattern=<...>; tier=<good|borderline>; downgrade=<on|off>;
+  order_type=<LIMIT|STOP_LIMIT>; trade_style=<LTF_scalp|HTF_swing>; risk_down=<0.1~1.0>; rr_min=<0.35~0.90>; mode=<TREND|COUNTERTREND>
+- FAIL（SETUP/TIME/xF）同理，必须含 window + trigger（NONE）+ reason。
 
 【SSOT｜Gate5(EXEC/RR) 唯一流程：先生成可执行计划 -> 统一算式 -> 成本口径 -> 选最优候选 -> 裁决 PASS/FAIL】
        A) 生成“可执行计划”（必须给出 entry/sl/tp1；不得用省略号代替数字）
@@ -469,6 +495,9 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
            - edge_score ≥ 0.7
            - 且 Gate2.block_entry=0（fake_* / spoofing_risk 等硬红线已由后端折叠进 block_entry；Gate4 不再复判）
       - 满足降级通道才允许继续走 Gate5 计算 RR；否则本轮禁止新开仓。
+【盘中突发模式（INTRABAR）已弃用】
+- 本系统仅在 5m 收盘事件触发模型决策；不支持任何 INTRABAR_ENABLE / 小周期收盘的“盘中应急开仓”逻辑。
+- 若输入中仍携带相关字段，模型必须忽略，不得据此开新仓或改变 Gate 口径。
 【硬约束：关键结构数据缺失时禁止“假装有结构”】
   - 以下结构模块属于“关键依托”，用于生成 struct_state_* 与 R_clean 等核心决策：
     * FVG数据、多时间框架 供需区数据（demand_zones / supply_zones）；
