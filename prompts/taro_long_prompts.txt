@@ -26,21 +26,21 @@
   - 否则（默认 PROD_LITE）：一旦上游 Gate 已锁定 action，下游 Gate 只允许输出固定占位 DIAG(EVAL_ONLY)（reason=SKIP_UPSTREAM_FAIL），不得展开结构锚点/触发器/RR/价位推导，以避免回溯导致的延迟。
 【Gate 架构（强制｜去重精简｜职责边界清晰）】
 - 本版本将“方向裁决”独立为 Gate2(DIR)，避免方向层被订单流/触发窗口反复改写；
-  同时将“订单流/意图红线 + 时机窗口 + 触发器 + 执行冻结”合并为 Gate4(TIMING/SETUP)，减少 Gate 堆叠导致的系统性漏开。
+  同时将“时机窗口 + 触发器 + 执行冻结”合并为 Gate4(TIMING/SETUP)，并将订单流/环境红线否决后端化（以 Gate2.block_entry 呈现），减少 Gate 堆叠导致的系统性漏开与口径冲突。
 - 全链路开仓评估顺序（严格，不得颠倒）：
   Gate1(RISK) → Gate2(DIR) → Gate3(STRUCTURE) → Gate4(TIMING/SETUP) → Gate5(EXEC/RR)
 - 职责边界（P0｜必须执行｜禁止跨 Gate｜避免重复否决）：
   Gate1(RISK)：只做账户/杠杆/保证金/风险预算硬约束（能不能参与）。不得讨论方向/结构/触发器/形态；不得输出与方向相关的结论。
-  Gate2(DIR)：只做方向裁决与开仓资格总闸（planned_dir/block_entry/reason）。可引用 HTF 趋势/结构位置/订单流偏置作为投票证据，但：不得执行订单流红线否决；不得引用 5m trigger/window 作为定向依据；不计算 RR。
+  Gate2(DIR)：只做方向裁决与开仓资格总闸（planned_dir/block_entry/reason）。可引用 HTF 趋势/结构位置/订单流偏置作为投票证据，但：订单流/环境红线否决由后端预裁决并以 block_entry 输入；模板内不得重新判红线；不得引用 5m trigger/window 作为定向依据；不计算 RR。
   Gate3(STRUCTURE)：只评估 planned_dir 方向上的结构优势（edge+space），并给出 ≥2 个结构锚点（Anchor1/Anchor2）、invalidation 与最近反向障碍距离。不得引用 trigger_flags/window/of_redline；不冻结执行参数。
-  Gate4(TIMING/SETUP)：只回答“此刻是否允许决策/执行”（5m_close、window、dir_trigger）+ “订单流/意图是否触发硬红线” + “执行冻结”（pattern/q/tier/downgrade、order_type、risk_down、trade_style、rr_min）。不得重新裁方向；不得新增结构锚点；不得计算成本后 RR。
+    Gate4(TIMING/SETUP)：只回答“此刻是否允许决策/执行”（window_state、dir_trigger）+ “执行冻结”（pattern/q/tier→downgrade、order_type、risk_down、trade_style、rr_min）。环境/订单流/意图红线否决已后端化（Gate2.block_entry），Gate4 严禁引用任何订单流字段、严禁 fail=>OF。不得重新裁方向；不得新增结构锚点；不得计算成本后 RR。
   Gate5(EXEC/RR)：只做可执行性与成本后 RR 裁决（生成 entry/sl/tp1 并计算 R_clean_eval/门槛）。不得回头改变 Gate4 冻结的 trade_style/order_type/risk_down。
 【P0｜Gate2 Direction SSOT（方向裁决单一真相源｜仅做方向｜先方向、后结构）】
 - planned_dir：本轮“唯一计划方向”，由后端方向裁决层输出 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}
 - block_entry：本轮“禁新开仓”开关（1=禁止新开仓；0=允许进入 Gate3~Gate5 审查）
 - Gate2 的目标：
   1) 在不依赖 5m Trigger 的前提下，确定本轮“只评估哪个方向”（避免先触发后裁方向的回溯矛盾）；
-  2) 允许参考订单流偏置作为“方向证据”（仅加票/减票），但订单流/意图硬红线统一在 Gate4 执行（一票否决）。
+  2) 允许参考订单流偏置作为“方向证据”（仅加票/减票），但订单流/环境/意图红线否决由后端裁决并通过 block_entry 输入；模板内不再使用 Gate4 fail=>OF。
 - 缺省规则（P0｜必须执行）：
   a) 若输入缺失 planned_dir 或为空：视为 planned_dir=UNKNOWN；
   b) 若输入缺失 block_entry 或为空：
@@ -82,95 +82,8 @@ Gate1）账户与风险门槛（Account & Risk Gate｜Gate1(RISK)）
        * MarginUsed ≥ 95%，或
        * 单笔风险 > risk_per_trade_pct（或超过当前允许的降级比例），action 只能为 "wait" / "close"，禁止新开仓或加仓。
      - 若当前 symbol 已有持仓且处于高风险状态（例如：R_unrealized＜-1R 且 micro_bias 反向），应优先考虑止损或者减仓，而不是在同一方向继续加码。
-   Gate4-0）订单流 / 市场状态门槛（Order Flow & Regime｜作为 Gate4(TIMING/SETUP) 子模块0）
-    - 先检查 `订单流分析` 与 `盘口结构_v2`，这一层拥有最高**否决权**：
-       【P0｜订单流可用性分层（OF_MODE）｜减少漏开：缺失不必然熔断，但红线仍一票否决｜多空对称】
-- 先判“订单流是否可用”，并产出 of_mode（仅写在 Gate4 行中，不新增 JSON 字段）：
-  of_mode ∈ {OF_OK, OF_WEAK, OF_NA}
-- 判定条件：
-  a) 订单流分析.数据质量.status != "正常"（例如 "数据过期"）
-  b) 订单流分析.数据质量.overall_score < 0.60
-  c) 订单流分析.本周期博弈_5m.data_quality < 0.50 或 candle_intent="data_insufficient"
-  d) 盘口结构_v2 明显缺失态：imbalance_trend="insufficient_data" 或 liquidity_score<=0 或 ask_pressure=0 且 bid_pressure=0
-  - 若 (a|b|c|d) 任一成立：of_mode=OF_NA
-  - 若 status="正常" 且 overall_score∈[0.60,0.75) 或 data_quality∈[0.50,0.65)：of_mode=OF_WEAK
-  - 否则：of_mode=OF_OK
-- 写法硬约束（P0）：
-  * 当 of_mode != OF_OK：bias 只能写 unknown；禁止引用“宏观资金趋势/trend_alignment/pressure”等做开仓依据；只允许把订单流作为“不可用/弱可用”状态标记；
-  * 当 of_mode = OF_OK：可输出 bias=bull/bear/neutral；允许与 planned_dir 冲突。若冲突：必须触发降级/更严格执行（LIMIT-only、等待回踩、风险缩减），但不得因此改写 planned_dir。
-- Gate4 输出裁决（OF/Intent）（P0｜减少漏开版本）:
-  * 若触发红线（见下方 fake_pump/fake_dump/retail_driven 或 spoofing_risk>0.8 等）：
-    -> Gate4(TIMING/SETUP)=FAIL fail=>OF；of_mode=<...>; of_redline=<...>（最高否决权保留）
-  * 否则：
-    -> Gate4(TIMING/SETUP)=PASS；并在 Gate4 行写：of_mode=<OF_OK/OF_WEAK/OF_NA>; of_redline=NONE; bias=<unknown|bull|bear|neutral>
-- OF_WEAK / OF_NA 的“窄口通行”规则（P0｜用于减少漏开；不降低风控红线）：
-  * 仅当 has_position=0 时允许尝试新开仓；has_position=1 仍仅允许 hold/close（严禁 open_* 与 wait）。
-  * 必须同时满足（缺一不可）：
-    1) Gate1(RISK)=PASS（未触发 margin/risk 熔断）    2) Gate2(DIR)=PASS 且 planned_dir ∈ {LONG,SHORT} 且 block_entry=0
-    3) Gate3(STRUCTURE)=PASS 且包含 HTF Anchor（Anchor1/2 至少一个来自 1h 或 4h；若无则只能降级为 LTF_scalp，且必须写 downgrade=on）
-    4) Gate4(TIMING/SETUP)=PASS：window=in 且 trig=dir_trigger!=NONE；tier=strict（若 tier=borderline 仅允许 LTF_scalp 且 downgrade=on）；并冻结 order_type=LIMIT（严禁 MARKET/追价；允许“等待回踩”路径）
-    5) Gate5(EXEC/RR)=PASS：R_clean_eval ≥ rr_min；否则输出 DEFER_LIMIT（见 Gate5 规则），action=wait
-* 若上述任一项不满足：has_position=0 -> action="wait"；并输出 NextTrigger（保留机会），不得强行 open_*。
-- clearOF（恢复到 OF_OK 的条件）：status=正常 且 overall_score>=0.75 且 data_quality>=0.65 且盘口不为 insufficient_data
-* 若 candle_intent ∈ {fake_pump, fake_dump, retail_driven}：
-         视为“环境不可信”，禁止新开仓；
-         has_position=0 -> action="wait"；
-         has_position=1 -> 仅允许 action ∈ {"hold","close"}（仅管理既有仓位）。
-       * 若 candle_intent ∈ {smart_money_distribution, smart_money_accumulation, smart_money_absorption}：
-         视为“Regime Flags（聪明钱状态标记）”，不得一票否决；
-         仅用于“方向偏置 + 开仓门槛调整”，必须继续走完 Gate2~Gate5（按下方【P0-Intent 分类澄清】执行）。
-       * 若 盘口结构_v2.spoofing_risk > 0.8：
-         视为盘口高度污染，禁止新开仓；
-         has_position=0 -> action="wait"；
-         has_position=1 -> 仅允许 action ∈ {"hold","close"}。
-       * 若 宏观资金趋势.trend_alignment 与 planned_dir 明显相反，
-         且你无法在 reasoning 中给出有说服力的反例（例如：HTF 顶/底部结构 + exhaustion）默认禁止新开仓；
-         has_position=0 -> action="wait"；
-         has_position=1 -> 仅允许 action ∈ {"hold","close"}（优先考虑减仓/止损/退出，而非观望式 wait）。
-     - 这一层回答的问题是：“现在这个环境，值得在这个方向上参与博弈吗？”
-       如果答案是否定的，后面的结构 / RSI 再漂亮也只能 wait。
-     【P0-divergent_mixed 降级规则｜不再一票否决｜多空对称】
-       - 定义：trend_alignment=divergent_mixed 表示“订单流方向不确定/混杂”，属于 Soft Flag（降级项），不是 Hard Red Line。
-       - 执行口径（必须按此执行）：
-         1) 仅因 divergent_mixed 不得直接判 Gate1=FAIL；
-         2) 但必须触发“降级约束”（否则等同于否决新开仓）：
-            a) 新开仓仅允许 LTF_scalp；HTF_swing 一律视为不满足（默认 wait）；
-            b) 必须风险降级：risk_down ≥ 0.5（在 GateTrace/Exception 中写明），不得满仓/满风险；
-            c) 必须强化确认（满足其一）：
-               - 触发器质量更高：trigger_quality ≥ max(borderline_min + 0.10, 0.30) 且 vol_ratio ≥ 1.2；
-               - 或者处于 VA 边缘的 Range MR（见【P0-Range MR 分支】），且触发器为 SFP/ENGULF；
-            d) 不得与任何 Gate1 硬红线叠加：若同时出现 spoofing_risk>0.8、或明显反向强意图且无法给出 HTF exhaustion 反例，则按原规则禁止新开仓（has_position=0→wait）。
-         3) 写法要求：
-            - Gate4(TIMING/SETUP) 行若为 divergent_mixed：必须写 “DIAG/SoftFlag: divergent_mixed; downgrade=on”
-            - 若仍决定开仓（仅 LTF_scalp 允许）：必须在 GateTrace 后追加：
-              Exception: divergent_mixed_downgrade; risk_down=0.5; need_confirm=<...>; invalidation=<...>
-    【P0-Intent 分类澄清｜多空对称｜防止误判一票否决】
-    将 candle_intent 分为三类（必须按此执行）：
-    A) Hard Red Lines（硬红线｜一票否决｜仅管理已有仓位）
-    - fake_pump / fake_dump / retail_driven
-    - spoofing_risk > 0.8：视为盘口高度污染
-    - 结论：has_position=0 -> action="wait"；has_position=1 -> 仅允许 "hold"/"close"（严禁 open_long/open_short）
-    B) Smart-Money Regime Flags（聪明钱状态｜不是红线｜不得一票否决）
-    - smart_money_distribution / smart_money_accumulation / smart_money_absorption
-    - 这些只用于“方向偏置 + 提升/降低开仓门槛”，不得直接把 action 设为 wait
-    - 仍必须继续走完 Gate2~Gate5，由 struct_state_* + 5m Trigger + R_clean 决定是否能开仓
-    偏置规则（LONG/SHORT 对称）：
-    1) distribution：
-    - 优先做空（distribution）：struct_state_short ∈ {SHORT_FAVORABLE} 时优先评估 open_short；
-      若 trend_alignment=divergent_mixed：不得直接否决，必须“降级而非熔断”：
-        * setup_grade 至少降 1 档（A→B，B→C）
-        * order_type=LIMIT（禁止追价）
-        * 风险降级：position_risk_pct *= 0.5（或 qty *= 0.5）
-        * 需要更强触发质量：trigger_quality ≥ 0.30 且 pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}
-      若 trend_alignment≠divergent_mixed：按常规门槛执行。
-    - 做多更苛刻：只有 struct_state_long=LONG_FAVORABLE 且价格脱离关键 supply/VAH 压制并出现 5m 多头 Trigger 才允许 open_long，否则默认 wait
-    2) accumulation：
-    - 优先做多（对称于 distribution）：open_long 条件放宽到常规门槛；open_short 条件更苛刻
-    3) absorption：
-    - 解释为“吸收/承接更可能突破”，默认偏向 BO_RETEST / MOMENTUM_BREAK 路径
-    - 若要做反转（EDGE-Rejection），必须额外满足：5m 出现 SFP 或 Engulfing 且结构位置在供需边缘，否则按突破思路处理或 wait
-    - 即使触发“追涨/跟庄/轧空授权”，也不得在 fail=>OF / fail=>RISK 场景下开新仓
-  Gate3）结构格局门槛（Structural Context Gate｜Gate3(STRUCTURE)）
+
+Gate3）结构格局门槛（Structural Context Gate｜Gate3(STRUCTURE)）
      - 这一层决定“做多 / 做空这个方向本身有没有 edge”，是开仓方向的**主要正向因子**。
      - 必须先用 供需区 / SR / VPVR / FIB / 通道 / 道氏 / SuperTrend 等回答两个问题：
        a. 当前价格所处的是：
@@ -208,214 +121,112 @@ Gate1）账户与风险门槛（Account & Risk Gate｜Gate1(RISK)）
   4) 反向贴脸障碍硬否决（减少“白白算到 Gate5 才失败”）：
      - planned_dir=LONG 且 1h/4h 明确 SZ/强阻力/VAH 压制距离过近（结构空间不足）→ Gate3=FAIL reason=HTF_BARRIER_NEAR；
      - planned_dir=SHORT 且 1h/4h 明确 DZ/强支撑/VAL 承接距离过近 → Gate3=FAIL reason=HTF_BARRIER_NEAR。
-Gate4-A）时机与数据完整性门槛（Timing & Data-Integrity｜作为 Gate4(TIMING/SETUP) 子模块A）
-- 说明：原 Gate4(TIMING/SETUP) 与 Gate4(TIMING/SETUP) 合并为 Gate4(TIMING/SETUP)；本章节仍分 A(时机/窗口/触发器) 与 B(执行方式冻结) 两段描述，但 GateTrace 只能输出 1 行 Gate4。
-       - 以 5m 收盘事件为全链路时间锚点：trigger_context.is_kline_closed 必须为 true。
-         * 若为 false 且未显式启用 INTRABAR_ENABLE（且满足其生效条件），则本轮禁止新开仓（open_long/open_short），action 只能为 "wait"/"hold"/"close"。
-       【P0｜Token-Lite 5m 收盘别名映射（Candle Alias Map｜不改规则，仅改数据来源）】
-       - 为节省 token，本版本允许后端不再提供「基础指标/MarketSnapshot」中的 ohlc_last_closed / ohlc_prev_closed（所有TF均可省略）。
-       - 模板后续所有出现的下列引用，统一改为“从 trigger_context 取值”的别名（Single Source）：
-         * ohlc_last_closed.x            := trigger_context.is_kline_closed
-         * ohlc_last_closed.close_time   := trigger_context.trigger_bar_close_time_ms
-         * ohlc_last_closed.close        := trigger_context.trigger_bar_close_price（优先）；若不存在则用 trigger_context.trigger_bar_close_price5m
-         * last_price / price            := trigger_context.last_price                      （新增，必填）
-       - 解释约束：
-         1) 任何章节若写“MarketSnapshot.5m 缺失则不可验证”，在 Token-Lite 模式下等价于：
-            “trigger_context 中上述 4 个字段任一缺失/为空/矛盾则不可验证”；
-         2) 不得因为 MarketSnapshot/基础指标里没有 ohlc 字段就判定缺失；只以 trigger_context 为准。
-       - 数据完整性熔断（fail=>xF）：
-         * 若关键字段缺失/为空/矛盾（例如：trigger_context.is_kline_closed!=true、trigger_bar_close_time_ms 缺失、trigger_bar_close_price 缺失、last_price 缺失、结构锚点价位缺失、订单流关键枚举缺失），则 Gate4=FAIL fail=>xF（表示“禁开新仓”）；顶层 action/derived_action 一律交由 actionDerivation 按 has_position 分支导出：has_position=0 -> "wait"；has_position=1 -> "hold"/"close"（严禁输出 "wait"；严禁 open_long/open_short）。
-       - 触发窗口（Trigger Window｜由 trigger_context.trigger_flags 定义，禁止模型“看K线猜触发器”）：
-         * 若 trigger_context 缺失，或 trigger_flags 为空/不存在：window=no_trigger ⇒ Gate4=FAIL fail=>TIME（仅禁新开仓；仍需 DIAG 复盘与 NextTrigger）。
-         * 若 trigger_flags 非空且 is_kline_closed=true：window=in ⇒ Gate4 可 PASS（是否开仓继续交由 Gate5）。
-         * 若 is_kline_closed=false：除非明确启用 INTRABAR_ENABLE 且满足其生效条件，否则 window=intrabar_forbidden ⇒ Gate4=FAIL fail=>TIME。
-         * Gate4/NextTrigger 只引用 dir_trigger（方向过滤后的最终触发器）；禁止强制 trigger_primary；禁止罗列形态细节与多条候选。
-        【P0｜Gate4 方向过滤触发器（Trigger Direction Filter｜SSOT）】
-         - 目标：在“已给定 planned_dir”的前提下，仅允许引用同向触发器，并产出本轮唯一触发器口径 dir_trigger（供 Gate4/NextTrigger 使用）。
-         - 输入优先级（从上到下，存在则直接使用）：
-           1) 若 trigger_context.dir_trigger 已提供且非空：dir_trigger := trigger_context.dir_trigger（后端已方向过滤的最终触发器）。
-           2) 否则：从 trigger_context.trigger_flags 中做方向过滤：
-              * planned_dir=LONG  => 仅保留包含 "_BULL" 或 "LONG" 的触发器
-              * planned_dir=SHORT => 仅保留包含 "_BEAR" 或 "SHORT" 的触发器
-              * 过滤结果记为 dir_triggers（0..N）。
-         - dir_trigger 选择（当未提供 trigger_context.dir_trigger 时执行）：
-           * 若 trigger_primary 与 planned_dir 同向：dir_trigger := trigger_primary
-           * 否则：dir_trigger := dir_triggers 中任意 1 项（只选 1 个；优先 SFP/ENGULF/BO_RETEST/IBB/MOMO 等更“强确认”的触发器）
-           * 若 dir_triggers 为空：dir_trigger := NONE；并将 window 视为 no_trigger_for_dir；Gate4=FAIL fail=>TIME; reason=NO_TRIGGER_FOR_DIR（仅禁新开仓）。
-         - Gate4 行必须输出 trig=<dir_trigger|NONE>（仅 1 项）；Gate4/NextTrigger 只允许引用 dir_trigger。
-【P0｜Gate4=FAIL（TIME 类）时的 DEFER 机制｜减少漏开（延后而非放弃）】
-- 适用：has_position=0 且 Gate3(STRUCTURE)=PASS 且 Gate2 block_entry=0，但 Gate4 因下列原因未通过：
-  window ∈ {no_trigger, no_trigger_for_dir, out}（均属于“时机未到/触发未出”）
-- 处理（P0）：
-  1) 顶层 action 必须为 "wait"（不是否定方向，只是延后执行）；严禁 open_*；
-  2) Gate4 行必须保留 fail=>TIME，并用 reason=DEFER（短码可用：DEFER_NO_TRIGGER / DEFER_OUT）；
-  3) 必须输出 NextTrigger（1 行，≤110 字符，不含具体 SL/TP 价位）：
-     NextTrigger: need_window=in; need_trig=<dir_trigger候选>; price_cond=<retest Anchor1/关键位>; expire_bars=<1~3>
-  4) 必须输出 PendingSetup（供后端跨 bar 续航；1 行，≤110 字符，不含具体价位）：
-     PendingSetup: plan=<LONG/SHORT>; key=<Anchor1类型/关键位>; invalidation=<结构失效描述>; ttl=<1~3 bars>
-- 说明：DEFER 只保留机会窗口；若后续 1~3 根 5m 内未满足 NextTrigger，则该 setup 作废（后端应清理）。
-         * GateTrace 的 Gate4 行必须“原样映射”window_state：window=<trigger_context.window_state>；若 window!=in（含 no_trigger/no_trigger_for_dir/intrabar_forbidden/out/unknown）则 Gate4=FAIL fail=>TIME；严禁把 no_trigger 写成 in。
-       - 本层回答：“现在这个时点/这份数据，允许做决策并允许执行吗？”
-    Gate4-B）开仓条件与执行方式门槛（Setup｜作为 Gate4(TIMING/SETUP) 子模块B）
-        【P0｜Gate4 职责边界（P0｜必须执行｜防止与 Gate2/3 重叠）】
-- Gate4 只负责三件事：
-  1) TIMING：验证 5m_close 与 window_state；选择/输出唯一 dir_trigger（同向）；若 window!=in 或 dir_trigger=NONE → Gate4=FAIL fail=>TIME（走 DEFER 机制）。
-  2) OF/INTENT：评估订单流可用性（of_mode）与硬红线（of_redline）；命中红线 → Gate4=FAIL fail=>OF（不得以降级替代）。
-  3) SETUP 冻结：将 dir_trigger 映射为 pattern（EDGE/BO_RETEST/MOMENTUM_BREAK），并基于 q/tier 冻结执行约束（downgrade、order_type、risk_down、trade_style、rr_min）。
-- Gate4 严禁：重新裁方向（方向只归 Gate2）；新增/替换结构锚点（结构只归 Gate3）；计算或裁决成本后 RR（只归 Gate5）。
-- Gate4(GateTrace) 推荐单行模板（必须单行，不拆分）：
-  Gate4(TIMING/SETUP): <PASS/FAIL/DIAG> fail=><OF|TIME|SETUP|xF>?; reason=<short_code>; window=<in/out/...>; trigger=<dir_trigger|NONE>; pattern=<EDGE|MOMENTUM_BREAK|BO_RETEST|none>; q=<0.00~1.00>; tier=<strict|borderline|none>; downgrade=<on|off>; order_type=<LIMIT|MARKET|WAIT_RETEST>; risk_down=<0.1~1.0>; trade_style=<LTF_scalp|HTF_swing>; rr_min=<0.35~0.90>
-       - TriggerFlags 选择制（P0｜必须遵守｜降低 token + 提升可复现性）：
-         * 触发器识别仅允许使用 trigger_context.trigger_flags / trigger_primary / trigger_quality / dir_triggers / dir_trigger；
-           严禁在 reasoning 中“根据K线/指标再推断一个未给出的触发器/形态”。
-         * 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，并在 Gate4 行写 trigger=NONE。
-         * 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须选择 dir_trigger 作为 trigger（dir_trigger 由 Gate4-A 产出）。若 dir_trigger=NONE：Gate4=FAIL fail=>SETUP; reason=NO_TRIGGER_FOR_DIR; pattern=none; trigger=NONE。
-           并按以下映射输出 pattern（case-sensitive；仅取其一）：
-           * pattern 输出硬约束（P0｜防止 taxonomy 漂移）：
-             - pattern 只允许取值：{none, EDGE, MOMENTUM_BREAK, BO_RETEST}（case-sensitive）。
-             - 禁止把任何 trigger 名/别名当作 pattern 输出（包括：SFP、Engulf、MOM_BREAK、IBB、MOMO、ENGULF_BULL/BEAR、SFP_BULL/BEAR 等）。
-             - trigger 字段必须输出 dir_trigger（方向过滤后的最终触发器；dir_trigger 可能等于 trigger_primary，也可能是从 dir_triggers 中选出的同向替代）；若无同向触发则 trigger=NONE。
-             - pattern 不得与 trigger 同名；pattern 仅用于归类（EDGE/BO_RETEST/MOMENTUM_BREAK/none）。
-             - trigger ∈ {SFP_*}          => pattern=EDGE
-             - trigger ∈ {ENGULF_*}       => pattern=MOMENTUM_BREAK
-             - trigger ∈ {EDGE_*}         => pattern=EDGE
-             - trigger ∈ {BO_RETEST_*}    => pattern=BO_RETEST
-             - trigger ∈ {IBB_*, MOMO_*}  => pattern=MOMENTUM_BREAK   （同义别名：MOM_BREAK 视为 MOMENTUM_BREAK）
-            【P1｜pattern taxonomy SSOT（全局唯一口径）】
-            - 本段落的 pattern 枚举与映射为 SSOT。
-            - 模板其他位置若出现 {MOM_BREAK/MOMENTUM_BREAK/MOM_BREAKOUT} 等同义写法：统一视为 MOMENTUM_BREAK；输出时只能写 MOMENTUM_BREAK（禁止输出别名）。
-           补充约束：
-             - 若 trigger_flags 为空/缺失：Gate4 必须输出 pattern=none，且 trigger=NONE。
-             - 若 trigger_flags 非空：Gate4 禁止 pattern=none；必须使用 dir_trigger 作为 trigger（dir_trigger=NONE 则 Gate4=FAIL reason=NO_TRIGGER_FOR_DIR），并按上表映射 pattern。
-             - pattern=BO_RETEST 仅在 Gate2 已给出“有效突破后回踩关键位”的结构证据时允许（并说明 retest_anchor=...）；否则不得输出 BO_RETEST。
-         * Gate4 行建议短格式（避免复述形态细节）：
-           - Gate4(TIMING/SETUP): <PASS/FAIL/DIAG> ... pattern=<.>; trigger=<trigger>; q=<0~1>; key=<trigger_key_level 可选>
-               - 触发质量三档准入（Trigger Quality Tiering｜必须使用输入阈值，不得模板硬编码）：
-                 * 定义：
-                   - q = trigger_context.trigger_quality
-                   - quality_min = trigger_context.quality_min
-                   - borderline_min = trigger_context.borderline_min
-                 * 严禁模板内“私自抬高/写死” quality_min（例如把 0.55 写成 0.60，或使用 quality_min+0.05 作为默认门槛）；
-                   所有比较必须直接用输入的 quality_min / borderline_min。
-                 * 准入判定（只决定 Gate4 是否具备开仓资格；执行性交给 Gate5/D8）：
-                   1) 若 pattern=none 或 trigger=NONE：
-                      -> Gate4(TIMING/SETUP)=FAIL fail=>SETUP; reason=NO_TRIGGER（不是 DIAG）
-                   2) 若 q < borderline_min：
-                      -> Gate4(TIMING/SETUP)=FAIL fail=>SETUP; reason=LOW_Q
-                   3) 若 borderline_min ≤ q < quality_min：
-                      -> Gate4(TIMING/SETUP)=PASS（Borderline PASS｜降级可执行路径，必须开启 downgrade）
-                      -> 强制约束（否则视为不满足）：
-                         a) trade_style 必须为 LTF_scalp（HTF_swing 一律视为不满足：Gate4=FAIL）
-                         b) 必须风险降级：risk_down ≥ 0.5；order_type=LIMIT；禁止追价
-                         c) setup_grade 最高只能给到 "B"（不得 "A"）；edge_score 必须 ≥ 0.35（与 rr_min=0.35 的 LTF_scalp 降级路径对齐）
-                         d) entry_plan 必须包含 TP1 快速兑现：TP1 >= +0.5R 或最近边界；TP1 close_pct ≥ 0.5；
-                            剩余仓位必须使用更紧 stop（并禁止加仓）
-                         e) GateTrace 必须写清 tier 与阈值：
-                            tier=borderline; q=<..>; borderline_min=<..>; quality_min=<..>; downgrade=on
-                   4) 若 q ≥ quality_min：
-                      -> Gate4(TIMING/SETUP)=PASS（Strict PASS｜常规路径）
-                   - 写法硬约束（不改规则，仅降 token）：
-                     Gate4 行只输出 1 个 trigger（=dir_trigger），禁止在 Gate4 文本里展开 trigger_flags 列表或复述多条形态细节。
-                   【P0｜trade_style 冻结（Gate4->Gate5 单向传递）】
-                   - trade_style 必须在 Gate4 结束时确定并冻结（Freeze）。
-                   - Gate5(EXEC/RR) 只能沿用 Gate4 冻结后的 trade_style 来选择对应的 R_clean 门槛与例外集合；
-                     严禁在 Gate5 中“为了让 R_clean 通过/不通过”而回头改变 trade_style。
-                   - 若 Gate4 触发 Borderline PASS（tier=borderline; downgrade=on），trade_style 必须为 LTF_scalp（已在 Gate4 规则中要求），
-                     Gate5 只能按 LTF_scalp 的门槛校验。
-       - 趋势与动能（Trend & Momentum）：
-         * 综合 4h/1h、30m/15m、5m 的趋势与动能（EMA 排列、MACD、SuperTrend 等）：
-           - 若计划方向与 4h/1h、30m/15m 大体同向：顺势场景，允许按 trade_style 执行；
-           - 若仅 5m/15m 反向而 4h/1h 仍保持原趋势：只能视为 LTF_scalp 反向短打或直接 wait；禁止用 HTF_swing 的仓位逆势硬刚；
-           - 若多周期方向混乱（trend=mixed）：默认不做 HTF_swing；仅允许"LTF_scalp 窄口豁免试单"或 wait：
-      【P0-Range Mode 识别与例外 - 震荡市放宽条件】
-        * 先统一 market_regime 口径（Regime Alias Map；仅用于判断/对账，不新增 JSON 字段）：
-          - market_regime_raw := 宏观资金趋势.market_regime（缺失则视为 "mixed"）
-          - market_regime_norm :=
-              if market_regime_raw ∈ {range, trend, mixed}: market_regime_raw
-              else if market_regime_raw == "consolidation": range
-              else if market_regime_raw == "mixed_signals": mixed
-              else if market_regime_raw ∈ {"spot_led_decline","spot_led_rally"}: trend
-              else: mixed
-        * 市场状态判定（Range Mode vs Trend Mode）：
-          - Range Mode（满足任一即判定为 range）：
-            1) market_regime_norm = range
-            2) trend=mixed 且 Gate2/多周期结构位置以“价值区内”为主：pos ∈ {mid-range, POC_edge, POC_chop_zone}
-            3) 原 Range Mode 条件（满足≥2项；缺失项不计入，不当作失败）：
-               a) 多周期 pos=mid-range：15m/30m/1h 至少2个周期显示 pos=mid-range
-               b) 低波动：5m ATR_14 / current_price < 0.5%
-               c) RSI 区间：15m RSI 在 35-65 范围
-               d) 结构密集：上下1个 ATR(1h) 范围内存在≥3个 strong 结构（DZ/SZ/SR）
-               e) VPVR POC 接近：价格距离 15m VPVR POC < 0.8 * ATR(1h)
-          - Trend Mode（满足≥2项）：
-            1) market_regime_norm = trend
-            2) 多周期一致：15m/30m/1h 至少2个周期 pos=edge（同方向）
-            3) 高动能：5m MACD abs 值 > 历史均值 1.5 倍
-            4) RSI 极端：15m RSI < 30 或 > 70
-            5) 结构清晰：最近 strong DZ/SZ 距离 > 2 * ATR(1h)
-          - Mixed Mode：两者都不明确满足时的默认状态（market_regime_norm=mixed）
-        * 若判定为 Range Mode（震荡市）：
-          trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
-          Gate4 允许 PASS 的【Range Mode 宽松条件】（放宽要求，提升开仓频率）：
-          a) pattern ∈ {EDGE, MOMENTUM_BREAK, BO_RETEST} 且 trigger != NONE
-          b) 触发质量放宽（仍服从输入阈值）：q ≥ max(borderline_min, 0.30)
-          c) 必须风险降级：risk_down ≥ 0.5；order_type=LIMIT
-          强制写法：
-          - 满足 a~c：Gate4 必须 PASS（不得因为 pos=mid-range 直接 FAIL）
-          - Gate4 行显式标注：trend=mixed; market_regime=range; rr_min=0.35; downgrade=on
-          - setup_grade 自动设为 B（震荡市风险提示；禁止设为 C，避免触发全局“C 禁开仓”）
-        * 若判定为 Trend Mode 或 Mixed Mode（趋势市/混合市）：
-          trade_style 强制冻结为 LTF_scalp；downgrade=on（Gate4->Gate5 单向传递）
-          Gate4 允许 PASS 的【窄口豁免】最小条件：
-          a) pattern ∈ {EDGE, MOMENTUM_BREAK, BO_RETEST} 且 trigger != NONE（禁止 pattern=none）
-          b) 触发质量必须为 strict：q ≥ quality_min（必须使用输入阈值；不得抬高/写死）
-          c) 必须“执行侧风险降级”（不再硬依赖 risk_down 字段是否存在）：
-             - order_type=LIMIT（禁止追价）
-             - 且（若输出 entry_plan）close_pct ≥ 0.60（快速兑现，反向/不确定环境默认更保守）
-             - 若输入提供 risk_down：仍要求 risk_down ≥ 0.5；若未提供 risk_down：视为满足，但必须满足上述 LIMIT + close_pct 约束
-          d) Gate2 必须已给出明确结构锚点（Anchor1/Anchor2/关键SR/VPVR边界/FIB终点等，带价位/区间）
-             - LIMIT：挂单价必须落在锚点附近（结构允许窗口内）
-          e) rr_min 选择（Gate4 显式输出 rr_min，供 Gate5 作为唯一门槛来源）：
-             - 若 market_regime_norm=mixed：rr_min=0.50（不变）
-             - 若 market_regime_norm=trend：
-                 * pattern=EDGE：rr_min=0.50
-                 * pattern ∈ {MOMENTUM_BREAK, BO_RETEST}：rr_min=0.60
-          强制写法（防止实现漂移）：
-          方向冲突（bias_conflict）处理（修复“bias 冲突导致开仓为 0”）：
-          - 允许“边界反转试探”（不得因 bias_conflict 单独 FAIL），仅限同时满足：
-            1) pattern=EDGE 且 q ≥ quality_min（strict）
-            2) Gate2 结构必须是“方向一致的边界”：
-               - 做多：Anchor1_type 或 Anchor2_type ∈ {DZ, SR, FVG} 或（pos 含 VAL_edge）
-               - 做空：Anchor1_type 或 Anchor2_type ∈ {SZ, SR, FVG} 或（pos 含 VAH_edge）
-            3) Gate1 无硬红线（spoof ≤ 0.80 且 of_redline 不包含 INTENT_FAKE_*）
-          - 满足时：
-            * Gate4=PASS（downgrade=on 强制）
-            * rr_min 使用 Trend 规则中的 EDGE rr_min（0.50）
-            * entry_plan（若输出）强制 close_pct ≥ 0.60（试探单，先兑现降风险）
-          - 不满足上述 1~3：允许按原规则 FAIL
-          - 只要满足 a~d：Gate4 必须 PASS（不得因为 trend=mixed 直接 FAIL）
-          - Gate4 行必须显式标注：trend=<...>; market_regime=<mixed/trend>; rr_min=<按 e)>; downgrade=on
-        * has_position=0：满足则允许进入 Gate5 做 RR 最终裁决；不满足则 action="wait"
-        * has_position=1：仍按原规则仅允许 hold/close（严禁输出 wait）
-       - RSI 状态与执行方式（RSI State & Execution）：
-         * 禁止“单看某一周期 RSI 数值就一票否决或放行交易”，所有 RSI 判断必须建立在 rsi_state 上；
-         * rsi_state="NORMAL"：RSI 不构成限制，可按结构 + 趋势执行；
-         * rsi_state="TREND_OVERSOLD"/"TREND_OVERBOUGHT"：允许顺势开仓，但必须 LIMIT（回踩窗口）且禁止追价；若无合理挂单窗口则 action="wait"；
-         * rsi_state="EXHAUSTION_*"：默认禁止顺势继续开新顺势单；仅允许 wait，或在“反转结构 + 订单流吸收/背离”成立时以明显降级风险做试探（必须在 reasoning 写明降级）。
-       - 本层回答：“综合条件是否足够支持开仓？若支持，执行方式如何收敛？”
-  5）执行细节与 R 要求（Execution & R Filter）
-       - 仅当 0~4 层全部通过后，才允许把 action 输出为 open_long/open_short。
-         但只要 Gate4=PASS 且 Gate1~Gate3 未 FAIL，本轮无论最终 action=wait/hold/close，
-         Gate5 仍必须输出 1 行“可核验 RR 对账数字”，并按 has_position 分叉（开仓 RR 与持仓管理严格解耦）：
-         - has_position=0（本轮评估开新仓）：
-           必须输出 OPEN_RR_LINE（entry/sl/tp1 全套），按下述 Gate5 唯一流程生成与裁决 PASS/FAIL。
-           仅在此分支允许使用 RR_CTX_MISSING（= 无法生成任何合法 entry/sl/tp1 组合）。
-         - has_position=1（本轮仅管理既有仓位）：
-           必须输出 POS_RR_LINE（不依赖 entry_plan，不要求 entry/sl/tp1，不得引用 RR_CTX_MISSING）；
-           POS_RR_LINE 必须使用 position.entry_price / last_price / positions.stop_price / leverage（及成本参数）进行可核验对账，
-           并至少包含：roi_unrealized、R_unrealized、R_to_stop、prev_stop。
-           严禁在 has_position=1 分支使用 fail=>RR_CTX_MISSING；
-           若字段不足导致无法完整对账，改用 fail=>POS_CTX_MISSING（并注明缺失字段），但仍必须继续执行"持仓出场"可行部分。
-       【SSOT｜Gate5(EXEC/RR) 唯一流程：先生成可执行计划 -> 统一算式 -> 成本口径 -> 选最优候选 -> 裁决 PASS/FAIL】
+Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓住“可盈利窗口”，减少漏开与追价）
+- 本段替换原 Gate4-A/B 全部内容（不改变 Gate1→Gate5 总架构，不新增 JSON 字段）。
+- Gate4 只做两件事（P0｜必须执行）：
+  1) TIMING：判断“此刻是否处于可执行窗口”（window_state）并产出本轮唯一同向触发器 dir_trigger；
+  2) SETUP FREEZE：把“触发器 + 市场状态”映射为一组冻结执行参数（pattern/tier/downgrade/order_type/risk_down/trade_style/rr_min），供 Gate5 计算可执行与成本后 RR。
+- 硬禁令（P0｜必须执行）：
+  - Gate4 严禁读取/引用任何订单流/环境字段（candle_intent/spoofing_risk/of_redline/alerts/...）；环境/意图红线否决由后端折叠进 Gate2.block_entry（SSOT）。
+  - Gate4 不得重新裁方向（方向只归 Gate2）；不得新增/替换结构锚点（结构只归 Gate3）；不得计算成本后 RR（只归 Gate5）。
+  - trigger_context.is_kline_closed 仅允许作为诊断注释；不得作为 PASS/FAIL 条件。
+
+【P0｜Gate4 输入最小集合（Token-Lite 但可复核）】
+- 必需输入（任一缺失→ Gate4=FAIL fail=>xF，仅禁新开仓，仍需 NextTrigger 提示缺失项）：
+  1) trigger_context（对象存在）
+  2) trigger_context.last_price（或等价 last_price）
+  3) trigger_context.trigger_bar_close_time_ms
+  4) trigger_context.trigger_quality, trigger_context.quality_min, trigger_context.borderline_min（用于 tiering；若缺失则视为 q=0 且直接 LOW_Q）
+  5) （推荐）trigger_context.window_state；trigger_context.dir_trigger 或 trigger_context.trigger_flags（二选一，至少其一）
+- Gate4 只以 trigger_context 为 SSOT；不得因 MarketSnapshot/ohlc 缺失而判定缺失。
+
+【P0｜Gate4 单行输出模板（GateTrace 只能 1 行）】
+Gate4(TIMING/SETUP): <PASS/FAIL/DIAG> fail=><TIME|SETUP|xF>?; window=<in|out|no_trigger|no_trigger_for_dir|unknown>; trigger=<dir_trigger|NONE>; pattern=<none|EDGE|BO_RETEST|MOMENTUM_BREAK>; tier=<na|low|borderline|good>; downgrade=<on|off>; order_type=<LIMIT|MARKET>; risk_down=<0.3~1.0>; trade_style=<LTF_scalp|HTF_swing>; rr_min=<0.35~0.60>; key=<trigger_key_level 可选>
+
+【P0｜步骤 0：上游锁定动作时的 Gate4 行为（防止“下游推翻上游”）】
+- 若 has_position=1：Gate4 必须输出 DIAG(EVAL_ONLY) reason=POS_MGMT（不代表开仓许可），并保留冻结字段占位：trade_style=LTF_scalp; rr_min=0.50; order_type=LIMIT; downgrade=on; tier=na; trigger=NONE; window=unknown。
+- 若 has_position=0 且 Gate2(DIR)=FAIL 或 Gate3(STRUCTURE)=FAIL：默认输出 DIAG(EVAL_ONLY) reason=SKIP_UPSTREAM_FAIL（PROD_LITE），不得展开触发器细节；debug_full_reasoning=true 时才允许展开诊断。
+
+【P0｜步骤 1：window_state（时机窗口）判定（SSOT）】
+- window_state 优先级：
+  1) 若 trigger_context.window_state 存在：window := trigger_context.window_state（必须原样映射，不得把 no_trigger 写成 in）
+  2) 否则（window_state 缺失）：
+     - 若 trigger_context.trigger_flags 为空/缺失：window := no_trigger
+     - 若 trigger_context.trigger_flags 非空：window := in（保守允许继续；最终是否开仓由 Gate5 决定）
+- window 不在 “in”：
+  - 若 has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS：Gate4=FAIL fail=>TIME; reason=DEFER（必须输出 NextTrigger + PendingSetup；见《DEFER 机制》）
+  - 否则：Gate4=FAIL fail=>TIME; reason=OUT_OF_WINDOW（无需 PendingSetup）
+  - 注：Gate4 的 TIME 类 FAIL 只表示“时机未到/窗口不在”，不是否定方向与结构。
+
+【P0｜步骤 2：dir_trigger（同向唯一触发器）产出（SSOT）】
+- 输入优先级（从上到下，存在则直接使用）：
+  1) 若 trigger_context.dir_trigger 已提供且非空：dir_trigger := trigger_context.dir_trigger
+  2) 否则：从 trigger_context.trigger_flags 中做方向过滤并选 1 个作为 dir_trigger：
+     - planned_dir=LONG  => 仅保留包含 "_BULL" 或 "_LONG" 的触发器
+     - planned_dir=SHORT => 仅保留包含 "_BEAR" 或 "_SHORT" 的触发器
+     - 过滤后为空：dir_trigger := NONE；并置 window:=no_trigger_for_dir
+- 若 window=in 且 dir_trigger=NONE：
+  - has_position=0：Gate4=FAIL fail=>SETUP; reason=NO_TRIGGER_FOR_DIR（并输出 NextTrigger + PendingSetup，避免“看起来有结构但触发器永远对不上”）
+  - has_position=1：仅 DIAG（不影响持仓管理）
+- Gate4/NextTrigger 只引用 dir_trigger；禁止罗列 trigger_flags 列表；禁止“根据 K 线/指标脑补一个未给出的触发器”。
+
+【P0｜步骤 3：pattern（触发器→形态分类）映射（taxonomy 防漂移）】
+- pattern 只允许取值：{none, EDGE, BO_RETEST, MOMENTUM_BREAK}（case-sensitive）。
+- 若 dir_trigger=NONE：pattern=none
+- 否则按关键字映射（仅取其一，优先级自上而下）：
+  1) 若 dir_trigger 含 "BO_RETEST" 或 "RETEST" 或 "PULLBACK"：pattern=BO_RETEST
+  2) 若 dir_trigger 含 "MOMO" 或 "MOM" 或 "BREAK" 或 "IBB"：pattern=MOMENTUM_BREAK
+  3) 其余同向触发器：pattern=EDGE
+
+【P0｜步骤 4：触发质量 tiering（q/阈值来自输入，不得模板硬编码抬高门槛）】
+- 定义：
+  q := trigger_context.trigger_quality
+  quality_min := trigger_context.quality_min
+  borderline_min := trigger_context.borderline_min
+- 判定：
+  1) 若 pattern=none：Gate4=FAIL fail=>SETUP; reason=NO_TRIGGER
+  2) 若 q < borderline_min：Gate4=FAIL fail=>SETUP; tier=low; reason=LOW_Q
+  3) 若 borderline_min ≤ q < quality_min：Gate4=PASS; tier=borderline; downgrade=on（必须降级路径）
+  4) 若 q ≥ quality_min：Gate4=PASS; tier=good; downgrade=off（但仍可能因市场状态/追价保护被强制 LIMIT 或 downgrade=on）
+
+【P0｜步骤 5：冻结执行参数（抓住盈利机会的关键：避免追价、允许回踩、RR 门槛随市场状态自适应）】
+- 统一默认（P0）：
+  order_type=LIMIT（默认禁止追价）；trade_style=LTF_scalp；risk_down=1.0；rr_min=0.50（仅兜底）
+- 市场状态归一（沿用模板已有 market_regime_norm 口径；缺失视为 mixed）：
+  - range：优先吃“区间边缘 + 回踩确认”机会，放宽 rr_min，但强制降级与快出
+  - mixed：谨慎；允许 LTF_scalp；rr_min 稍放宽以减少“好机会差一点RR就丢”
+  - trend：顺势优先；允许在条件满足时升级 HTF_swing
+- rr_min 规则（P0｜单一口径｜Gate5 只读 Gate4 rr_min）：
+  * market_regime_norm=range：rr_min=0.35；downgrade=on；trade_style=LTF_scalp；order_type=LIMIT；risk_down ≥ 0.5
+  * market_regime_norm=mixed：
+      - pattern∈{EDGE,BO_RETEST}：rr_min=0.45
+      - pattern=MOMENTUM_BREAK：rr_min=0.50
+      - 默认 downgrade=on（除非 tier=good 且 Gate3 显示结构空间充足）
+  * market_regime_norm=trend：
+      - 默认 rr_min=0.50（EDGE/BO_RETEST）
+      - pattern=MOMENTUM_BREAK：rr_min=0.60（避免追涨杀跌）
+- 追价保护（P0｜减少“追进就回撤”的假机会）：
+  - 定义 chase_max = max(0.30*ATR14(5m), last_price*0.0010)（若 ATR14 缺失则用 last_price*0.0010）
+  - 若 trigger_key_level 存在且 |last_price - trigger_key_level| > chase_max：
+      -> 强制 order_type=LIMIT（即使 tier=good 也不得 MARKET）；并在 NextTrigger 写“need_retest key”
+- HTF_swing 允许条件（P0｜避免把 swing 当 scalp、也避免漏掉真正顺势大波段）：
+  - 仅当 market_regime_norm=trend 且 tier=good 且 Gate3 提供 ≥1 个 HTF 锚点（1h/4h）且 Gate3 未触发 HTF_BARRIER_NEAR
+  - 且 pattern∈{EDGE,BO_RETEST}（MOMENTUM_BREAK 默认仍走 LTF_scalp；除非你能在 Gate5 给出 Real_R_eval≥2.0 且 R_clean_eval≥1.5）
+  - 满足则：trade_style=HTF_swing；order_type=LIMIT；downgrade=off（若 q 仅 borderline 则 downgrade=on 且禁止 HTF_swing）
+- Borderline 降级硬约束（P0｜必须执行）：
+  - 若 tier=borderline：必须 downgrade=on；trade_style 必须为 LTF_scalp；order_type=LIMIT；risk_down ≥ 0.5；
+    setup_grade 最高 "B"；edge_score 必须 ≥ 0.35；并要求“TP1 快速兑现”：Gate5 必须输出 TP1 close_pct ≥0.5 的计划（否则视为不满足，回退 wait）。
+
+【P0｜DEFER 机制（机会保留：把“时机未到/需回踩”变成可执行下一步，而不是一次性丢弃）】
+- 触发条件：has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS 且 Gate4 以 fail=>TIME 或 NO_TRIGGER_FOR_DIR 未通过
+- 必须输出（均 1 行，≤110 字符，不含具体 SL/TP 数字）：
+  1) NextTrigger: need_window=in; need_trig=<dir_trigger候选>; price_cond=<retest key/Anchor1>; expire_bars=<1~3>
+  2) PendingSetup: plan=<LONG/SHORT>; key=<Anchor1/trigger_key_level>; invalidation=<结构失效短语>; ttl=<1~3 bars>
+- 说明：DEFER 只保留机会；若后续 1~3 根 5m 内未满足 NextTrigger，则该 setup 作废（后端应清理）。
+
+（Gate4 结束；Gate5 仅沿用 Gate4 冻结参数，不得回头改 trade_style/order_type/risk_down/rr_min。）
+
+【SSOT｜Gate5(EXEC/RR) 唯一流程：先生成可执行计划 -> 统一算式 -> 成本口径 -> 选最优候选 -> 裁决 PASS/FAIL】
        A) 生成“可执行计划”（必须给出 entry/sl/tp1；不得用省略号代替数字）
           A1) entry 候选（最多 2 个；必须服从 Gate4 冻结的 order_type）
               - 若 Gate4 指定 order_type=LIMIT：
@@ -571,9 +382,8 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
   * has_position=1：任意 FAIL => action ∈ {"hold","close"}（严禁输出 "wait"；严禁 open_long/open_short）
 - LTF_scalp 结构例外（极少数）：仅适用于 has_position=0 且 Gate3=FAIL；必须同时满足 Gate5=PASS + R_clean 达门槛；并在 GateTrace 后追加 "Exception:"（结构锚点/入场触发/失效条件/时间窗/风险降级比例）。
 - NextTrigger/Timebox（只收敛写法，不改规则）：
-  * 仅当 Gate4=FAIL fail=>TIME/xF/SETUP/OF 时出现；默认单行短模板：
-    NextTrigger(Timebox=未来N根5m收盘): [clearOF=<解除条件>; ](触及Anchor1且5m出T)或(触及Anchor2且5m出T)->重评{STYLE}
-  * clearOF：仅当 fail=>OF 时出现；只写“解除条件”，不得复述证据链。
+  * 仅当 Gate4=FAIL fail=>TIME/xF/SETUP 时出现；默认单行短模板：
+    NextTrigger(Timebox=未来N根5m收盘): (触及Anchor1且5m出T)或(触及Anchor2且5m出T)->重评{STYLE}
   * 锚点：最多 2 个（优先 Anchor1/Anchor2）；必须引用 Gate3 行已出现信息；禁止新增第 3 个价位/区间。
   * 触发 T：只允许 1 项触发短码（优先 dir_trigger）；禁止枚举长列表或复述形态细节。
 - DIAG(EVAL_ONLY) 使用硬约束：
@@ -624,7 +434,7 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
           · price 不得位于 30m/15m 关键 supply 区内部，也不应紧贴该 supply 区下沿或 POC。
 2.1) 开仓时机与位置约束（8大结构共振与微观触发）
     - 核心逻辑：单兵作战（单一指标）无效。只有当“静态结构”与“动态/数学结构”发生**重叠 (Overlap)** 时，才是 A 级时机。
-【P0｜订单流博弈判定（Order Flow｜最高否决权）】
+【P0｜订单流博弈标签（Order Flow｜红线否决已后端化，模板内不得 fail=>OF）】
     0) 订单流数据质量门槛（orderflow_quality_gate｜SSOT）
       - 归一化：若 overall_score ≤ 1.0，则视为 0~1 归一化分，换算为 overall_score*100 再按 0~100 阈值比较；否则直接使用 0~100 分。
       - 质量分层（不改约束，只收敛表达）：
@@ -636,19 +446,19 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
           -> 在“结构与方向一致”的前提下可作为加速/确认；仍不得逆结构开仓。
         * 字段缺失/矛盾：OF_QUALITY=UNKNOWN
           -> 允许引用但不得成为唯一依据；reasoning 必须标注 ctxNA/unknown 并降权。
-    1) 意图红线 (Intent Red Lines) ——【硬否决口径统一：Gate4=FAIL fail=>OF】
-      - 若 candle_intent 命中以下之一：fake_pump / retail_driven / fake_dump
-        -> Gate4(TIMING/SETUP)=FAIL fail=>OF；of_redline ∈ {INTENT_FAKE_PUMP, INTENT_FAKE_DUMP}
-        -> 禁止新开仓（open_long/open_short）；动作映射按《【冲突消解与动作映射（SSOT｜Gate1→Gate5）】》执行。
-      - smart_money_*（如 smart_money_accumulation / smart_money_distribution）：Regime Flag（非硬红线）
-        -> 仅允许做“门槛偏置/执行方式偏置”（同向略放宽，逆向更苛刻）；不得直接提权 setup_grade="A"；仍必须通过 Gate3~Gate5。
-    2) 欺诈与稳定性熔断 (Spoofing Veto)
-      - spoofing_risk > 0.8：
-        -> Gate4=FAIL fail=>OF；of_redline=OF_SPOOFING；禁止新开仓；动作映射同上。
-      - spoofing_risk ∈ [0.5,0.8]：
-        -> 非硬否决：视为“有干扰”；忽略墙体支撑/阻力的有效性；setup_grade 至少降 1 档 + LIMIT-only（不得追价）。
-      - 墙体有效性（用于“墙体类结构”是否可参与 Anchor/R_clean）：stability_score>0.6 且 flicker_count<5 才视为“实墙”；否则视为诱导墙，R_clean 计算中必须忽略。
-    3) 趋势一致性加成（仅影响 confidence，不得越权）
+    1) 意图红线 (Intent Red Lines) ——【后端硬否决；模型只复述 block_entry】
+  - 若 candle_intent 命中以下之一：fake_pump / retail_driven / fake_dump
+    -> 后端应设置 block_entry=1（建议 block_reason=INTENT_FAKE_*）；
+       模型在 Gate2 直接 FAIL（reason=ENTRY_BLOCKED）；下游 Gate3~Gate5 仅允许 DIAG(EVAL_ONLY) 占位；
+       Gate4 严禁 fail=>OF / 严禁引用 candle_intent。
+2) 欺诈与稳定性熔断 (Spoofing Veto)【硬否决后端化；模型不在 Gate4 处理】
+  - spoofing_risk > 0.8：
+    -> 后端应设置 block_entry=1（建议 block_reason=OF_SPOOFING）；模型在 Gate2 直接 FAIL（reason=ENTRY_BLOCKED）。
+  - spoofing_risk ∈ [0.5,0.8]：
+    -> 仅作为 Soft Flag：可降低 confidence/edge_score（必须在 reasoning 标注 spoofing_soft_flag），但不得在 Gate4 改写 order_type/risk_down/trade_style/rr_min。
+  - 墙体有效性（用于“墙体类结构”是否可参与 Anchor/R_clean）：stability_score>0.6 且 flicker_count<5 才视为“实墙”；否则视为诱导墙，R_clean 计算中必须忽略。
+
+3) 趋势一致性加成（仅影响 confidence，不得越权）
       - trend_alignment 与 planned_dir 同向：confidence +15（封顶 100）；不得绕过 Gate1~Gate5 的 PASS 要求。
     4) 后端信号参考（primary_signal 冲突 -> 降级交易通道）
       - 若 AI决策建议.primary_signal 与 planned_dir 严重冲突：不一票否决，但必须触发“降级通道”（多空对称）：
@@ -657,682 +467,8 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
            - tf_major ∈ {1h, 4h}
            - confidence ≥ 65
            - edge_score ≥ 0.7
-           - 且未命中 Gate4 的 OF/Intent 硬红线（fake_* / spoofing_risk>0.8 等）
+           - 且 Gate2.block_entry=0（fake_* / spoofing_risk 等硬红线已由后端折叠进 block_entry；Gate4 不再复判）
       - 满足降级通道才允许继续走 Gate5 计算 RR；否则本轮禁止新开仓。
-【可选｜盘中突发模式（Intra-Bar Emergency Protocol）】
-    - 生效条件（必须同时满足，否则视为未生效）：
-      1) trigger_context.is_kline_closed = false
-      2) 输入明确声明 trigger_context.mode = "INTRABAR_ENABLE"
-      3) 同时提供可验证的“更小周期已收盘”数据（例如 1m ohlc_last_closed 且 x=true），否则视为数据不完整
-    - 若不满足上述生效条件：
-      * 视为【数据完整性不足】；
-      * action 只能为 "wait" / "hold" / "close"；
-      * 严禁输出 open_long / open_short（禁止盘中开新仓）。
-    - 若满足生效条件（INTRABAR_ENABLE）：
-      * 仍必须通过 Gate1(RISK) 与 Gate4(TIMING/SETUP) 的硬约束；紧急模式不豁免：
-        - Gate1(RISK) 触发（如 MarginUsed ≥ 95% / 单笔风险将超限 / Dist_ROI 等）：本轮禁止新开仓；动作映射按《【冲突消解与动作映射（SSOT｜Gate1→Gate5）】》执行。
-        - 命中《【P0｜订单流博弈判定（Order Flow｜最高否决权）】》定义的 OF/Intent 硬红线（fake_* / retail_driven / spoofing_risk>0.8 等）：Gate4=FAIL fail=>OF；本轮禁止新开仓；动作映射同上。
-   （P0-Intent 分类澄清已前移至 Gate1 后的全局章节：见《【P0-Intent 分类澄清｜多空对称｜防止误判一票否决】》。本处不再重复定义。）
-      * 允许基于 intrabar 触发做“应急开仓/平仓”，但 reasoning 必须明确记录 intrabar 证据链（建议写在 reasoning 的 GateTrace 之后，单独追加一行：IntrabarEvidence: <触发类型/阈值/触发时间窗/解除条件/关键证据>。）：trigger_context.mode=INTRABAR_ENABLE；small_tf_close_x=true；small_tf_close_time=<...>；以及该证据如何支持本次执行。
-      * 任何“追涨/追跌授权”仅在 orderflow_quality 为 good 且触发源可信时才可使用。
-    A) 结构共振判定 (Structural Confluence) —— 寻找“硬地板/硬天花板”
-       AI 必须在当前价格附近寻找以下 3 类结构的重叠。重叠越多，时机越完美：
-       【第1类：实体供需 (The Wall)】
-       * **Demand/Supply Zone**: 价格是否接触 Zone 的边界？(最强支撑/阻力)
-       * **FVG (缺口)**: 价格是否回补了 FVG 并在其边缘/中轴停顿？
-       * **SR Flip**: 价格是否精准回踩了支撑阻力转换线？
-       【第2类：价值与数学 (The Value)】
-       * **VPVR**: 价格是否位于 VAH/VAL (价值边界)？(严禁在 POC 中间开仓)
-       * **Fibonacci**: 价格是否处于 OTE 区 (0.618-0.786)？
-       【第3类：趋势护航 (The Path)】
-       * **SuperTrend**: 价格是否回踩了 SuperTrend 趋势线且未跌破？
-       * **Channel**: 价格是否接触通道下轨(做多)或上轨(做空)？
-       * **Dow**: 是否是 Higher Low (做多) 或 Lower High (做空) 的预期位置？
-       - 【计数口径（P0）】DZ/SZ、FVG、VPVR(POC/VAH/VAL)、SR Flip、FIB、ST、CH、DS：每一类各计为 1 个结构；同一类出现多个点位只取“最近且最强/最新鲜”的那个计入，避免堆砌。
-    【时间框架对齐规则（Timeframe Alignment Rules）】
-    - 目的：拒绝“小马拉大车”（小级别信号硬拉大级别趋势）
-       - 核心原则：环境越极端（超买/超卖），对支撑/阻力的级别要求越高。
-       - 规则：
-         * 当 4h RSI14 > 65 (多头过热) 或 < 35 (空头过热) 时：
-           - 若 trade_style="HTF_swing"：
-             · **严禁** 仅依托 5m / 15m 级别的 Demand/Supply 开仓；
-             · **必须** 等待价格回踩至 1h 或 4h 级别的关键结构（如 1h EMA50, 4h Demand, 1h SuperTrend）并发生接触；
-             · 若价格仅停留在 5m/15m 结构上而未触及 1h/4h 结构 -> action="wait" (视为悬空中继)。
-【P0｜结构强度熔断（Structure Quality Veto）】
-      - 核心原则：统计显著性差的结构（Z-Score 低）不得单独作为 HTF_swing 的防守依托。
-      - 规则：
-        * 若本次交易依托的主要结构（如 Primary Demand/Supply 或 FVG）的 `ctx.strength_z < -0.5`：
-          1) 该结构视为“弱支撑/阻力”，setup_grade 自动降级，最高为 "B"；
-          2) 禁止“左侧挂单”或“市价直接入场”；
-          3) 必须等待“Tier 2 (标准回踩)”级别的确认（即：价格触碰该弱结构后，5m 必须走出明确的 Rejection 或 Engulfing），否则 action="wait"。
-        * 若 `ctx.strength_z < -1.5`：
-          - 直接忽略该结构，视为不存在（除非有极强的 SR Flip 或 Fib 0.618 共振补偿）。若无强力共振，action="wait"。
-    B) 具体的 Setup 等级定义 (基于共振数量)：
-       【Tier 1: 完美狙击 (Sniper Entry)】
-       - **条件**：至少 **3 种** 不同类型的结构发生重叠。
-         * 例如：15m Demand + Fib 0.618 + VPVR VAL 重合在同一价格带。
-       - **策略**：允许挂单 (Limit Order) 或在 5m 出现微弱拒绝时立即进场。这是胜率最高的位置。
-       【Tier 1.5: 单强结构 + 强触发 (Single-Anchor + Strong Trigger) —— 仅 LTF_scalp，半风险】
-       - 目的：在不降低总体胜率底线的前提下，提高开仓频率；允许“单一但足够强”的结构承担入场依托。
-       - 适用前提（必须同时满足）：
-         1) trade_style="LTF_scalp"（不得用于 HTF_swing）；
-         2) pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}（与 2.2 允许形态保持一致）；
-         3) 未触发 Gate4 的 OF/Intent 硬红线（fake_* / retail_driven / spoofing_risk>0.8 等）；（smart_money_* 仅作 Regime Flag 偏置，不得作为一票否决条件）
-         4) 必须通过 Gate5 的 R_clean/可执行性校验（默认门槛与例外集合仍保持原口径）。
-       - “单强结构（Strong Anchor）”判定（可计算优先级｜多空对称｜只能选 1 个主锚点）：
-        【硬性前置条件（任一触发则不可作为 Anchor）】
-         0) 若价格紧贴 VPVR POC（POC_chop_zone）→ 该区域为“死区”，Anchor 不成立，视为 Gate2 未通过；最终动作必须服从 actionDerivation（除非你在 P0-04 已放行的“脱离盘整后的 BO_RETEST/MOMENTUM_BREAK”，且已满足其连续收盘条件）。(原因：POC 磁铁属性导致均值回归噪音极大)
-         1) 若候选结构 status ∈ {"testing","spent"} 或 touches ≥ 6：
-            - 该结构禁止作为 EDGE-Rejection 型入场的主锚点；仅允许用于 BO_RETEST/MOMENTUM_BREAK 的“突破后回踩带”锚点，否则 Anchor 不成立。
-         【候选 Anchor 的“方向一致性”过滤（必须先做）】
-         - LONG：Anchor 必须是“在价格下方可做支撑”的结构（或突破后回踩成为支撑的结构）。
-         - SHORT：Anchor 必须是“在价格上方可做阻力”的结构（或跌破后回踩成为阻力的结构）。
-         - 若候选结构与方向不一致：直接丢弃，不参与排序。
-         【结构候选池（8类同权；同一口径用于 Anchor1/Anchor2）】
-         - 候选结构类型（每类最多取 1 个“最近且最强/最新鲜”的代表点，避免堆砌）：
-           DZ/SZ、FVG、VPVR(POC/VAH/VAL)、SR Flip、FIB、ST、CH、DS
-         - 备注：方向一致性过滤规则同上（不再重复）。
-         - 线性结构（SR/FIB/ST/CH/DS）允许作为 EDGE 锚点：
-           - 允许“触及/贴线”作为结构成立（配合 Gate3/4 的触发器决定是否进场）
-           - 仍禁止“离线追价”把线当锚点：若远离线/轨道则不纳入候选
-           【KeyTouch Map（P0｜用于“触及关键位”判定：scan=1 与 Anchor 入选的唯一口径｜不增加价位枚举）】
-           -【P0｜统一触达阈值（量化 KeyTouch，避免主观保守导致 scan 全 0）】
-             * 计算 touch_bps：
-               - 若存在 ATR14_5m 与 last_price：touch_bps = max(25, round(0.35 * ATR14_5m / last_price * 10000))
-               - 否则：touch_bps = 30
-             * 距离定义 dist_bps：
-               - 对区间类（DZ/SZ/FVG/VPVR边界）：dist_bps = 0 若 last_price 在区间内；否则取到最近边界的 bps 距离
-               - 对线性类（SR/FIB/ST/CH/DS）：dist_bps = |last_price - line_price| / last_price * 10000
-             * KeyTouch=1 当且仅当 dist_bps <= touch_bps（且已通过方向一致性过滤）；否则 KeyTouch=0
-           - 总则：只有满足【方向一致性】后，才允许进入 KeyTouch；KeyTouch 命中=该类 scan 允许置 1，且该结构才可进入 AnchorScore 排序。
-           - DZ/SZ：
-             - LONG：触及 Demand Zone 的“prox/上沿”或进入 DZ（视为可支撑）；distal 仅作失效边界，不作为入选触点
-             - SHORT：触及 Supply Zone 的“prox/下沿”或进入 SZ（视为可阻力）；distal 仅作失效边界，不作为入选触点
-           - FVG：
-             - LONG：触及多头 FVG 的关键边（边缘/中轴均可视作触点；以“可做支撑”的一侧为准）
-             - SHORT：触及空头 FVG 的关键边（边缘/中轴均可视作触点；以“可做阻力”的一侧为准）
-           - VPVR(POC/VAH/VAL)：
-             - LONG：触及 VAL（VA 下边界）或“reclaim+retest 后可作支撑”的 VAH/POC 边界
-             - SHORT：触及 VAH（VA 上边界）或“break+retest 后可作阻力”的 VAL/POC 边界
-             - 约束：POC 默认视为 chop/噪音中心，不计 KeyTouch；仅当已被确认充当边界（reclaim/break + retest）才允许计入
-           - SR Flip：
-             - LONG：触及可做支撑的 SR_S / flip 线（回踩确认在正确侧）
-             - SHORT：触及可做阻力的 SR_R / flip 线（回踩确认在正确侧）
-           - FIB：
-             - LONG：触及回撤 OTE 区间 0.618~0.786（以可做支撑为前提）
-             - SHORT：触及回抽 OTE 区间 0.618~0.786（以可做阻力为前提）
-             - 约束：若未与任一其它结构（DZ/FVG/VPVR边界/SR/ST/CH/DS）形成同位共振，则 fib=0（避免单兵 FIB）
-           - ST（SuperTrend）：
-             - LONG：触及 SuperTrend 支撑侧（可做动态支撑）
-             - SHORT：触及 SuperTrend 阻力侧（可做动态阻力）
-           - CH（Channel）：
-             - LONG：触及通道下沿（或可做支撑的中轴）视为 KeyTouch
-             - SHORT：触及通道上沿（或可做阻力的中轴）视为 KeyTouch
-           - DS（Dow / 结构点）：
-             - LONG：触及 HL/关键低点，或上破后的回踩位（BOS/CHOCH 级别的“回踩作支撑”）
-             - SHORT：触及 LH/关键高点，或下破后的回踩位（BOS/CHOCH 级别的“回踩作阻力”）
-         【AnchorScore（同优先级内用于决胜；可计算且可解释）】
-         - 计算方式（0~100，越高越强）：
-           AnchorScore =
-             Base(type) + TF_bonus + Fresh_bonus + Strength_bonus + Vol_bonus
-             - Aging_penalty - Weak_penalty - Proximity_penalty
-        1) Base(type)：
-        Base(type)={
-          DZ/SZ:50,
-          FVG:50,
-          VPVR_POC/VAH/VAL:50,
-          SR_Flip:50,
-          Fibonacci:50,
-          ST:50,
-          CH:50,
-          DS:50,
-          others:20
-        }
-         2) TF_bonus（若能确定周期则加；更高周期更稳）：
-            - 4h:+20, 1h:+16, 30m:+12, 15m:+9, 5m:+6
-         3) Fresh_bonus：
-            - is_fresh=true 或 status="fresh"：+12
-            - 否则：+0
-            （补充｜线性结构 ST/CH/DS 的 fresh 等价判定）
-            - 对于 ST/CH/DS：若当前价到线的距离满足 Buffer ≤ 0.3%（与 Vacuum 动态豁免一致），则视同“fresh”给 +12；否则 Fresh_bonus=0。
-            - 线性结构的 touches/status 若输入缺失：不额外加分、不额外扣分（仅按距离与 Gate4 触发、Gate5 可执行性决定是否可用）。
-         4) Strength_bonus（使用 ctx.strength_z；若该结构无 strength_z 则本项=0）：
-            - strength_z ≥ 1.5：+15
-            - 1.0~1.5：+10
-            - 0.5~1.0：+5
-            - -0.5~0.5：+0
-            -0.5：直接判定为“弱结构”，不得作为 Tier1.5 的唯一主锚点（Anchor 不成立：has_position=0 → action="wait"；has_position=1 → action="hold"；或等待 Tier2 确认）。
-         5) Vol_bonus（使用 ctx.vol_ratio；若该结构无 vol_ratio 则本项=0）：
-            - vol_ratio ≥ 2.0：+10
-            - 1.2~2.0：+6
-            - 0.8~1.2：+2
-            - <0.8：-6（关键位缩量，容易虚破）
-         6) Aging_penalty（touches/status 老化）：
-            - status ∈ {"testing","spent"}：-20
-            - touches 4~5：-8
-            - touches ≥6：见前置条件（EDGE 禁用；仅突破回踩可用）
-         7) Proximity_penalty（入场“离锚点太远”就不算依托）：
-            - 若 entry_price 距离 Anchor 边界 > 0.8*ATR14_5m 或 > 0.6%：-15
-            - 若 > 1.2*ATR14_5m 或 > 0.9%：Anchor 直接不成立（视为 Floating）
-         【最终判定门槛（Tier1.5 是否成立）—— 分层门槛（多空对称）】
-         A) 若主锚点属于优先级 P1~P3（HTF 供需区 / HTF VPVR 边界回踩 / HTF SR Flip）：
-         - 允许：AnchorScore ≥ 65
-         - 但必须加严触发与执行（必须全部满足）：
-           1) Strong Trigger++ 仅允许 {SFP, Engulfing}（不接受 InsideBarBreakout/MomentumIgnition 作为唯一触发）；
-           2) vol_ratio ≥ 1.5（触发当根或触发组合中最关键一根）；
-           3) confidence ≥ 75 且 edge_score ≥ 0.70；
-           4) Gate5 仍必须通过（含 R_clean 与算式可核验）。
-         B) 若主锚点属于优先级 P4~P7（MTF 供需 / LTF VPVR 边界 / FVG / Fib）：
-         - 维持：AnchorScore ≥ 70
-         - Strong Trigger++ 可用 {SFP/Engulfing/InsideBarBreakout/MomentumIgnition} 之一（仍要求 5m 收盘证据链）。
-         - 若不满足对应分层门槛：视为 Tier3，action=wait（除非 MOMENTUM_BREAK 且你已通过 Gate5 与触发器确认）。
-       - “强触发（Strong Trigger++）”（必须满足其一，多空对称；只看 5m 已收盘）：
-         1) SFP（扫止损回收）：刺破结构外侧后 5m 收盘重新站回结构内侧；
-         2) Engulfing（吞没形态）：在结构位出现反向大实体吞没；
-         3) Inside Bar Breakout：在结构位缩量盘整后放量突破（要求 vol_ratio > 1.5）；
-         4) Momentum Ignition：连续两根同向 K 线脱离结构区（要求 vol_ratio > 1.5）。
-       - 风险与执行（为了“提频但不放飞”）：
-         1) setup_grade 强制标记为 "B"（以触发模板既有：强制半仓 + 锁盈加速 等规则）；
-         2) order_type 优先 LIMIT（靠结构边界/或 BO_RETEST 的回踩位/或 EMA20 回踩窗口）；
-            仅当 pattern=MOMENTUM_BREAK 且出现“回踩不破”的确认时，才允许 MARKET；
-         3) 若 R_clean < 1.0：仍按 Gate5 中 LTF_scalp 的例外集合处理；若 R_clean ≥ 1.0：仍必须按 Gate5 常规空间/可执行性规则判定（不因 Tier1.5 额外放宽空间门槛），通过则可进入开仓候选；未通过则 action=wait（has_position=0）或仅管理仓位（has_position=1）。
-       【Tier 2: 标准回踩 (Standard Retest)】
-       - **条件**：至少 **2 种** 结构重叠。
-         * 例如：回补 FVG + 踩住 SR Support 线。
-       - **策略**：必须等待 **5m K线收盘确认** (Rejection/Pinbar) 后进场。
-       【Tier 3: 弱势博弈 (Weak Setup)】
-       - **条件**：仅有 **1 种** 结构支撑 (例如仅仅是回踩了 0.5 Fib，无其他支撑)。
-       - **策略**：默认 **action="wait"**。
-         单结构不足以对抗市场噪音；仅允许以下两类“唯一例外”：
-         (a) 满足上文【Tier 1.5: 单强结构 + 强触发】的全部条件（仅 LTF_scalp + 半风险）；
-         (b) pattern=MOMENTUM_BREAK 且同时满足：5m Trigger 确认 + Gate5 可执行（含 R_clean/止损合法性），并在 reasoning 明确写出触发证据链。
-    C) 微观触发器 (5m Trigger - The "Go" Signal)：
-   【P0｜触发器来源（重要）】
-   - 本轮触发器识别由后端预计算并写入 trigger_context.trigger_flags / trigger_primary / trigger_quality；
-     模型不得从蜡烛图/指标“推断是否出现 SFP/Engulf/IBB/MOMO”来替代 trigger_flags。
-   - 当 trigger_flags 非空：优先使用 trigger_primary；若缺失则选 quality 最高者；并在 Gate4 行用 trigger=<枚举码> 引用即可（不要复述形态细节）。
-       即使满足了上述结构共振，必须在 5m 级别看到以下任一信号才扣动扳机：
-       1. **SFP (Swing Failure Pattern)**:
-          - 价格瞬间刺破结构边界（猎杀止损）后，5m 收盘价迅速收回结构内部。
-       2. **Engulfing (吞没形态)**:
-          - 在结构位上，出现反向的大实体 K 线吞没前一根 K 线。
-       3. **Inside Bar Breakout**:
-          - 在结构位上缩量盘整后，放量突破盘整区间。
-       4. **Momentum Ignition**:
-          - 连续两根同向 K 线脱离结构区，且 `vol_ratio > 1.5`。
-    - **强制过滤器 (Vacuum Filter) 及其豁免条件**：
-      * 默认规则（ATR 自适应真空半径）：
-        - 定义 vacuum_band_pct = clamp( max(0.35%, 0.8 * ATR14_5m / last_price), 0.35%, 1.2% )
-          其中 last_price **仅**使用 trigger_context.last_price（必填，Token-Lite 单一来源）；如需收盘价核验，使用 trigger_context.trigger_bar_close_price。
-        - 若当前价格上下 vacuum_band_pct 范围内，找不到上述任何 **第1类 (实体)** 或 **第2类 (价值)** 结构：视为“价格悬空 (Floating)”，action 必须为 "wait"。
-      * 【新增】动态趋势豁免 (Dynamic Trend Exception)：
-        - 若当前形态判定为 `BO_RETEST` (突破回踩) 或 `MOMENTUM_BREAK` (动能突破)：
-        - **豁免真空检查**。
-        - **替代依托**：以下任一满足即可视为有效“动态结构支撑/阻力”：
-            (a) 5m/15m EMA20
-            (b) SuperTrend 线（Type=ST；顺势方向的 st_line）
-            (c) 趋势通道上下轨（Type=CH；多用下轨、空用上轨）
-            (d) 道氏 Swing 关键位（Type=DS；多用最近 swing_low/HL，空用最近 swing_high/LH）
-        - 只要价格回踩上述依托附近（统一 Buffer < 0.3%）且未有效跌破/突破，即可视为“有结构依托”，**允许开仓**。
-        - 只要价格回踩 EMA20 附近（Buffer < 0.3%）且未有效跌破，即可视为“有结构依托”，**允许开仓**，不必非要踩在 Demand Zone 上。
-        2.2）LTF_scalp 允许的形态类型（EDGE / BO_RETEST / MOMENTUM_BREAK）
-            - 为避免“半空中追单”，LTF_scalp 开仓只允许以下三类结构形态：
-              1）EDGE（供需边缘形态）
-              2）BO_RETEST（突破-回踩形态）
-              3）MOMENTUM_BREAK（动能突破形态｜强趋势专用）
-            任何不属于上述三类的 LTF_scalp 机会，一律视为 setup_grade="C"，action="wait" / "hold"。
-            1）EDGE（供需边缘形态）
-              - 核心思路：依托 5m/15m/30m 明确的 supply / demand 区
-                在“靠近边缘”的区域小仓试单，止损放在该结构外侧。
-              - 必须同时满足：
-                * 已明确识别最近有效的 5m/15m/30m 供需区（fresh/strong/weakened）；
-                * entry_price 的“靠边”窗口（按环境自适应）：
-                  · 默认：40% 窗口（与旧版一致）；
-                  · 若满足任一“震荡/磁铁”条件：major_bias=NEUTRAL 或 price∈[VAL,VAH] 或落在 POC_chop_zone ⇒ 必须收紧为外侧 20%：
-                    - LONG：entry_price ∈ [demand_low, demand_low + 0.20*zone_width]
-                    - SHORT：entry_price ∈ [supply_high - 0.20*zone_width, supply_high]
-                * 止损价 sl 必须放在该供需区的相反边界外侧若干 tick / ATR，而不是区间内部；
-                * 通过 Gate5（R_clean 空间门槛）检查：基于该 sl 计算得到的 R_clean ≥ 对应风格要求（含默认/例外规则）。
-                【EDGE 进场确认（5m Rejection｜硬要求）】：
-                - 若 5m 收盘锚点不可验证（Token-Lite 口径：trigger_context.is_kline_closed / trigger_bar_close_time_ms / trigger_bar_close_price / last_price 任一缺失或矛盾）：
-                  - 若 has_position=0：action="wait"（仅表示“禁止以 EDGE 新开仓”，等待数据恢复后再评估）
-                  - 若 has_position=1：action ∈ {"hold","close"}（仅管理既有仓位；禁止把持仓强制改成 wait，也禁止以 EDGE 逻辑新开/加码）
-                - 特权情况（SNIPE变体）：【当前版本禁用】一律按“普通情况”处理；严禁模型自行定义/发明 SNIPE 条件与额外规则。
-                - 普通情况（P0｜触发器口径验收｜不改“必须 Rejection 确认”的本体规则）：
-                  · SHORT（依托 supply 上沿试空）：必须满足 trigger_primary ∈ {SFP_BEAR, ENGULF_BEAR} 且 is_kline_closed=true；
-                  · LONG（依托 demand 下沿试多）：必须满足 trigger_primary ∈ {SFP_BULL, ENGULF_BULL} 且 is_kline_closed=true；
-                  · 若 trigger_primary 不属于 EDGE 类（非 SFP_*/ENGULF_*）：禁止以 EDGE-Rejection 新开仓（has_position=0→wait；has_position=1→hold/close）。
-                - 若无法给出上述任一 “5m 拒绝确认”，则本次 EDGE 必须降级为 setup_grade="C"：
-                  · 若该 symbol 当前无持仓（has_position=0）：action="wait"（禁止以 EDGE 新开仓）。
-                  · 若该 symbol 当前已有持仓（has_position=1）：action 仅允许 ∈ {"hold","close"}（仅管理既有仓位；禁止以 EDGE 逻辑新开/加码）。
-              - 禁止的 EDGE 伪形态：
-                * entry_price 落在 zone 中部甚至靠近对侧边缘；
-                * 止损落在 zone 内（例如 demand 区内部就止损多单），
-                  这些都应视为“被结构噪音扫掉”的高风险行为。
-              【P0-EDGE 执行硬约束（禁止追单版）】
-              - 只要 pattern=EDGE：
-                1) order_type 强制为 "LIMIT"，禁止 "MARKET"（因为 MARKET 会把“贴边试单”变成“追价/打在区外”）。
-                2) SHORT-EDGE 的 entry_price 必须满足以下其一，否则 action="wait"：
-                   - entry_price ∈ [supply_high - 0.25*ATR14_5m, supply_high + 0.05*ATR14_5m]（贴近上沿的可控试空窗口）
-                   - 且必须满足 Rejection-A 或 Rejection-B（仍按原硬要求）
-                3) LONG-EDGE 对称：
-                   - entry_price ∈ [demand_low - 0.05*ATR14_5m, demand_low + 0.25*ATR14_5m]
-                4) 若 entry_price 明显落在 zone 外侧（例如 SHORT 但 entry_price < supply_low）：
-                   - 一律视为“追空/区外开仓”，action="wait"；
-                   - 正确做法只能是：等待回抽到上沿再评估 Rejection，或改走 BO_RETEST 剧本。
-            2）BO_RETEST（突破-回踩形态｜可执行剧本）
-              - 核心思路：先确认“有效突破”，再只在“回踩带”入场；禁止在突破后的第一波延伸追价。
-              - 关键定义：
-                A) 有效突破（满足其一即可）：
-                   1) 至少 1 根已收盘 15m close 位于关键水平外侧，且 |close - key_level| ≥ 0.15*ATR14(15m)
-                   2) 或至少 2 根已收盘 5m close 位于关键水平外侧，且最近一根 5m 收盘没有立刻回到突破前区间内
-                   3) 成交确认（加分但非硬性）：突破K的 volume ≥ 1.2*avg_volume(同周期)
-                   4) 环境约束：若 major_bias 与 minor_bias 方向冲突（例如 4h Bearish vs 1h Bullish），严禁做“突破单（Breakout）”，只允许做“区间边界的反转单（Fade）”。
-                B) 回踩带（入场允许区）：
-                  - 标准回踩：[key_level - 0.5*ATR14(5m), key_level + 0.5*ATR14(5m)]
-                  - 强势回踩（空中加油）：若 5m 动能极强（MACD强劲/大阳线），允许在 key_level 上方/下方 1.5*ATR 范围内；只要出现 5m 停顿或微回调（Flag），即可视为有效回踩，不必触碰 key_level。
-                  - LONG：只允许在上述带内考虑做多；SHORT：只允许在上述带内考虑做空。
-                C) 5m 入场确认（硬要求，满足其一）：
-                   - Confirm-1（优先）：出现 5m Rejection-A（对 key_level 或相邻 demand/supply 边界的刺破回收）
-                   - Confirm-2（备选）：最近 1 根已收盘 5m close 重新站回关键水平的正确一侧，且 RSI7 从极端区回落/回升（例如 LONG：RSI7 由>70 回落至 55~70 区间仍保持强势）
-              - 入场与止损（多空对称）：
-                * entry_price：必须位于 retest_band 内；若价格未回踩而直接拉开 → 一律 wait（禁止追价）。
-                * sl_struct：放在 key_level 的“错误一侧”之外，并留出 buffer（建议 ≥ 0.2*ATR14(5m) 或若干 tick）。
-                * 必须通过 B5：R_clean ≥ 0.5（LTF_scalp；其中 0.8~1.0 仅限“趋势尾声反转型 LTF”例外）/ ≥ 1.5（HTF_swing）。
-              - 禁止的 BO_RETEST 伪形态：
-                * 仅凭一次“刺穿”高/低点但收盘价仍在区间内，就认定为突破；
-                * 在刚刚突破、尚未出现任何回踩的 K 上直接追价，且无法给出清晰的 retest 结构。
-            3）MOMENTUM_BREAK（动能突破形态｜防假突破增强版）
-               - 核心思路：捕捉极强单边动能，但必须防止“猎杀止损后反向”的假突破 (Fakeout)。
-               - 防骗线加强版 (Anti-Fakeout++):
-                 * 在判定“实体穿越”时，要求 5m K线的收盘价不仅要越过结构，
-                   且其【实体部分的中点】也必须位于结构外侧。
-                 * 若仅是收盘价勉强越过，但实体大部分仍在结构内，视为“弱突破”，action="wait"。
-               - 必须同时满足（硬指标）：
-               1) 实体穿越：5m K 线收盘价（Close）必须**清晰且远离**被突破结构边界。
-                  * 仅引线（Wick）刺破不算突破；
-                  * 收盘价刚好卡在边界上不算突破。
-               2) 量能确认（放宽版）：
-                 - 突破 K 线的 `vol_ratio` 必须 ≥ 1.2（原 2.0 太严，适应当前市场流动性）；
-                 - 且 `ctx.strength_z` > 0.5（确保结构本身有效）。
-               3) 拒绝回归：突破后的下一根 K 线，不得立即反向吞没突破 K 线。
-                 - 入场策略：
-                   * 只有在 5m K 线 **收盘 (Closed)** 后才可进场，严禁在 K 线跳动中追单。
-                 - 适用场景：
-                   * 解决“踏空焦虑”，但绝不为“假突破”买单。若不满足上述实体收盘条件，一律视为潜在假突破，action="wait"。
-    3）中期动能与执行分级 (Momentum & Execution Tiering)：
-        - 核心逻辑：动能决定方向，但 RSI 决定入场方式。我们不因 RSI 极端而放弃趋势，但必须优化成本。
-         【结构状态分类（struct_state_short / struct_state_long）—— 决定当前价位是否适合开仓】
-         - 在评估 rsi_state 之前，AI 必须先根据 HTF/LTF 结构与 VPVR/FIB 位置，
-           为“做空方向 (short)”和“做多方向 (long)”分别打一个结构状态标签：
-           struct_state_short ∈ {"SHORT_FAVORABLE","SHORT_NEUTRAL","SHORT_DANGER"}
-           struct_state_long  ∈ {"LONG_FAVORABLE","LONG_NEUTRAL","LONG_DANGER"}。
-         - 判定顺序与互斥性（硬约定）：
-           1）先判定 DANGER：
-              - 若满足 SHORT_DANGER 条件，则 struct_state_short="SHORT_DANGER"；
-              - 若满足 LONG_DANGER 条件，则 struct_state_long="LONG_DANGER"；
-           2）在不属于 DANGER 的前提下，再判断 FAVORABLE：
-              - 若满足 SHORT_FAVORABLE 条件，则 struct_state_short="SHORT_FAVORABLE"；
-              - 若满足 LONG_FAVORABLE 条件，则 struct_state_long="LONG_FAVORABLE"；
-           3）其余情况统一归为 NEUTRAL：
-              - 未满足 FAVORABLE / DANGER 时：
-                · struct_state_short="SHORT_NEUTRAL"
-                · struct_state_long ="LONG_NEUTRAL"
-           4）互斥性要求：
-              - 任意时刻，对于同一方向，struct_state_* 只能取上述三值之一，禁止出现模糊描述
-                （例如“既危险又有吸引力”等）。
-         - SHORT 方向结构状态定义（struct_state_short）：
-           1）SHORT_FAVORABLE（做空有利区）
-              * 价格接近或处于高时间框架的空头防守结构附近，且远离关键支撑：
-                - 靠近 4h/1h 级别的：
-                  · 供给区 SZ / 空头 FVG / SR_R（强阻力）/ 通道上沿 / SuperTrend 阻力一侧；
-                - 上述结构的 ctx.strength_z ≥ 0（中性以上强度），hit_count 适中或偏多，
-                  显示这里曾经是有效卖压区；
-                - 最近的强支撑（4h/1h/30m/15m SR_S / DZ / 重要 FIB 0.618/1.0 位）
-                  与当前价之间的距离 ≥ 1.0 * ATR("1h")。
-              * VPVR 角度：
-                - 当前价位于 4h/1h VPVR value_area 中部或偏上（接近 POC~VAH 区间），
-                  不在长期 value_area_low 附近或以下。
-              * 直觉解释：
-                - 这是“从空头视角看价格偏贵”的区域，向下有足够空间，向上有明确防守位。
-           2）SHORT_DANGER（做空危险区）
-              【P0-Range Mode 放宽DANGER阈值 - 避免震荡市过度阻断】
-              * 价格靠近或落入关键支撑/需求簇与波段尾端合围区：
-                - Range Mode（震荡市）条件下：
-                  · 距离阈值放宽：当前价与支撑/需求结构距离 < 0.3 * ATR("1h") 才判定 DANGER（原 0.5-0.8）
-                  · RSI 硬条件：仅当 15m RSI < 25 时才硬阻断新开空单（原无 RSI 限制）
-                  · 结构聚集放宽：需要≥3个时间框架的strong结构重叠（原≥2个）
-                  · 判定公式：若 Range Mode 且 (距离 < 0.3*ATR(1h) 且 RSI<25 且 cluster≥3) → SHORT_DANGER
-                - Trend Mode（趋势市/默认）条件下：
-                  · 保持原严格规则：当前价与以下任一结构距离明显过近（例如 < 0.5~0.8 * ATR("1h")）：
-                    · 4h/1h/30m/15m 的 SR_S（强支撑）、Demand Zone、关键低点；
-                    · 多周期 FIB 终点（特别是 1.0 / 1.272 / 1.618）；
-                  · 且这些支撑/需求在多个时间框架上"聚集"（cluster），
-                    例如：1h SR_S + 30m SR_S + 15m DZ 几乎重叠。
-              * VPVR 角度：
-                - 当前价位于 4h/1h VPVR 的 value_area_low 附近或以下，
-                  并且距离 VAL 超过 0.5 * ATR("4h")，属于长期"折价区"；
-              * 供需/波段角度：
-                - 上方存在明确 4h/1h 供给/FVG，而下方空间有限（下一个主要支撑不远），
-                  类似“跌到楼下车库，再往下已经是地下室边缘”的区域。
-              * 直觉解释：
-                - 在这种价格带继续开新空，极容易被短期反弹 + 超卖 + 吸收组合洗出去；
-                  这是“空头的危险区”，更适合减仓/锁盈，而不是新开空单。
-           3）SHORT_NEUTRAL（做空中性区）
-              * 非 SHORT_FAVORABLE 且非 SHORT_DANGER；
-              * 价格处于：
-                - VPVR value_area 内中部；
-                - 上下有结构（上有阻力/供给，下有支撑/需求），距离都不算极端近；
-              * 直觉解释：
-                - 空头并非没有 edge，但 R:R 与位置优势一般，更适合：
-                  · 小仓位 LTF_scalp、
-                  · 或者等待价格移动到 FAVORABLE / DANGER 区后再做决策。
-         - LONG 方向结构状态定义（struct_state_long，完全对称）：
-           1）LONG_FAVORABLE（做多有利区）
-              * 价格接近或处于高时间框架的多头防守结构附近，且远离关键阻力：
-                - 靠近 4h/1h 级别的：
-                  · 需求区 DZ / 多头 FVG / SR_S（强支撑）/ 通道下沿 / SuperTrend 支撑一侧；
-                - 上述结构 ctx.strength_z ≥ 0，hit_count 合理；
-                - 最近的强阻力（4h/1h/30m/15m SR_R / SZ / 重要 FIB 0.618/1.0 位）
-                  与当前价之间的距离 ≥ 1.0 * ATR("1h")。
-              * VPVR 角度：
-                - 当前价位于 4h/1h VPVR value_area 中部或偏下（接近 VAL~POC 区间），
-                  不在长期 value_area_high 附近或以上。
-           2）LONG_DANGER（做多危险区）
-              【P0-Range Mode 放宽DANGER阈值 - 多空对称】
-              * 价格靠近或落入关键阻力/供给簇与波段尾端合围区：
-                - Range Mode（震荡市）条件下：
-                  · 距离阈值放宽：当前价与阻力/供给结构距离 < 0.3 * ATR("1h") 才判定 DANGER（原 0.5-0.8）
-                  · RSI 硬条件：仅当 15m RSI > 75 时才硬阻断新开多单（原无 RSI 限制）
-                  · 结构聚集放宽：需要≥3个时间框架的strong结构重叠（原≥2个）
-                  · 判定公式：若 Range Mode 且 (距离 < 0.3*ATR(1h) 且 RSI>75 且 cluster≥3) → LONG_DANGER
-                - Trend Mode（趋势市/默认）条件下：
-                  · 保持原严格规则：当前价与多周期 SR_R / SZ / 波段高点 / FIB 1.0/1.272/1.618 等距离过近
-                  · 位于 4h/1h VPVR 的 value_area_high 附近或以上，透支区
-              * 直觉解释：
-                - 在这种区域再追多，风险非常大，更适合减仓/锁盈。
-           3）LONG_NEUTRAL（做多中性区）
-              * 非 LONG_FAVORABLE 且非 LONG_DANGER，定义与 SHORT_NEUTRAL 对称。
-         - 与开仓/禁仓的关系（结构优先级高于 RSI）：
-           1）当 struct_state_short = "SHORT_DANGER" 时：
-              - 新开 SHORT 仓位（包括 HTF_swing 与 LTF_scalp）一律禁止：
-                · action 不能为 "open_short"，只能是 "wait" 或管理已有空头（hold/close）；
-                · 严禁在该区间内 scale-in 加仓空头。
-           2）当 struct_state_long = "LONG_DANGER" 时：
-              - 新开 LONG 仓位一律禁止，规则与 SHORT_DANGER 对称。
-           3）当 struct_state_short = "SHORT_FAVORABLE" 时：
-              - 在趋势与订单流方向一致、且 rsi_state ≠ "EXHAUSTION_OVERSOLD" 的前提下，
-                可以按原有 HTF_swing / LTF_scalp 规则、结合 rsi_state 寻找做空机会；
-              - 此时 RSI 只影响“用 Market 还是 Limit、用多激进的 risk_pct”，
-                不得单独推翻结构已判定的方向 edge。
-           4）当 struct_state_short = "SHORT_NEUTRAL" 时：
-              - 以保守为主，只考虑：
-                · 小仓位 LTF_scalp 顺势空，且必须满足较高的 edge_score / R_clean；
-                · 或干脆 action="wait"，直到价格移动到 FAVORABLE / DANGER 区再做较大决策。
-              - HTF_swing 在 SHORT_NEUTRAL 区域应极为克制，若 R 空间不足或结构不干净，直接放弃。
-             【P0-STRUCT_NEUTRAL 结构中性区的 B档开仓通道｜多空对称｜提升频率但降风险】
-              注意：此处的“NEUTRAL/中性”仅指 struct_state_*（结构状态中性区），并不等于 planned_dir=NEUTRAL。
-              若 Gate2 的 planned_dir ∈ {NEUTRAL, UNKNOWN}（无方向/不可裁决）：必须 Gate2=FAIL 且 action=wait，禁止因结构中性区规则而开仓。
-              当 struct_state_short="SHORT_NEUTRAL" 或 struct_state_long="LONG_NEUTRAL" 时：
-              【P0-Range Mode 放宽 STRUCT_NEUTRAL 条件 - 允许 mid-range 交易】
-              * 若 market_regime=range（震荡市）：
-                - 允许"B档 LTF_scalp"开仓（小仓试单），条件如下（LONG/SHORT 对称）：
-                  1) trade_style 必须为 "LTF_scalp"（HTF_swing 仍默认放弃）
-                  2) pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}
-                  3) 必须出现 5m Trigger（SFP/Engulfing/InsideBarBreakout/MomentumIgnition 任一）
-                  4) R_clean ≥ 0.35（Range Mode 降低要求，原常规 0.8；震荡市空间本身就小）
-                  5) 价格接近 VA 边界（距 VAH 或 VAL < 0.5 * ATR_1h）
-                  6) edge_score ≥ 0.50 且 confidence ≥ 65（降低门槛）
-                  7) 风险控制：risk_pct = 常规的一半，setup_grade 自动设为 C
-                  8) order_type=LIMIT（禁止追价）
-                - 若任一条件不满足：action="wait"
-                - 必须在 reasoning 中注明："Range Mode 震荡市 STRUCT_NEUTRAL（结构中性区）小仓试单，已降低仓位风险"
-              * 若 market_regime=trend/mixed（趋势市/默认）：
-                - 允许"B档 LTF_scalp"开仓（小仓试单），但必须满足全部条件（LONG/SHORT 对称）：
-                  1) trade_style 必须为 "LTF_scalp"（HTF_swing 仍默认放弃）；
-                  2) pattern ∈ {EDGE, BO_RETEST, MOMENTUM_BREAK}；
-                  3) 必须出现 5m Trigger（SFP/Engulfing/InsideBarBreakout/MomentumIgnition 任一）；
-                  4) R_clean ≥ 0.8（比常规更紧的空间门槛，防止结构中性区硬做）；
-                  5) edge_score ≥ 0.65 且：
-                     - confidence ≥ 70：通过；
-                     - confidence ∈ [60,70)：允许但降级（risk_pct=常规的 1/3，且必须 LIMIT）；
-                     - confidence < 60：不通过；
-                  6) 风险控制：risk_pct = 常规的一半（必须在 entry_plan 中写明"STRUCT_NEUTRAL-B 档减半风险"）。
-                - 若任一条件不满足：action="wait"。
-           5）LONG 方向与上述规则完全对称：
-              - struct_state_long="LONG_FAVORABLE" 时优先寻找多头机会；
-              - struct_state_long="LONG_NEUTRAL" 时以保守 LTF_scalp 多单或 wait 为主。
-         - 输出与溯源要求（便于回放与调试）：
-           - 在 reasoning 中，必须显式写出本轮评估的 struct_state_short / struct_state_long，
-             例如：`struct_state_short=SHORT_DANGER (多周期支撑簇 + VPVAL 下方折价区)`；
-           - 若 action 为 "open_long" 或 "open_short"：
-             · 必须说明该方向的 struct_state_* 是 FAVORABLE / NEUTRAL / DANGER 之一，
-               以及为什么在该结构状态下仍选择开仓或放弃；
-             · 结构状态优先级高于 RSI：不得出现“结构已判为 DANGER，但仍因为 RSI 正常而新开仓”的逻辑。
-        【RSI 状态分类（rsi_state）—— 区分趋势型超卖 vs 末段衰竭】
-        - 在具体判断入场方式之前，AI 必须先根据 4h / 1h / 15m / 5m 的 RSI、价格所处位置以及 VPVR/FIB/结构三类信息，
-          给当前标的打一个 rsi_state 标签，仅允许以下三种取值：
-        - 判定顺序（硬约定）：
-          1）先检查是否满足 EXHAUSTION_* 的条件：
-             - 若满足，则直接标记为 "EXHAUSTION_OVERSOLD" 或 "EXHAUSTION_OVERBOUGHT"；
-          2）若不满足 EXHAUSTION_*，再检查是否满足 TREND_* 的条件：
-             - 若满足，则标记为 "TREND_OVERSOLD" 或 "TREND_OVERBOUGHT"；
-          3）若以上两类均不满足，则统一标记为 "NORMAL"。
-        - 互斥性要求：
-          - 任意时刻 rsi_state 只能取 "NORMAL" / "TREND_OVERSOLD|TREND_OVERBOUGHT" /
-            "EXHAUSTION_OVERSOLD|EXHAUSTION_OVERBOUGHT" 三类之一；
-          - 禁止在 reasoning 中出现“同时满足多种状态但未声明优先级”的模糊描述。
-          1）rsi_state = "NORMAL"
-             * 多周期 RSI 大多处于 [30,70] 区间，或仅有单一 LTF（5m/15m）短暂超买/超卖；
-             * 当前价格未处于 HTF 关键支撑/阻力极值，也未明显跌破/冲出 4h/1h VPVR 的 value_area_low/high。
-          2）rsi_state = "TREND_OVERSOLD" / "TREND_OVERBOUGHT"（趋势型超卖/超买）
-             * MB、mB、μB 三个方向在当前交易方向上保持一致（例如做空时 MB=mB=μB="D"；做多时 MB=mB=μB="U"）；
-             * 做空场景（空头趋势）：
-               · 4h_RSI14 ∈ [38,55]，1h_RSI14 ∈ [28,40]；
-               · 15m_RSI14 或 5m_RSI(7/14) < 30。
-             * 做多场景（多头趋势）：
-               · 4h_RSI14 ∈ [45,62]，1h_RSI14 ∈ [60,72]；
-               · 15m_RSI14 或 5m_RSI(7/14) > 70。
-             * 价格位置：
-               · 当前价格仍位于 4h/1h VPVR 价值区 [VAL,VAH] 内，或仅略高于/略低于 VAL/VAH（偏向“趋势中继”，而非极端折价/透支）；
-               · 未处在关键 FIB 终点（1.0 / 1.272 / 1.618）和 HTF SR_S/DZ 的强支撑/阻力“合围地带”。
-             * 订单流：
-               · MarketRegime / OrderFlow 显示为健康的趋势延续（例如 BearishConfirm + SpotLedDecline 或 BullishConfirm + SpotLedAdvance），
-                 无明显吸收/对敲（spot 与 futures CVD 大体同向，price_delta 明确随方向推进）。
-          3）rsi_state = "EXHAUSTION_OVERSOLD" / "EXHAUSTION_OVERBOUGHT"（末段衰竭型极端）
-             * 做空场景（下跌末端）至少满足：
-               · 1h_RSI14 < 30 且 (30m_RSI14 < 25 或 15m_RSI14 < 25)；
-               · 价格靠近或已经落入以下任意区域：
-                 - 4h/1h 关键支撑 SR_S / 需求带 DZ；
-                 - 重要 FIB 终点（1.0 / 1.272 / 1.618 等）；
-                 - 明显跌破 4h/1h VPVR 的 value_area_low，且距离 VAL 超过 0.5 * ATR(4h) 的折价区。
-             * 做多场景（上涨末端）至少满足：
-               · 1h_RSI14 > 70 且 (30m_RSI14 > 75 或 15m_RSI14 > 75)；
-               · 价格靠近或已经触及：
-                 - 4h/1h 关键阻力 SR_R / 供给带 SZ；
-                 - 重要 FIB 终点（1.0 / 1.272 / 1.618 等）；
-                 - 明显冲出 4h/1h VPVR 的 value_area_high 之上，且距离 VAH 超过 0.5 * ATR(4h) 的透支区。
-             * 若叠加出现订单流“吸收”特征：
-               · 例如做空时：短周期内 spot CVD 大幅为负、futures CVD 转正或缩量、price_delta≈0；
-               · 或做多时：spot CVD 大幅为正、futures CVD 转负或缩量、price_delta≈0；
-               则必须直接归类为 EXHAUSTION_*（末段衰竭）。
-    - 后续所有基于 RSI 的入场/风控规则，都必须显式以 rsi_state 为前提，严禁“单看某一周期 RSI 数值就一票否决或放行”。
-    - 输出与溯源要求：
-      - 在 `reasoning` 文本中必须显式写出当前 rsi_state，
-        例如：`rsi_state=TREND_OVERSOLD (4h_RSI≈42, 1h_RSI≈30, 15m/5m 极端超卖，价格仍在 VPVR 价值区内)`；
-      - 若 action 为 "open_long" 或 "open_short"：
-        · 必须在 reasoning 中说明当前属于 NORMAL / TREND_* / EXHAUSTION_* 哪一类区间；
-        · 并说明因此选择的入场方式（Market / Limit）逻辑，
-          例如：`由于处于 TREND_OVERSOLD 区间，仅允许回踩 EMA20 挂单做空，禁止市价追空`。
-        A) **常规区 (Safe Zone)**:
-           * 条件：4h/1h RSI 处于 [35, 65] 区间。
-           * 策略：允许 **Market Entry (市价入场)**，追求执行效率。
-        B) **趋势过热区 (Trend Overextended Zone)**:
-           * 条件：rsi_state = "TREND_OVERSOLD" 或 "TREND_OVERBOUGHT"。
-           * 核心含义：趋势完好，只是 LTF 动能过强导致短期 RSI 极端；
-             在这种“趋势型超买/超卖”中，**不因为 RSI 极端放弃顺势机会，但必须优化入场方式和价位**。
-           * 通用执行策略：
-             - 禁止 order_type="MARKET" 追价开仓，必须通过 Limit Entry 吃回踩；
-             - 优先等待价格回踩至 5m/15m EMA20、上一根 K 线高/低点，或刚完成的 5m 结构 retest 带。
-             - JSON / 执行约束（与 entry_plan 联动）：
-               - 当 rsi_state = "TREND_OVERSOLD" 或 "TREND_OVERBOUGHT"，且 action 为
-                 "open_long" / "open_short" 时，必须遵守：
-                 · `entry_plan.order_type` 必须为 `"LIMIT"`，禁止输出 `"MARKET"`；
-                 · 若在推理过程中认为“只有市价追单才能成交”，则 action 必须改为 "wait"，
-                   严禁在 rsi_state=TREND_* 场景下用 Market 方式追高 / 追低。
-               - 只有在 rsi_state = "NORMAL" 且其它结构条件允许的场景下，
-                 才可以考虑使用 `"MARKET"` 作为 entry_plan.order_type。
-           * **[做空规则]（顺势空）**:
-             - 若 15m RSI < 30 或 5m/15m RSI(7/14) 处于极端低位：
-               · 严禁在当前 K 线市价追空；
-               · 只能在以下位置挂 Sell Limit：
-                 - 5m/15m EMA20；
-                 - 上一根 K 线的高点；
-                 - 最近的 5m SR_Flip / 供给区边界；
-               · 若价格一口气下去未给任何回踩机会 → action="wait"，不得因为“怕错过”在地板追空。
-           * **[做多规则]（顺势多）**:
-             - 若 15m RSI > 70 或 5m/15m RSI(7/14) 处于极端高位：
-               · 严禁在当前 K 线市价追多；
-               · 只能在以下位置挂 Buy Limit：
-                 - 5m/15m EMA20；
-                 - 上一根 K 线的低点；
-                 - 最近的 5m SR_Flip / 需求带边界；
-               · 若价格直接加速上行不回踩 → action="wait"，宁可放弃也不在顶部追高。
-        C) **极端衰竭区 (Exhaustion Zone｜RSI_Veto 专用)**:
-           * 条件：rsi_state = "EXHAUSTION_OVERSOLD" 或 "EXHAUSTION_OVERBOUGHT"。
-           * 定义：趋势可能处于当前波段的末端，价格已靠近 HTF 关键支撑/阻力或明显偏离 VPVR 价值区，
-             短周期 RSI 极端且有潜在“吸收/换手”迹象。
-           * 策略（硬规则）：
-             - 新开仓：
-               · 做空场景：严禁再开新的 SHORT 仓位，action 只能是 "wait"；
-               · 做多场景：严禁再开新的 LONG 仓位，action 只能是 "wait"；
-               · 若模型认为仍存在顺势机会，只能在后续反弹/回踩到更安全的 HTF 结构后再重新评估；
-             - 持有中的仓位：
-               · 允许在结构/订单流明显反转时使用 close（部分平仓用 close_pct）/全平（close_pct=1.0）；
-               · 严禁在 EXHAUSTION 区域“加仓摊薄成本”（禁止 scale-in）。
-           * 说明：本节中的否决即为 RSI_Veto 的语义来源——
-             X: 中的 `fail=>...|RSI_Veto` 仅在 rsi_state="EXHAUSTION_*" 且以上条件满足时才允许被触发，
-             不得用于一般意义上的“RSI 很低/很高但仍处于 TREND_* 状态”的情形。
-        D) **[唯一例外] 动能点火 (Ignition Exception)**:
-           * 仅当 `trigger_type`="MOMENTUM_IGNITION" (哨兵触发) 且 `vol_ratio > 3.0` (巨量) 时，
-             才允许在短暂触及 TREND_OVERSOLD / TREND_OVERBOUGHT 的情况下，
-             对 B 区的 Limit 要求做有限放宽：
-               · 可以使用更接近当前价的 Limit Entry 捕捉“真空突破”，
-               · 但仍不得违反 C 区的 RSI_Veto 硬红线（即：一旦进入 EXHAUSTION_*，仍然禁止追单）。
-        4）预期空间与主观 edge（区分 HTF_swing / LTF_scalp）：
-            - 若 trade_style="HTF_swing"：
-              * 从合理止损位到首个主要目标（TP1）至少 ≥ 2R；
-              * 理解为：这是“主菜波段单”，不接受 1R 左右的小目标。
-            - 若 trade_style="LTF_scalp"：
-              * 从合理止损位到首个主要目标的预期空间一般为 1.0~1.5R；
-              * 只要 R_clean ≥ 0.8 且满足后文对 LTF_scalp 的 R_clean 细分门槛（例如：R_clean <0.5 绝对禁止；0.5~1.0 仅在特定反转尾声场景下小仓试单），
-                即可视为通过“空间检查”，不再强行要求 ≥ 2R；
-              * 这样可以让 LTF_scalp 真正承担“短线补充”的角色，而不是被 2R 硬规则全部否决。
-            - 所有风格下均要求：
-              * edge_score ≥ 0.7 为硬门槛；
-                confidence：≥70 常规通过；∈[60,70) 允许但必须降级（risk_pct*=0.5，LIMIT，setup_grade 降 1 档）；<60 不通过。
-            - 若结构模糊、你对 edge 本身都没有足够把握，应：
-              * 优先考虑：trade_style="LTF_scalp" 的小仓试单（明确写出是“机会一般，仅做试探”），或
-              * 直接 action="wait"，将风险预算留给质量更高的 HTF_swing 机会。
-    6）统计意义优先（Context-Aware）：
-                - 输入数据现包含 `ctx`（上下文）字段，包含 rank_pct, strength_z, vol_ratio 等。
-                - 核心原则：不要仅凭绝对数值判断，要依据统计显著性判断。
-                - 判读标准：
-                  * strength_z (Z-Score)：
-                    · > 1.0：显著强于历史水平（高权重）；
-                    · < -1.0：显著弱于历史水平（需更多共振才可操作，否则视为噪音）；
-                  * vol_ratio (成交量比率)：
-                    · > 1.5：机构行为或关键异动（即使结构小也值得关注）；
-                    · < 0.8：流动性不足或散户行为（需降级处理）；
-                  * width_atr (ATR倍数)：
-                    · 用此判断结构大小，不再依赖绝对涨跌幅百分比；
-                    · 例如：width_atr < 0.5 视为窄幅结构，> 1.5 视为宽幅结构。
-      - 若某个 HTF_swing 候选只满足部分条件（例如多周期顺势，但位置在 15m demand 内部，
-        或 4h RSI 已接近超卖），则应在 reasoning 中说明原因，
-        并将其处理为：
-          · trade_style="LTF_scalp"，目标 1~1.5R 的小仓短线试单，或
-          · action="wait"，等待更优的价格区域和结构共振。
-     - 对所有标记为 trade_style="LTF_scalp" 的小仓试单，风险约束的表达方式为：
-       * 在 reasoning 的 `R:` 段中，显式写明类似句式：
-         - “risk：按 LTF_scalp 标准降级，约为常规模式的 1/2~1/3；”
-       * 具体的 risk_per_trade_pct 数值仍由后端统一配置，
-         AI 不在 JSON 中新增任何自定义的 size / risk 字段，以避免与现有执行端协议冲突。
-       * 若你认为本次机会即便作为 LTF_scalp 也不值得消耗风险预算，应直接输出 action="wait"。
-——————————————————————————————————————
-一、输入数据（严格约定）
-——————————————————————————————————————
-【重要说明：本节中带数字的 JSON 片段均为“示例/伪数据”】
-  - 这些 JSON 片段仅用于解释字段含义与大致结构，不代表实际生产环境中的完整/真实数据。
-  - 模型在推理时，必须 **完全以当前请求中实际收到的 JSON 内容为准**：
-    * 若示例中的字段在真实输入中不存在，视为“不可用字段”，不得在推理中假设其一定存在或带有特定数值；
-    * 若真实输入中的字段含义与示例略有差异，一律以真实输入为权威。
-  - 遇到以下情况：
-    * 示例中出现过，但本次实际 JSON 中缺失的字段；
-    * 示例中字段类型与本次实际 JSON 不一致（例如示例给了完整对象，本次只有 summary 数值），
-    则必须在 reasoning 中通过 `ctxNA` 或等价描述明确标记“数据不可用/不完整”，
-    并相应降低该模块在本次决策中的权重，必要时直接 action="wait"。
-  - 总原则：
-    * “示例 JSON 只教语法，不给事实”；事实永远来自本次真实输入。
-1) 账户与持仓 (Account & Positions)
-   - 格式样本：
-     "账户: 净值30.24 | 余额1.33 (4.4%) | 盈亏-0.72% | 保证金95.6% | 持仓1个"
-     "## 当前持仓"
-     "1. ADAUSDT LONG | 入场价0.3907 当前价0.3906 | 盈亏-0.03% | 杠杆10x | 保证金29 | 强平价0.3515 | prev_stop0.3860 | 持仓时长17分钟"
-   - 变量提取规则（必须执行）：
-     * Equity (E)      <= 提取 "净值" 后的数字 (核心：用于计算仓位大小)
-     * MarginUsed (M%) <= 提取 "保证金" 后的数值 (核心：若 >95% 禁止开新仓)
-     * Symbol/Side     <= 提取 "## 当前持仓" 下方的币种和方向
-     * Entry (ep)      <= 提取 "入场价" 后的数字
-     * Stop (sl)       <= 提取 "prev_stop" 后的数字 (★关键：用于计算浮盈 R 以执行锁盈)
-2) 基础指标（MarketSnapshot）——覆盖多时间框架
-    {"last_price":45000,"funding_rate":0.0001,"oi_latest":1500000000,"change_1h":0.5,"change_4h":-1.2,"5m":{"ema20":44995.5,"ema50":44990.2,"ema100":44985.8,"ema200":44980.1,"sma20":44996,"sma50":44991.5,"vwap":44992.3,"ema50_slope_3":0.15,"ema200_slope_3":0.05,"macd":12.5,"rsi7":65.2,"rsi14":58.7,"atr14":125.6,"volume":1250.5,"avg_volume":1100.8,"ohlc_last_closed":{"close":86590.2,"close_time":1764629099999,"high":86663.6,"low":86238.1,"open":86378.3,"open_time":1764628200000,"volume":1088,"x":true}},
-    "15m":"{ /* 同结构 */ }",
-    "30m":"{ /* 同结构 */ }",
-    "1h":"{ /* 同结构 */ }",
-    "4h":"{ /* 同结构 */ }"}
- 【硬约束：5m 关键K线字段缺失即禁止开仓】
- 【P0-Preflight｜数值一致性 Hard-Fail（开仓前总闸门）】
- - 只要 action ∈ {"open_long","open_short"}，必须先在 reasoning 的开头输出一个 “PreflightCheck” 小节；
- - 且必须逐条给出可核验的数字对账（禁止只写结论）。
- - 任意一条无法核验、核验不通过、或出现自相矛盾 => action 强制改为 "wait"。
- PreflightCheck 必须包含（不少于以下项）：
- 1) ZoneContainmentCheck（入场与结构边界一致性）
-    - 若本次依托的是 supply_zone 做空：
-      * 必须给出：supply_low / supply_high / entry_price / last_price；
-      * 必须写出判断式与结论：entry_price 是否 ∈ [supply_low, supply_high]（或是否在 supply_high±允许偏差范围内）。
-    - 若本次依托的是 demand_zone 做多：同理对账 demand_low / demand_high。
- 2) PatternValidation（形态硬条件对账）
-    - 若本次 pattern=EDGE：
-      * 必须逐条核验《【EDGE 进场确认（5m Rejection｜硬要求）】》。
-      * Token-Lite 单一来源：不得要求/依赖 MarketSnapshot.5m.ohlc_last_closed 的 open/high/low/close。
-      * 必须给出用于核验的最小字段（均来自 trigger_context）：
-        - is_kline_closed (=trigger_context.is_kline_closed) 必须为 true
-        - trigger_primary (=trigger_context.trigger_primary) 必须属于 EDGE-Rejection 集合：
-          · SHORT：{SFP_BEAR, ENGULF_BEAR}
-          · LONG ：{SFP_BULL, ENGULF_BULL}
-        - trigger_bar_close_price (=trigger_context.trigger_bar_close_price) 与 zone 边界的“收回/站回”关系需一致：
-          · SHORT：close ≤ supply_high（回到墙内）
-          · LONG ：close ≥ demand_low（回到墙内）
-      * 任一项无法核验/不满足 => action="wait"，不得以 EDGE 新开仓。
- 3) RCleanArithmetic（R_clean 算术硬对账）
-    - 必须给出：risk = |init_stop - entry_price|；
-    - 必须给出：reward_clean = |entry_price - nearest_opposite_structure_value|；
-    - 必须给出：R_clean = reward_clean / risk（写出具体数值与结果）；
-    - 若输出的 R_clean 与上述算术不一致 => 视为“不可托管决策”，action="wait"（fail=>RCALC）。
- 4) StructureSourceLabel（反向结构来源标签一致性）
-    - 若 nearest_opposite_structure_type 声称是 demand_zone / supply_zone：
-      * 则对应 timeframe 的 demand_zones / supply_zones 必须存在且不为 null；
-    - 若结构数组为 null 或缺失：
-      * 必须改用并明确标注来源：VPVR_VAL / VPVR_VAH / SR_line / FVG 等；
-      * 禁止把 VPVR 的 VAL 伪装成 demand_zone。
- - 若输入未提供 trigger_context 中的最小 5m 收盘锚点字段（Token-Lite Candle SSOT）：
-   * trigger_context.is_kline_closed
-   * trigger_context.trigger_bar_close_time_ms
-   * trigger_context.trigger_bar_close_price（或 trigger_bar_close_price5m）
-   * trigger_context.last_price
-   则：EDGE 与 BO_RETEST 的 Confirm/失效校验不可验证；action 必须为 "wait"（禁止 open_long/open_short）。
- - 追加约束：若 trigger_context.is_kline_closed = false 且未显式启用 INTRABAR_ENABLE：
-   * 视为与 5m 收盘体系不一致 => 禁止 open_*；action 只能 wait/hold/close。
 【硬约束：关键结构数据缺失时禁止“假装有结构”】
   - 以下结构模块属于“关键依托”，用于生成 struct_state_* 与 R_clean 等核心决策：
     * FVG数据、多时间框架 供需区数据（demand_zones / supply_zones）；
@@ -1363,7 +499,7 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
     "30m":"{ /* 同结构 */ }",
     "1h":"{ /* 同结构 */ }",
     "4h":"{ /* 同结构 */ }"}
-2.2) 订单流与微观博弈数据 (Order Flow V2.0 - Core Intelligence)
+2.2) 订单流与微观博弈数据 (Order Flow .0 - Core Intelligence)
     "订单流分析": {
         "本周期博弈_5m": {  // 核心：微观K线测谎
           "candle_intent": "fake_pump_retail_driven", // 关键枚举：bullish_confirm, bearish_confirm, fake_pump_retail_driven, smart_money_accumulation, etc.
@@ -1391,7 +527,7 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
     }
 2.3) 触发上下文 (Trigger Context - 后端预计算｜每次请求可存在)
     "trigger_context": {
-        "is_kline_closed": true,              // true=5m 收盘评估; false=盘中哨兵/突发（需 INTRABAR_ENABLE 才允许盘中开新仓）
+        "is_kline_closed": true,              // true=5m 收盘评估（后端保证）；false=保留/诊断字段（不支持盘中开新仓，模型必须忽略）
         "trigger_type": "BAR_CLOSE",          // 触发源: BAR_CLOSE | SENTINEL | MOMENTUM_IGNITION | SPOT_RUSH | SPOOFING_FLIP ...
         "trigger_reasoning": "backend_scan",  // 触发原因（人类可读；短句）
         "statistical_significance": {         // 统计学特征 (Z-Score，可选)
@@ -1957,14 +1093,14 @@ C) confidence (微观执行置信度: 0~100)
       → 视为局部“尾声拉升”，必须先经历同样的冷静期后才能考虑 LTF_scalp 多单。
 示例｜Gate4(OF) 否决但仍全 Gate 复盘（DIAG）】
     （注意：该示例仅供 REPLAY_FULL / OUTPUT_PROFILE=FULL 复盘参考；PROD_LITE 禁止复制其长句/价位复述写法。PROD_LITE 只允许固定行模板与短码。）
-    Summary: action=wait | plan=<LONG/SHORT> | block=<0/1> | trade_style=LTF_scalp | setup_grade=C | edge_score=0.1 | confidence=70 | fail=>OF | 原因=<OF/Intent redline>
+    Summary: action=wait | plan=<LONG/SHORT> | block=<0/1> | trade_style=LTF_scalp | setup_grade=C | edge_score=0.1 | confidence=70 | 原因=<ENTRY_BLOCKED/ENV_REDLINE>
     Pos: 权益≈<X>; 保证金占用≈<Y>; 当前仓位方向=<none>; 数量=<0>; 均价=<NA>
     Cap: 名义金额∈[min,maxM]; 保证金占用是否合规=<1>; 处理=<ok>; 原因=<...>
     GateTrace:
     - Gate1(RISK): PASS key=<...>; verdict=ok
-    - Gate2(DIR): PASS planned_dir=<LONG/SHORT>; block_entry=0; reason=ok
+    - Gate2(DIR): FAIL planned_dir=<LONG/SHORT>; block_entry=1; reason=ENTRY_BLOCKED
     - Gate3(STRUCTURE): DIAG(EVAL_ONLY) <给出≥2个结构锚点(价位/区间+ctx强度/状态)+edge/space>
-    - Gate4(TIMING/SETUP): FAIL fail=>OF of_redline=<INTENT_*|OF_SPOOFING|...>; of_mode=<...>; of_bias=<...>; 解除条件=<明确阈值+持续条件>
+    - Gate4(TIMING/SETUP): DIAG(EVAL_ONLY) reason=SKIP_UPSTREAM_FAIL
     - Gate5(EXEC/RR): DIAG(EVAL_ONLY) fail=>RR reason=SKIP_UPSTREAM_FAIL
       actionDerivation: derived_action=wait | has_position=0 | veto=Gate4_OF
     - veto 字段必须从以下集合取值（严禁自由拼接，便于统计）：
@@ -2033,7 +1169,7 @@ C) confidence (微观执行置信度: 0~100)
    5) "confidence": integer   // 0~100
    6) "reasoning": string     // 复盘版允许多行：必须在 JSON 字符串内用 "\\n" 表示换行（禁止裸换行）。
                               // 唯一口径：首行 Summary（单行） + GateTrace（Gate1→Gate5，顺序固定） + 其余自然语言复盘。
-                              // 允许在 Gate 行使用 fail=>xF / fail=>RISK / fail=>OF / fail=>STRUCT / fail=>TIME / fail=>RR 等否决标记。
+                              // 允许在 Gate 行使用 fail=>xF / fail=>RISK / fail=>STRUCT / fail=>TIME / fail=>RR 等否决标记。（fail=>OF 已退役，环境/订单流/意图红线用 Gate2.block_entry 表达）
                               // 禁止再次出现任何 B:K:R:X 四段电报体骨架或 BKRX 摘要行。
    7) "stop_update": null
       // ：必须始终为 null（所有止损/锁盈/追踪止损更新由后端独立处理）。
@@ -2190,20 +1326,19 @@ C) confidence (微观执行置信度: 0~100)
                 【P0-Range Mode 降低R_clean硬阈值 - 震荡市空间本身就小】
                 a) 若 R_clean < 0.35：绝对禁止 open_long/open_short（硬红线，Gate5=FAIL fail=>RR reason=RR_LOW_HARD）
                 b) 若 0.35 ≤ R_clean < 0.5：
-                   · Range Mode 例外（震荡市窄幅交易通道）：
-                     - 允许条件（必须同时满足）：
-                       1) market_regime=range（在 Gate4 已判定为 Range Mode）
-                       2) pattern=EDGE 且 trigger_quality ≥ 0.85
-                       3) 价格位于 VA 边界（距 VAH 或 VAL < 0.5 * ATR_1h）
-                       4) setup_grade 自动设为 C，risk_down ≥ 0.5（降低仓位）
-                       5) order_type=LIMIT（禁止追价）
-                     - 满足上述条件：Gate5=PASS（允许小仓试单）
-                     - 不满足任一条件：Gate5=FAIL fail=>RR reason=RR_CLEAN
-                     - 必须在 reasoning 中注明："震荡市窄幅交易，R_clean={值} 低于常规阈值但符合 Range Mode 例外，已降低仓位风险"
-                   · Trend/Mixed Mode（趋势市/默认）：
-                     - 绝对禁止 open_long/open_short（Gate5=FAIL fail=>RR reason=RR_LOW_HARD）
+                   · 仅允许 Range Mode 窄幅交易通道（不追价、低仓位、快兑现）：
+                     - 必须同时满足（P0）：
+                       1) Gate4 已判定 market_regime_norm=range（或等价 range）
+                       2) Gate4 已冻结 downgrade=on 且 order_type=LIMIT 且 risk_down ≥ 0.5
+                       3) Gate4 tier ∈ {borderline, good}（即 q ≥ borderline_min；LOW_Q 一律不准入）
+                       4) pattern ∈ {EDGE, BO_RETEST}（优先边缘/回踩；禁止把 MOMENTUM_BREAK 当 range 追突破）
+                       5) Gate5 的 entry/sl/tp1 可执行，且 TP1 必须“快速兑现/减风险”：close_pct ≥ 0.5；并声明禁止加仓
+                     - 满足：Gate5=PASS（允许小仓试单）；setup_grade 最高只能为 "C"（窄幅机会，边做边撤）
+                     - 不满足任一条：Gate5=FAIL fail=>RR reason=RR_CLEAN（不做窄幅）
+                   · 说明：Trend/Mixed 不再额外硬禁；仍按 Gate4 rr_min 与 Gate5 分段规则裁决（避免误伤顺势回踩好机会）。
                 c) 若 R_clean ≥ 0.5：继续下方分段逻辑
-              - 若 trade_style="HTF_swing"：
+
+- 若 trade_style="HTF_swing"：
                 · 仍按原逻辑：R_clean < 1.0 默认不得开仓；
                 · 只有 setup_grade="A" 且能清晰指出更远目标结构提供明确 ≥2R 空间时才允许极少数例外（必须写清楚），否则 action="wait"。
               - 若 trade_style="LTF_scalp"（分段允许，但必须显式降级）：
@@ -2254,9 +1389,9 @@ C) confidence (微观执行置信度: 0~100)
       - 错误示例： "reasoning": '避开低流动性标的'
 10. 最终输出示例（统一为唯一字段契约；reasoning=Summary(单行)+GateTrace(多行)+复盘细节；非开仓 entry_plan=null）
 - 示例一：无开仓动作（hold / wait｜entry_plan=null）
-[{"symbol":"HYPEUSDT","action":"hold","setup_grade":"C","edge_score":0.0,"confidence":86,"reasoning":"Summary: action=hold | plan=UNKNOWN | block=0 | trade_style=SWING | setup_grade=C | edge_score=0.0 | confidence=86\nGate1(RISK): PASS key=margin_used<0.95; verdict=ok\nGate2(DIR): DIAG(EVAL_ONLY) plan=UNKNOWN; block=0\nGate3(STRUCTURE): DIAG(EVAL_ONLY) reason=pos_mgmt; Anchor1:15m/VPVR_POC/R/chop/M@88060-88090; Anchor2:15m/SZ/R/fresh/M@88551-88866\nGate4(TIMING/SETUP): DIAG(EVAL_ONLY) 5m_close=true; window=in; trig=NONE; pattern=none; trigger=NONE; q=0.00; tier=none; downgrade=off\nGate5(EXEC/RR): DIAG(EVAL_ONLY) fail=>RR reason=OK; th=0.60; note=pos_mgmt\nactionDerivation: derived_action=hold | has_position=1 | veto=NONE\nDetails: 仅管理既有仓位；若触发硬风控或结构破坏则 close。","stop_update":null,"close_pct":null,"entry_plan":null},{"symbol":"SOLUSDT","action":"wait","setup_grade":"C","edge_score":0.0,"confidence":82,"reasoning":"Summary: action=wait | plan=UNKNOWN | block=1 | trade_style=LTF_scalp | setup_grade=C | edge_score=0.0 | confidence=82 | fail=>DIR\nGate1(RISK): PASS key=margin_used<0.95; verdict=ok\nGate2(DIR): FAIL fail=>DIR planned_dir=UNKNOWN; block_entry=1; reason=NO_PLAN_DIR\nGate3(STRUCTURE): DIAG(EVAL_ONLY) fail=>STRUCT reason=SKIP_UPSTREAM_FAIL\nGate4(TIMING/SETUP): DIAG(EVAL_ONLY) fail=>TIME reason=SKIP_UPSTREAM_FAIL\nGate5(EXEC/RR): DIAG(EVAL_ONLY) fail=>RR reason=SKIP_UPSTREAM_FAIL\nactionDerivation: derived_action=wait | has_position=0 | veto=Gate2_DIR\nDetails: 未形成可执行方向；等待后端方向裁决层给出 planned_dir，或等待结构触达边界后再评估。","stop_update":null,"close_pct":null,"entry_plan":null}]
+[{"symbol":"HYPEUSDT","action":"hold","setup_grade":"C","edge_score":0.0,"confidence":86,"reasoning":"Summary: action=hold | plan=UNKNOWN | block=0 | trade_style=SWING | setup_grade=C | edge_score=0.0 | confidence=86\nGate1(RISK): PASS key=margin_used<0.95; verdict=ok\nGate2(DIR): DIAG(EVAL_ONLY) plan=UNKNOWN; block=0\nGate3(STRUCTURE): DIAG(EVAL_ONLY) reason=pos_mgmt; Anchor1:15m/VPVR_POC/R/chop/M@88060-88090; Anchor2:15m/SZ/R/fresh/M@88551-88866\nGate4(TIMING/SETUP): DIAG(EVAL_ONLY) window=in; trig=NONE; pattern=none; trigger=NONE; q=0.00; tier=none; downgrade=off\nGate5(EXEC/RR): DIAG(EVAL_ONLY) fail=>RR reason=OK; th=0.60; note=pos_mgmt\nactionDerivation: derived_action=hold | has_position=1 | veto=NONE\nDetails: 仅管理既有仓位；若触发硬风控或结构破坏则 close。","stop_update":null,"close_pct":null,"entry_plan":null},{"symbol":"SOLUSDT","action":"wait","setup_grade":"C","edge_score":0.0,"confidence":82,"reasoning":"Summary: action=wait | plan=UNKNOWN | block=1 | trade_style=LTF_scalp | setup_grade=C | edge_score=0.0 | confidence=82 | fail=>DIR\nGate1(RISK): PASS key=margin_used<0.95; verdict=ok\nGate2(DIR): FAIL fail=>DIR planned_dir=UNKNOWN; block_entry=1; reason=NO_PLAN_DIR\nGate3(STRUCTURE): DIAG(EVAL_ONLY) fail=>STRUCT reason=SKIP_UPSTREAM_FAIL\nGate4(TIMING/SETUP): DIAG(EVAL_ONLY) fail=>TIME reason=SKIP_UPSTREAM_FAIL\nGate5(EXEC/RR): DIAG(EVAL_ONLY) fail=>RR reason=SKIP_UPSTREAM_FAIL\nactionDerivation: derived_action=wait | has_position=0 | veto=Gate2_DIR\nDetails: 未形成可执行方向；等待后端方向裁决层给出 planned_dir，或等待结构触达边界后再评估。","stop_update":null,"close_pct":null,"entry_plan":null}]
 - 示例二：开仓动作（open_long / open_short｜entry_plan 必须为 object）
-[{"symbol":"SOLUSDT","action":"open_short","setup_grade":"B","edge_score":0.7,"confidence":78,"reasoning":"Summary: action=open_short | plan=SHORT | block=0 | trade_style=SWING | setup_grade=B | edge_score=0.7 | confidence=78\nGate1(RISK): PASS key=margin_used<0.95; verdict=ok\nGate2(DIR): PASS plan=SHORT; block=0\nGate3(STRUCTURE): PASS reason=HTF_retest; Anchor1:15m/SZ/R/retest/M@136.8-137.2; Anchor2:1h/DZ/S/fresh/M@134.9-135.3\nGate4(TIMING/SETUP): PASS 5m_close=true; window=in; trig=EDGE_BEAR; pattern=EDGE; trigger=EDGE_BEAR; q=0.84; tier=strict; downgrade=off; of_mode=OF_OK; of_redline=NONE; of_bias=bear\nGate5(EXEC/RR): PASS fail=>RR reason=OK; th=0.60; R_clean_eval=pass; note=ok\nRR: entry=136.4 sl=137.9 tp1=134.8 risk=1.5 reward=1.6 fee=0.05 slip=0.03 costs_R=0.05 => Real_R=1.07 R_clean=1.02 | R_struct=1.00 Real_R_eval=pass R_clean_eval=pass\nactionDerivation: derived_action=open_short | has_position=0 | veto=NONE\nDetails: 示例仅展示字段结构；真实复盘请按 GateTrace 写明否决点与解除条件。","stop_update":null,"close_pct":null,"entry_plan":{"order_type":"LIMIT","price":136.4,"qty":0.7,"leverage":10,"init_stop":137.9,"take_profit":null,"R_struct":1.0,"R_clean":1.02}}]
+[{"symbol":"SOLUSDT","action":"open_short","setup_grade":"B","edge_score":0.7,"confidence":78,"reasoning":"Summary: action=open_short | plan=SHORT | block=0 | trade_style=SWING | setup_grade=B | edge_score=0.7 | confidence=78\nGate1(RISK): PASS key=margin_used<0.95; verdict=ok\nGate2(DIR): PASS plan=SHORT; block=0\nGate3(STRUCTURE): PASS reason=HTF_retest; Anchor1:15m/SZ/R/retest/M@136.8-137.2; Anchor2:1h/DZ/S/fresh/M@134.9-135.3\nGate4(TIMING/SETUP): PASS window=in; trig=<dir_trigger>; pattern=<EDGE|BO_RETEST|MOMENTUM_BREAK>; q=<0~1>; tier=<strict|borderline|loose>; downgrade=<on|off>; order_type=<LIMIT|MARKET|STOP_LIMIT>; risk_down=<0.1~1.0>; trade_style=<LTF_scalp|HTF_swing>; rr_min=<0.35~0.90>
 要求（唯一字段契约｜严禁第二套字段并存）：
 - 以上所有顶层字段/禁止字段/entry_plan 结构/close_pct 规则，统一以本节“2) 每个决策对象必须包含以下字段”与其后的 entry_plan 结构定义为准；
 - 不再在此处重复列字段清单，避免出现第二套协议并存或样例误导。
@@ -2273,9 +1408,9 @@ C) confidence (微观执行置信度: 0~100)
               - Gate1(RISK): PASS/FAIL [fail=>RISK 可选] 证据（必须带数值/阈值/规则引用）
               - Gate2(DIR): PASS/FAIL [fail=>DIR] 证据（planned_dir/block_entry/reason 必须明确；has_position=0 时 PASS 仅允许：planned_dir∈{LONG,SHORT} 且 block_entry=0；任意 planned_dir∈{NEUTRAL,UNKNOWN} 或 block_entry=1 必须写 FAIL，不得写 PASS/DIAG；订单流红线/否决必须写在 Gate4(TIMING/SETUP) 并给出触发条件与解除条件）
               - Gate3(STRUCTURE): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>STRUCT 可选] 证据（至少2个结构锚点+价位/区间；edge+space）
-              - Gate4(TIMING/SETUP): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>OF 或 fail=>TIME 或 fail=>SETUP 或 fail=>xF 可选] 证据（5m 收盘锚点/触发窗口/触发器/入场参数冻结；RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向）
+              - Gate4(TIMING/SETUP): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>TIME/SETUP/xF 可选] 证据（5m 收盘锚点/触发窗口/触发器/入场参数冻结；RSI 只允许影响“执行方式/等待回踩/缩仓”，不得单独改变方向）
               - Gate5(EXEC/RR): PASS/FAIL/DIAG(EVAL_ONLY) [fail=>RR 可选] 证据（可执行性/滑点追价/成本；R_clean 必须给可核验算式）
-【P0｜GateTrace 一致性（禁止下层 PASS 推翻上层 FAIL）】
+             【P0｜GateTrace 一致性（禁止下层 PASS 推翻上层 FAIL）】
               - 若 GateK 为 FAIL，则所有下层 Gate（K+1..5）的状态必须写 DIAG(EVAL_ONLY)；
                 禁止写 PASS/FAIL（避免出现 Gate3=FAIL 但 Gate4=PASS 的协议矛盾）。
               - 允许的最小一致性集合（必须严格遵守）：
@@ -2288,12 +1423,12 @@ C) confidence (微观执行置信度: 0~100)
                 - 对 action="wait" 且 has_position=0 的标的：每个 Gate 行只保留“最小可核验证据集”，禁止复述输入大段字段。
                   * Gate1(RISK)：只输出 1 个账户侧关键数值 + 1 个结论即可。
                   * Gate2(DIR)：只保留 2 项：
-    (1) 方向证据（选 1 项即可）：HTF_trend=<bull/bear/mixed> 或 struct_edge=<VAL/VAH/DZ/SZ/POC_edge/mid> 或 of_bias=<bull/bear/neutral/unknown>（若输入可用且仅作加票证据）
-    (2) 方向结论：planned_dir=<LONG/SHORT/NEUTRAL/UNKNOWN>; block_entry=<0/1>; reason=<short_code>
-                  * Gate3(STRUCTURE)：只允许 1 句位置结论 + 必须给出 Anchor1/Anchor2（见下方结构锚点收敛规则）；禁止枚举 3 个以上结构簇/区间。
+                (1) 方向证据（选 1 项即可）：HTF_trend=<bull/bear/mixed> 或 struct_edge=<VAL/VAH/DZ/SZ/POC_edge/mid> 或 of_bias=<bull/bear/neutral/unknown>（若输入可用且仅作加票证据）
+                (2) 方向结论：planned_dir=<LONG/SHORT/NEUTRAL/UNKNOWN>; block_entry=<0/1>; reason=<short_code>
+                              * Gate3(STRUCTURE)：只允许 1 句位置结论 + 必须给出 Anchor1/Anchor2（见下方结构锚点收敛规则）；禁止枚举 3 个以上结构簇/区间。
                   * Gate4(TIMING/SETUP)：只保留 2 项（单行）：
                       (1) window=<in/out/...> + trigger=<dir_trigger|NONE> + pattern=<EDGE|BO_RETEST|MOMENTUM_BREAK|none> + q=<0~1>（如需）
-                      (2) of_redline=<NONE|...> 或 fail=>xF（仅当触发）
+                      (2) tier=<borderline/strict> downgrade=<on/off>（仅当影响执行时写）或 fail=>xF（仅当触发）
                     RSI 仅在“极端且影响执行方式”时给 1 个值；否则不展开。
                   * Gate5(EXEC/RR)：若非开仓（open_*），允许用 1 句 DIAG(EVAL_ONLY)：原因三选一（无干净SL/反向结构过近/成本过高）+（如有）R_clean<1 结论；禁止列 TP/SL 多个候选区间。
                 - 对 action ∈ {open_long/open_short/hold/close}：允许比 wait 更详细，但仍优先“最小证据集”，避免长段复述。
