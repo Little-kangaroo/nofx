@@ -347,7 +347,7 @@ func (client *Client) callOnce(systemPrompt, userPrompt string) (string, error) 
 
 			// GPT-5.1专用参数（Prompt Caching）
 			if client.Model == "gpt-5.1" || strings.Contains(client.Model, "gpt-5.2") {
-				requestBody["reasoning_effort"] = "low"
+				requestBody["reasoning_effort"] = "none"
 				requestBody["prompt_cache_retention"] = "24h"
 				requestBody["prompt_cache_key"] = "nofx:gpt-at:prod" // 🔥 缓存键，确保模板版本一致性
 			}
