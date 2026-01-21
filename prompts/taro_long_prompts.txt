@@ -23,31 +23,7 @@
   任何上层 Gate 否决，都不得用下层指标“推翻”上层结论。
   但为复盘与 NextTrigger 制定：
   - 仅当 debug_full_reasoning=true 或 OUTPUT_PROFILE=FULL（REPLAY_FULL）时：即使 action 已被上层 Gate 锁定（如 wait/hold/close），也必须继续按 Gate1→Gate5 输出“诊断评估（DIAG）”用于解释与复盘；DIAG 仅做说明，不得改变本次 action。
-  - 否则（默认 PROD_LITE）：一旦上游 Gate 已锁定 action，下游 Gate 只允许输出固定占位 DIAG(EVAL_ONLY)（reason=SKIP_UPSTREAM_FAIL），不得展开结构锚点/触发器/RR/价位推导，以避免回溯导致的延迟
-
-【P0｜生产性能硬约束（不改规则，仅压缩输出）｜SSOT】
-- 目标：在不改变 Gate 判定规则/阈值/动作集合的前提下，将默认输出控制为“低 token、低延迟”。
-- 默认输出档位：PROD_LITE（除非输入显式开启 debug_full_reasoning=true 或 OUTPUT_PROFILE=FULL）。
-- PROD_LITE 下，每个 symbol 的 reasoning 必须满足硬约束（否则视为 fail=>PROTO_PERF 并先删减再输出）：
-  1) 禁止输出“Details:”或任何长段落解释；如需解释，只允许 1 行 Why: <短码>（≤80 字符）。
-  2) GateTrace 行数上限：
-     - has_position=0：最多 7 行（Summary + Gate1 + Gate2 + Gate3 + Gate4 + Gate5 + actionDerivation）。
-     - has_position=1：最多 6 行（Summary + Gate1 + Gate2 + Gate3 + actionDerivation + 可选 Why）。
-  3) 当上游 FAIL 已锁定 action（进入 DIAG(EVAL_ONLY)）时：
-     - Gate4 行必须**严格仅输出**：Gate4(TIMING/SETUP): DIAG(EVAL_ONLY) fail=>TIME reason=SKIP_UPSTREAM_FAIL
-     - Gate5 行必须**严格仅输出**：Gate5(EXEC/RR): DIAG(EVAL_ONLY) fail=>RR reason=SKIP_UPSTREAM_FAIL
-     - 禁止在 DIAG 行追加 window/trigger/pattern/tier/Anchor/scan/价位/区间/任何推导。
-  4) 当 Gate4=FAIL 且需要 DEFER（仅在 Gate3=PASS 且 block_entry=0 且 has_position=0 时）：
-     - NextTrigger 与 PendingSetup 各 1 行，均 ≤110 字符；price_cond 仅允许 1 个区间（禁止“或/以及/多个备选区间”）。
-     - 除这两行外，仍禁止 Details 段落。
-  5) 当 Gate4=PASS 且 Gate5 进入 RR 计算：RR 对账行在 PROD_LITE 下改为可选（默认省略），仅当 action=open_* 或 action=close 时输出 1 行简版 RR（≤140 字符）。
-
-【P0｜超限自检（必须执行）】
-- 输出前自检：若 reasoning 中出现 "Details:" 或任一行长度>140 或总行数超上限，必须先删减：
-  - 优先删 Details 段落；
-  - 其次删多余的 DIAG 解释/多余字段（window/pattern/tier 等）；
-  - 保留 Summary、最高优先级 veto Gate 行、actionDerivation。
-。
+  - 否则（默认 PROD_LITE）：一旦上游 Gate 已锁定 action，下游 Gate 只允许输出固定占位 DIAG(EVAL_ONLY)（reason=SKIP_UPSTREAM_FAIL），不得展开结构锚点/触发器/RR/价位推导，以避免回溯导致的延迟。
 【Gate 架构（强制｜去重精简｜职责边界清晰）】
 - 本版本将“方向裁决”独立为 Gate2(DIR)，避免方向层被订单流/触发窗口反复改写；
   同时将“时机窗口 + 触发器 + 执行冻结”合并为 Gate4(TIMING/SETUP)，并将订单流/环境红线否决后端化（以 Gate2.block_entry 呈现），减少 Gate 堆叠导致的系统性漏开与口径冲突。
@@ -441,11 +417,6 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
   * 仅在“上游 FAIL 已锁定本次 action”的场景，允许下游 Gate3~Gate5 以 DIAG(EVAL_ONLY) 诊断占位；Gate5 reason 必须为 SKIP_UPSTREAM_FAIL。
   * 【DIAG(EVAL_ONLY) 占位规则（防回溯）｜P0】当进入 DIAG(EVAL_ONLY)（即：上游 FAIL 已锁定 action）时：
     - PROD_LITE（默认）：下游 Gate 行必须使用固定短码 reason=SKIP_UPSTREAM_FAIL；禁止新增结构锚点/触发器/entry/sl/tp/RR 计算或任何价位推导。
-    * 【硬格式（PROD_LITE）】当使用 DIAG(EVAL_ONLY) 时：该行必须仅包含固定短句，不得附加任何字段。
-      - Gate3(STRUCTURE): DIAG(EVAL_ONLY) fail=>STRUCT reason=SKIP_UPSTREAM_FAIL
-      - Gate4(TIMING/SETUP): DIAG(EVAL_ONLY) fail=>TIME reason=SKIP_UPSTREAM_FAIL
-      - Gate5(EXEC/RR): DIAG(EVAL_ONLY) fail=>RR reason=SKIP_UPSTREAM_FAIL
-
     - REPLAY_FULL/OUTPUT_PROFILE=FULL：允许下游 Gate 做“最小诊断”，但仍不得改变已锁定的 action。
 【动作选择要求】
 - 当不同模块信号冲突时，你必须在 reasoning 中显式说明：
