@@ -31,14 +31,15 @@ type Config struct {
 }
 
 // DefaultConfig 返回默认配置
+// 🔥 优化：提高反应速度的配置调整
 func DefaultConfig() Config {
 	return Config{
-		// 数据质量阈值
-		MinOverallScore: 0.60,
-		MinMicroDQ:      0.50,
+		// 数据质量阈值（提高要求，确保信号质量）
+		MinOverallScore: 0.65, // 从 0.60 提高到 0.65
+		MinMicroDQ:      0.55, // 从 0.50 提高到 0.55
 
-		// 欺骗风险阈值
-		SpoofHard: 0.80,
+		// 欺骗风险阈值（更严格的检测）
+		SpoofHard: 0.75, // 从 0.80 降低到 0.75
 		SpoofSoft: 0.60,
 
 		// 流动性阈值
@@ -47,13 +48,13 @@ func DefaultConfig() Config {
 		// 墙体闪烁阈值
 		WallFlickerN: 120,
 
-		// 动态权重范围（订单流权重更高）
-		WOFMin: 0.60,
-		WOFMax: 0.80,
+		// 动态权重范围（提高订单流权重）
+		WOFMin: 0.70, // 从 0.60 提高到 0.70
+		WOFMax: 0.85, // 从 0.80 提高到 0.85
 
-		// 方向裁决阈值
-		ThetaNeutral: 0.12,
-		MinConf:      0.30,
+		// 方向裁决阈值（降低阈值，更容易触发）
+		ThetaNeutral: 0.10, // 从 0.12 降低到 0.10
+		MinConf:      0.25, // 从 0.30 降低到 0.25
 
 		// 归一化尺度
 		CVDFallbackScale: 1e6,

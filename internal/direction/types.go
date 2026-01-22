@@ -95,21 +95,18 @@ type Wall struct {
 type MTFAnalysis map[string]TimeframeData
 
 // TimeframeData 单个时间框架数据
+// 🔥 优化：使用通道指标替代 SuperTrend + 道氏理论
 type TimeframeData struct {
-	SuperTrend SuperTrend `json:"超级趋势指标"`
-	Dow        Dow        `json:"道氏理论数据"`
-	VPVR       VPVR       `json:"VPVR数据"`
+	Channel ChannelInfo `json:"通道分析数据"` // 通道指标（主要方向判断）
+	VPVR    VPVR        `json:"VPVR数据"`    // VPVR（用于平局打破）
 }
 
-// SuperTrend 超级趋势指标
-type SuperTrend struct {
-	Direction string `json:"direction"` // "bullish" or "bearish"
-}
-
-// Dow 道氏理论数据
-type Dow struct {
-	TrendDirection string  `json:"trend_direction"` // "up", "down", "sideways"
-	TrendStrength  float64 `json:"trend_strength"`  // 0-100
+// ChannelInfo 通道信息（简化版，用于方向裁决）
+type ChannelInfo struct {
+	Direction       string  `json:"direction"`        // "up", "down", "sideways"
+	CurrentPosition string  `json:"current_position"` // "Inside", "BreakUp", "BreakDown"
+	PriceRatio      float64 `json:"price_ratio"`      // 价格在通道中的位置 0-1
+	Quality         float64 `json:"quality"`          // 通道质量 0-1
 }
 
 // VPVR Volume Profile Volume Range

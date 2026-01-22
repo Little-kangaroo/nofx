@@ -155,13 +155,14 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	structDir := StructDirFromMTF(in.MTF)
 
 	// ========== Step C: 订单流合成方向（主导方向）==========
+	// 🔥 优化：提高 CVD 和订单簿权重，降低宏观权重
 	ofDir := clamp(
-		0.30*macroSign+
-			0.15*intentSign+
-			0.20*cvdSign+
-			0.10*oiSign+
-			0.15*obSign+
-			0.10*wallSign,
+		0.15*macroSign+      // 宏观趋势：从 30% 降低到 15%
+			0.15*intentSign+ // 蜡烛意图：保持 15%
+			0.30*cvdSign+    // CVD：从 20% 提高到 30%
+			0.10*oiSign+     // OI：保持 10%
+			0.20*obSign+     // 订单簿：从 15% 提高到 20%
+			0.10*wallSign,   // 墙：保持 10%
 		-1, 1,
 	)
 

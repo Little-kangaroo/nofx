@@ -165,6 +165,7 @@ func parseWall(data map[string]interface{}, key string) *direction.Wall {
 }
 
 // parseMTFData 解析多时间框架数据
+// 🔥 优化：只解析 15m 和 30m 的通道数据，移除 SuperTrend 和道氏理论
 func parseMTFData(data interface{}) direction.MTFAnalysis {
 	// 将 interface{} 转换为 JSON，再解析为目标结构
 	jsonData, err := json.Marshal(data)
@@ -181,7 +182,8 @@ func parseMTFData(data interface{}) direction.MTFAnalysis {
 	}
 
 	mtf := make(direction.MTFAnalysis)
-	timeframes := []string{"4h", "1h", "30m", "15m", "5m"}
+	// 🔥 优化：只使用 15m 和 30m 时间框架
+	timeframes := []string{"30m", "15m"}
 
 	for _, tf := range timeframes {
 		tfData, ok := rawData[tf].(map[string]interface{})
@@ -190,37 +192,31 @@ func parseMTFData(data interface{}) direction.MTFAnalysis {
 		}
 
 		mtf[tf] = direction.TimeframeData{
-			SuperTrend: parseSuperTrend(tfData),
-			Dow:        parseDow(tfData),
-			VPVR:       parseVPVR(tfData),
+			Channel: parseChannel(tfData),
+			VPVR:    parseVPVR(tfData),
 		}
 	}
 
 	return mtf
 }
 
-// parseSuperTrend 解析超级趋势指标
-func parseSuperTrend(data map[string]interface{}) direction.SuperTrend {
-	stData, ok := data["超级趋势指标"].(map[string]interface{})
+// parseChannel 解析通道数据
+func parseChannel(data map[string]interface{}) direction.ChannelInfo {
+	chData, ok := data["通道分析数据"].(map[string]interface{})
 	if !ok {
-		return direction.SuperTrend{Direction: "bearish"}
+		return direction.ChannelInfo{
+			Direction:       "sideways",
+			CurrentPosition: "Inside",
+			PriceRatio:      0.5,
+			Quality:         0.0,
+		}
 	}
 
-	return direction.SuperTrend{
-		Direction: getStringOrDefault(stData, "direction", "bearish"),
-	}
-}
-
-// parseDow 解析道氏理论数据
-func parseDow(data map[string]interface{}) direction.Dow {
-	dowData, ok := data["道氏理论数据"].(map[string]interface{})
-	if !ok {
-		return direction.Dow{}
-	}
-
-	return direction.Dow{
-		TrendDirection: getStringOrDefault(dowData, "trend_direction", "sideways"),
-		TrendStrength:  getFloatOrDefault(dowData, "trend_strength", 0),
+	return direction.ChannelInfo{
+		Direction:       getStringOrDefault(chData, "direction", "sideways"),
+		CurrentPosition: getStringOrDefault(chData, "current_position", "Inside"),
+		PriceRatio:      getFloatOrDefault(chData, "price_ratio", 0.5),
+		Quality:         getFloatOrDefault(chData, "quality", 0.0),
 	}
 }
 

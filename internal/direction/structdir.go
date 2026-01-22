@@ -3,15 +3,14 @@ package direction
 import "strings"
 
 // StructDirFromMTF 从多时间框架分析计算结构方向 [-1, +1]
-// 权重：4h(45%) > 1h(30%) > 30m(15%) > 15m(10%)
-// 5m 不参与方向背景计算，交给触发器处理
+// 🔥 优化：使用通道指标替代 SuperTrend + 道氏理论
+// 权重：30m(60%) > 15m(40%)
+// 只使用 15m 和 30m 时间框架，提高反应速度
 func StructDirFromMTF(mtf MTFAnalysis) float64 {
-	// 时间框架权重配置
+	// 时间框架权重配置（只使用 15m 和 30m）
 	weights := map[string]float64{
-		"4h":  0.45,
-		"1h":  0.30,
-		"30m": 0.15,
-		"15m": 0.10,
+		"30m": 0.60,
+		"15m": 0.40,
 	}
 
 	sum := 0.0
@@ -21,19 +20,14 @@ func StructDirFromMTF(mtf MTFAnalysis) float64 {
 			continue
 		}
 
-		// 超级趋势方向符号
-		st := stSign(t.SuperTrend.Direction)
-		// 道氏理论方向符号
-		dow := dowSign(t.Dow.TrendDirection)
+		// 通道方向符号
+		chSign := channelSign(t.Channel.Direction, t.Channel.CurrentPosition, t.Channel.PriceRatio)
 
-		// 综合方向：超级趋势权重 60%，道氏理论权重 40%
-		tfSign := 0.60*float64(st) + 0.40*float64(dow)
-
-		// 趋势强度因子：强度越高权重越大
-		strengthF := clamp(t.Dow.TrendStrength/80.0, 0.2, 1.0)
+		// 通道质量因子：质量越高权重越大
+		qualityF := clamp(t.Channel.Quality, 0.3, 1.0)
 
 		// 加权累加
-		sum += w * tfSign * strengthF
+		sum += w * chSign * qualityF
 	}
 
 	// VPVR tie-break：仅在方向不明确时使用
@@ -46,27 +40,57 @@ func StructDirFromMTF(mtf MTFAnalysis) float64 {
 	return clamp(sum, -1, 1)
 }
 
-// stSign 超级趋势方向符号
-// bullish -> +1, bearish -> -1
-func stSign(dir string) int {
-	d := strings.ToLower(dir)
-	if d == "bullish" {
-		return 1
-	}
-	return -1
-}
+// channelSign 通道方向符号 [-1, +1]
+// 综合考虑通道方向、价格位置、突破情况
+func channelSign(direction, position string, priceRatio float64) float64 {
+	dir := strings.ToLower(direction)
+	pos := strings.ToLower(position)
 
-// dowSign 道氏理论方向符号
-// up -> +1, down -> -1, sideways -> 0
-func dowSign(d string) int {
-	s := strings.ToLower(d)
-	if s == "up" {
-		return 1
+	// 基础方向符号
+	var baseSign float64
+	switch dir {
+	case "up":
+		baseSign = 1.0
+	case "down":
+		baseSign = -1.0
+	case "sideways":
+		baseSign = 0.0
+	default:
+		baseSign = 0.0
 	}
-	if s == "down" {
-		return -1
+
+	// 根据价格位置调整信号强度
+	switch pos {
+	case "breakup":
+		// 向上突破：强看涨
+		return 1.0
+	case "breakdown":
+		// 向下突破：强看跌
+		return -1.0
+	case "inside":
+		// 在通道内：根据位置调整
+		if dir == "up" {
+			// 上升通道：价格越接近下轨越看涨（回调买入机会）
+			// priceRatio: 0=下轨, 1=上轨
+			if priceRatio < 0.3 {
+				return 1.0 // 接近下轨，强看涨
+			} else if priceRatio > 0.7 {
+				return 0.5 // 接近上轨，弱看涨（可能回调）
+			}
+			return 0.8 // 中间位置，正常看涨
+		} else if dir == "down" {
+			// 下降通道：价格越接近上轨越看跌（反弹卖出机会）
+			if priceRatio > 0.7 {
+				return -1.0 // 接近上轨，强看跌
+			} else if priceRatio < 0.3 {
+				return -0.5 // 接近下轨，弱看跌（可能反弹）
+			}
+			return -0.8 // 中间位置，正常看跌
+		}
+		return baseSign * 0.5 // 横盘通道，信号较弱
+	default:
+		return baseSign * 0.5
 	}
-	return 0
 }
 
 // vpvrTieBreak VPVR tie-break 逻辑
