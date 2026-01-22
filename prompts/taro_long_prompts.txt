@@ -41,6 +41,8 @@
 - Gate2 的目标：
   1) 在不依赖 5m Trigger 的前提下，确定本轮“只评估哪个方向”（避免先触发后裁方向的回溯矛盾）；
   2) 允许参考订单流偏置作为“方向证据”（仅加票/减票），但订单流/环境/意图红线否决由后端裁决并通过 block_entry 输入；模板内不再使用 Gate4 fail=>OF。
+- P0（ 加硬可观测性约束）：Gate2 输出行中严禁出现 trigger_primary/trigger_flags/dir_trigger/q/tier/window 等触发相关字段；
+  仅当本轮满足“反转白名单”并输出 mode=COUNTERTREND 时，才允许在 Gate2 行用 1 个短语注明 trig_dir 作为“冲突探测”依据（不得展开形态细节）。
 - 缺省规则（P0｜必须执行）：
   a) 若输入缺失 planned_dir 或为空：视为 planned_dir=UNKNOWN；
   b) 若输入缺失 block_entry 或为空：
@@ -50,44 +52,59 @@
      - Gate2 必须输出 DIAG(EVAL_ONLY) reason=POS_MGMT（仅管理仓位，不代表开仓许可）；
      - planned_dir 允许为 {LONG, SHORT, UNKNOWN}（推荐：与持仓方向一致；若无法确定则 UNKNOWN）；
      - 但无论 planned_dir 为何：持仓时顶层 action 仅允许 ∈ {"hold","close"}（绝对禁止 open_* 与 wait）。
-【P0｜方向一致性自检与有限翻转（Plan Sanity & Limited Flip｜提升盈利机会捕捉）】
-- 背景：后端 direction_arbitration.plan_side（下称 suggested_dir）可能在“极值区 + 反向触发”场景下滞后；若仍强制沿 suggested_dir 评估，Gate4 会频繁出现 NO_TRIGGER_FOR_DIR，导致有效机会被动丢失。
-- 目标：在不破坏 Gate1→Gate5 架构的前提下，让 Gate2 产出“最终执行方向 planned_dir”，并在严格条件下允许从 suggested_dir 进行有限翻转（countertrend 仅用于快进快出）。
+【P0｜方向一致性自检与有限翻转（｜极稀有反转，仅用于降低误开）】
+-  总原则：若后端已提供 suggested_dir（direction_arbitration.plan_side），则其为默认 SSOT。
+  Gate2 在 has_position=0 且 block_entry=0 的前提下：
+  1) 默认 planned_dir := suggested_dir（不得因 5m 触发器/窗口而改写方向）。
+  2) 只有在满足“反转白名单（Flip Allowlist）”的极端条件时，才允许从 suggested_dir 进行有限翻转；
+     否则若存在明显冲突，必须直接 planned_dir=NEUTRAL + block_entry=1（本轮禁新开仓），避免把冲突拖到 Gate4/5 才暴雷。
 
 【定义｜Gate2 输入/输出口径（SSOT）】
-- suggested_dir：direction_arbitration.plan_side（或等价字段），仅作为建议方向，不再视为强制执行方向。
+- suggested_dir：direction_arbitration.plan_side（或等价字段），后端建议方向 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}。
 - planned_dir：Gate2 最终输出方向 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}，作为 Gate3~Gate5 的唯一方向口径。
-- block_entry：仍为后端硬否决（1=禁止新开仓；0=允许进入后续 Gate 审查）。Gate2 不得把 block_entry=1 改回 0。
+- block_entry：仍为后端硬否决（1=禁止新开仓；0=允许进入后续 Gate）。Gate2 不得把 block_entry=1 改回 0。
 
-【冲突判定（只用于“自检/翻转”，不允许在 Gate2 输出结构锚点）】
-- trig_dir：由 trigger_context.trigger_primary 推导：
-  - *_BULL -> LONG
-  - *_BEAR -> SHORT
-  - 缺失/无法推导 -> UNKNOWN
-- edge_type：trigger_context.trigger_type（若缺失则忽略）；重点使用 edge_support / edge_resistance。
-- q：trigger_context.trigger_quality[trigger_primary]（缺失则取 0）。
-- htf_exhaustion：若输入提供 HTF RSI14（4h 优先，其次 1h），用于判断“极端超买/超卖”：
-  - RSI14 ≤ 30 -> 倾向 LONG 反转
-  - RSI14 ≥ 70 -> 倾向 SHORT 反转
+【冲突探测（仅用于“是否允许翻转”的自检；不允许在 Gate2 产出结构锚点/价格）】
+- trig_dir：仅用于检测“后端方向是否与当前 5m 触发方向严重相反”，不得作为顺势交易的定向证据。
+  trig_dir 由 trigger_context.trigger_primary 推导：
+  - 包含 *_BULL 或 *_LONG 视为 LONG；包含 *_BEAR 或 *_SHORT 视为 SHORT；否则 UNKNOWN。
 
-【有限翻转许可（仅 has_position=0 且 block_entry=0）】
-- SHORT -> LONG（COUNTERTREND_LONG）：
-  - suggested_dir=SHORT
-  - trig_dir=LONG 且 edge_type=edge_support
-  - q ≥ 0.82
-  - 且满足 htf_exhaustion(≤30) 或（缺失 RSI 时）q ≥ 0.88
-  -> 则 Gate2 允许输出 planned_dir=LONG，并标记 mode=COUNTERTREND。
-- LONG -> SHORT（COUNTERTREND_SHORT）：对称条件（edge_resistance / RSI≥70）。
+【有限翻转白名单（Flip Allowlist｜.1｜用于“纠错方向”，但不以牺牲频率为代价）】
+- 适用前置：has_position=0 且 block_entry=0 且 suggested_dir∈{LONG,SHORT} 且 trig_dir 与 suggested_dir 方向相反。
+- .1 的翻转分两类（满足其一即可；否则视为“不满足翻转”）：
 
-【冲突但不满足翻转】
-- 若 suggested_dir 与 trig_dir 明显冲突（LONG vs SHORT），但不满足上面翻转阈值：
-  -> Gate2 输出 planned_dir=NEUTRAL 且 block_entry=1；reason=DIR_CONFLICT_NO_FLIP。
-  目的：避免把冲突留给 Gate4 以 NO_TRIGGER_FOR_DIR 形式表现，从而反复“看见触发但不交易”。
+A) EXTREME_REVERSAL（极值反转｜更少但更稳）
+  1) 触发强度：q ≥ 0.90。
+  2) RSI 极值（优先）：必须能从输入中读取到 4h RSI 且满足极值：
+     - flip_to_LONG：RSI_4h ≤ 28
+     - flip_to_SHORT：RSI_4h ≥ 72
+     若 RSI_4h 缺失：仅当 pattern∈{SFP,ENGULF} 且“HTF 边缘贴边”可被证明时才可继续；否则禁止。
+  3) HTF 反向趋势不得强：若 4h/1h 显示“强顺势”且与 suggested_dir 同向（trend_strength ≥ 65，或 4h 与 1h 的 SuperTrend/道氏方向均与 suggested_dir 同向），禁止翻转。
+  4) 必须处于 HTF 边缘（结构极值）：输入中必须能证明 last_price 位于 4h 或 1h 的 DZ/SZ/VAL/VAH/FIB-OTE 等边缘附近（不是价值区中部）。
 
-【翻转后的风控硬约束（P0｜必须执行）】
-- 仅允许 trade_style=LTF_scalp；必须 downgrade=on；order_type=LIMIT；risk_down ≤ 0.5；
-- rr_min 允许下调至 0.35~0.40，但 Gate5 必须要求 TP1 快速兑现（close_pct ≥ 0.5）；
-- 若 Gate3 识别到反向 HTF_BARRIER_NEAR，则翻转单也必须放弃（Gate3=FAIL）。
+B) BREAKOUT_ALIGNMENT（突破顺势纠错｜更频率友好，用来避免“break_up 里还做空 / break_down 里还做多”）
+  1) 必须存在 HTF breakout 证据：1h 或 4h 的通道/Channel.current_position 显示 break_up 或 break_down，且与 trig_dir 同向。
+  2) 触发强度：q ≥ strict_min（无需强行 ≥0.90，但不得低于 strict_min）。
+  3) 形态限制：pattern∈{EDGE, BO_RETEST, MOMENTUM_BREAK} 之一（若 pattern=none 则禁止）。
+  4) 位置要求：不得处于 VPVR 价值区中部；必须能证明“靠近 VAH/VAL/供需区边缘/突破回踩位”其一。
+
+【翻转后的风控硬约束（P0｜必须执行｜保守但可交易）】
+- 若允许翻转：Gate2 输出 planned_dir=（反转方向）并标记 mode=COUNTERTREND；否则 planned_dir 只能取 suggested_dir 或 NEUTRAL。
+- COUNTERTREND 固定参数（Gate4 必须强制冻结）：
+  trade_style=LTF_scalp；downgrade=on；order_type=LIMIT；risk_down=0.40；rr_min=0.55；
+  且 Gate5 必须设计“快速兑现”：TP1 close_pct ≥ 0.60；不得做 HTF_swing；不得追价开 STOP_LIMIT。
+- 若 Gate3 或 Gate4 识别到“反向 HTF_BARRIER_NEAR / HTF_BREAKOUT_AGAINST_DIR”，翻转单必须放弃（Gate3/4=FAIL）。
+
+【冲突但不满足翻转（.1｜避免误开，但不把低质量噪声也当成“冲突”而压缩频率）】
+- 若 suggested_dir 与 trig_dir 明显冲突（LONG vs SHORT），但不满足“有限翻转白名单”，按强/弱冲突分流：
+  A) 强冲突（禁开仓｜只在“高质量且新鲜”的反向触发出现时启用）：
+     - q ≥ strict_min 且
+     - window_state=in（若缺失视为 in）且
+     - trigger_age_bars=0（若缺失视为 0）
+     -> Gate2 输出 planned_dir=NEUTRAL 且 block_entry=1；reason=DIR_CONFLICT_NO_FLIP_STRONG。
+  B) 弱冲突（不禁开仓｜视为噪声）：
+     - 其余情况 planned_dir 保持 suggested_dir，block_entry 保持输入值；
+     - Gate2 仅需在 reasoning 中简短备注：trig_conflict=1（不得展开触发细节），后续由 Gate4 的 dir_trigger 过滤与 Gate5 的 RR 处理。
 
 - 输入一致性纠错（P0｜必须执行｜强制收敛 planned_dir=NEUTRAL 的口径）:
   a) 若 has_position=0 且 planned_dir ∈ {NEUTRAL, UNKNOWN}：必须将 block_entry 视为 1（即使输入给了 0 也必须覆盖），并在 Gate2 行输出 FAIL。
@@ -210,23 +227,48 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
 【P0｜Step 3：SETUP FREEZE（冻结执行参数）】
 - q（触发质量）：
   - 优先用 trigger_quality[trigger_primary]；若缺失则取 0
-- tier（严格分层，P0）：
-  - strict_min := trigger_context.strict_min（缺失则 0.75）
-  - borderline_min := trigger_context.borderline_min（缺失则 0.60）
-  - 若 q ≥ strict_min      -> tier=good
-  - 否则若 q ≥ borderline_min -> tier=borderline（必须 downgrade=on）
+- tier（严格分层，P0｜.1 频率友好阈值）：
+  - strict_min_raw := trigger_context.strict_min（缺失则 0.75）
+  - borderline_min_raw := trigger_context.borderline_min（若缺失，优先取 trigger_context.quality_min；再缺失则 0.45）
+  - 为兼顾“开仓频率”与“可执行质量”，.1 采用温和下限（仍防止阈值被误传到极低）：
+    strict_min := max(strict_min_raw, 0.75)
+    borderline_min := max(borderline_min_raw, 0.45)
+  - 若 borderline_min ≥ strict_min：则 strict_min := min(0.90, borderline_min + 0.05)（保持层级分离）
+  - 若 q ≥ strict_min         -> tier=good
+  - 否则若 q ≥ borderline_min -> tier=borderline（必须 downgrade=on；并触发“borderline 追加约束”）
   - 否则 -> Gate4=FAIL fail=>SETUP reason=LOW_Q（不进入 Gate5）
+
 - pattern（短码）：
   - 取 trigger_context.trigger_pattern_hint（若存在），否则按 trigger_primary 前缀推导：
     EDGE_* -> EDGE；SFP_* -> SFP；ENGULF_* -> ENGULF；MOM_BREAK_* -> MOMENTUM_BREAK；BO_* -> BO_RETEST；未知 -> none
+
+【｜额外过滤（在冻结参数前先做硬否决，直接减少误开）】
+- BORDERLINE 追加约束（P0｜.1｜频率友好但更可控）：
+  - 若 tier=borderline：允许 pattern ∈ {ENGULF, SFP, BO_RETEST, EDGE}。
+  - 但必须满足以下任一“位置确认”（否则 Gate4=FAIL fail=>SETUP reason=BORDERLINE_NO_LOCATION）：
+     a) trigger_context.key_level_distance_atr ≤ 0.35（若字段存在）；或
+     b) trigger_context.touch_flags / trigger_flags 中包含 SR_TOUCH / DZ_TOUCH / SZ_TOUCH / VAL_TOUCH / VAH_TOUCH（若字段存在）；或
+     c) Gate3 明确指出 entry 位于 15m/30m 的 supply/demand 边缘（贴边而非中部）。
+  - 额外限制：borderline 严禁使用 MARKET 追价；order_type 必须为 LIMIT。
+- HTF 突破反向过滤（P0｜｜避免“顺势突破里做反手”）：
+  - 若 planned_dir=SHORT 且 1h 或 4h 的通道/Channel.current_position 显示 break_up：
+      仅当 (tier=good 且 q≥0.88 且 pattern∈{SFP,ENGULF}) 才允许继续；否则 Gate4=FAIL fail=>STRUCT reason=HTF_BREAKOUT_AGAINST_DIR。
+  - 若 planned_dir=LONG 且 1h 或 4h 的通道/Channel.current_position 显示 break_down：
+      仅当 (tier=good 且 q≥0.88 且 pattern∈{SFP,ENGULF}) 才允许继续；否则 Gate4=FAIL fail=>STRUCT reason=HTF_BREAKOUT_AGAINST_DIR。
+
 - Gate2.mode（可选）：
-  - 若 Gate2 输出 mode=COUNTERTREND：强制 trade_style=LTF_scalp；downgrade=on；order_type=LIMIT；risk_down≤0.5；rr_min=0.35~0.40
+  - 若 Gate2 输出 mode=COUNTERTREND：强制 trade_style=LTF_scalp；downgrade=on；order_type=LIMIT；risk_down=0.35；rr_min=0.55（固定｜不追求高胜率但控制风险）
   - 否则（TREND 默认为顺势）：按 tier 与 regime 决定 trade_style 与 rr_min（见下）
-- trade_style / rr_min（P0）：
-  - 若 tier=good 且 market_regime_norm=trend 且 Gate3 提供 ≥1 个 HTF 锚点（1h/4h）且未触发 HTF_BARRIER_NEAR：
-      * pattern∈{BO_RETEST,EDGE} -> trade_style=HTF_swing；rr_min=0.55（默认 LIMIT）
-      * pattern=MOMENTUM_BREAK  -> trade_style=LTF_scalp（除非 Gate5 能给出 Real_R_eval≥2.0 且 R_clean_eval≥1.5）
-  - 其余情况 -> trade_style=LTF_scalp；rr_min=0.45
+- trade_style / rr_min（P0｜ 更偏盈利质量）：
+  - 若 Gate2 输出 mode=COUNTERTREND：以其冻结参数为准（不在此处二次覆盖）。
+  - 否则：
+    1) tier=borderline：
+       -> trade_style=LTF_scalp；rr_min=0.45（频率守护：不额外抬高 RR 门槛；通过“位置确认+风控降档”控制误开）
+    2) tier=good 且 market_regime_norm=trend 且 Gate3 提供 ≥1 个 HTF 锚点（1h/4h）且未触发 HTF_BARRIER_NEAR：
+       * pattern∈{BO_RETEST,EDGE} -> trade_style=HTF_swing；rr_min=0.50（默认 LIMIT）
+       * pattern=MOMENTUM_BREAK  -> trade_style=LTF_scalp；rr_min=0.45（且 Gate5 必须满足 R_clean_eval≥1.3 且 costs_R≤0.25）
+    3) 其余情况：
+       -> trade_style=LTF_scalp；rr_min=0.45
 - downgrade（P0）：
   - tier=borderline => downgrade=on（强制）；否则 downgrade=off
 - order_type（P0）：
@@ -235,10 +277,13 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
 - chase 风险（若输入可用，P0）：
   - 若 trigger_key_level 存在且 |last_price - trigger_key_level| > chase_max：
       -> 强制 order_type=LIMIT；并在 NextTrigger 写“need_retest key”
-- risk_down（P0）：
-  - tier=good 且 downgrade=off -> risk_down=1.0（除非后端已给风险降级建议）
-  - tier=borderline（downgrade=on）-> risk_down≥0.5
-  - mode=COUNTERTREND -> risk_down≤0.5（与上条取更严格）
+- risk_down（P0｜｜必须“降风险”，禁止反向含义）：
+  - 解释：risk_down 是“风险预算乘数”，用于把单笔 1% 风险上限按质量折扣（例如 0.35 代表单笔仅允许 0.35% 净值风险）。
+  -  映射（未额外指定时）：
+    * tier=good：若 q≥0.90 -> risk_down=1.00；否则 risk_down=0.75
+    * tier=borderline：risk_down=0.35
+    * mode=COUNTERTREND：risk_down=0.25（覆盖并优先于 tier）
+  - 若后端提供了风险降级建议（如 risk_down_backend）：以 min(risk_down, risk_down_backend) 为最终值（只能更保守）。
 
 【P0｜DEFER 机制（机会保留：把“时机未到/需回踩”变成下一步，而不是一次性丢弃）】
 - 触发条件：has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS 且 Gate4 以 fail=>TIME/SETUP 未通过（OUT_OF_WINDOW/DEFER/NO_TRIGGER_FOR_DIR/LOW_Q）
@@ -266,7 +311,7 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
               - buffer 取：max(0.25*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
               - 若无法给出满足方向正确性的 sl -> 视为 RR_CTX_MISSING（reason=RR_CTX_MISSING; detail=NO_VALID_SL）
               【P1｜risk 下限（防止 costs_R 被极小 risk 放大）】
-              - 定义 risk_floor = max(0.40*ATR14(5m), entry*0.0015)；若 ATR 缺失则仅用 entry*0.0015
+              - 定义 risk_floor = max(0.30*ATR14(15m), 0.60*ATR14(5m), entry*0.0020)；若 ATR(15m) 缺失则去掉该项；若 ATR 缺失则仅用 entry*0.0020
               - 若 risk < risk_floor：
                 * 对 LIMIT 候选：优先尝试 entry_candidate_2（更保守回踩）重新计算（提升 risk 与 RR 稳定性）
                 * 若仍 < risk_floor：该候选视为不可执行（reason=RISK_TOO_TIGHT），不得用于“选最优候选”
@@ -374,7 +419,7 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
                -> Gate5=PASS；reason=OK（使用最近障碍）
             3) 否则，尝试"第二近 Respect 障碍"作为 TP1，计算 Conservative_R_clean_2nd
             4) 若 Conservative_R_clean_2nd 达到对应 trade_style 的下限：
-               -> Gate5=PASS，但必须降级：setup_grade 降 1 档 + risk_down≥0.5 + LIMIT + TP1 快速兑现；reason=OK（使用第二近障碍，跳过最近障碍）
+               -> Gate5=PASS，但必须降级：setup_grade 降 1 档 + risk_down≤0.75 + LIMIT + TP1 快速兑现；reason=OK（使用第二近障碍，跳过最近障碍）
             5) 否则：
                -> Gate5=FAIL fail=>RR；reason=RR_LOW_CLUSTER
        F) Gate5 最终输出约束（与 actionDerivation 对齐）
@@ -541,7 +586,7 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
           "trend_alignment": "bearish_aligned",  // 现货期货一致性
           "context_inference": "smart_money_distribution"
         },
-        "盘口结构_v2": {    // 核心：防欺诈雷达
+        "盘口结构_": {    // 核心：防欺诈雷达
           "spoofing_risk": 0.65, // >0.6 为高危欺诈风险
           "resistance_wall": { "price": 45100, "is_solid": true, "stability_score": 0.25, "flicker_count": 8 }, // stability<0.3+flicker>5 = 虚墙
           "support_wall": { "price": 44800, "is_solid": true, "stability_score": 0.91 } // 强支撑
@@ -620,15 +665,16 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
    3.将 risk_points 换算为“止损触发的亏损金额”（允许先算 qty 再写入 entry_plan）：
     - 若本轮已能给出 qty（来自 entry_plan.qty）：loss_usdt = risk_points * qty
     - 若本轮尚未给出 qty：必须在本节先完成“风险上限反推 sizing”，不得因为“还未给 qty”直接退出：
-        a) max_loss_usdt = equity * 1.0%
+        a) risk_down_eff = (Gate4.risk_down 若已冻结，否则 1.0)
+        a1) max_loss_usdt = equity * 1.0% * risk_down_eff
         b) qty_risk_cap = max_loss_usdt / risk_points
         c) 若已提供 lot_size：qty = floor(qty_risk_cap / lot_size) * lot_size
            若未提供 lot_size：qty = qty_risk_cap（先用连续值；执行端再做最小步进取整）
         d) 计算 loss_usdt = risk_points * qty，并将 qty 写入 entry_plan.qty
     4.单笔风险占比（唯一口径）：
     - risk_equity_pct = (loss_usdt / equity) * 100
-    - 要求：risk_equity_pct ≤ 1.0%
-    - 若 risk_equity_pct > 1.0%：
+    - 要求：risk_equity_pct ≤ 1.0% * risk_down_eff
+    - 若 risk_equity_pct > 1.0% * risk_down_eff：
         * 必须继续下调 qty（重复 3-c 的 round/floor 过程），直到 risk_equity_pct ≤ 1.0%
         * 若在最小 lot_size 取整后仍无法压到 ≤ 1.0%：本次机会放弃，action="wait"（并说明：risk_cap 约束导致放弃）
 - 模型必须在内部推理中显式评估「risk_equity_pct 是否 ≤ 1%」：
@@ -1377,7 +1423,7 @@ C) confidence (微观执行置信度: 0~100)
                    · 且必须强制降级：risk_down ≥ 0.5；order_type=LIMIT；必须设置 TP1 快速兑现（≥+0.5R 或最近 Anchor/VPVR 边界，close_pct ≥0.5）；禁止追价/加仓。
                    · 不满足任一项：Gate5=FAIL fail=>RR reason=rr_low_not_qualified。
                 c) 若 R_clean ∈ [0.8, 1.0)：
-                   · 允许作为 LTF_scalp 降级单进入候选，但必须强制降级（risk_down≥0.5 + LIMIT + TP1 快速兑现 + 禁止追价/加仓）。
+                   · 允许作为 LTF_scalp 降级单进入候选，但必须强制降级（risk_down≤0.75 + LIMIT + TP1 快速兑现 + 禁止追价/加仓）。
                    · 不满足降级约束：Gate5=FAIL fail=>RR reason=rr_low_no_downgrade。
               - 写法约束（降 token，避免复述）：
                 · Gate5(EXEC/RR) 行只写 1 行：PASS/FAIL + tag=>RR + reason=短码 + (R_clean=<数值> 可选)；若为 DIAG(EVAL_ONLY)：DIAG(EVAL_ONLY) + fail=><RR_CTX_MISSING|SKIP_UPSTREAM_FAIL> + reason=短码。
