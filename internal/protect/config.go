@@ -15,6 +15,9 @@ type Config struct {
 	// 🎯 V-19.0: ROI止盈里程碑（ROI-based automatic take-profit）
 	TPMilestones map[float64]float64 // ROI阈值 -> 止盈百分比 (如：0.10 -> 0.15表示10%ROI触发15%止盈)
 
+	// 🎯 V-21.0: ROI止损里程碑（ROI-based progressive stop-loss）
+	StopLossMilestones map[float64]float64 // ROI阈值 -> 止损百分比 (如：0.10 -> 0.05表示10%ROI时止损移到entry+5%)
+
 	// 执行控制与防抖
 	StopDistanceMinTicks int64 // 3 - 止损最小距离（tick数）
 	SafetyTicks          int64 // 2 - 安全缓冲（tick数）
@@ -24,18 +27,31 @@ type Config struct {
 	Scheduler SchedulerConfig
 }
 
-// DefaultConfig 返回默认配置（V-20.0 简化版：纯ROI锁盈）
+// DefaultConfig 返回默认配置（V-21.0：ROI止损阶梯）
 func DefaultConfig() Config {
 	c := Config{
 		// ROI锁盈（无时间约束）
 		ROILockTrigger: 0.05, // 5%触发
-		FloorPriceBps:  20,   // 盈利地板
+		FloorPriceBps:  20,   // 盈利地板（仅在无StopLossMilestones时使用）
 
 		// 🎯 V-19.0: ROI止盈里程碑
 		TPMilestones: map[float64]float64{
 			0.10: 0.15, // 10% ROI → 15% 止盈
 			0.20: 0.30, // 20% ROI → 30% 止盈
 			0.50: 0.70, // 50% ROI → 70% 止盈
+		},
+
+		// 🎯 V-21.0: ROI止损里程碑（激进型）
+		StopLossMilestones: map[float64]float64{
+			0.05: 0.03, // 5% ROI → 止损移到 entry + 3%
+			0.08: 0.05, // 8% ROI → 止损移到 entry + 5%
+			0.12: 0.08, // 12% ROI → 止损移到 entry + 8%
+			0.16: 0.11, // 16% ROI → 止损移到 entry + 11%
+			0.20: 0.14, // 20% ROI → 止损移到 entry + 14%
+			0.25: 0.18, // 25% ROI → 止损移到 entry + 18%
+			0.30: 0.22, // 30% ROI → 止损移到 entry + 22%
+			0.40: 0.30, // 40% ROI → 止损移到 entry + 30%
+			0.50: 0.38, // 50% ROI → 止损移到 entry + 38%
 		},
 
 		// 执行控制

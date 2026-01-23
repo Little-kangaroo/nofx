@@ -89,15 +89,31 @@ func BEWithCosts(pos PositionState, cfg Config, m MarketSnapshot, f FeeModel) (f
 	return pos.Entry*(1.0-cost) - pad, nil
 }
 
-// ProfitFloor 计算盈利地板价格（至少锁住floor_price_bps利润）
+// ProfitFloor 计算盈利地板价格（V-21.0：支持ROI止损阶梯）
 // 多空对称：
-//   - LONG: floor = max(BE, entry * (1 + floor_bps/10000))
-//   - SHORT: floor = min(BE, entry * (1 - floor_bps/10000))
-func ProfitFloor(pos PositionState, cfg Config, be float64) float64 {
-	floorRate := cfg.FloorPriceBps / 10000.0
+//   - LONG: floor = max(BE, entry * (1 + floor_pct))
+//   - SHORT: floor = min(BE, entry * (1 - floor_pct))
+func ProfitFloor(pos PositionState, cfg Config, be float64, currentROI float64) float64 {
+	// V-21.0: 如果配置了StopLossMilestones，使用阶梯止损
+	floorPct := 0.0
+	if cfg.StopLossMilestones != nil && len(cfg.StopLossMilestones) > 0 {
+		// 找到满足条件的最高ROI阶梯
+		highestROI := 0.0
+		highestStopPct := 0.0
+		for roiThreshold, stopPct := range cfg.StopLossMilestones {
+			if currentROI >= roiThreshold && roiThreshold > highestROI {
+				highestROI = roiThreshold
+				highestStopPct = stopPct
+			}
+		}
+		floorPct = highestStopPct
+	} else {
+		// 回退到旧逻辑：使用FloorPriceBps
+		floorPct = cfg.FloorPriceBps / 10000.0
+	}
 
 	if pos.Side == Long {
-		floorPx := pos.Entry * (1.0 + floorRate)
+		floorPx := pos.Entry * (1.0 + floorPct)
 		if be > floorPx {
 			return be
 		}
@@ -105,7 +121,7 @@ func ProfitFloor(pos PositionState, cfg Config, be float64) float64 {
 	}
 
 	// SHORT
-	floorPx := pos.Entry * (1.0 - floorRate)
+	floorPx := pos.Entry * (1.0 - floorPct)
 	if be < floorPx {
 		return be
 	}

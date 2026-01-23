@@ -147,7 +147,7 @@ func (e *Engine) Evaluate(pos PositionState, m MarketSnapshot) StopUpdatePlan {
 	plan.BE = be
 
 	// 计算盈利地板
-	floor := ProfitFloor(pos, e.Cfg, be)
+	floor := ProfitFloor(pos, e.Cfg, be, plan.RoiUnr)
 	plan.Floor = floor
 
 	// ========== 计算候选止损价 ==========
