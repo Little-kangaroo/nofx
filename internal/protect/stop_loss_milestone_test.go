@@ -85,10 +85,12 @@ func TestStopLossMilestones(t *testing.T) {
 
 			plan := eng.Evaluate(pos, m)
 
-			// 验证盈利地板是否正确
-			expectedFloor := pos.Entry * (1.0 + tt.expectedStopPct)
+			// 验证盈利地板是否正确（V-21.3：基于R0的计算）
+			// Floor = Entry + (R0 * stopPct)
+			r0 := pos.Entry - pos.InitStop // LONG: 100000 - 95000 = 5000
+			expectedFloor := pos.Entry + (r0 * tt.expectedStopPct)
 			if plan.Floor < expectedFloor-1 || plan.Floor > expectedFloor+1 {
-				t.Errorf("Floor = %.2f, want %.2f (entry * (1 + %.2f%%))",
+				t.Errorf("Floor = %.2f, want %.2f (entry + R0*%.2f%%)",
 					plan.Floor, expectedFloor, tt.expectedStopPct*100)
 			}
 
@@ -128,17 +130,19 @@ func TestStopLossMilestonesMonotonicity(t *testing.T) {
 		StopTriggerType: TriggerLast,
 	}
 
-	// 模拟价格上涨过程
+	// 模拟价格上涨过程（V-21.3：基于R0的计算）
+	// R0 = 100000 - 95000 = 5000
+	// Floor = Entry + (R0 * stopPct)
 	priceSteps := []struct {
 		price       float64
 		expectedROI float64
 		minFloor    float64
 	}{
-		{100500, 0.05, 103000},  // 5% ROI → floor >= 103000 (entry + 3%)
-		{100800, 0.08, 105000},  // 8% ROI → floor >= 105000 (entry + 5%)
-		{101200, 0.12, 108000},  // 12% ROI → floor >= 108000 (entry + 8%)
-		{102000, 0.20, 114000},  // 20% ROI → floor >= 114000 (entry + 14%)
-		{103000, 0.30, 122000},  // 30% ROI → floor >= 122000 (entry + 22%)
+		{100500, 0.05, 100150},  // 5% ROI → floor >= 100150 (entry + R0*3%)
+		{100800, 0.08, 100250},  // 8% ROI → floor >= 100250 (entry + R0*5%)
+		{101200, 0.12, 100400},  // 12% ROI → floor >= 100400 (entry + R0*8%)
+		{102000, 0.20, 100700},  // 20% ROI → floor >= 100700 (entry + R0*14%)
+		{103000, 0.30, 101100},  // 30% ROI → floor >= 101100 (entry + R0*22%)
 	}
 
 	prevFloor := 0.0
@@ -238,10 +242,11 @@ func TestStopLossMilestonesShort(t *testing.T) {
 
 			plan := eng.Evaluate(pos, m)
 
-			// SHORT: floor应该是 entry * (1 - stopPct)
-			expectedFloor := pos.Entry * (1.0 - tt.expectedStopPct)
+			// SHORT: floor应该是 entry - (R0 * stopPct)（V-21.3修复）
+			r0 := pos.InitStop - pos.Entry // SHORT: 105000 - 100000 = 5000
+			expectedFloor := pos.Entry - (r0 * tt.expectedStopPct)
 			if plan.Floor < expectedFloor-1 || plan.Floor > expectedFloor+1 {
-				t.Errorf("Floor = %.2f, want %.2f (entry * (1 - %.2f%%))",
+				t.Errorf("Floor = %.2f, want %.2f (entry - R0*%.2f%%)",
 					plan.Floor, expectedFloor, tt.expectedStopPct*100)
 			}
 

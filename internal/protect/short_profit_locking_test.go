@@ -57,14 +57,14 @@ func TestSHORTProfitLocking_RealScenario(t *testing.T) {
 		t.Logf("  备注: %s", plan.Note)
 	}
 
-	// 验证盈利地板在entry上方
-	if plan.Floor < pos.Entry {
-		t.Errorf("❌ SHORT盈利地板%.6f不应该在entry%.6f下方！", plan.Floor, pos.Entry)
+	// 验证盈利地板在entry下方（SHORT持仓盈利时，止损应该向下移动）
+	if plan.Floor > pos.Entry {
+		t.Errorf("❌ SHORT盈利地板%.6f不应该在entry%.6f上方！", plan.Floor, pos.Entry)
 	} else {
-		t.Logf("✅ SHORT盈利地板%.6f在entry%.6f上方", plan.Floor, pos.Entry)
+		t.Logf("✅ SHORT盈利地板%.6f在entry%.6f下方（正确）", plan.Floor, pos.Entry)
 	}
 
-	// 验证盈利地板在当前价上方
+	// 验证盈利地板在当前价上方（止损必须在当前价上方才能触发）
 	if plan.Floor < snap.LastPrice {
 		t.Errorf("❌ SHORT盈利地板%.6f不应该在当前价%.6f下方！", plan.Floor, snap.LastPrice)
 	} else {
@@ -80,11 +80,11 @@ func TestSHORTProfitLocking_RealScenario(t *testing.T) {
 			t.Logf("✅ 新止损%.6f在当前价%.6f上方", plan.NewStop, snap.LastPrice)
 		}
 
-		// 新止损应该在entry上方
-		if plan.NewStop < pos.Entry {
-			t.Errorf("❌ 新止损%.6f不应该在entry%.6f下方！", plan.NewStop, pos.Entry)
+		// 新止损应该在entry下方（SHORT锁盈时，止损向下移动到entry下方）
+		if plan.NewStop > pos.Entry {
+			t.Errorf("❌ 新止损%.6f不应该在entry%.6f上方！", plan.NewStop, pos.Entry)
 		} else {
-			t.Logf("✅ 新止损%.6f在entry%.6f上方", plan.NewStop, pos.Entry)
+			t.Logf("✅ 新止损%.6f在entry%.6f下方（锁定利润）", plan.NewStop, pos.Entry)
 		}
 
 		// 新止损应该比旧止损低（下移）

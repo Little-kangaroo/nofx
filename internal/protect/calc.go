@@ -150,15 +150,28 @@ func ProfitFloor(pos PositionState, cfg Config, be float64, currentROI float64) 
 		return floorPx
 	}
 
-	// 🔥 V-21.2: 使用基于R0的计算（LONG和SHORT统一）
-	// 盈利地板 = entry + (R0 * floor_pct)
-	// 对于LONG：entry在下方，+R0*pct向上移动
-	// 对于SHORT：entry在下方，+R0*pct也是向上移动（因为R0=InitStop-Entry>0）
-	floorPx := pos.Entry + (r0 * floorPct)
+	// 🔥 V-21.3: 修复SHORT持仓盈利地板计算方向
+	// LONG和SHORT需要区分方向：
+	//   - LONG: 止损上移，盈利地板 = entry + (R0 * floor_pct)
+	//   - SHORT: 止损下移，盈利地板 = entry - (R0 * floor_pct)
+	var floorPx float64
+	if pos.Side == Long {
+		// LONG: entry在下方，+R0*pct向上移动
+		floorPx = pos.Entry + (r0 * floorPct)
+	} else {
+		// SHORT: entry在上方，-R0*pct向下移动
+		floorPx = pos.Entry - (r0 * floorPct)
+	}
 
-	// 盈利地板不能低于BE
-	if be > floorPx {
-		return be
+	// 盈利地板不能低于BE（LONG）或高于BE（SHORT）
+	if pos.Side == Long {
+		if be > floorPx {
+			return be
+		}
+	} else {
+		if be < floorPx {
+			return be
+		}
 	}
 	return floorPx
 }
