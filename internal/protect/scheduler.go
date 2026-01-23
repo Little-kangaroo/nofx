@@ -51,6 +51,14 @@ func NewScheduler(eng *Engine, store PositionStore, prices PriceCache, exec Stop
 // StartFastLoop 启动10秒快速检查循环（goroutine）
 // 这是主要的锁盈触发器，每10秒检查所有持仓
 func (s *Scheduler) StartFastLoop(ctx context.Context) {
+	// 🔥 添加panic recovery，防止goroutine崩溃导致扫描任务中断
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("❌❌❌ [ProfitLocking] Fast Loop发生致命panic: %v", r)
+			log.Printf("⚠️  [ProfitLocking] Fast Loop异常退出，锁盈系统已停止！")
+		}
+	}()
+
 	interval := time.Duration(s.Eng.Cfg.Scheduler.CheckIntervalSec) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -63,7 +71,16 @@ func (s *Scheduler) StartFastLoop(ctx context.Context) {
 			log.Printf("[ProfitLocking] Fast Loop停止")
 			return
 		case <-ticker.C:
-			s.tickOnce(ctx)
+			// 🔥 使用defer recover保护每次tick执行，确保单次panic不会导致整个循环退出
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("❌ [ProfitLocking] tickOnce发生panic: %v", r)
+						log.Printf("⚠️  [ProfitLocking] 本次检查失败，将在下个周期重试")
+					}
+				}()
+				s.tickOnce(ctx)
+			}()
 		}
 	}
 }
@@ -94,6 +111,19 @@ func (s *Scheduler) tickOnce(ctx context.Context) {
 			continue
 		}
 		snap.NowMs = nowMs
+
+		// 🔥 添加除零检查，防止panic
+		if pos.Entry <= 0 {
+			log.Printf("❌ [持仓%d/%d] %s %s - 入场价无效(%.6f)，跳过评估",
+				i+1, len(positions), pos.Symbol, pos.Side, pos.Entry)
+			continue
+		}
+
+		if pos.Leverage <= 0 {
+			log.Printf("❌ [持仓%d/%d] %s %s - 杠杆倍数无效(%.0f)，跳过评估",
+				i+1, len(positions), pos.Symbol, pos.Side, pos.Leverage)
+			continue
+		}
 
 		// 计算基础指标
 		currentPrice := snap.LastPrice

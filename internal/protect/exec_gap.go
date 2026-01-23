@@ -32,26 +32,54 @@ type ExecCheckResult struct {
 }
 
 // CheckExecutable 检查候选止损价是否满足可执行边界
-// 如果违反边界，返回EXEC_GAP错误，本轮必须延后（不改单）
+// 🔥 V-21.1: 修复移动止损锁盈场景的EXEC_GAP检查逻辑
+//
+// 对于移动止损锁盈，我们需要区分两种情况：
+// 1. 止损向不利方向移动（靠近当前价）：需要严格检查EXEC_GAP
+// 2. 止损向有利方向移动（远离当前价）：只需确保不会立即触发
 func CheckExecutable(pos PositionState, cfg Config, refPrice float64, tick float64, candidate float64) ExecCheckResult {
 	b := ExecBoundsForStop(cfg, refPrice, tick)
 
 	if pos.Side == Long {
-		// LONG止损必须在当前价下方，且不能太靠近
-		if candidate > b.UpperExec {
+		// LONG止损：
+		// - 如果候选止损 > 当前价（会立即触发），拒绝
+		// - 如果候选止损在危险区域内（> UpperExec），且比旧止损更靠近当前价，拒绝
+		// - 否则允许（包括向上移动锁盈的情况）
+		if candidate >= refPrice {
 			return ExecCheckResult{
 				Ok:      false,
 				ExecGap: true,
-				Reason:  "EXEC_GAP_LONG: candidate > upper_exec",
+				Reason:  "EXEC_GAP_LONG: candidate >= refPrice (would trigger immediately)",
+			}
+		}
+
+		// 如果候选止损在危险区域内，且是向当前价移动（不利方向），拒绝
+		if candidate > b.UpperExec && candidate > pos.PrevStop {
+			return ExecCheckResult{
+				Ok:      false,
+				ExecGap: true,
+				Reason:  "EXEC_GAP_LONG: candidate in danger zone and moving toward price",
 			}
 		}
 	} else {
-		// SHORT止损必须在当前价上方，且不能太靠近
-		if candidate < b.LowerExec {
+		// SHORT止损：
+		// - 如果候选止损 < 当前价（会立即触发），拒绝
+		// - 如果候选止损在危险区域内（< LowerExec），且比旧止损更靠近当前价，拒绝
+		// - 否则允许（包括向下移动锁盈的情况）
+		if candidate <= refPrice {
 			return ExecCheckResult{
 				Ok:      false,
 				ExecGap: true,
-				Reason:  "EXEC_GAP_SHORT: candidate < lower_exec",
+				Reason:  "EXEC_GAP_SHORT: candidate <= refPrice (would trigger immediately)",
+			}
+		}
+
+		// 如果候选止损在危险区域内，且是向当前价移动（不利方向），拒绝
+		if candidate < b.LowerExec && candidate < pos.PrevStop {
+			return ExecCheckResult{
+				Ok:      false,
+				ExecGap: true,
+				Reason:  "EXEC_GAP_SHORT: candidate in danger zone and moving toward price",
 			}
 		}
 	}

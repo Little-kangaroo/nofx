@@ -89,10 +89,23 @@ func BEWithCosts(pos PositionState, cfg Config, m MarketSnapshot, f FeeModel) (f
 	return pos.Entry*(1.0-cost) - pad, nil
 }
 
-// ProfitFloor 计算盈利地板价格（V-21.0：支持ROI止损阶梯）
-// 多空对称：
-//   - LONG: floor = max(BE, entry * (1 + floor_pct))
-//   - SHORT: floor = min(BE, entry * (1 - floor_pct))
+// ProfitFloor 计算盈利地板价格（V-21.2：修复SHORT盈利地板计算）
+// 🔥 V-21.2修复：使用基于R0的计算方式，使LONG和SHORT逻辑统一
+//
+// 盈利地板的含义：止损可以移动到的目标位置，用于锁定盈利
+//   - LONG: 止损上移到 entry + (R0 * floor_pct)
+//   - SHORT: 止损下移到 entry + (R0 * floor_pct)
+//
+// 为什么使用R0而不是entry的百分比？
+//   1. R0是初始风险，floor_pct表示相对于初始风险的倍数
+//   2. 这样LONG和SHORT可以使用相同的配置值
+//   3. 盈利地板会随ROI增加而逐渐接近entry
+//
+// 示例（SHORT）：
+//   - Entry: 127.17, InitStop: 128.9, R0: 1.73
+//   - 12% ROI时，floor_pct=0.08
+//   - 盈利地板 = 127.17 + (1.73 * 0.08) = 127.31
+//   - 候选止损 = min(128.9, 127.31) = 127.31（下移1.59，锁定盈利）
 func ProfitFloor(pos PositionState, cfg Config, be float64, currentROI float64) float64 {
 	// V-21.0: 如果配置了StopLossMilestones，使用阶梯止损
 	floorPct := 0.0
@@ -112,7 +125,24 @@ func ProfitFloor(pos PositionState, cfg Config, be float64, currentROI float64) 
 		floorPct = cfg.FloorPriceBps / 10000.0
 	}
 
+	// 🔥 V-21.2: 计算R0（初始风险单位）
+	var r0 float64
 	if pos.Side == Long {
+		r0 = pos.Entry - pos.InitStop
+	} else {
+		r0 = pos.InitStop - pos.Entry
+	}
+
+	// 如果R0无效，回退到基于entry的计算
+	if r0 <= 0 {
+		if pos.Side == Long {
+			floorPx := pos.Entry * (1.0 + floorPct)
+			if be > floorPx {
+				return be
+			}
+			return floorPx
+		}
+		// SHORT回退逻辑
 		floorPx := pos.Entry * (1.0 + floorPct)
 		if be > floorPx {
 			return be
@@ -120,9 +150,14 @@ func ProfitFloor(pos PositionState, cfg Config, be float64, currentROI float64) 
 		return floorPx
 	}
 
-	// SHORT
-	floorPx := pos.Entry * (1.0 - floorPct)
-	if be < floorPx {
+	// 🔥 V-21.2: 使用基于R0的计算（LONG和SHORT统一）
+	// 盈利地板 = entry + (R0 * floor_pct)
+	// 对于LONG：entry在下方，+R0*pct向上移动
+	// 对于SHORT：entry在下方，+R0*pct也是向上移动（因为R0=InitStop-Entry>0）
+	floorPx := pos.Entry + (r0 * floorPct)
+
+	// 盈利地板不能低于BE
+	if be > floorPx {
 		return be
 	}
 	return floorPx
