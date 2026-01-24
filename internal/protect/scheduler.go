@@ -32,6 +32,11 @@ type Scheduler struct {
 	Store   PositionStore
 	Prices  PriceCache
 	Exec    StopExecutor
+
+	// 🔥 V-21.6: 健康监控
+	lastTickTime  time.Time // 最后一次tick时间
+	isRunning     bool      // 是否正在运行
+	stopRequested bool      // 是否请求停止
 }
 
 // NewScheduler 创建调度器（V-20.0 简化版）
@@ -48,8 +53,67 @@ func NewScheduler(eng *Engine, store PositionStore, prices PriceCache, exec Stop
 	}
 }
 
+// StartFastLoopWithAutoRestart 启动带自动重启的Fast Loop（推荐使用）
+// 🔥 V-21.6: 如果goroutine异常退出，会自动重启
+func (s *Scheduler) StartFastLoopWithAutoRestart(ctx context.Context) {
+	s.isRunning = true
+	s.stopRequested = false
+
+	go func() {
+		for {
+			// 检查是否请求停止
+			if s.stopRequested {
+				log.Printf("✅ [ProfitLocking] 收到停止请求，退出自动重启循环")
+				s.isRunning = false
+				return
+			}
+
+			// 检查context是否已取消
+			select {
+			case <-ctx.Done():
+				log.Printf("✅ [ProfitLocking] Context已取消，退出自动重启循环")
+				s.isRunning = false
+				return
+			default:
+			}
+
+			log.Printf("🚀 [ProfitLocking] 启动Fast Loop...")
+			s.StartFastLoop(ctx)
+
+			// 如果Fast Loop退出，检查原因
+			if s.stopRequested {
+				log.Printf("✅ [ProfitLocking] 正常停止，不再重启")
+				s.isRunning = false
+				return
+			}
+
+			// 异常退出，等待5秒后重启
+			log.Printf("⚠️  [ProfitLocking] Fast Loop异常退出，5秒后自动重启...")
+			time.Sleep(5 * time.Second)
+		}
+	}()
+}
+
+// StopFastLoop 停止Fast Loop
+// 🔥 V-21.6: 优雅停止，设置标志位避免自动重启
+func (s *Scheduler) StopFastLoop() {
+	s.stopRequested = true
+	log.Printf("🛑 [ProfitLocking] 已发送停止信号")
+}
+
+// IsRunning 检查Fast Loop是否正在运行
+func (s *Scheduler) IsRunning() bool {
+	return s.isRunning
+}
+
+// GetLastTickTime 获取最后一次tick时间
+func (s *Scheduler) GetLastTickTime() time.Time {
+	return s.lastTickTime
+}
+
 // StartFastLoop 启动10秒快速检查循环（goroutine）
 // 这是主要的锁盈触发器，每10秒检查所有持仓
+// 🔥 V-21.6: 建议使用 StartFastLoopWithAutoRestart 代替此方法
 func (s *Scheduler) StartFastLoop(ctx context.Context) {
 	// 🔥 添加panic recovery，防止goroutine崩溃导致扫描任务中断
 	defer func() {
@@ -87,6 +151,9 @@ func (s *Scheduler) StartFastLoop(ctx context.Context) {
 
 // tickOnce 执行一次锁盈检查（所有持仓）
 func (s *Scheduler) tickOnce(ctx context.Context) {
+	// 🔥 V-21.6: 更新最后tick时间，用于健康监控
+	s.lastTickTime = time.Now()
+
 	positions, err := s.Store.ListOpenPositions(ctx)
 	if err != nil {
 		log.Printf("❌ [ProfitLocking] 获取持仓失败: %v", err)

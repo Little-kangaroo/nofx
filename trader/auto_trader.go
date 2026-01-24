@@ -364,10 +364,10 @@ func (at *AutoTrader) Run() error {
 		}
 	}
 
-	// 🔒 启动锁盈系统Fast Loop
+	// 🔒 启动锁盈系统Fast Loop（V-21.6: 带自动重启）
 	if at.profitScheduler != nil {
-		go at.profitScheduler.StartFastLoop(at.protectCtx)
-		log.Printf("✅ [%s] 锁盈系统Fast Loop已启动（10秒循环）", at.name)
+		at.profitScheduler.StartFastLoopWithAutoRestart(at.protectCtx)
+		log.Printf("✅ [%s] 锁盈系统Fast Loop已启动（10秒循环，自动重启）", at.name)
 	}
 
 	// 创建结束信号通道
@@ -396,10 +396,16 @@ func (at *AutoTrader) Stop() {
 		log.Printf("✅ [%s] WebSocket订单管理器已停止", at.name)
 	}
 
-	// 🔒 停止锁盈系统Fast Loop
+	// 🔒 停止锁盈系统Fast Loop（V-21.6: 优雅停止）
+	if at.profitScheduler != nil {
+		at.profitScheduler.StopFastLoop()
+		log.Printf("✅ [%s] 锁盈系统停止信号已发送", at.name)
+	}
+
+	// 取消锁盈系统context
 	if at.protectCancel != nil {
 		at.protectCancel()
-		log.Printf("✅ [%s] 锁盈系统已停止", at.name)
+		log.Printf("✅ [%s] 锁盈系统context已取消", at.name)
 	}
 
 	log.Println("⏹ 自动交易系统停止")

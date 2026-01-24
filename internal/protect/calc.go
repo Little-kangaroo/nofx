@@ -150,28 +150,29 @@ func ProfitFloor(pos PositionState, cfg Config, be float64, currentROI float64) 
 		return floorPx
 	}
 
-	// 🔥 V-21.3: 修复SHORT持仓盈利地板计算方向
-	// LONG和SHORT需要区分方向：
-	//   - LONG: 止损上移，盈利地板 = entry + (R0 * floor_pct)
-	//   - SHORT: 止损下移，盈利地板 = entry - (R0 * floor_pct)
+	// 🔥 V-21.5修复：基于ROI百分比锁盈，而不是R0倍数
+	// 用户期望：ROI 5%时锁住3%的ROI利润
+	// 正确公式：floor = entry ± (entry * floorPct / leverage)
+	//   - LONG: 止损上移，盈利地板 = entry + (entry * floorPct / leverage)
+	//   - SHORT: 止损下移，盈利地板 = entry - (entry * floorPct / leverage)
 	var floorPx float64
 	if pos.Side == Long {
-		// LONG: entry在下方，+R0*pct向上移动
-		floorPx = pos.Entry + (r0 * floorPct)
+		// LONG: 锁住floorPct的ROI
+		floorPx = pos.Entry + (pos.Entry * floorPct / pos.Leverage)
 	} else {
-		// SHORT: entry在上方，-R0*pct向下移动
-		floorPx = pos.Entry - (r0 * floorPct)
+		// SHORT: 锁住floorPct的ROI
+		floorPx = pos.Entry - (pos.Entry * floorPct / pos.Leverage)
 	}
 
-	// 盈利地板不能低于BE（LONG）或高于BE（SHORT）
+	// 🔥 V-21.4修复：SHORT移除BE限制，LONG保持BE保护
+	// LONG: BE作为上限保护，防止止损设得太高（太接近当前价）
+	// SHORT: 移除BE限制，让floor自由下移，实现渐进式锁盈
 	if pos.Side == Long {
+		// LONG: 如果BE > floor，返回BE（更保守）
 		if be > floorPx {
 			return be
 		}
-	} else {
-		if be < floorPx {
-			return be
-		}
 	}
+	// SHORT: 直接返回floor，不受BE限制
 	return floorPx
 }
