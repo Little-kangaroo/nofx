@@ -210,6 +210,83 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 		}
 	}
 
+	// ========== Step D2: 多时间框架flat+break_down检查 ==========
+	if side == SideShort {
+		flatBreakdownCount := 0
+		breakdownTFs := []string{}
+
+		for _, tf := range []string{"15m", "30m", "1h"} {
+			if t, ok := in.MTF[tf]; ok {
+				dir := strings.ToLower(t.Channel.Direction)
+				pos := strings.ToLower(t.Channel.CurrentPosition)
+				quality := t.Channel.Quality
+
+				// 只统计高质量通道
+				if quality >= 0.40 {
+					if (dir == "flat" || dir == "sideways") && pos == "breakdown" {
+						flatBreakdownCount++
+						breakdownTFs = append(breakdownTFs, tf)
+					}
+				}
+			}
+		}
+
+		// 如果>=2个时间框架都是flat + break_down
+		if flatBreakdownCount >= 2 {
+			blockEntry = true
+			blockReason = "MULTI_TF_FLAT_BREAKDOWN:" + strings.Join(breakdownTFs, "+")
+			flags = append(flags, "FLAT_BREAKDOWN_CLUSTER")
+		}
+	} else if side == SideLong {
+		// 做多时：检查flat + breakup
+		flatBreakupCount := 0
+		breakupTFs := []string{}
+
+		for _, tf := range []string{"15m", "30m", "1h"} {
+			if t, ok := in.MTF[tf]; ok {
+				dir := strings.ToLower(t.Channel.Direction)
+				pos := strings.ToLower(t.Channel.CurrentPosition)
+				quality := t.Channel.Quality
+
+				if quality >= 0.40 {
+					if (dir == "flat" || dir == "sideways") && pos == "breakup" {
+						flatBreakupCount++
+						breakupTFs = append(breakupTFs, tf)
+					}
+				}
+			}
+		}
+
+		if flatBreakupCount >= 2 {
+			blockEntry = true
+			blockReason = "MULTI_TF_FLAT_BREAKUP:" + strings.Join(breakupTFs, "+")
+			flags = append(flags, "FLAT_BREAKUP_CLUSTER")
+		}
+	}
+
+	// ========== Step D3: 1h矛盾信号检查 ==========
+	if t1h, ok := in.MTF["1h"]; ok {
+		dir1h := strings.ToLower(t1h.Channel.Direction)
+		pos1h := strings.ToLower(t1h.Channel.CurrentPosition)
+		quality1h := t1h.Channel.Quality
+
+		// 只有高质量通道才信任
+		if quality1h >= 0.50 {
+			// 判断做空，但1h向上突破（排除flat通道的弱信号）
+			if side == SideShort && pos1h == "breakup" && dir1h != "flat" && dir1h != "sideways" {
+				blockEntry = true
+				blockReason = "1H_BREAKUP_CONFLICT"
+				flags = append(flags, "1H_BREAKUP_VETO")
+			}
+			// 判断做多，但1h向下突破（排除flat通道的弱信号）
+			if side == SideLong && pos1h == "breakdown" && dir1h != "flat" && dir1h != "sideways" {
+				blockEntry = true
+				blockReason = "1H_BREAKDOWN_CONFLICT"
+				flags = append(flags, "1H_BREAKDOWN_VETO")
+			}
+		}
+	}
+
 	// ========== 调试信息 ==========
 	dbg["macro_sign"] = macroSign
 	dbg["intent_sign"] = intentSign

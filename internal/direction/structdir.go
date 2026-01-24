@@ -21,7 +21,7 @@ func StructDirFromMTF(mtf MTFAnalysis) float64 {
 		}
 
 		// 通道方向符号
-		chSign := channelSign(t.Channel.Direction, t.Channel.CurrentPosition, t.Channel.PriceRatio)
+		chSign := channelSign(t.Channel.Direction, t.Channel.CurrentPosition, t.Channel.PriceRatio, t.Channel.Quality)
 
 		// 通道质量因子：质量越高权重越大
 		qualityF := clamp(t.Channel.Quality, 0.3, 1.0)
@@ -41,8 +41,8 @@ func StructDirFromMTF(mtf MTFAnalysis) float64 {
 }
 
 // channelSign 通道方向符号 [-1, +1]
-// 综合考虑通道方向、价格位置、突破情况
-func channelSign(direction, position string, priceRatio float64) float64 {
+// 综合考虑通道方向、价格位置、突破情况、通道质量
+func channelSign(direction, position string, priceRatio, quality float64) float64 {
 	dir := strings.ToLower(direction)
 	pos := strings.ToLower(position)
 
@@ -62,10 +62,16 @@ func channelSign(direction, position string, priceRatio float64) float64 {
 	// 根据价格位置调整信号强度
 	switch pos {
 	case "breakup":
-		// 向上突破：强看涨
+		// 向上突破：检查质量
+		if quality < 0.50 {
+			return 0.30 // 低质量通道，突破不可靠
+		}
 		return 1.0
 	case "breakdown":
-		// 向下突破：强看跌
+		// 向下突破：检查质量
+		if quality < 0.50 {
+			return -0.30 // 低质量通道，突破不可靠
+		}
 		return -1.0
 	case "inside":
 		// 在通道内：根据位置调整
@@ -73,21 +79,51 @@ func channelSign(direction, position string, priceRatio float64) float64 {
 			// 上升通道：价格越接近下轨越看涨（回调买入机会）
 			// priceRatio: 0=下轨, 1=上轨
 			if priceRatio < 0.3 {
-				return 1.0 // 接近下轨，强看涨
+				return 1.0 * quality // 接近下轨，强看涨
 			} else if priceRatio > 0.7 {
-				return 0.5 // 接近上轨，弱看涨（可能回调）
+				return 0.5 * quality // 接近上轨，弱看涨（可能回调）
 			}
-			return 0.8 // 中间位置，正常看涨
+			return 0.8 * quality // 中间位置，正常看涨
 		} else if dir == "down" {
 			// 下降通道：价格越接近上轨越看跌（反弹卖出机会）
 			if priceRatio > 0.7 {
-				return -1.0 // 接近上轨，强看跌
+				return -1.0 * quality // 接近上轨，强看跌
 			} else if priceRatio < 0.3 {
-				return -0.5 // 接近下轨，弱看跌（可能反弹）
+				return -0.3 * quality // 接近下轨，弱看跌（反弹风险）
 			}
-			return -0.8 // 中间位置，正常看跌
+			return -0.8 * quality // 中间位置，正常看跌
+		} else {
+			// 横盘通道
+			if priceRatio > 0.7 {
+				return -0.3 // 接近上沿，轻微看跌
+			} else if priceRatio < 0.3 {
+				return 0.3 // 接近下沿，轻微看涨
+			}
+			return 0
 		}
-		return baseSign * 0.5 // 横盘通道，信号较弱
+	case "lower":
+		// 在通道下部
+		if dir == "down" {
+			// 下降通道的下部，反弹风险高
+			return -0.2 * quality
+		} else if dir == "up" {
+			// 上升通道的下部，买入机会
+			return 0.9 * quality
+		}
+		return 0.2 // 横盘通道下部，轻微看涨
+	case "upper":
+		// 在通道上部
+		if dir == "up" {
+			// 上升通道的上部，回调风险
+			return 0.4 * quality
+		} else if dir == "down" {
+			// 下降通道的上部，卖出机会
+			return -0.9 * quality
+		}
+		return -0.2 // 横盘通道上部，轻微看跌
+	case "middle":
+		// 在通道中部，跟随通道方向但降级
+		return baseSign * 0.6 * quality
 	default:
 		return baseSign * 0.5
 	}
