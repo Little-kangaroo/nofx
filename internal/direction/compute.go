@@ -35,6 +35,36 @@ func isOFStale(of Orderflow, cfg Config, flags *[]string) bool {
 	return false
 }
 
+// hasValidChannelData 检查是否有足够的有效通道数据
+// 🔥 新增：防止通道数据缺失导致结构方向失效
+func hasValidChannelData(mtf MTFAnalysis, flags *[]string) bool {
+	// 检查关键时间框架（15m, 30m, 1h）是否有有效通道数据
+	criticalTFs := []string{"15m", "30m", "1h"}
+	validCount := 0
+	missingTFs := []string{}
+
+	for _, tf := range criticalTFs {
+		if t, ok := mtf[tf]; ok {
+			// 通道方向不为空，且质量>0
+			if t.Channel.Direction != "" && t.Channel.Quality > 0 {
+				validCount++
+			} else {
+				missingTFs = append(missingTFs, tf)
+			}
+		} else {
+			missingTFs = append(missingTFs, tf)
+		}
+	}
+
+	// 至少需要2个关键时间框架有有效通道数据
+	if validCount < 2 {
+		*flags = append(*flags, "CHANNEL_DATA_INSUFFICIENT")
+		return false
+	}
+
+	return true
+}
+
 // StrongCounterexample 判断是否满足强反例条件（宏观反向时的豁免条件）
 // 需要满足"三取二"：
 // 1) 吸收提示或 CVD 分歧
@@ -82,6 +112,23 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 			PlanSide:    SideUnknown,
 			BlockEntry:  true,
 			BlockReason: "OF_STALE",
+			Confidence:  0,
+			Delta:       0,
+			OFDir:       0,
+			StructDir:   0,
+			OFQuality:   0,
+			Flags:       flags,
+		}
+	}
+
+	// ========== Step A2: 通道数据质量检查（新增）==========
+	// 🔥 修复：防止通道数据缺失导致结构方向失效，订单流完全主导
+	if !hasValidChannelData(in.MTF, &flags) {
+		flags = append(flags, "CHANNEL_DATA_MISSING")
+		return DirectionArbitration{
+			PlanSide:    SideChannelDataMissing,  // 🔥 修改：返回特殊状态而非UNKNOWN
+			BlockEntry:  true,                     // 仍然拦截开仓
+			BlockReason: "CHANNEL_DATA_MISSING",
 			Confidence:  0,
 			Delta:       0,
 			OFDir:       0,
@@ -261,6 +308,57 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 			blockEntry = true
 			blockReason = "MULTI_TF_FLAT_BREAKUP:" + strings.Join(breakupTFs, "+")
 			flags = append(flags, "FLAT_BREAKUP_CLUSTER")
+		}
+	}
+
+	// ========== Step D2.5: 反向突破拦截（新增）==========
+	// 🔥 修复BTCUSDT案例：做空时检查是否有多个时间框架向上突破
+	if side == SideShort {
+		reverseBreakupCount := 0
+		reverseBreakupTFs := []string{}
+
+		// 检查所有时间框架（包括4h）
+		for _, tf := range []string{"15m", "30m", "1h", "4h"} {
+			if t, ok := in.MTF[tf]; ok {
+				pos := strings.ToLower(t.Channel.CurrentPosition)
+				quality := t.Channel.Quality
+
+				// 高质量通道的反向突破（兼容 breakup 和 break_up）
+				if quality >= 0.40 && (pos == "breakup" || pos == "break_up") {
+					reverseBreakupCount++
+					reverseBreakupTFs = append(reverseBreakupTFs, tf)
+				}
+			}
+		}
+
+		// 如果>=2个时间框架出现反向突破，拦截
+		if reverseBreakupCount >= 2 {
+			blockEntry = true
+			blockReason = "REVERSE_BREAKUP_CLUSTER:" + strings.Join(reverseBreakupTFs, "+")
+			flags = append(flags, "REVERSE_BREAKUP_VETO")
+		}
+	} else if side == SideLong {
+		// 做多时检查反向breakdown
+		reverseBreakdownCount := 0
+		reverseBreakdownTFs := []string{}
+
+		for _, tf := range []string{"15m", "30m", "1h", "4h"} {
+			if t, ok := in.MTF[tf]; ok {
+				pos := strings.ToLower(t.Channel.CurrentPosition)
+				quality := t.Channel.Quality
+
+				// 兼容 breakdown 和 break_down
+				if quality >= 0.40 && (pos == "breakdown" || pos == "break_down") {
+					reverseBreakdownCount++
+					reverseBreakdownTFs = append(reverseBreakdownTFs, tf)
+				}
+			}
+		}
+
+		if reverseBreakdownCount >= 2 {
+			blockEntry = true
+			blockReason = "REVERSE_BREAKDOWN_CLUSTER:" + strings.Join(reverseBreakdownTFs, "+")
+			flags = append(flags, "REVERSE_BREAKDOWN_VETO")
 		}
 	}
 

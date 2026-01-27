@@ -201,19 +201,27 @@ func parseMTFData(data interface{}) direction.MTFAnalysis {
 }
 
 // parseChannel 解析通道数据
+// 🔥 修复：字段名映射错误，JSON中是"通道数据"而非"通道分析数据"，字段是"channel_direction"而非"direction"
 func parseChannel(data map[string]interface{}) direction.ChannelInfo {
-	chData, ok := data["通道分析数据"].(map[string]interface{})
+	// 🔥 修复1：正确的JSON字段名是"通道数据"
+	chData, ok := data["通道数据"].(map[string]interface{})
 	if !ok {
-		return direction.ChannelInfo{
-			Direction:       "sideways",
-			CurrentPosition: "Inside",
-			PriceRatio:      0.5,
-			Quality:         0.0,
+		// 降级：尝试旧字段名（兼容性）
+		chData, ok = data["通道分析数据"].(map[string]interface{})
+		if !ok {
+			log.Printf("⚠️ [方向裁决] 通道数据字段缺失")
+			return direction.ChannelInfo{
+				Direction:       "sideways",
+				CurrentPosition: "Inside",
+				PriceRatio:      0.5,
+				Quality:         0.0,
+			}
 		}
 	}
 
+	// 🔥 修复2：正确的字段名是"channel_direction"而非"direction"
 	return direction.ChannelInfo{
-		Direction:       getStringOrDefault(chData, "direction", "sideways"),
+		Direction:       getStringOrDefault(chData, "channel_direction", "sideways"),
 		CurrentPosition: getStringOrDefault(chData, "current_position", "Inside"),
 		PriceRatio:      getFloatOrDefault(chData, "price_ratio", 0.5),
 		Quality:         getFloatOrDefault(chData, "quality", 0.0),

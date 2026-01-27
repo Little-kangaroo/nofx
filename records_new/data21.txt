@@ -1,0 +1,33 @@
+输入数据：
+时间: 2026-01-27 01:40:00 | 周期: #22 | 运行: 106分钟
+
+BTC: 87515.10 (1h: +0.09%, 4h: -0.46%) | MACD: -124.5291 | RSI14: 38.29
+🔗 BTC联动性分析:
+  📊 BTC占比: 42.5% (1h: +0.01%, 4h: -0.05%, 24h: -0.09%) | 趋势: stable (强度50)
+  🎯 关键位: 阻力45.0% | 支撑40.0%
+  🔗 山寨币联动: 1h=0.00 | 4h=0.00 | 24h=0.00 | 趋势=insufficient_data | 脱钩风险=50%
+  📈 Beta系数: 1.00 | Alpha超额收益: +0.00%
+  💰 持仓变化: 1h=+0.0% | 4h=+0.0% | 24h=+0.1% | 趋势=stable
+  ⚖️ 多空比: 1.00 | 清算风险: 50% | 与BTC OI相关: 0.00
+  💸 资金费率: 当前=0.0078% | 24h均值=0.0078% | 波动性=0.0000 | 情绪=neutral
+  🔥 过热风险: 0% | 与BTC费率相关: 0.00
+  ⚠️ 风险评估: low (评分24/100) | BTC依赖度: 0%
+  🔍 系统性风险: 14% | 个股风险: 34% | BTC方向性: 0% | BTC波动性: 2%
+
+账户: 净值103.50 | 余额103.50 (100.0%) | 盈亏-0.44% | 保证金0.0% | 持仓0个
+
+
+
+
+
+e
+
+##夏普比率: 0.14
+
+---
+
+现在请严格按照 System Prompt 定义的协议格式，仅输出 JSON 数组；除 JSON 外禁止输出任何字符。所有依据仅写入 JSON 的 reasoning 字段,禁止输出思维链。
+
+
+AI决策:
+[{"symbol":"BTCUSDT","action":"open_short","setup_grade":"A","edge_score":1.6,"confidence":78,"reasoning":"Summary: action=open_short | plan=SHORT | block=0 | trade_style=HTF_swing | setup_grade=A | edge_score=1.6 | confidence=78\nGate1(RISK): PASS key=margin_used=0.0<0.95 & risk_cap=1% OK; verdict=ok\nGate2(DIR): PASS planned_dir=SHORT; block_entry=0; reason=INPUT_SUGGESTED_SHORT\nGate3(STRUCTURE): PASS reason=HTF_downtrend_from_supply; Anchor1:1h/DZ/S/testing/M@86021.7-87150.8; Anchor2:4h/SZ/R/testing/M@86760.4-88078.3\nGate4(TIMING/SETUP): PASS window=in; trigger=EDGE_BEAR; pattern=EDGE; q=0.90; tier=good; downgrade=off; order_type=LIMIT; trade_style=HTF_swing; risk_down=1.00; rr_min=0.50; mode=TREND\nGate5(EXEC/RR): PASS tag=>RR reason=OK; entry anchored near 4h/30m supply edge for short swing\nRR: entry=87950.0 sl=88150.0 tp1=87190.0 risk=200.0 reward=760.0 fee=17.59 slip=43.98 costs_R=0.31 => Real_R=3.80 R_clean=3.49 | R_struct=3.80 Real_R_eval=3.80 R_clean_eval=3.49\nSizing: equity=103.5; max_loss_1pct=1.04; risk_points=200.0; qty_risk_cap=0.00517 BTC; qty=0.005 (lot_size=0.001); loss_usdt≈1.00→risk_equity_pct≈0.97%≤1%; leverage=10; Dist_ROI≈2.3%<60%\nR_calc_short: risk=sl-entry=200.0; reward=entry-tp1=760.0; R_clean≈(760/200)-0.31≈3.49\nStructure/space: price位于多周期供给簇与4h/1h bearish 结构下方，最近主要支撑在1h demand 87150.8-86021.7，当前计划TP1放在其上缘附近，留足缓冲\nactionDerivation: derived_action=open_short | has_position=0 | veto=NONE","stop_update":null,"close_pct":null,"entry_plan":{"order_type":"LIMIT","price":87950.0,"qty":0.005,"leverage":10,"init_stop":88150.0,"take_profit":87190.0,"R_struct":3.8,"R_clean":3.49}}]

@@ -4,10 +4,11 @@ package direction
 type DirectionSide string
 
 const (
-	SideLong    DirectionSide = "LONG"
-	SideShort   DirectionSide = "SHORT"
-	SideNeutral DirectionSide = "NEUTRAL"
-	SideUnknown DirectionSide = "UNKNOWN"
+	SideLong                DirectionSide = "LONG"
+	SideShort               DirectionSide = "SHORT"
+	SideNeutral             DirectionSide = "NEUTRAL"
+	SideUnknown             DirectionSide = "UNKNOWN"
+	SideChannelDataMissing  DirectionSide = "CHANNEL_DATA_MISSING"  // 🔥 新增：通道数据缺失
 )
 
 // DirectionArbitration 方向裁决输出（SSOT）
