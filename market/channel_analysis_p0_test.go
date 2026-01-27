@@ -2,6 +2,7 @@ package market
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 )
 
@@ -276,16 +277,25 @@ func generateChannelTestKlines(count int, startPrice float64, volatility float64
 	klines := make([]Kline, count)
 	baseTime := int64(1700000000000) // 2023-11-15 00:00:00
 
-	price := startPrice
 	for i := 0; i < count; i++ {
-		// 模拟价格波动
-		change := (float64(i%10) - 5) * volatility * price
-		price += change
+		// 使用正弦波创建通道模式
+		// 周期为20根K线，这样在200根K线中有10个完整周期
+		cycle := float64(i) / 20.0
+		wave := math.Sin(cycle * 2 * math.Pi)
 
-		high := price * (1 + volatility)
-		low := price * (1 - volatility)
-		open := price - change/2
-		close := price
+		// 添加轻微的上升趋势
+		trend := float64(i) * 0.0002
+
+		// 组合趋势和波动 - 减小波动幅度以产生合理的ATR
+		priceOffset := (wave * volatility * 3.0 + trend) * startPrice
+		price := startPrice + priceOffset
+
+		// 生成OHLC - 使用适中的波动幅度
+		// 确保有足够的摆动强度，但不会导致ATR异常
+		high := price * (1 + volatility * 1.5)
+		low := price * (1 - volatility * 1.5)
+		open := price * (1 - volatility * 0.3)
+		close := price * (1 + volatility * 0.3)
 
 		klines[i] = Kline{
 			OpenTime:  baseTime + int64(i*5*60*1000), // 5分钟间隔
