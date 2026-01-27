@@ -102,21 +102,21 @@ type ChannelPositionInfo struct {
 func NewChannelAnalyzer() *ChannelAnalyzer {
 	return &ChannelAnalyzer{
 		config: ChannelAnalysisConfig{
-			SwingLookback:     7,    // 7个周期回看
-			MinSwingStrength:  0.6,  // 最小强度0.6
-			MinTrendLineHits:  3,    // 至少3次命中
-			MaxDistance:       0.015, // 1.5%容忍度
+			SwingLookback:     5,    // 🔥 修复：从7降到5，提高摆动点识别率
+			MinSwingStrength:  0.5,  // 🔥 修复：从0.6降到0.5，降低摆动点强度要求
+			MinTrendLineHits:  2,    // 🔥 修复：从3降到2，降低趋势线命中要求
+			MaxDistance:       0.020, // 🔥 修复：从1.5%提高到2%，放宽距离容忍度
 			MinChannelWidth:   0.02,  // 2%最小宽度（传统模式）
 			MaxChannelWidth:   0.18,  // 18%最大宽度（传统模式）
-			ParallelTolerance: 0.08,  // 8%平行容忍度
-			QualityThreshold:  0.75,  // 75%质量阈值
+			ParallelTolerance: 0.10,  // 🔥 修复：从8%提高到10%，放宽平行度要求
+			QualityThreshold:  0.60,  // 🔥 修复：从0.75降到0.60，降低质量阈值
 
-			// 🔥 新增：ATR动态宽度标准配置
+			// 🔥 修复：放宽ATR动态宽度标准，提高通道识别率
 			EnableATRWidthStandards: true,  // 启用ATR标准
-			MinChannelWidthATR:      0.8,   // 最小0.8倍ATR
-			MaxChannelWidthATR:      4.0,   // 最大4.0倍ATR
-			OptimalWidthATRMin:      1.2,   // 最优下限1.2倍ATR
-			OptimalWidthATRMax:      2.5,   // 最优上限2.5倍ATR
+			MinChannelWidthATR:      0.5,   // 🔥 修复：从0.8降到0.5，允许更窄的通道
+			MaxChannelWidthATR:      6.0,   // 🔥 修复：从4.0提高到6.0，允许更宽的通道
+			OptimalWidthATRMin:      1.0,   // 🔥 修复：从1.2降到1.0
+			OptimalWidthATRMax:      3.0,   // 🔥 修复：从2.5提高到3.0
 
 			// 🔥 P0-CH-05修复：平行度判定稳定性
 			SlopeEpsilon:            1e-6,  // 斜率最小阈值
@@ -324,11 +324,13 @@ func (ca *ChannelAnalyzer) calculateSwingStrength(klines []Kline, index int, isH
 		return 0
 	}
 
-	// 价格范围评分
+	// 🔥 简化版：只要是局部高低点，就给一个基础强度
+	// 价格范围评分（权重40%）
 	priceRange := (klines[index].High - klines[index].Low) / klines[index].Close
-	
-	// 成交量评分
-	volumeScore := 1.0
+	priceScore := math.Min(priceRange*10, 1.0) * 0.4
+
+	// 成交量评分（权重30%）
+	volumeScore := 0.15 // 默认给一半分数
 	if len(klines) > index+20 {
 		avgVolume := 0.0
 		for i := index - 10; i <= index+10 && i < len(klines); i++ {
@@ -338,39 +340,17 @@ func (ca *ChannelAnalyzer) calculateSwingStrength(klines []Kline, index int, isH
 		}
 		avgVolume /= 21
 		if avgVolume > 0 {
-			volumeScore = math.Min(klines[index].Volume/avgVolume, 2.0)
+			volumeRatio := klines[index].Volume / avgVolume
+			volumeScore = math.Min(volumeRatio/2.0, 1.0) * 0.3
 		}
 	}
 
-	// 相对位置评分
-	positionScore := 0.0
-	if isHigh {
-		// 高点：相对于周围的突出程度
-		maxHigh := klines[index].High
-		for i := index - 15; i <= index+15 && i < len(klines); i++ {
-			if i >= 0 && i != index {
-				maxHigh = math.Max(maxHigh, klines[i].High)
-			}
-		}
-		if maxHigh > 0 {
-			positionScore = klines[index].High / maxHigh
-		}
-	} else {
-		// 低点：相对于周围的突出程度
-		minLow := klines[index].Low
-		for i := index - 15; i <= index+15 && i < len(klines); i++ {
-			if i >= 0 && i != index {
-				if minLow == 0 || klines[i].Low < minLow {
-					minLow = klines[i].Low
-				}
-			}
-		}
-		if klines[index].Low > 0 {
-			positionScore = minLow / klines[index].Low
-		}
-	}
+	// 位置评分（权重30%）- 简化：只要通过了isLocalHigh/Low检查，就给满分
+	positionScore := 0.3
 
-	return (priceRange*0.4 + volumeScore*0.3 + positionScore*0.3) * 2.0
+	// 总强度
+	strength := priceScore + volumeScore + positionScore
+	return math.Min(strength, 1.0)
 }
 
 // calculateATR 计算平均真实波幅
