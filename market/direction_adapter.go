@@ -3,6 +3,7 @@ package market
 import (
 	"encoding/json"
 	"log"
+	"math"
 	"nofx/internal/direction"
 )
 
@@ -182,8 +183,8 @@ func parseMTFData(data interface{}) direction.MTFAnalysis {
 	}
 
 	mtf := make(direction.MTFAnalysis)
-	// 🔥 优化：只使用 15m 和 30m 时间框架
-	timeframes := []string{"30m", "15m"}
+	// 🔥 修复：添加1h时间框架，满足hasValidChannelData的要求（需要15m/30m/1h中至少2个）
+	timeframes := []string{"15m", "30m", "1h", "4h"}
 
 	for _, tf := range timeframes {
 		tfData, ok := rawData[tf].(map[string]interface{})
@@ -220,11 +221,23 @@ func parseChannel(data map[string]interface{}) direction.ChannelInfo {
 	}
 
 	// 🔥 修复2：正确的字段名是"channel_direction"而非"direction"
+	// 🔥 修复3：quality字段在JSON中是"channel_width_pct"，需要转换为0-1范围
+	channelWidthPct := getFloatOrDefault(chData, "channel_width_pct", 0.0)
+	// 将百分比转换为0-1的质量分数（假设>1%的通道宽度视为有效）
+	quality := 0.0
+	if channelWidthPct > 0 {
+		// 通道宽度越大，质量越高，但设置上限避免过大值
+		quality = math.Min(channelWidthPct/10.0, 1.0) // 10%宽度=1.0质量
+		if quality < 0.1 {
+			quality = 0.1 // 最小质量阈值
+		}
+	}
+
 	return direction.ChannelInfo{
 		Direction:       getStringOrDefault(chData, "channel_direction", "sideways"),
 		CurrentPosition: getStringOrDefault(chData, "current_position", "Inside"),
 		PriceRatio:      getFloatOrDefault(chData, "price_ratio", 0.5),
-		Quality:         getFloatOrDefault(chData, "quality", 0.0),
+		Quality:         quality,
 	}
 }
 
