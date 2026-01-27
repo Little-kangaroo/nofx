@@ -222,19 +222,30 @@ func TestDirectionArbitrationWithInvalidChannelData(t *testing.T) {
 	t.Logf("判断方向: %s", result.PlanSide)
 	t.Logf("是否拦截: %v", result.BlockEntry)
 	t.Logf("拦截原因: %s", result.BlockReason)
+	t.Logf("置信度: %.2f", result.Confidence)
+	t.Logf("标记: %v", result.Flags)
 
-	// 应该返回CHANNEL_DATA_MISSING
-	if result.PlanSide != "CHANNEL_DATA_MISSING" {
-		t.Errorf("❌ 应该返回CHANNEL_DATA_MISSING，实际返回: %s", result.PlanSide)
+	// 🔥 修改：新行为是降级为纯订单流模式，而不是完全拦截
+	if result.PlanSide == "CHANNEL_DATA_MISSING" {
+		t.Error("❌ 不应该返回CHANNEL_DATA_MISSING，应该降级为纯订单流模式")
 	}
 
-	if !result.BlockEntry {
-		t.Error("❌ 应该拦截开仓")
+	// 应该返回有效的方向（LONG/SHORT/NEUTRAL）
+	if result.PlanSide != "LONG" && result.PlanSide != "SHORT" && result.PlanSide != "NEUTRAL" {
+		t.Errorf("❌ 应该返回有效方向，实际返回: %s", result.PlanSide)
 	}
 
-	if result.BlockReason != "CHANNEL_DATA_MISSING" {
-		t.Errorf("❌ 拦截原因应该是CHANNEL_DATA_MISSING，实际: %s", result.BlockReason)
+	// 检查是否有通道数据弱标记
+	hasWeakFlag := false
+	for _, flag := range result.Flags {
+		if flag == "CHANNEL_DATA_WEAK" || flag == "CHANNEL_DATA_INSUFFICIENT" {
+			hasWeakFlag = true
+			break
+		}
+	}
+	if !hasWeakFlag {
+		t.Error("❌ 应该包含通道数据弱标记")
 	}
 
-	t.Logf("✅ 正确识别通道数据缺失并拦截")
+	t.Logf("✅ 通道数据缺失时正确降级为纯订单流模式")
 }

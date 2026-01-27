@@ -320,7 +320,10 @@ func (ca *ChannelAnalyzer) isLocalLow(klines []Kline, index, lookback int) bool 
 
 // calculateSwingStrength 计算摆动点强度
 func (ca *ChannelAnalyzer) calculateSwingStrength(klines []Kline, index int, isHigh bool) float64 {
-	if index < 10 || index >= len(klines)-10 {
+	// 🔥 修复：边界检查应该与identifySwingPoints的lookback一致
+	// identifySwingPoints从lookback(5)开始扫描，这里硬编码10导致索引5-9的摆动点强度为0
+	lookback := ca.config.SwingLookback // 5
+	if index < lookback || index >= len(klines)-lookback {
 		return 0
 	}
 
@@ -331,17 +334,23 @@ func (ca *ChannelAnalyzer) calculateSwingStrength(klines []Kline, index int, isH
 
 	// 成交量评分（权重30%）
 	volumeScore := 0.15 // 默认给一半分数
-	if len(klines) > index+20 {
+	// 🔥 修复：成交量计算范围也应该使用lookback，而不是硬编码10和20
+	volumeWindow := lookback * 2 // 使用lookback的2倍作为成交量窗口
+	if index >= volumeWindow && index < len(klines)-volumeWindow {
 		avgVolume := 0.0
-		for i := index - 10; i <= index+10 && i < len(klines); i++ {
+		count := 0
+		for i := index - volumeWindow; i <= index+volumeWindow && i < len(klines); i++ {
 			if i >= 0 {
 				avgVolume += klines[i].Volume
+				count++
 			}
 		}
-		avgVolume /= 21
-		if avgVolume > 0 {
-			volumeRatio := klines[index].Volume / avgVolume
-			volumeScore = math.Min(volumeRatio/2.0, 1.0) * 0.3
+		if count > 0 {
+			avgVolume /= float64(count)
+			if avgVolume > 0 {
+				volumeRatio := klines[index].Volume / avgVolume
+				volumeScore = math.Min(volumeRatio/2.0, 1.0) * 0.3
+			}
 		}
 	}
 

@@ -121,21 +121,12 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 		}
 	}
 
-	// ========== Step A2: 通道数据质量检查（新增）==========
-	// 🔥 修复：防止通道数据缺失导致结构方向失效，订单流完全主导
-	if !hasValidChannelData(in.MTF, &flags) {
-		flags = append(flags, "CHANNEL_DATA_MISSING")
-		return DirectionArbitration{
-			PlanSide:    SideChannelDataMissing,  // 🔥 修改：返回特殊状态而非UNKNOWN
-			BlockEntry:  true,                     // 仍然拦截开仓
-			BlockReason: "CHANNEL_DATA_MISSING",
-			Confidence:  0,
-			Delta:       0,
-			OFDir:       0,
-			StructDir:   0,
-			OFQuality:   0,
-			Flags:       flags,
-		}
+	// ========== Step A2: 通道数据质量检查（修改）==========
+	// 🔥 修复：通道数据缺失时不应该完全阻止交易，而是降级为纯订单流模式
+	hasValidChannel := hasValidChannelData(in.MTF, &flags)
+	if !hasValidChannel {
+		flags = append(flags, "CHANNEL_DATA_WEAK")
+		// 不再直接返回，而是继续计算，但结构方向权重会降低
 	}
 
 	// ========== Step A: Redline 标记（只设置 block_entry，不阻止计算）==========
@@ -214,8 +205,15 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	)
 
 	// ========== Step C: 动态权重（订单流权重更高）==========
+	// 🔥 修复：当通道数据缺失时，完全依赖订单流
 	wOF := cfg.WOFMin + (cfg.WOFMax-cfg.WOFMin)*ofQ
 	wST := 1 - wOF
+
+	// 如果通道数据质量不足，降低结构权重，提高订单流权重
+	if !hasValidChannel {
+		wOF = 0.95 // 订单流权重提升到95%
+		wST = 0.05 // 结构权重降低到5%
+	}
 
 	// ========== Step C: 双边评分 ==========
 	scoreLong := wOF*max(ofDir, 0) + wST*max(structDir, 0)
