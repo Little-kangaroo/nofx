@@ -150,18 +150,17 @@ func ProfitFloor(pos PositionState, cfg Config, be float64, currentROI float64) 
 		return floorPx
 	}
 
-	// 🔥 V-21.5修复：基于ROI百分比锁盈，而不是R0倍数
-	// 用户期望：ROI 5%时锁住3%的ROI利润
-	// 正确公式：floor = entry ± (entry * floorPct / leverage)
-	//   - LONG: 止损上移，盈利地板 = entry + (entry * floorPct / leverage)
-	//   - SHORT: 止损下移，盈利地板 = entry - (entry * floorPct / leverage)
+	// 🔥 V-21.7修复：回退到基于R0的计算（V-21.5的ROI计算方式有误）
+	// 正确逻辑：floorPct表示相对于初始风险R0的倍数
+	//   - LONG: 止损上移，盈利地板 = entry + (R0 * floorPct)
+	//   - SHORT: 止损下移，盈利地板 = entry - (R0 * floorPct)
 	var floorPx float64
 	if pos.Side == Long {
-		// LONG: 锁住floorPct的ROI
-		floorPx = pos.Entry + (pos.Entry * floorPct / pos.Leverage)
+		// LONG: entry在下方，+R0*pct向上移动
+		floorPx = pos.Entry + (r0 * floorPct)
 	} else {
-		// SHORT: 锁住floorPct的ROI
-		floorPx = pos.Entry - (pos.Entry * floorPct / pos.Leverage)
+		// SHORT: entry在上方，-R0*pct向下移动
+		floorPx = pos.Entry - (r0 * floorPct)
 	}
 
 	// 🔥 V-21.4修复：SHORT移除BE限制，LONG保持BE保护

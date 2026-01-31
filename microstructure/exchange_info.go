@@ -166,13 +166,50 @@ func (eim *ExchangeInfoManager) GetTickSize(symbol string) float64 {
 
 // calculateFallbackTickSize 🔥 T08新增：智能兜底tickSize计算
 func (eim *ExchangeInfoManager) calculateFallbackTickSize(symbol string) float64 {
-	// 基于币种名称的智能推断
-	if symbol == "BTCUSDT" {
-		return 0.1 // BTC默认0.1 USD
-	} else if symbol == "ETHUSDT" {
-		return 0.01 // ETH默认0.01 USD
-	} else {
-		return 0.001 // 其他币种默认0.001 USD
+	// 基于币种名称的智能推断（从币安API获取的真实值）
+	switch symbol {
+	case "BTCUSDT":
+		return 0.1 // BTC: 0.1 USD
+	case "ETHUSDT":
+		return 0.01 // ETH: 0.01 USD
+	case "BNBUSDT":
+		return 0.01 // BNB: 0.01 USD
+	case "SOLUSDT":
+		return 0.001 // SOL: 0.001 USD
+	case "XRPUSDT":
+		return 0.0001 // XRP: 0.0001 USD
+	case "DOGEUSDT":
+		return 0.00001 // DOGE: 0.00001 USD (修复)
+	case "ADAUSDT":
+		return 0.0001 // ADA: 0.0001 USD
+	case "AVAXUSDT":
+		return 0.001 // AVAX: 0.001 USD
+	case "DOTUSDT":
+		return 0.001 // DOT: 0.001 USD
+	case "MATICUSDT":
+		return 0.0001 // MATIC: 0.0001 USD
+	case "LINKUSDT":
+		return 0.001 // LINK: 0.001 USD
+	case "UNIUSDT":
+		return 0.001 // UNI: 0.001 USD
+	case "ATOMUSDT":
+		return 0.001 // ATOM: 0.001 USD
+	case "LTCUSDT":
+		return 0.01 // LTC: 0.01 USD
+	case "ETCUSDT":
+		return 0.001 // ETC: 0.001 USD
+	case "TRXUSDT":
+		return 0.00001 // TRX: 0.00001 USD
+	case "SHIBUSDT":
+		return 0.00000001 // SHIB: 0.00000001 USD
+	case "PEPEUSDT":
+		return 0.0000000001 // PEPE: 0.0000000001 USD
+	case "ARBUSDT":
+		return 0.0001 // ARB: 0.0001 USD
+	case "OPUSDT":
+		return 0.0001 // OP: 0.0001 USD
+	default:
+		return 0.0001 // 其他币种默认0.0001 USD（更安全的兜底值）
 	}
 }
 
