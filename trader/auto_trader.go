@@ -58,6 +58,10 @@ type AutoTraderConfig struct {
 	AsterSigner     string // Aster API钱包地址
 	AsterPrivateKey string // Aster API钱包私钥
 
+	// Gate.io配置
+	GateAPIKey    string
+	GateSecretKey string
+
 	CoinPoolAPIURL string
 
 	// AI配置
@@ -210,6 +214,9 @@ func NewAutoTrader(config AutoTraderConfig, database *config.Database) (*AutoTra
 		if err != nil {
 			return nil, fmt.Errorf("初始化Aster交易器失败: %w", err)
 		}
+	case "gate":
+		log.Printf("🏦 [%s] 使用Gate.io交易", config.Name)
+		trader = NewGateAdapter(config.GateAPIKey, config.GateSecretKey)
 	default:
 		return nil, fmt.Errorf("不支持的交易平台: %s", config.Exchange)
 	}

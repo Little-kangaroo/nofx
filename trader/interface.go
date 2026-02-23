@@ -1,6 +1,9 @@
 package trader
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // OrderTradeDetail 真实成交明细（与交易所API完全一致）
 type OrderTradeDetail struct {
@@ -120,4 +123,23 @@ type Trader interface {
 	
 	// GetIncomeHistory 获取资金流水历史
 	GetIncomeHistory(symbol string, incomeType string, limit int) ([]IncomeRecord, error)
+}
+
+// TraderFactory 交易器工厂函数类型
+type TraderFactory func(apiKey, secretKey string) Trader
+
+var traderFactories = make(map[string]TraderFactory)
+
+// RegisterTraderFactory 注册交易器工厂函数
+func RegisterTraderFactory(exchange string, factory TraderFactory) {
+	traderFactories[exchange] = factory
+}
+
+// NewTrader 根据交易所类型创建交易器
+func NewTrader(exchange, apiKey, secretKey string) (Trader, error) {
+	factory, ok := traderFactories[exchange]
+	if !ok {
+		return nil, fmt.Errorf("不支持的交易所: %s", exchange)
+	}
+	return factory(apiKey, secretKey), nil
 }

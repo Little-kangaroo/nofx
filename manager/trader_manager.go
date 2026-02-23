@@ -231,6 +231,8 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		BinanceSecretKey:      "",
 		HyperliquidPrivateKey: "",
 		HyperliquidTestnet:    exchangeCfg.Testnet,
+		GateAPIKey:            "",
+		GateSecretKey:         "",
 		CoinPoolAPIURL:        effectiveCoinPoolURL,
 		UseQwen:               aiModelCfg.Provider == "qwen",
 		DeepSeekKey:           "",
@@ -261,6 +263,9 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		traderConfig.AsterUser = exchangeCfg.AsterUser
 		traderConfig.AsterSigner = exchangeCfg.AsterSigner
 		traderConfig.AsterPrivateKey = exchangeCfg.AsterPrivateKey
+	} else if exchangeCfg.ID == "gate" {
+		traderConfig.GateAPIKey = exchangeCfg.GateAPIKey
+		traderConfig.GateSecretKey = exchangeCfg.GateSecretKey
 	}
 
 	// 根据AI模型设置API密钥
@@ -358,6 +363,8 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		BinanceSecretKey:      "",
 		HyperliquidPrivateKey: "",
 		HyperliquidTestnet:    exchangeCfg.Testnet,
+		GateAPIKey:            "",
+		GateSecretKey:         "",
 		CoinPoolAPIURL:        effectiveCoinPoolURL,
 		UseQwen:               aiModelCfg.Provider == "qwen",
 		DeepSeekKey:           "",
@@ -387,6 +394,9 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		traderConfig.AsterUser = exchangeCfg.AsterUser
 		traderConfig.AsterSigner = exchangeCfg.AsterSigner
 		traderConfig.AsterPrivateKey = exchangeCfg.AsterPrivateKey
+	} else if exchangeCfg.ID == "gate" {
+		traderConfig.GateAPIKey = exchangeCfg.GateAPIKey
+		traderConfig.GateSecretKey = exchangeCfg.GateSecretKey
 	}
 
 	// 根据AI模型设置API密钥
@@ -958,6 +968,9 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 		traderConfig.AsterUser = exchangeCfg.AsterUser
 		traderConfig.AsterSigner = exchangeCfg.AsterSigner
 		traderConfig.AsterPrivateKey = exchangeCfg.AsterPrivateKey
+	} else if exchangeCfg.ID == "gate" {
+		traderConfig.GateAPIKey = exchangeCfg.GateAPIKey
+		traderConfig.GateSecretKey = exchangeCfg.GateSecretKey
 	}
 
 	// 根据AI模型设置API密钥
