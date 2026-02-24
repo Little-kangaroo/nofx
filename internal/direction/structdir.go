@@ -44,7 +44,8 @@ func StructDirFromMTF(mtf MTFAnalysis) float64 {
 // 综合考虑通道方向、价格位置、突破情况
 func channelSign(direction, position string, priceRatio float64) float64 {
 	dir := strings.ToLower(direction)
-	pos := strings.ToLower(position)
+	// 标准化 position：去除下划线，兼容 "break_up"/"breakup"、"break_down"/"breakdown" 等格式
+	pos := strings.ToLower(strings.ReplaceAll(position, "_", ""))
 
 	// 基础方向符号
 	var baseSign float64
@@ -53,7 +54,7 @@ func channelSign(direction, position string, priceRatio float64) float64 {
 		baseSign = 1.0
 	case "down":
 		baseSign = -1.0
-	case "sideways":
+	case "sideways", "flat":
 		baseSign = 0.0
 	default:
 		baseSign = 0.0
@@ -67,6 +68,22 @@ func channelSign(direction, position string, priceRatio float64) float64 {
 	case "breakdown":
 		// 向下突破：强看跌
 		return -1.0
+	case "lower":
+		// 处于通道下轨附近：与 inside 接近下轨逻辑一致
+		if dir == "up" {
+			return 1.0 // 上升通道下轨：强看涨
+		} else if dir == "down" {
+			return -0.5 // 下降通道下轨：弱看跌
+		}
+		return 0.0
+	case "upper":
+		// 处于通道上轨附近
+		if dir == "up" {
+			return 0.5 // 上升通道上轨：弱看涨
+		} else if dir == "down" {
+			return -1.0 // 下降通道上轨：强看跌
+		}
+		return 0.0
 	case "inside":
 		// 在通道内：根据位置调整
 		if dir == "up" {

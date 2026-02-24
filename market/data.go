@@ -1466,14 +1466,25 @@ func extractCompactChannelAnalysis(data *ChannelData, symbol string) map[string]
 		return map[string]interface{}{}
 	}
 
+	// 归一化空方向：通道分析失败时回退到 sideways/inside
+	channelDir := data.Direction
+	if channelDir == "" {
+		channelDir = "sideways"
+	}
+	currentPos := data.CurrentPosition
+	if currentPos == "" {
+		currentPos = "inside"
+	}
+
 	result := map[string]interface{}{
-		"channel_direction": data.Direction,
-		"channel_width_pct": FormatByDataTypeAndSymbol(data.Quality*100, "percentage", symbol), // 默认用Quality评分作为百分比
-		"current_position":  data.CurrentPosition,
+		"channel_direction": channelDir,
+		"channel_width_pct": FormatByDataTypeAndSymbol(data.Quality*100, "percentage", symbol),
+		"current_position":  currentPos,
+		"price_ratio":       data.PriceRatio,
+		"quality":           data.Quality,
 	}
 
 	if data.ActiveChannel != nil {
-		// 通道宽度是相对于价格的百分比，已经是0.02形式，乘以100转为百分比显示
 		result["channel_width_pct"] = FormatByDataTypeAndSymbol(data.ActiveChannel.Width*100, "percentage", symbol)
 	}
 

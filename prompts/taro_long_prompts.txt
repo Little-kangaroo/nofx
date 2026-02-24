@@ -82,11 +82,17 @@ A) EXTREME_REVERSAL（极值反转｜更少但更稳）
   3) HTF 反向趋势不得强：若 4h/1h 显示“强顺势”且与 suggested_dir 同向（trend_strength ≥ 65，或 4h 与 1h 的 SuperTrend/道氏方向均与 suggested_dir 同向），禁止翻转。
   4) 必须处于 HTF 边缘（结构极值）：输入中必须能证明 last_price 位于 4h 或 1h 的 DZ/SZ/VAL/VAH/FIB-OTE 等边缘附近（不是价值区中部）。
 
-B) BREAKOUT_ALIGNMENT（突破顺势纠错｜更频率友好，用来避免“break_up 里还做空 / break_down 里还做多”）
+B) BREAKOUT_ALIGNMENT（突破顺势纠错｜更频率友好，用来避免”break_up 里还做空 / break_down 里还做多”）
   1) 必须存在 HTF breakout 证据：1h 或 4h 的通道/Channel.current_position 显示 break_up 或 break_down，且与 trig_dir 同向。
   2) 触发强度：q ≥ strict_min（无需强行 ≥0.90，但不得低于 strict_min）。
   3) 形态限制：pattern∈{EDGE, BO_RETEST, MOMENTUM_BREAK} 之一（若 pattern=none 则禁止）。
-  4) 位置要求：不得处于 VPVR 价值区中部；必须能证明“靠近 VAH/VAL/供需区边缘/突破回踩位”其一。
+  4) 位置要求：不得处于 VPVR 价值区中部；必须能证明”靠近 VAH/VAL/供需区边缘/突破回踩位”其一。
+  5) 【P0｜方向限制｜禁止用 BREAKOUT_ALIGNMENT flip_to_LONG when suggested_dir=SHORT】：
+     当 suggested_dir=SHORT 时，BREAKOUT_ALIGNMENT 不得触发 flip_to_LONG。
+     direction_arbitration 已将通道突破信号（channel.current_position 的 break_up/break_down）纳入 structDir 多因子计算；
+     若综合计算后仍输出 SHORT，说明短周期 break_up 已被评估且不足以改变方向判断，AI 不得再用相同信号逆势开多。
+     此条件下 BREAKOUT_ALIGNMENT 只能用于 flip_to_SHORT（即 suggested_dir=LONG 时）。
+     违反此规则直接 Gate2 FAIL，planned_dir=NEUTRAL，block_entry=1，reason=BREAKOUT_ALIGN_LONG_BLOCKED_BY_SHORT_PLAN。
 
 【翻转后的风控硬约束（P0｜必须执行｜保守但可交易）】
 - 若允许翻转：Gate2 输出 planned_dir=（反转方向）并标记 mode=COUNTERTREND；否则 planned_dir 只能取 suggested_dir 或 NEUTRAL。

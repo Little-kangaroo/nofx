@@ -13,10 +13,10 @@ import (
 
 // TestProductionRecords 测试生产环境的决策记录
 func TestProductionRecords(t *testing.T) {
-	recordsDir := "../../../records_new"
+	recordsDir := "../../../records"
 
-	// 读取所有 data*.txt 文件
-	files, err := filepath.Glob(filepath.Join(recordsDir, "data*.txt"))
+	// 读取所有 .txt 文件
+	files, err := filepath.Glob(filepath.Join(recordsDir, "*.txt"))
 	if err != nil {
 		t.Fatalf("读取文件列表失败: %v", err)
 	}
@@ -63,25 +63,44 @@ func TestProductionRecords(t *testing.T) {
 		for symbol, data := range marketData {
 			stats.Total++
 
-			// 提取订单流和多时间框架数据
-			orderflowData, ok := data["订单流分析"]
-			if !ok {
-				t.Logf("  [%s] 缺少订单流分析数据", symbol)
-				stats.Failed++
-				continue
-			}
-
 			mtfData, ok := data["多时间框架分析"]
 			if !ok {
-				t.Logf("  [%s] 缺少多时间框架分析数据", symbol)
+				t.Logf("  [%s] 缺少多时间框架分析数据，跳过", symbol)
 				stats.Failed++
 				continue
 			}
 
-			// 调用方向裁决模块
-			result := computeDirection(symbol, orderflowData, mtfData)
+			var result *direction.DirectionArbitration
+			orderflowData, hasOF := data["订单流分析"]
+			if hasOF {
+				result = computeDirection(symbol, orderflowData, mtfData)
+			} else {
+				// 旧格式记录无订单流字段，使用中性订单流隔离结构方向
+				t.Logf("  [%s] 无订单流分析数据，使用中性订单流", symbol)
+				mtf := parseMTFData(mtfData)
+				if mtf == nil {
+					t.Logf("  [%s] MTF 解析失败，跳过", symbol)
+					stats.Failed++
+					continue
+				}
+				cfg := direction.DefaultConfig()
+				neutral := direction.Orderflow{
+					Quality: direction.Quality{Status: "正常", OverallScore: 0.70, DataLagMs: 100, UpdateIntervalS: 5,
+						CvdReliability: 0.70, OIReliability: 0.70, OrderbookReliability: 0.70},
+					Macro:   direction.Macro{TrendAlignment: "divergent_mixed"},
+					Micro5m: direction.Micro5m{CandleIntent: "mixed", DataQuality: 0.70},
+					OB:      direction.Orderbook{BidPressure: 0.50, AskPressure: 0.50, LiquidityScore: 0.50},
+				}
+				r := direction.ComputeDirectionArbitration(direction.RootSymbolInput{
+					Symbol:    symbol,
+					Orderflow: neutral,
+					MTF:       mtf,
+				}, cfg)
+				result = &r
+			}
+
 			if result == nil {
-				t.Logf("  [%s] 方向裁决计算失败", symbol)
+				t.Logf("  [%s] 方向裁决计算失败，跳过", symbol)
 				stats.Failed++
 				continue
 			}
@@ -320,7 +339,7 @@ func parseMTFData(data interface{}) direction.MTFAnalysis {
 	}
 
 	mtf := make(direction.MTFAnalysis)
-	timeframes := []string{"4h", "1h", "30m", "15m", "5m"}
+	timeframes := []string{"30m", "15m"}
 
 	for _, tf := range timeframes {
 		tfData, ok := rawData[tf].(map[string]interface{})
@@ -329,37 +348,31 @@ func parseMTFData(data interface{}) direction.MTFAnalysis {
 		}
 
 		mtf[tf] = direction.TimeframeData{
-			SuperTrend: parseSuperTrend(tfData),
-			Dow:        parseDow(tfData),
-			VPVR:       parseVPVR(tfData),
+			Channel: parseChannel(tfData),
+			VPVR:    parseVPVR(tfData),
 		}
 	}
 
 	return mtf
 }
 
-// parseSuperTrend 解析超级趋势指标
-func parseSuperTrend(data map[string]interface{}) direction.SuperTrend {
-	stData, ok := data["超级趋势指标"].(map[string]interface{})
+// parseChannel 解析通道数据
+func parseChannel(data map[string]interface{}) direction.ChannelInfo {
+	chData, ok := data["通道数据"].(map[string]interface{})
 	if !ok {
-		return direction.SuperTrend{Direction: "bearish"}
+		return direction.ChannelInfo{
+			Direction:       "sideways",
+			CurrentPosition: "inside",
+			PriceRatio:      0.5,
+			Quality:         0.5,
+		}
 	}
 
-	return direction.SuperTrend{
-		Direction: getStringOrDefault(stData, "direction", "bearish"),
-	}
-}
-
-// parseDow 解析道氏理论数据
-func parseDow(data map[string]interface{}) direction.Dow {
-	dowData, ok := data["道氏理论数据"].(map[string]interface{})
-	if !ok {
-		return direction.Dow{}
-	}
-
-	return direction.Dow{
-		TrendDirection: getStringOrDefault(dowData, "trend_direction", "sideways"),
-		TrendStrength:  getFloatOrDefault(dowData, "trend_strength", 0),
+	return direction.ChannelInfo{
+		Direction:       getStringOrDefault(chData, "channel_direction", "sideways"),
+		CurrentPosition: getStringOrDefault(chData, "current_position", "inside"),
+		PriceRatio:      getFloatOrDefault(chData, "price_ratio", 0.5),
+		Quality:         getFloatOrDefault(chData, "quality", 0.5),
 	}
 }
 

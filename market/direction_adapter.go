@@ -202,21 +202,29 @@ func parseMTFData(data interface{}) direction.MTFAnalysis {
 
 // parseChannel 解析通道数据
 func parseChannel(data map[string]interface{}) direction.ChannelInfo {
-	chData, ok := data["通道分析数据"].(map[string]interface{})
+	chData, ok := data["通道数据"].(map[string]interface{})
 	if !ok {
 		return direction.ChannelInfo{
 			Direction:       "sideways",
-			CurrentPosition: "Inside",
+			CurrentPosition: "inside",
 			PriceRatio:      0.5,
-			Quality:         0.0,
+			Quality:         0.5,
 		}
 	}
 
+	dir := getStringOrDefault(chData, "channel_direction", "sideways")
+	if dir == "" {
+		dir = "sideways" // 上游通道分析失败时回退
+	}
+	pos := getStringOrDefault(chData, "current_position", "inside")
+	if pos == "" {
+		pos = "inside"
+	}
 	return direction.ChannelInfo{
-		Direction:       getStringOrDefault(chData, "direction", "sideways"),
-		CurrentPosition: getStringOrDefault(chData, "current_position", "Inside"),
+		Direction:       dir,
+		CurrentPosition: pos,
 		PriceRatio:      getFloatOrDefault(chData, "price_ratio", 0.5),
-		Quality:         getFloatOrDefault(chData, "quality", 0.0),
+		Quality:         getFloatOrDefault(chData, "quality", 0.5),
 	}
 }
 

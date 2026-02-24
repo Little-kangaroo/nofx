@@ -109,7 +109,7 @@ func NewChannelAnalyzer() *ChannelAnalyzer {
 			MinChannelWidth:   0.02,  // 2%最小宽度（传统模式）
 			MaxChannelWidth:   0.18,  // 18%最大宽度（传统模式）
 			ParallelTolerance: 0.08,  // 8%平行容忍度
-			QualityThreshold:  0.75,  // 75%质量阈值
+			QualityThreshold:  0.60,  // 60%质量阈值（兼容山寨币震荡行情）
 
 			// 🔥 新增：ATR动态宽度标准配置
 			EnableATRWidthStandards: true,  // 启用ATR标准
@@ -734,13 +734,17 @@ func (ca *ChannelAnalyzer) scoreChannelWithATR(channel *Channel, swingPoints []*
 	totalHits := channel.UpperLine.Touches + channel.LowerLine.Touches
 	score += float64(totalHits) * 0.5
 
-	// 🔥 P0-CH-04修复：基于索引的通道年龄评分，避免毫秒转换误差
-	ageInIndices := float64(channel.AgeBars) // channel.AgeBars现在是索引差
-	if ageInIndices <= 50 { // 50根K线内认为是新通道
-		score += 2.0
-	} else if ageInIndices <= 200 { // 200根K线内认为是较新通道
-		score += 1.0
+	// 通道年龄评分：跨度越长 = 结构越成熟 = 得分越高
+	// 修复：原逻辑偏向短通道，1000根K线场景下有效长通道（ageBars>200）全部得0分
+	ageInIndices := float64(channel.AgeBars)
+	if ageInIndices >= 500 {
+		score += 2.0 // 500根以上：成熟结构
+	} else if ageInIndices >= 100 {
+		score += 1.5 // 100-499根：有效通道
+	} else if ageInIndices >= 30 {
+		score += 1.0 // 30-99根：较新通道
 	}
+	// < 30根：太短，不加分
 
 	// 🔥 P0-C1修复：ATR宽度质量评分 - 使用正确的当前索引
 	if atr14 > 0 {
@@ -853,12 +857,16 @@ func (ca *ChannelAnalyzer) scoreChannel(channel *Channel, swingPoints []*SwingPo
 	score += float64(totalHits) * 0.5
 
 	// 🔥 P0-CH-04修复：基于索引的通道年龄评分，避免毫秒转换误差
-	ageInIndices := float64(channel.AgeBars) // channel.AgeBars现在是索引差
-	if ageInIndices <= 50 { // 50根K线内认为是新通道
-		score += 2.0
-	} else if ageInIndices <= 200 { // 200根K线内认为是较新通道
-		score += 1.0
+	// 通道年龄评分：跨度越长 = 结构越成熟 = 得分越高
+	ageInIndices := float64(channel.AgeBars)
+	if ageInIndices >= 500 {
+		score += 2.0 // 500根以上：成熟结构
+	} else if ageInIndices >= 100 {
+		score += 1.5 // 100-499根：有效通道
+	} else if ageInIndices >= 30 {
+		score += 1.0 // 30-99根：较新通道
 	}
+	// < 30根：太短，不加分
 
 	// 基于宽度（适中的宽度更好）
 	if channel.Width >= 0.03 && channel.Width <= 0.08 {
