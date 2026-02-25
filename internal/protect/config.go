@@ -31,7 +31,7 @@ type Config struct {
 func DefaultConfig() Config {
 	c := Config{
 		// ROI锁盈（无时间约束）
-		ROILockTrigger: 0.05, // 5%触发
+		ROILockTrigger: 0.03, // 3%触发（保本阶段起点）
 		FloorPriceBps:  20,   // 盈利地板（仅在无StopLossMilestones时使用）
 
 		// 🎯 V-19.0: ROI止盈里程碑
@@ -43,6 +43,7 @@ func DefaultConfig() Config {
 
 		// 🎯 V-21.0: ROI止损里程碑（激进型）
 		StopLossMilestones: map[float64]float64{
+			0.03: 0.00, // 3% ROI → 保本（止损移至入场价）
 			0.05: 0.03, // 5% ROI → 锁住3%
 			0.08: 0.05, // 8% ROI → 锁住5%
 			0.12: 0.08, // 12% ROI → 锁住8%

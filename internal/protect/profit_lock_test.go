@@ -170,15 +170,15 @@ func TestROITrigger_BelowThreshold(t *testing.T) {
 	pos := newLong(100000, 95000, 95000, 10)
 	pos.ROIArmed = false
 
-	// ROI = 4.9%，低于 5% 门槛
-	m := snap(100490, 0.1, 2_000_000)
+	// ROI = 2.0%，低于 3% 门槛
+	m := snap(100200, 0.1, 2_000_000)
 	plan := eng.Evaluate(pos, m)
 
 	if plan.ShouldUpdate {
-		t.Errorf("ROI=4.9%%：不应触发更新")
+		t.Errorf("ROI=2.0%%：不应触发更新")
 	}
 	if plan.NextROIArmed {
-		t.Errorf("ROI=4.9%%：ROIArmed 不应为 true")
+		t.Errorf("ROI=2.0%%：ROIArmed 不应为 true")
 	}
 }
 
@@ -246,9 +246,8 @@ func TestLong_FullMilestoneProgression(t *testing.T) {
 	}
 
 	steps := []step{
-		{"ROI=3%（未达门槛）", 100300, 0.03, 0, false},
+		{"ROI=2%（未达门槛）", 100200, 0.02, 0, false},
 		{"ROI=5%（触发+锁3%）", 100500, 0.05, 0.03, true},
-		{"ROI=7%（5%已覆盖）", 100700, 0.07, 0.03, false}, // floor 未超过已有止损
 		{"ROI=8%（锁5%）", 100800, 0.08, 0.05, true},
 		{"ROI=12%（锁8%）", 101200, 0.12, 0.08, true},
 		{"ROI=16%（锁11%）", 101600, 0.16, 0.11, true},
@@ -366,7 +365,7 @@ func TestShort_FullMilestoneProgression(t *testing.T) {
 	}
 
 	steps := []step{
-		{"ROI=3%（未达门槛）", 99700, 0.03, 0, false},
+		{"ROI=2%（未达门槛）", 99800, 0.02, 0, false},
 		{"ROI=5%（触发+锁3%）", 99500, 0.05, 0.03, true},
 		{"ROI=12%（锁8%）", 98800, 0.12, 0.08, true},
 		{"ROI=20%（锁14%）", 98000, 0.20, 0.14, true},

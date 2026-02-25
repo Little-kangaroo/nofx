@@ -236,13 +236,13 @@ func TestSchedulerTickOnce_NoUpdate(t *testing.T) {
 		},
 	}
 
-	// 价格只涨0.3% = 3% ROI (低于5%触发阈值)
+	// 价格只涨0.2% = 2% ROI (低于3%触发阈值)
 	mockCache := &MockPriceCache{
 		Prices: map[string]MarketSnapshot{
 			"BTCUSDT": {
 				Symbol:    "BTCUSDT",
-				LastPrice: 100300.0,
-				MarkPrice: 100300.0,
+				LastPrice: 100200.0,
+				MarkPrice: 100200.0,
 				TickSize:  0.1,
 				NowMs:     now,
 			},
@@ -257,7 +257,7 @@ func TestSchedulerTickOnce_NoUpdate(t *testing.T) {
 
 	// 验证：不应该有任何更新
 	if len(mockExec.StopCalls) != 0 {
-		t.Errorf("Expected 0 stop updates (ROI < 5%%), got %d", len(mockExec.StopCalls))
+		t.Errorf("Expected 0 stop updates (ROI < 3%%), got %d", len(mockExec.StopCalls))
 	}
 	if len(mockExec.TakeProfitCalls) != 0 {
 		t.Errorf("Expected 0 TP updates (ROI < 10%%), got %d", len(mockExec.TakeProfitCalls))
@@ -932,13 +932,13 @@ func TestBreakEvenProtection(t *testing.T) {
 			},
 		}
 
-		// 价格上涨0.04% = 4% ROI@10x（未达5% ROI触发），R=0.08R（未达0.4R阈值）
+		// 价格上涨0.02% = 2% ROI@10x（未达3% ROI触发），R=0.04R（未达阈值）
 		mockCache := &MockPriceCache{
 			Prices: map[string]MarketSnapshot{
 				"BTCUSDT": {
 					Symbol:    "BTCUSDT",
-					LastPrice: 100400.0, // +400 = 0.08R, ROI=4%
-					MarkPrice: 100400.0,
+					LastPrice: 100200.0, // +200 = 0.04R, ROI=2%
+					MarkPrice: 100200.0,
 					TickSize:  0.1,
 					NowMs:     now,
 				},
@@ -951,9 +951,9 @@ func TestBreakEvenProtection(t *testing.T) {
 		ctx := context.Background()
 		scheduler.tickOnce(ctx)
 
-		// 验证：不应触发更新（ROI<5%，R<0.4R）
+		// 验证：不应触发更新（ROI<3%）
 		if len(mockExec.StopCalls) != 0 {
-			t.Errorf("Expected 0 stop updates at 0.08R/4%%ROI, got %d", len(mockExec.StopCalls))
+			t.Errorf("Expected 0 stop updates at 0.04R/2%%ROI, got %d", len(mockExec.StopCalls))
 		}
 
 		// 验证：BreakEvenArmed仍为false
@@ -2067,7 +2067,7 @@ func TestBoundaryConditions(t *testing.T) {
 
 	now := time.Now().UnixMilli()
 
-	t.Run("ROI边界：4.99%不触发", func(t *testing.T) {
+	t.Run("ROI边界：2.99%不触发", func(t *testing.T) {
 		mockStore := &MockPositionStore{
 			Positions: []PositionState{
 				{
@@ -2078,7 +2078,7 @@ func TestBoundaryConditions(t *testing.T) {
 					Leverage:             10.0,
 					InitStop:             95000.0,
 					PrevStop:             95000.0,
-					OpenTimeMs:           now - 10*60*1000, // 10分钟前（满足时间条件）
+					OpenTimeMs:           now - 10*60*1000,
 					LastStopUpdateTimeMs: time.Now().UnixMilli() - 30*1000,
 					StopTriggerType:      TriggerLast,
 					ROIArmed:             false,
@@ -2086,13 +2086,13 @@ func TestBoundaryConditions(t *testing.T) {
 			},
 		}
 
-		// 价格上涨0.499% = 4.99% ROI@10x（刚好低于5%触发阈值）
+		// 价格上涨0.299% = 2.99% ROI@10x（刚好低于3%触发阈值）
 		mockCache := &MockPriceCache{
 			Prices: map[string]MarketSnapshot{
 				"BTCUSDT": {
 					Symbol:    "BTCUSDT",
-					LastPrice: 100499.0, // +0.499% = 4.99% ROI
-					MarkPrice: 100499.0,
+					LastPrice: 100299.0, // +0.299% = 2.99% ROI
+					MarkPrice: 100299.0,
 					TickSize:  0.1,
 					NowMs:     now,
 				},
@@ -2105,12 +2105,12 @@ func TestBoundaryConditions(t *testing.T) {
 		ctx := context.Background()
 		scheduler.tickOnce(ctx)
 
-		// 验证：不应触发更新（4.99% < 5%）
+		// 验证：不应触发更新（2.99% < 3%）
 		if len(mockExec.StopCalls) != 0 {
-			t.Errorf("Expected 0 stop updates at 4.99%% ROI, got %d", len(mockExec.StopCalls))
+			t.Errorf("Expected 0 stop updates at 2.99%% ROI, got %d", len(mockExec.StopCalls))
 		}
 
-		t.Logf("✓ 4.99%% ROI correctly NOT triggered (below 5%% threshold)")
+		t.Logf("✓ 2.99%% ROI correctly NOT triggered (below 3%% threshold)")
 	})
 
 	t.Run("ROI边界：5.00%精确触发", func(t *testing.T) {
