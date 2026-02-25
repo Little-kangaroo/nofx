@@ -71,8 +71,8 @@ func TestLONGStopUpdateComprehensive(t *testing.T) {
 			t.Errorf("ROI达到5%%，应该触发更新。原因: %v, 备注: %s", plan.Reasons, plan.Note)
 		}
 
-		// 验证盈利地板：entry + (R0 * 3%) = 100000 + 150 = 100150
-		expectedFloor := 100150.0
+		// 验证盈利地板：entry × (1 + 3%/10) = 100000 × 1.003 = 100300
+		expectedFloor := 100300.0
 		if plan.Floor < expectedFloor-1 || plan.Floor > expectedFloor+1 {
 			t.Errorf("盈利地板错误: %.2f, 期望约%.2f", plan.Floor, expectedFloor)
 		}
@@ -128,9 +128,8 @@ func TestLONGStopUpdateComprehensive(t *testing.T) {
 					t.Errorf("ROI=%.4f, 期望%.4f", plan.RoiUnr, tc.expectedROI)
 				}
 
-				// 验证盈利地板：entry + (R0 * stopPct)
-				r0 := 5000.0
-				expectedFloor := pos.Entry + (r0 * tc.expectedStopPct)
+				// 验证盈利地板：entry × (1 + stopPct/leverage)
+				expectedFloor := pos.Entry * (1 + tc.expectedStopPct/pos.Leverage)
 				if plan.Floor < expectedFloor-1 || plan.Floor > expectedFloor+1 {
 					t.Errorf("盈利地板=%.2f, 期望%.2f", plan.Floor, expectedFloor)
 				}
@@ -255,17 +254,17 @@ func TestLONGStopUpdateComprehensive(t *testing.T) {
 
 		plan := eng.Evaluate(pos, snap)
 
-		// BE应该在entry上方（LONG）
-		if plan.BE <= pos.Entry {
-			t.Errorf("BE=%.2f应该在entry=%.2f上方", plan.BE, pos.Entry)
+		// LONG：盈利地板应在entry上方（锁住正ROI）
+		if plan.Floor <= pos.Entry {
+			t.Errorf("LONG Floor=%.2f应该在entry=%.2f上方", plan.Floor, pos.Entry)
 		}
 
-		// 盈利地板不应低于BE
-		if plan.Floor < plan.BE {
-			t.Errorf("盈利地板%.2f不应低于BE%.2f", plan.Floor, plan.BE)
+		// 盈利地板应低于当前价（不立即触发）
+		if plan.Floor >= snap.LastPrice {
+			t.Errorf("Floor=%.2f不应高于当前价=%.2f", plan.Floor, snap.LastPrice)
 		}
 
-		t.Logf("✓ BE=%.2f, Floor=%.2f（BE保护正确）", plan.BE, plan.Floor)
+		t.Logf("✓ Floor=%.2f（>entry=%.2f，锁盈验证正确）", plan.Floor, pos.Entry)
 	})
 }
 
@@ -335,8 +334,8 @@ func TestSHORTStopUpdateComprehensive(t *testing.T) {
 			t.Errorf("ROI达到5%%，应该触发更新。原因: %v, 备注: %s", plan.Reasons, plan.Note)
 		}
 
-		// 验证盈利地板：entry - (R0 * 3%) = 100000 - 150 = 99850
-		expectedFloor := 99850.0
+		// 验证盈利地板：entry × (1 - 3%/10) = 100000 × 0.997 = 99700
+		expectedFloor := 99700.0
 		if plan.Floor < expectedFloor-1 || plan.Floor > expectedFloor+1 {
 			t.Errorf("盈利地板错误: %.2f, 期望约%.2f", plan.Floor, expectedFloor)
 		}
@@ -402,9 +401,8 @@ func TestSHORTStopUpdateComprehensive(t *testing.T) {
 					t.Errorf("ROI=%.4f, 期望%.4f", plan.RoiUnr, tc.expectedROI)
 				}
 
-				// 验证盈利地板：entry - (R0 * stopPct)
-				r0 := 5000.0
-				expectedFloor := pos.Entry - (r0 * tc.expectedStopPct)
+				// 验证盈利地板：entry × (1 - stopPct/leverage)
+				expectedFloor := pos.Entry * (1 - tc.expectedStopPct/pos.Leverage)
 				if plan.Floor < expectedFloor-1 || plan.Floor > expectedFloor+1 {
 					t.Errorf("盈利地板=%.2f, 期望%.2f", plan.Floor, expectedFloor)
 				}
@@ -529,17 +527,17 @@ func TestSHORTStopUpdateComprehensive(t *testing.T) {
 
 		plan := eng.Evaluate(pos, snap)
 
-		// BE应该在entry下方（SHORT）
-		if plan.BE >= pos.Entry {
-			t.Errorf("BE=%.2f应该在entry=%.2f下方", plan.BE, pos.Entry)
+		// SHORT：盈利地板应在entry下方（锁住正ROI）
+		if plan.Floor >= pos.Entry {
+			t.Errorf("SHORT Floor=%.2f应该在entry=%.2f下方", plan.Floor, pos.Entry)
 		}
 
-		// 盈利地板不应高于BE
-		if plan.Floor > plan.BE {
-			t.Errorf("盈利地板%.2f不应高于BE%.2f", plan.Floor, plan.BE)
+		// 盈利地板应高于当前价（不立即触发）
+		if plan.Floor <= snap.LastPrice {
+			t.Errorf("SHORT Floor=%.2f不应低于当前价=%.2f", plan.Floor, snap.LastPrice)
 		}
 
-		t.Logf("✓ BE=%.2f, Floor=%.2f（BE保护正确）", plan.BE, plan.Floor)
+		t.Logf("✓ BE=0.00, Floor=%.2f（<entry=%.2f，锁盈验证正确）", plan.Floor, pos.Entry)
 	})
 
 	t.Run("场景8: 真实场景验证 (SOLUSDT)", func(t *testing.T) {

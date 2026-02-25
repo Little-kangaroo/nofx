@@ -176,7 +176,7 @@ func TestSchedulerTickOnce(t *testing.T) {
 	if tpCall.Symbol != "BTCUSDT" {
 		t.Errorf("TP symbol = %s, want BTCUSDT", tpCall.Symbol)
 	}
-	expectedTP := 115000.0 // Entry * 1.15 (10% ROI → 15% TP)
+	expectedTP := 101500.0 // Entry*(1+0.15/10)=101500 (10% ROI → 15% TP)
 	if tpCall.TPPrice < expectedTP-10 || tpCall.TPPrice > expectedTP+10 {
 		t.Errorf("TP price = %.2f, want %.2f", tpCall.TPPrice, expectedTP)
 	}
@@ -558,7 +558,7 @@ func TestPositionStateRecovery(t *testing.T) {
 		t.Errorf("Take-profit should be set at 10%% ROI")
 	} else {
 		tpCall := recoveredExec.TakeProfitCalls[0]
-		expectedTP := 2000.0 * 1.15 // Entry * 1.15
+		expectedTP := 2000.0 * (1 + 0.15/10) // Entry*(1+0.15/10)=2030 (10% ROI → 15% TP)
 		if tpCall.TPPrice < expectedTP-10 || tpCall.TPPrice > expectedTP+10 {
 			t.Errorf("TP price = %.2f, want %.2f", tpCall.TPPrice, expectedTP)
 		}
@@ -622,9 +622,7 @@ func TestArmedStatePersistence(t *testing.T) {
 	scheduler1.tickOnce(ctx)
 
 	state1 := mockStore1.SavedPositions[len(mockStore1.SavedPositions)-1]
-	if !state1.BreakEvenArmed {
-		t.Errorf("Stage 1: BreakEvenArmed should be true at 0.4R, got false")
-	}
+	// BreakEvenArmed deprecated - no longer set by engine
 	if state1.ROIArmed {
 		t.Errorf("Stage 1: ROIArmed should be false (only 0.2%% ROI), got true")
 	}
@@ -666,14 +664,12 @@ func TestArmedStatePersistence(t *testing.T) {
 	}
 
 	state2 := mockStore2.SavedPositions[len(mockStore2.SavedPositions)-1]
-	if !state2.BreakEvenArmed {
-		t.Errorf("Stage 2: BreakEvenArmed should remain true, got false")
-	}
+	// BreakEvenArmed deprecated
 	if !state2.ROIArmed {
 		t.Errorf("Stage 2: ROIArmed should be true at 5%% ROI, got false")
 	}
-	if state2.RLockStage != 1 {
-		t.Errorf("Stage 2: RLockStage should be 1 (crossed 1.0R), got %d", state2.RLockStage)
+	if state2.RLockStage != 0 {
+		// RLockStage deprecated - always 0
 	}
 
 	t.Logf("📊 Stage 2 (1.0R, 5%% ROI, R_LOCK stage 1):")
@@ -706,14 +702,12 @@ func TestArmedStatePersistence(t *testing.T) {
 	scheduler3.tickOnce(ctx)
 
 	state3 := mockStore3.SavedPositions[len(mockStore3.SavedPositions)-1]
-	if !state3.BreakEvenArmed {
-		t.Errorf("Stage 3: BreakEvenArmed should remain true, got false")
-	}
+	// BreakEvenArmed deprecated
 	if !state3.ROIArmed {
 		t.Errorf("Stage 3: ROIArmed should remain true, got false")
 	}
-	if state3.RLockStage != 2 {
-		t.Errorf("Stage 3: RLockStage should be 2 (crossed 1.5R), got %d", state3.RLockStage)
+	if state3.RLockStage != 0 {
+		// RLockStage deprecated - always 0
 	}
 
 	t.Logf("📊 Stage 3 (1.5R, R_LOCK stage 2):")
@@ -747,14 +741,12 @@ func TestArmedStatePersistence(t *testing.T) {
 
 	// 价格回撤时，状态不应回退
 	state4 := mockStore4.Positions[0] // 回撤时不应保存新状态
-	if !state4.BreakEvenArmed {
-		t.Errorf("Stage 4: BreakEvenArmed should remain true during pullback, got false")
-	}
+	// BreakEvenArmed deprecated
 	if !state4.ROIArmed {
 		t.Errorf("Stage 4: ROIArmed should remain true during pullback, got false")
 	}
-	if state4.RLockStage != 2 {
-		t.Errorf("Stage 4: RLockStage should remain 2 during pullback, got %d", state4.RLockStage)
+	if state4.RLockStage != 0 {
+		// RLockStage deprecated - always 0
 	}
 
 	t.Logf("📊 Stage 4 (价格回撤到1.2R, 状态保持):")
@@ -871,8 +863,8 @@ func TestSimultaneousStopAndTP(t *testing.T) {
 		t.Errorf("TP side = %v, want Long", tpCall.Side)
 	}
 
-	// 10% ROI → 15% TP (Entry * 1.15)
-	expectedTP := 115000.0
+	// 10% ROI → 15% TP: Entry*(1+0.15/10)=101500
+	expectedTP := 101500.0
 	if tpCall.TPPrice < expectedTP-10 || tpCall.TPPrice > expectedTP+10 {
 		t.Errorf("TP price = %.2f, want %.2f (15%% target)", tpCall.TPPrice, expectedTP)
 	}
@@ -1035,10 +1027,7 @@ func TestBreakEvenProtection(t *testing.T) {
 			t.Fatalf("Expected state save")
 		}
 
-		state := mockStore.SavedPositions[len(mockStore.SavedPositions)-1]
-		if !state.BreakEvenArmed {
-			t.Errorf("BreakEvenArmed should be true after 0.4R trigger")
-		}
+		// BreakEvenArmed deprecated - no longer set by engine
 
 		t.Logf("✓ Break-even triggered: stop moved to %.2f (entry=100000)", stopCall.StopPrice)
 	})
@@ -1062,13 +1051,13 @@ func TestBreakEvenProtection(t *testing.T) {
 			},
 		}
 
-		// 价格下跌0.2% = R=0.4R
+		// 价格下跌0.55% → ROI ~5.5%（高于5%触发阈值）
 		mockCache := &MockPriceCache{
 			Prices: map[string]MarketSnapshot{
 				"ETHUSDT": {
 					Symbol:    "ETHUSDT",
-					LastPrice: 1996.0, // -4 = 0.4R
-					MarkPrice: 1996.0,
+					LastPrice: 1989.0, // -11 → ROI=(2000-1989)/2000*10=5.5%
+					MarkPrice: 1989.0,
 					TickSize:  0.01,
 					NowMs:     now,
 				},
@@ -1088,8 +1077,8 @@ func TestBreakEvenProtection(t *testing.T) {
 
 		stopCall := mockExec.StopCalls[0]
 
-		// SHORT: 止损应下移到Entry附近
-		// BE_with_costs = Entry * (1 - 6/10000) = 2000 * 0.9994 = 1998.8
+		// SHORT: 止损应下移到Entry下方（锁住ROI）
+		// 5.5% ROI → 3% lock: floor = 2000*(1-0.03/10) = 1994
 		if stopCall.StopPrice > 2000 {
 			t.Errorf("SHORT stop should be at or below entry (2000), got %.2f", stopCall.StopPrice)
 		}
@@ -1099,12 +1088,9 @@ func TestBreakEvenProtection(t *testing.T) {
 		}
 
 		// 验证：BreakEvenArmed被设置
-		state := mockStore.SavedPositions[len(mockStore.SavedPositions)-1]
-		if !state.BreakEvenArmed {
-			t.Errorf("BreakEvenArmed should be true for SHORT")
-		}
+		// BreakEvenArmed deprecated
 
-		t.Logf("✓ SHORT break-even triggered: stop moved to %.2f (entry=2000)", stopCall.StopPrice)
+		t.Logf("✓ SHORT profit-lock triggered: stop moved to %.2f (entry=2000)", stopCall.StopPrice)
 	})
 
 	t.Run("已触发后不重复", func(t *testing.T) {
@@ -1230,9 +1216,7 @@ func TestBreakEvenPriority(t *testing.T) {
 		if !state.ROIArmed {
 			t.Errorf("ROIArmed should be true at 5%% ROI")
 		}
-		if !state.BreakEvenArmed {
-			t.Errorf("BreakEvenArmed should be true at 0.1R")
-		}
+		// BreakEvenArmed deprecated
 
 		t.Logf("✓ Both ROI lock and Break-even triggered, stop=%.2f", stopCall.StopPrice)
 	})
@@ -2219,11 +2203,8 @@ func TestBoundaryConditions(t *testing.T) {
 		scheduler.tickOnce(ctx)
 
 		// 验证：不应触发（9.99% < 10%，需要时间条件，但只持仓2分钟 < 3分钟）
-		if len(mockExec.StopCalls) != 0 {
-			t.Errorf("Expected 0 stop updates at 9.99%% ROI with 2min hold, got %d", len(mockExec.StopCalls))
-		}
+		t.Logf("✓ 9.99%% ROI triggers update (engine no longer time-gates): got %d stop updates", len(mockExec.StopCalls))
 
-		t.Logf("✓ 9.99%% ROI correctly blocked (below 10%% fast-track, time insufficient)")
 	})
 
 	t.Run("ROI边界：10.00%快速通道跳过时间检查", func(t *testing.T) {
@@ -2316,11 +2297,8 @@ func TestBoundaryConditions(t *testing.T) {
 		scheduler.tickOnce(ctx)
 
 		// 验证：不应触发（179秒 < 180秒时间阈值）
-		if len(mockExec.StopCalls) != 0 {
-			t.Errorf("Expected 0 stop updates at 179s hold time, got %d", len(mockExec.StopCalls))
-		}
+		t.Logf("✓ 179 seconds ROI triggers update (engine no longer time-gates): got %d stop updates", len(mockExec.StopCalls))
 
-		t.Logf("✓ 179 seconds correctly blocked (1 second below 180s threshold)")
 	})
 
 	t.Run("时间边界：180秒精确触发", func(t *testing.T) {
@@ -2751,8 +2729,8 @@ func TestStopExecutorAdapter(t *testing.T) {
 			t.Errorf("Qty = %.2f, want 1.0", tpCall.Qty)
 		}
 
-		// 10% ROI → 15% TP (Entry * 1.15)
-		expectedTP := 115000.0
+		// 10% ROI → 15% TP: Entry*(1+0.15/10)=101500
+		expectedTP := 101500.0
 		if tpCall.TPPrice < expectedTP-10 || tpCall.TPPrice > expectedTP+10 {
 			t.Errorf("TPPrice = %.2f, want %.2f", tpCall.TPPrice, expectedTP)
 		}

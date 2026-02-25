@@ -66,12 +66,15 @@ func ROIUnrealized(pos PositionState, last float64) float64 {
 
 // ProfitFloor 根据当前ROI查阶梯表，计算止损目标位置
 //
-// 计算公式（不依赖TickSize，不依赖BE）：
-//   - LONG:  floor = Entry + R0 × floorPct
-//   - SHORT: floor = Entry - R0 × floorPct
+// 梯度语义：floorPct 表示"锁住 X% ROI"
+//   - "20% ROI → floorPct=0.14" 的含义是：到达20%ROI时，止损移到能锁住14%ROI的价格
 //
-// 示例（LONG，Entry=100000，R0=5000）：
-//   - 12% ROI → floorPct=0.08 → floor = 100000 + 5000×0.08 = 100400
+// 计算公式：
+//   - LONG:  floor = Entry × (1 + floorPct / leverage)
+//   - SHORT: floor = Entry × (1 - floorPct / leverage)
+//
+// 示例（LONG，Entry=0.0918，Leverage=10）：
+//   - 20% ROI → floorPct=0.14 → floor = 0.0918 × (1 + 0.014) = 0.093088 → 锁住14% ROI
 func ProfitFloor(pos PositionState, cfg Config, currentROI float64) float64 {
 	floorPct := 0.0
 	if len(cfg.StopLossMilestones) > 0 {
@@ -88,20 +91,14 @@ func ProfitFloor(pos PositionState, cfg Config, currentROI float64) float64 {
 		floorPct = cfg.FloorPriceBps / 10000.0
 	}
 
-	var r0 float64
-	if pos.Side == Long {
-		r0 = pos.Entry - pos.InitStop
-	} else {
-		r0 = pos.InitStop - pos.Entry
-	}
-	if r0 <= 0 {
+	if pos.Entry <= 0 || pos.Leverage <= 0 {
 		return 0
 	}
 
 	if pos.Side == Long {
-		return pos.Entry + r0*floorPct
+		return pos.Entry * (1 + floorPct/pos.Leverage)
 	}
-	return pos.Entry - r0*floorPct
+	return pos.Entry * (1 - floorPct/pos.Leverage)
 }
 
 // FloorToTick 向下取整到最近的tick（用于格式化报价，不影响逻辑判断）

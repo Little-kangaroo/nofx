@@ -211,7 +211,7 @@ func TestROITakeProfitMultipleMilestones(t *testing.T) {
 		t.Fatalf("ShouldUpdateTP should be true for 50%% ROI")
 	}
 
-	expectedTP := 170000.0 // entry * 1.70
+	expectedTP := 107000.0 // entry * (1 + 0.70/10) = 107000
 	if math.Abs(plan.NewTakeProfit-expectedTP) > 0.01 {
 		t.Errorf("NewTakeProfit = %.2f, want %.2f (should use highest milestone)",
 			plan.NewTakeProfit, expectedTP)
@@ -243,10 +243,10 @@ func TestROITakeProfitMonotonicity(t *testing.T) {
 			name:         "LONG - 止盈上移（15%→30%）",
 			side:         Long,
 			entryPrice:   100000.0,
-			prevTP:       115000.0, // 已有15%止盈
+			prevTP:       101500.0, // 已有15% ROI TP: entry*(1+0.15/10)=101500
 			roiPercent:   0.20,     // 20% ROI触发30%止盈
 			shouldUpdate: true,
-			expectedTP:   130000.0, // 30% TP
+			expectedTP:   103000.0, // 30% ROI TP: entry*(1+0.30/10)=103000
 		},
 		{
 			name:         "LONG - 止盈不下移（已有20%，触发15%）",
@@ -260,10 +260,10 @@ func TestROITakeProfitMonotonicity(t *testing.T) {
 			name:         "SHORT - 止盈下移（15%→30%）",
 			side:         Short,
 			entryPrice:   100000.0,
-			prevTP:       85000.0, // 已有15%止盈
+			prevTP:       98500.0, // 已有15% ROI TP: entry*(1-0.15/10)=98500
 			roiPercent:   0.20,    // 20% ROI触发30%止盈
 			shouldUpdate: true,
-			expectedTP:   70000.0, // 30% TP
+			expectedTP:   97000.0, // 30% ROI TP: entry*(1-0.30/10)=97000
 		},
 		{
 			name:         "SHORT - 止盈不上移（已有20%，触发15%）",
@@ -373,7 +373,7 @@ func TestConfigurableTPMilestones(t *testing.T) {
 		t.Fatalf("ShouldUpdateTP should be true for custom 5%% ROI milestone")
 	}
 
-	expectedTP := 110000.0 // entry * 1.10
+	expectedTP := 101000.0 // entry * (1 + 0.10/10) = 101000
 	if math.Abs(plan.NewTakeProfit-expectedTP) > 0.01 {
 		t.Errorf("NewTakeProfit = %.2f, want %.2f (custom milestone)",
 			plan.NewTakeProfit, expectedTP)

@@ -5,73 +5,40 @@ import (
 )
 
 // TestStopLossMilestones 测试止损阶梯功能
+// 语义：floorPct 表示"锁住 X% ROI"
+// 公式：floor = Entry × (1 + floorPct/leverage)  LONG
+//        floor = Entry × (1 - floorPct/leverage)  SHORT
 func TestStopLossMilestones(t *testing.T) {
 	cfg := DefaultConfig()
-	eng := Engine{
-		Cfg: cfg,
-		Fees: FeeModel{
-			TakerFeeBps:      5,
-			SlippageBpsMinor: 5,
-			FundingBps:       1,
-		},
-	}
+	eng := Engine{Cfg: cfg}
 
 	tests := []struct {
-		name           string
-		roi            float64
-		expectedStopPct float64
-		lastPrice      float64
+		name            string
+		roi             float64
+		expectedStopPct float64 // 应锁住的ROI百分比
+		lastPrice       float64
+		expectedFloor   float64 // Entry × (1 + floorPct/leverage)
 	}{
-		{
-			name:           "5% ROI → 3% 止损",
-			roi:            0.05,
-			expectedStopPct: 0.03,
-			lastPrice:      100500, // 5% ROI @ 10x = 0.5% price move
-		},
-		{
-			name:           "8% ROI → 5% 止损",
-			roi:            0.08,
-			expectedStopPct: 0.05,
-			lastPrice:      100800,
-		},
-		{
-			name:           "12% ROI → 8% 止损",
-			roi:            0.12,
-			expectedStopPct: 0.08,
-			lastPrice:      101200,
-		},
-		{
-			name:           "20% ROI → 14% 止损",
-			roi:            0.20,
-			expectedStopPct: 0.14,
-			lastPrice:      102000,
-		},
-		{
-			name:           "30% ROI → 22% 止损",
-			roi:            0.30,
-			expectedStopPct: 0.22,
-			lastPrice:      103000,
-		},
-		{
-			name:           "50% ROI → 38% 止损",
-			roi:            0.50,
-			expectedStopPct: 0.38,
-			lastPrice:      105000,
-		},
+		{"5% ROI → 3% 止损", 0.05, 0.03, 100500, 100300},  // 100000 × 1.003
+		{"8% ROI → 5% 止损", 0.08, 0.05, 100800, 100500},  // 100000 × 1.005
+		{"12% ROI → 8% 止损", 0.12, 0.08, 101200, 100800}, // 100000 × 1.008
+		{"20% ROI → 14% 止损", 0.20, 0.14, 102000, 101400}, // 100000 × 1.014
+		{"30% ROI → 22% 止损", 0.30, 0.22, 103000, 102200}, // 100000 × 1.022
+		{"50% ROI → 38% 止损", 0.50, 0.38, 105000, 103800}, // 100000 × 1.038
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pos := PositionState{
-				Symbol:    "BTCUSDT",
-				Side:      Long,
-				Entry:     100000,
-				InitStop:  95000,
-				PrevStop:  95000,
-				Leverage:  10,
-				Qty:       1.0,
-				ROIArmed:  true, // 已触发ROI锁盈
-				OpenTimeMs: 1000000,
+				Symbol:          "BTCUSDT",
+				Side:            Long,
+				Entry:           100000,
+				InitStop:        95000,
+				PrevStop:        95000,
+				Leverage:        10,
+				Qty:             1.0,
+				ROIArmed:        true,
+				OpenTimeMs:      1000000,
 				StopTriggerType: TriggerLast,
 			}
 
@@ -80,18 +47,21 @@ func TestStopLossMilestones(t *testing.T) {
 				LastPrice: tt.lastPrice,
 				MarkPrice: tt.lastPrice,
 				TickSize:  0.1,
-				NowMs:     1000000 + 30000, // 30秒后
+				NowMs:     1000000 + 30000,
 			}
 
 			plan := eng.Evaluate(pos, m)
 
-			// 验证盈利地板是否正确（V-21.3：基于R0的计算）
-			// Floor = Entry + (R0 * stopPct)
-			r0 := pos.Entry - pos.InitStop // LONG: 100000 - 95000 = 5000
-			expectedFloor := pos.Entry + (r0 * tt.expectedStopPct)
-			if plan.Floor < expectedFloor-1 || plan.Floor > expectedFloor+1 {
-				t.Errorf("Floor = %.2f, want %.2f (entry + R0*%.2f%%)",
-					plan.Floor, expectedFloor, tt.expectedStopPct*100)
+			// 验证盈利地板：floor = Entry × (1 + floorPct/leverage)
+			if plan.Floor < tt.expectedFloor-1 || plan.Floor > tt.expectedFloor+1 {
+				t.Errorf("Floor = %.2f, want %.2f (entry×(1+%.2f%%/lev))",
+					plan.Floor, tt.expectedFloor, tt.expectedStopPct*100)
+			}
+
+			// 验证ROI at floor 等于 floorPct（锁住的ROI）
+			roiAtFloor := (plan.Floor-pos.Entry)/pos.Entry*pos.Leverage
+			if roiAtFloor < tt.expectedStopPct-0.001 || roiAtFloor > tt.expectedStopPct+0.001 {
+				t.Errorf("ROI at floor = %.2f%%, want %.2f%%", roiAtFloor*100, tt.expectedStopPct*100)
 			}
 
 			// 验证ROI计算
@@ -99,8 +69,8 @@ func TestStopLossMilestones(t *testing.T) {
 				t.Errorf("RoiUnr = %.4f, want %.4f", plan.RoiUnr, tt.roi)
 			}
 
-			t.Logf("✓ %s: Floor=%.2f (entry+%.2f%%), ROI=%.2f%%",
-				tt.name, plan.Floor, tt.expectedStopPct*100, plan.RoiUnr*100)
+			t.Logf("✓ %s: Floor=%.2f → 锁住ROI=%.2f%% (当前ROI=%.2f%%)",
+				tt.name, plan.Floor, roiAtFloor*100, plan.RoiUnr*100)
 		})
 	}
 }
@@ -108,41 +78,33 @@ func TestStopLossMilestones(t *testing.T) {
 // TestStopLossMilestonesMonotonicity 测试止损阶梯的单调性
 func TestStopLossMilestonesMonotonicity(t *testing.T) {
 	cfg := DefaultConfig()
-	eng := Engine{
-		Cfg: cfg,
-		Fees: FeeModel{
-			TakerFeeBps:      5,
-			SlippageBpsMinor: 5,
-			FundingBps:       1,
-		},
-	}
+	eng := Engine{Cfg: cfg}
 
 	pos := PositionState{
-		Symbol:    "BTCUSDT",
-		Side:      Long,
-		Entry:     100000,
-		InitStop:  95000,
-		PrevStop:  95000,
-		Leverage:  10,
-		Qty:       1.0,
-		ROIArmed:  false,
-		OpenTimeMs: 1000000,
+		Symbol:          "BTCUSDT",
+		Side:            Long,
+		Entry:           100000,
+		InitStop:        95000,
+		PrevStop:        95000,
+		Leverage:        10,
+		Qty:             1.0,
+		ROIArmed:        false,
+		OpenTimeMs:      1000000,
 		StopTriggerType: TriggerLast,
 	}
 
-	// 模拟价格上涨过程（V-21.3：基于R0的计算）
-	// R0 = 100000 - 95000 = 5000
-	// Floor = Entry + (R0 * stopPct)
+	// Entry=100000, Leverage=10
+	// floor = Entry × (1 + floorPct/leverage)
 	priceSteps := []struct {
 		price       float64
 		expectedROI float64
 		minFloor    float64
 	}{
-		{100500, 0.05, 100150},  // 5% ROI → floor >= 100150 (entry + R0*3%)
-		{100800, 0.08, 100250},  // 8% ROI → floor >= 100250 (entry + R0*5%)
-		{101200, 0.12, 100400},  // 12% ROI → floor >= 100400 (entry + R0*8%)
-		{102000, 0.20, 100700},  // 20% ROI → floor >= 100700 (entry + R0*14%)
-		{103000, 0.30, 101100},  // 30% ROI → floor >= 101100 (entry + R0*22%)
+		{100500, 0.05, 100300}, // 5%→3%: 100000×1.003
+		{100800, 0.08, 100500}, // 8%→5%: 100000×1.005
+		{101200, 0.12, 100800}, // 12%→8%: 100000×1.008
+		{102000, 0.20, 101400}, // 20%→14%: 100000×1.014
+		{103000, 0.30, 102200}, // 30%→22%: 100000×1.022
 	}
 
 	prevFloor := 0.0
@@ -152,22 +114,19 @@ func TestStopLossMilestonesMonotonicity(t *testing.T) {
 			LastPrice: step.price,
 			MarkPrice: step.price,
 			TickSize:  0.1,
-			NowMs:     1000000 + int64(i*30000), // 每30秒一次
+			NowMs:     1000000 + int64(i*30000),
 		}
 
 		plan := eng.Evaluate(pos, m)
 
-		// 验证ROI
 		if plan.RoiUnr < step.expectedROI-0.001 || plan.RoiUnr > step.expectedROI+0.001 {
 			t.Errorf("Step %d: RoiUnr = %.4f, want %.4f", i, plan.RoiUnr, step.expectedROI)
 		}
 
-		// 验证盈利地板单调递增
 		if plan.Floor < prevFloor {
 			t.Errorf("Step %d: Floor regressed from %.2f to %.2f", i, prevFloor, plan.Floor)
 		}
 
-		// 验证盈利地板至少达到预期
 		if plan.Floor < step.minFloor-1 {
 			t.Errorf("Step %d: Floor = %.2f, want >= %.2f", i, plan.Floor, step.minFloor)
 		}
@@ -186,48 +145,30 @@ func TestStopLossMilestonesMonotonicity(t *testing.T) {
 // TestStopLossMilestonesShort 测试做空的止损阶梯
 func TestStopLossMilestonesShort(t *testing.T) {
 	cfg := DefaultConfig()
-	eng := Engine{
-		Cfg: cfg,
-		Fees: FeeModel{
-			TakerFeeBps:      5,
-			SlippageBpsMinor: 5,
-			FundingBps:       1,
-		},
-	}
+	eng := Engine{Cfg: cfg}
 
 	pos := PositionState{
-		Symbol:    "BTCUSDT",
-		Side:      Short,
-		Entry:     100000,
-		InitStop:  105000,
-		PrevStop:  105000,
-		Leverage:  10,
-		Qty:       1.0,
-		ROIArmed:  true,
-		OpenTimeMs: 1000000,
+		Symbol:          "BTCUSDT",
+		Side:            Short,
+		Entry:           100000,
+		InitStop:        105000,
+		PrevStop:        105000,
+		Leverage:        10,
+		Qty:             1.0,
+		ROIArmed:        true,
+		OpenTimeMs:      1000000,
 		StopTriggerType: TriggerLast,
 	}
 
 	tests := []struct {
-		name           string
-		lastPrice      float64
+		name            string
+		lastPrice       float64
 		expectedStopPct float64
+		expectedFloor   float64
 	}{
-		{
-			name:           "5% ROI → 3% 止损",
-			lastPrice:      99500,
-			expectedStopPct: 0.03,
-		},
-		{
-			name:           "12% ROI → 8% 止损",
-			lastPrice:      98800,
-			expectedStopPct: 0.08,
-		},
-		{
-			name:           "30% ROI → 22% 止损",
-			lastPrice:      97000,
-			expectedStopPct: 0.22,
-		},
+		{"5% ROI → 3% 止损", 99500, 0.03, 99700},  // 100000×(1-0.003)
+		{"12% ROI → 8% 止损", 98800, 0.08, 99200}, // 100000×(1-0.008)
+		{"30% ROI → 22% 止损", 97000, 0.22, 97800}, // 100000×(1-0.022)
 	}
 
 	for _, tt := range tests {
@@ -242,16 +183,20 @@ func TestStopLossMilestonesShort(t *testing.T) {
 
 			plan := eng.Evaluate(pos, m)
 
-			// SHORT: floor应该是 entry - (R0 * stopPct)（V-21.3修复）
-			r0 := pos.InitStop - pos.Entry // SHORT: 105000 - 100000 = 5000
-			expectedFloor := pos.Entry - (r0 * tt.expectedStopPct)
-			if plan.Floor < expectedFloor-1 || plan.Floor > expectedFloor+1 {
-				t.Errorf("Floor = %.2f, want %.2f (entry - R0*%.2f%%)",
-					plan.Floor, expectedFloor, tt.expectedStopPct*100)
+			// SHORT: floor = Entry × (1 - floorPct/leverage)
+			if plan.Floor < tt.expectedFloor-1 || plan.Floor > tt.expectedFloor+1 {
+				t.Errorf("Floor = %.2f, want %.2f (entry×(1-%.2f%%/lev))",
+					plan.Floor, tt.expectedFloor, tt.expectedStopPct*100)
 			}
 
-			t.Logf("✓ %s: Floor=%.2f (entry-%.2f%%), ROI=%.2f%%",
-				tt.name, plan.Floor, tt.expectedStopPct*100, plan.RoiUnr*100)
+			// 验证ROI at floor
+			roiAtFloor := (pos.Entry-plan.Floor)/pos.Entry*pos.Leverage
+			if roiAtFloor < tt.expectedStopPct-0.001 || roiAtFloor > tt.expectedStopPct+0.001 {
+				t.Errorf("ROI at floor = %.2f%%, want %.2f%%", roiAtFloor*100, tt.expectedStopPct*100)
+			}
+
+			t.Logf("✓ %s: Floor=%.2f → 锁住ROI=%.2f%% (当前ROI=%.2f%%)",
+				tt.name, plan.Floor, roiAtFloor*100, plan.RoiUnr*100)
 		})
 	}
 }
