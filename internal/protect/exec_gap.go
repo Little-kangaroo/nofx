@@ -1,17 +1,5 @@
 package protect
 
-import "math"
-
-// FloorToTick 向下取整到最近的tick
-func FloorToTick(x, tick float64) float64 {
-	return math.Floor(x/tick) * tick
-}
-
-// CeilToTick 向上取整到最近的tick
-func CeilToTick(x, tick float64) float64 {
-	return math.Ceil(x/tick) * tick
-}
-
 // ExecBoundsForStop 计算止损可执行边界
 // 止损价格必须距离参考价格至少 (StopDistanceMinTicks + SafetyTicks) 个tick
 //   - LONG: 止损必须 <= UpperExec (refPrice - gap)

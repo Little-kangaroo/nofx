@@ -5,41 +5,44 @@ import (
 	"math"
 )
 
-// Engine 锁盈引擎（V-20.0 简化版：纯ROI锁盈）
+// Engine 锁盈引擎
 type Engine struct {
-	Cfg  Config   // 配置
-	Fees FeeModel // 费用模型
+	Cfg  Config
+	Fees FeeModel // 保留字段兼容现有初始化代码，当前未使用
 }
 
 // Evaluate 评估持仓并生成止损更新计划
-// V-20.0 简化版：纯ROI锁盈
-//  1. ROI触发检查（无时间约束）
-//  2. 计算盈利地板（BE + FloorPriceBps）
-//  3. EXEC_GAP检查
-//  4. 单调性/去抖/冷却
+//
+// 流程（简化版，不依赖TickSize做逻辑判断）：
+//  1. 输入验证
+//  2. 冷却期检查
+//  3. 计算 R0 / RUnr / RoiUnr
+//  4. ROI 触发检查（>= 5%）
+//  5. 查阶梯表计算盈利地板 floor = Entry ± R0×floorPct
+//  6. 对齐 tick（仅格式化，不影响判断）
+//  7. 单调性：只能往有利方向移动
+//  8. 安全检查：不能超过当前价（防止立即触发）
+//  9. 更新
 func (e *Engine) Evaluate(pos PositionState, m MarketSnapshot) StopUpdatePlan {
 	plan := StopUpdatePlan{}
 
 	// ========== 输入验证 ==========
-	if pos.Entry <= 0 || pos.InitStop <= 0 || m.TickSize <= 0 || m.LastPrice <= 0 {
+	if pos.Entry <= 0 || pos.InitStop <= 0 || m.LastPrice <= 0 {
 		plan.Reasons = append(plan.Reasons, ReasonInvalidInput)
-		plan.Note = "missing entry/init_stop/tick/last"
+		plan.Note = "missing entry/init_stop/last"
 		return plan
 	}
-
 	if pos.Leverage <= 0 {
 		plan.Reasons = append(plan.Reasons, ReasonInvalidInput)
 		plan.Note = "invalid leverage <= 0"
 		return plan
 	}
-
 	if pos.Qty <= 0 {
 		plan.Reasons = append(plan.Reasons, ReasonInvalidInput)
 		plan.Note = "invalid qty <= 0"
 		return plan
 	}
 
-	// 获取参考价格（last或mark）
 	ref, err := RefPriceForStop(pos, m)
 	if err != nil {
 		plan.Reasons = append(plan.Reasons, ReasonInvalidInput)
@@ -70,12 +73,11 @@ func (e *Engine) Evaluate(pos PositionState, m MarketSnapshot) StopUpdatePlan {
 	plan.RUnr = RUnrealized(pos, m.LastPrice, r0)
 	plan.RoiUnr = ROIUnrealized(pos, m.LastPrice)
 
-	// ========== 🎯 V-19.0: ROI止盈计算 ==========
+	// ========== 止盈计算（ROI阶梯，独立于止损逻辑） ==========
 	tpCandidate := pos.PrevTakeProfit
 	tpReason := ""
 
 	if e.Cfg.TPMilestones != nil {
-		// 找到满足条件的最高ROI里程碑
 		highestROIThreshold := 0.0
 		highestTPPct := 0.0
 		for roiThreshold, tpPct := range e.Cfg.TPMilestones {
@@ -84,8 +86,6 @@ func (e *Engine) Evaluate(pos PositionState, m MarketSnapshot) StopUpdatePlan {
 				highestTPPct = tpPct
 			}
 		}
-
-		// 如果找到了满足条件的里程碑，计算止盈价
 		if highestROIThreshold > 0 {
 			var targetTP float64
 			if pos.Side == Long {
@@ -106,14 +106,12 @@ func (e *Engine) Evaluate(pos PositionState, m MarketSnapshot) StopUpdatePlan {
 			tpReason = fmt.Sprintf("ROI_%.0f_PCT", highestROIThreshold*100)
 		}
 
-		// 检查是否需要更新止盈
 		shouldUpdateTP := false
 		if pos.Side == Long {
 			shouldUpdateTP = (tpCandidate > pos.PrevTakeProfit) || (pos.PrevTakeProfit == 0 && tpCandidate > 0)
 		} else {
 			shouldUpdateTP = (tpCandidate < pos.PrevTakeProfit && pos.PrevTakeProfit > 0) || (pos.PrevTakeProfit == 0 && tpCandidate > 0)
 		}
-
 		if shouldUpdateTP {
 			plan.ShouldUpdateTP = true
 			plan.NewTakeProfit = tpCandidate
@@ -121,95 +119,80 @@ func (e *Engine) Evaluate(pos PositionState, m MarketSnapshot) StopUpdatePlan {
 		}
 	}
 
-	// ========== ROI锁盈触发检查（无时间约束） ==========
+	// ========== ROI 触发检查 ==========
 	roiArmed := pos.ROIArmed
 	if !roiArmed && plan.RoiUnr >= e.Cfg.ROILockTrigger {
 		roiArmed = true
 		plan.Reasons = append(plan.Reasons, ReasonROIArm)
 	}
-
-	// ========== 计算盈利地板（仅在ROI armed时生效） ==========
 	if !roiArmed {
-		// ROI未触发，不更新止损
 		plan.Reasons = append(plan.Reasons, ReasonNoChange)
 		plan.Note = "ROI not triggered"
 		plan.NextROIArmed = roiArmed
 		return plan
 	}
 
-	// 计算BE_with_costs
-	be, err := BEWithCosts(pos, e.Cfg, m, e.Fees)
-	if err != nil {
+	// ========== 计算盈利地板（纯价格计算，不依赖TickSize） ==========
+	floor := ProfitFloor(pos, e.Cfg, plan.RoiUnr)
+	plan.Floor = floor
+	if floor <= 0 {
 		plan.Reasons = append(plan.Reasons, ReasonInvalidInput)
-		plan.Note = err.Error()
+		plan.Note = "invalid floor <= 0"
+		plan.NextROIArmed = roiArmed
 		return plan
 	}
-	plan.BE = be
 
-	// 计算盈利地板
-	floor := ProfitFloor(pos, e.Cfg, be, plan.RoiUnr)
-	plan.Floor = floor
-
-	// ========== 计算候选止损价 ==========
-	candidate := pos.PrevStop
-
+	// ========== 候选止损（取较优值，对齐tick仅用于报价格式） ==========
+	var candidate float64
 	if pos.Side == Long {
-		// LONG: 止损向盈利地板移动（只能上移）
-		candidate = maxFloat(candidate, floor)
-		candidate = FloorToTick(candidate, m.TickSize)
+		candidate = maxFloat(pos.PrevStop, floor)
+		if m.TickSize > 0 {
+			candidate = FloorToTick(candidate, m.TickSize)
+		}
 	} else {
-		// SHORT: 止损向盈利地板移动（只能下移）
-		candidate = minFloat(candidate, floor)
-		candidate = CeilToTick(candidate, m.TickSize)
+		candidate = minFloat(pos.PrevStop, floor)
+		if m.TickSize > 0 {
+			candidate = CeilToTick(candidate, m.TickSize)
+		}
 	}
 
-	// ========== 检查是否有改善（单调性） ==========
-	improved := false
-	if pos.Side == Long {
-		improved = candidate > pos.PrevStop
-	} else {
-		improved = candidate < pos.PrevStop
+	// ========== 单调性：只能往有利方向移动 ==========
+	if pos.Side == Long && candidate <= pos.PrevStop {
+		plan.Reasons = append(plan.Reasons, ReasonNoChange)
+		plan.Note = "not improved"
+		plan.NextROIArmed = roiArmed
+		return plan
 	}
-
-	if !improved {
+	if pos.Side == Short && candidate >= pos.PrevStop {
 		plan.Reasons = append(plan.Reasons, ReasonNoChange)
 		plan.Note = "not improved"
 		plan.NextROIArmed = roiArmed
 		return plan
 	}
 
-	// ========== 检查最小移动距离 ==========
-	minMove := float64(e.Cfg.MinTickMoveToUpdate) * m.TickSize
-	if math.Abs(candidate-pos.PrevStop) < minMove {
-		plan.Reasons = append(plan.Reasons, ReasonStepTooSmall)
-		plan.Note = "min move not reached"
-		plan.NextROIArmed = roiArmed
-		return plan
-	}
-
-	// ========== 可执行性检查（EXEC_GAP） ==========
-	exec := CheckExecutable(pos, e.Cfg, ref, m.TickSize, candidate)
-	plan.Bounds = ExecBoundsForStop(e.Cfg, ref, m.TickSize)
-
-	if !exec.Ok {
+	// ========== 安全检查：不能超过当前价（防止立即触发） ==========
+	if pos.Side == Long && candidate >= ref {
 		plan.Reasons = append(plan.Reasons, ReasonExecGap)
 		plan.ExecGap = true
-		plan.Note = exec.Reason
+		plan.Note = fmt.Sprintf("candidate(%.6f) >= ref(%.6f), would trigger immediately", candidate, ref)
+		plan.NextROIArmed = roiArmed
+		return plan
+	}
+	if pos.Side == Short && candidate <= ref {
+		plan.Reasons = append(plan.Reasons, ReasonExecGap)
+		plan.ExecGap = true
+		plan.Note = fmt.Sprintf("candidate(%.6f) <= ref(%.6f), would trigger immediately", candidate, ref)
 		plan.NextROIArmed = roiArmed
 		return plan
 	}
 
-	// ========== 通过所有检查，准备更新 ==========
+	// ========== 全部通过，准备更新 ==========
 	plan.ShouldUpdate = true
 	plan.NewStop = candidate
 	plan.Note = "ROI lock update"
-
 	plan.NextROIArmed = roiArmed
-
 	return plan
 }
-
-// ========== 辅助函数 ==========
 
 // maxFloat 返回两个浮点数中的最大值（忽略NaN）
 func maxFloat(cur float64, x float64) float64 {

@@ -239,9 +239,6 @@ func (s *Scheduler) tickOnce(ctx context.Context) {
 		if plan.Floor > 0 && !math.IsNaN(plan.Floor) {
 			log.Printf("      盈利地板(Floor)=%.6f", plan.Floor)
 		}
-		if plan.BE > 0 && !math.IsNaN(plan.BE) {
-			log.Printf("      盈亏平衡(BE)=%.6f", plan.BE)
-		}
 
 		// 判断是否更新
 		if !plan.ShouldUpdate {
@@ -254,13 +251,8 @@ func (s *Scheduler) tickOnce(ctx context.Context) {
 					log.Printf("      ⏳ 冷却期限制 (还需等待 %ds)", cooldownRemainingSec)
 				case ReasonNoChange:
 					log.Printf("      📊 止损未改善 (候选价=%.6f, 当前止损=%.6f)", plan.NewStop, pos.PrevStop)
-				case ReasonStepTooSmall:
-					minMove := float64(s.Eng.Cfg.MinTickMoveToUpdate) * snap.TickSize
-					actualMove := math.Abs(plan.NewStop - pos.PrevStop)
-					log.Printf("      📏 移动距离太小 (%.6f < %.6f)", actualMove, minMove)
 				case ReasonExecGap:
-					log.Printf("      ⚠️  EXEC_GAP: 候选止损%.6f距离当前价%.6f太近", plan.NewStop, plan.RefPrice)
-					log.Printf("         可执行区间: [%.6f, %.6f]", plan.Bounds.LowerExec, plan.Bounds.UpperExec)
+					log.Printf("      ⚠️  安全检查: %s", plan.Note)
 				}
 			}
 
@@ -270,7 +262,7 @@ func (s *Scheduler) tickOnce(ctx context.Context) {
 					plan.RoiUnr*100, s.Eng.Cfg.ROILockTrigger*100)
 			}
 
-			if plan.Note != "" && plan.Note != "not improved" && plan.Note != "cooldown" && plan.Note != "min move not reached" {
+			if plan.Note != "" && plan.Note != "not improved" && plan.Note != "cooldown" && plan.Note != "ROI not triggered" {
 				log.Printf("      📝 备注: %s", plan.Note)
 			}
 		} else {

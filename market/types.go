@@ -772,20 +772,29 @@ func GetDynamicVPVRConfig(exchangeMeta *ExchangeMeta, symbol string, timeframe s
 	return config
 }
 
-// getSmartTickSizeBySymbol 根据symbol智能推断tick_size（当ExchangeMeta不可用时的降级方案）
-// 🔥 功能：解决不同币种（BTC高价/山寨低价）使用0.01一刀切导致的分桶问题
+// getSmartTickSizeBySymbol 根据symbol获取tick_size（精确映射，避免一刀切导致的计算错误）
 func getSmartTickSizeBySymbol(symbol string) float64 {
-	// 根据symbol类型智能调整tick_size，避免价格分桶过细或过粗
-	switch {
-	case len(symbol) >= 6 && (symbol[:3] == "BTC" || symbol[:3] == "ETH"):
-		// BTC/ETH类：价格较高，可以使用更粗的分桶
-		return 0.1  // 0.1美元精度
-	case len(symbol) >= 8 && symbol[len(symbol)-4:] == "USDT":
-		// 一般USDT交易对：使用中等精度
-		return 0.01 // 0.01美元精度（保持当前默认）
+	switch symbol {
+	// 高价币
+	case "BTCUSDT":
+		return 0.1
+	case "ETHUSDT", "BNBUSDT":
+		return 0.01
+	// 中价币
+	case "SOLUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "UNIUSDT", "ATOMUSDT", "LTCUSDT", "ETCUSDT":
+		return 0.001
+	// 低价币（0.0001）
+	case "XRPUSDT", "ADAUSDT", "MATICUSDT", "ARBUSDT", "OPUSDT":
+		return 0.0001
+	// 极低价币（0.00001）
+	case "DOGEUSDT", "TRXUSDT":
+		return 0.00001
+	// 超低价币
+	case "SHIBUSDT", "PEPEUSDT":
+		return 0.0000001
 	default:
-		// 其他情况：使用精细分桶
-		return 0.001 // 0.001美元精度
+		// 兜底：优先使用偏小值，避免截断导致止损无法更新
+		return 0.0001
 	}
 }
 
