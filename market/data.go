@@ -1089,7 +1089,18 @@ func FormatAsCompactData(data *Data) string {
 	// 🔥 方向裁决模块：计算 plan_side（SSOT）
 	var directionArbitration interface{}
 	if dirResult := ComputeDirectionForSymbol(data.Symbol, orderflowData, mtfData); dirResult != nil {
-		directionArbitration = dirResult
+		directionArbitration = map[string]interface{}{
+			"plan_side":    dirResult.PlanSide,
+			"block_entry":  dirResult.BlockEntry,
+			"block_reason": dirResult.BlockReason,
+			"confidence":   dirResult.Confidence,
+			"delta":        dirResult.Delta,
+			"of_dir":       dirResult.OFDir,
+			"struct_dir":   dirResult.StructDir,
+			"of_quality":   dirResult.OFQuality,
+			"flags":        dirResult.Flags,
+			"debug":        dirResult.Debug,
+		}
 	} else {
 		// 如果计算失败，返回 UNKNOWN 状态
 		directionArbitration = map[string]interface{}{
@@ -1103,9 +1114,9 @@ func FormatAsCompactData(data *Data) string {
 
 	result := map[string]interface{}{
 		data.Symbol: map[string]interface{}{
-			"基础指标":       calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
-			"多时间框架分析": mtfData,
-			//"订单流分析":            orderflowData,
+			"基础指标":              calculateMultiTimeframeBasicIndicators(data, timeframeKlines),
+			"多时间框架分析":        mtfData,
+			"订单流分析":            orderflowData,
 			"trigger_context":       getTriggerContextForAI(data, timeframeKlines),
 			"direction_arbitration": directionArbitration,
 			// 🔥 P0-1新增：输出交易所元数据，解决 ctxNA_lot_size / ctxNA_execution_params
