@@ -12,16 +12,17 @@ const (
 
 // DirectionArbitration 方向裁决输出（SSOT）
 type DirectionArbitration struct {
-	PlanSide    DirectionSide      `json:"plan_side"`   // 计划方向（SSOT）
-	BlockEntry  bool               `json:"block_entry"` // 是否禁止新开仓
-	BlockReason string             `json:"-"`           // 禁止原因（内部使用）
-	Confidence  float64            `json:"-"`           // 置信度（内部使用）
-	Delta       float64            `json:"-"`           // ScoreLong - ScoreShort（内部使用）
-	OFDir       float64            `json:"-"`           // 订单流方向（内部使用）
-	StructDir   float64            `json:"-"`           // 结构方向（内部使用）
-	OFQuality   float64            `json:"-"`           // 订单流质量（内部使用）
-	Flags       []string           `json:"-"`           // 状态标记（内部使用）
-	Debug       map[string]float64 `json:"-"`           // 调试信息（内部使用）
+	PlanSide       DirectionSide      `json:"plan_side"`        // 计划方向（SSOT）
+	BlockEntry     bool               `json:"block_entry"`      // 是否禁止新开仓
+	BlockReason    string             `json:"-"`                // 禁止原因（内部使用）
+	Confidence     float64            `json:"-"`                // 相对置信度（内部使用）
+	SignalStrength float64            `json:"-"`                // 绝对信号强度 = |delta|，供AI区分弱/强信号
+	Delta          float64            `json:"-"`                // ScoreLong - ScoreShort（内部使用）
+	OFDir          float64            `json:"-"`                // 订单流方向（内部使用）
+	StructDir      float64            `json:"-"`                // 结构方向（内部使用）
+	OFQuality      float64            `json:"-"`                // 订单流质量（内部使用）
+	Flags          []string           `json:"-"`                // 状态标记（内部使用）
+	Debug          map[string]float64 `json:"-"`                // 调试信息（内部使用）
 }
 
 // RootSymbolInput 单个symbol的完整输入数据
@@ -56,6 +57,9 @@ type Macro struct {
 	SignalStrength   float64 `json:"signal_strength"`
 	ConfidenceLevel  float64 `json:"confidence_level"`
 	MarketRegime     string  `json:"market_regime"`
+	DominantDirection string `json:"dominant_direction"` // 主导方向（bearish_distribution / bullish_accumulation 等）
+	SpotCvd1hUSD     float64 `json:"spot_cvd_1h_usd"`   // 1小时现货累计delta（USD）
+	FuturesCvd1hUSD  float64 `json:"futures_cvd_1h_usd"` // 1小时期货累计delta（USD）
 	CvdDivergence    bool    `json:"cvd_divergence"`
 }
 
@@ -97,8 +101,9 @@ type MTFAnalysis map[string]TimeframeData
 // TimeframeData 单个时间框架数据
 // 🔥 优化：使用通道指标替代 SuperTrend + 道氏理论
 type TimeframeData struct {
-	Channel ChannelInfo `json:"通道分析数据"` // 通道指标（主要方向判断）
-	VPVR    VPVR        `json:"VPVR数据"`    // VPVR（用于平局打破）
+	Channel      ChannelInfo `json:"通道分析数据"` // 通道指标（主要方向判断）
+	VPVR         VPVR        `json:"VPVR数据"`    // VPVR（用于平局打破）
+	SupertrendDir string     `json:"-"`           // 超级趋势方向（"bullish"/"bearish"，用于4h背景约束）
 }
 
 // ChannelInfo 通道信息（简化版，用于方向裁决）

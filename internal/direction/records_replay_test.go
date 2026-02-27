@@ -149,17 +149,22 @@ func TestRecordsReplay(t *testing.T) {
 			// ── 读取 AI 实际开仓方向（从 AI 决策块中）───────────
 			aiAction := extractAIAction(string(content))
 
-			// ── 解析 MTF 数据（用修复后的字段名）─────────────────
+			// ── 解析 MTF 数据（含 4h 超级趋势约束）────────────────
 			mtfRaw, _ := data["多时间框架分析"].(map[string]interface{})
 			mtf := make(MTFAnalysis)
-			for _, tf := range []string{"30m", "15m"} {
+			for _, tf := range []string{"30m", "15m", "4h"} {
 				tfData, ok := mtfRaw[tf].(map[string]interface{})
 				if !ok {
 					continue
 				}
+				stDir := ""
+				if stData, ok := tfData["超级趋势指标"].(map[string]interface{}); ok {
+					stDir, _ = stData["direction"].(string)
+				}
 				mtf[tf] = TimeframeData{
-					Channel: parseChannelFromMap(tfData),
-					VPVR:    parseVPVRFromMap(tfData),
+					Channel:       parseChannelFromMap(tfData),
+					VPVR:          parseVPVRFromMap(tfData),
+					SupertrendDir: stDir,
 				}
 			}
 

@@ -7,7 +7,7 @@ import (
 
 // ========== Bug1/2/3 修复验证：channelSign 和 structDir ==========
 
-// TestChannelSignUnderscoreFormat 验证 Bug3 修复：带下划线的 position 值能正确触发
+// TestChannelSignUnderscoreFormat 验证 channelSign 的各种格式兼容性和修复后的差异化打分
 func TestChannelSignUnderscoreFormat(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -15,18 +15,22 @@ func TestChannelSignUnderscoreFormat(t *testing.T) {
 		position  string
 		wantSign  float64
 	}{
-		// 修复前：这些全部走 default 返回 0（flat 通道），现在应正确返回
-		{"flat+break_down 应返回 -1.0", "flat", "break_down", -1.0},
-		{"flat+break_up 应返回 +1.0", "flat", "break_up", 1.0},
-		{"down+break_down 应返回 -1.0", "down", "break_down", -1.0},
-		{"up+break_up 应返回 +1.0", "up", "break_up", 1.0},
-		// 兼容无下划线格式（原格式）
-		{"flat+breakdown 应返回 -1.0", "flat", "breakdown", -1.0},
-		{"flat+breakup 应返回 +1.0", "flat", "breakup", 1.0},
+		// 顺势突破：满分
+		{"up+break_up 顺势满分", "up", "break_up", 1.0},
+		{"down+break_down 顺势满分", "down", "break_down", -1.0},
+		// 横盘突破：60%（修复后，原为 ±1.0）
+		{"flat+break_up 横盘 60%", "flat", "break_up", 0.6},
+		{"flat+break_down 横盘 -60%", "flat", "break_down", -0.6},
+		// 逆势突破：30%（修复后）
+		{"down+break_up 逆势 30%", "down", "break_up", 0.3},
+		{"up+break_down 逆势 -30%", "up", "break_down", -0.3},
+		// 兼容无下划线格式
+		{"flat+breakup 横盘 60%", "flat", "breakup", 0.6},
+		{"flat+breakdown 横盘 -60%", "flat", "breakdown", -0.6},
 		// inside 仍然正常
 		{"up+inside 接近下轨 应为 +1.0", "up", "inside", 1.0},
 		{"down+inside 接近上轨 应为 -1.0", "down", "inside", -1.0},
-		// lower/upper 新增支持
+		// lower/upper 不变
 		{"up+lower 应返回 +1.0", "up", "lower", 1.0},
 		{"down+upper 应返回 -1.0", "down", "upper", -1.0},
 		// 空值 sideways
@@ -74,9 +78,8 @@ func TestStructDirFromMTF_FlatBreakDown(t *testing.T) {
 	t.Logf("flat+break_down structDir = %.4f ✓", got)
 }
 
-// TestStructDirFromMTF_DownBreakUp 对应 BNB 记录：
-// 1h=down+break_up，30m=down+break_up（实际是下降通道里的短暂反弹）
-// direction_arbitration 应综合多因子，structDir 应仍偏负或接近 0
+// TestStructDirFromMTF_DownBreakUp 验证逆势 break_up 的折扣处理
+// 下降通道 + break_up：应产生弱正信号（0.3），而非原来的满分 +1.0
 func TestStructDirFromMTF_DownBreakUp(t *testing.T) {
 	mtf := MTFAnalysis{
 		"30m": TimeframeData{
@@ -90,10 +93,13 @@ func TestStructDirFromMTF_DownBreakUp(t *testing.T) {
 	}
 
 	got := StructDirFromMTF(mtf)
-	// down+break_up：break_up 本身返回 +1.0，但 down 通道 break_up 含义不同
-	// 目前 channelSign("down", "break_up", ...) = +1.0（算法设计如此，break_up 始终 +1.0）
-	// 这里只是记录值，不做强断言；主要验证不会产生极端错误
-	t.Logf("down+break_up structDir = %.4f（注：break_up 信号已纳入 direction_arbitration 计算）", got)
+	// 修复后：down+break_up=0.3，flat+break_up=0.6
+	// 30m: 0.3×0.7×0.60=0.126，15m: 0.6×0.6×0.40=0.144，sum=0.270
+	// 不应再产生 +1.0 的满分多头信号
+	if got >= 0.8 {
+		t.Errorf("down+break_up 逆势场景不应给出接近满分信号，got=%.4f（期望 < 0.8）", got)
+	}
+	t.Logf("down+break_up structDir = %.4f（修复后折扣，原为 +1.0）", got)
 }
 
 // TestStructDirFromMTF_EmptyChannel 验证 DOGE 场景：channel 数据为空时的回退行为
@@ -294,4 +300,215 @@ func TestChannelQualityImpact(t *testing.T) {
 	if math.Abs(highQ) <= math.Abs(lowQ) {
 		t.Errorf("Quality 越高信号应越强：|highQ|=%.4f 应 > |lowQ|=%.4f", math.Abs(highQ), math.Abs(lowQ))
 	}
+}
+
+// ========== 亏损记录回归测试（Task #7）==========
+
+// TestLossRecord_BNB_DivergentMixed 复现亏损8.7%的 BNBUSDT 场景
+// 修复后，divergent_mixed + bearish_distribution + 空头现货CVD 应触发 MACRO_OPPOSE_BLOCK
+func TestLossRecord_BNB_DivergentMixed(t *testing.T) {
+	cfg := DefaultConfig()
+
+	in := RootSymbolInput{
+		Symbol: "BNBUSDT",
+		Orderflow: Orderflow{
+			Quality: Quality{
+				Status:               "正常",
+				OverallScore:         1.0,
+				DataLagMs:            5,
+				UpdateIntervalS:      300,
+				CvdReliability:       1.0,
+				OIReliability:        1.0,
+				OrderbookReliability: 1.0,
+			},
+			Macro: Macro{
+				TrendAlignment:    "divergent_mixed",
+				SignalStrength:    80,
+				ConfidenceLevel:   0.8,
+				DominantDirection: "bearish_distribution",
+				SpotCvd1hUSD:      -1450936.522,
+				FuturesCvd1hUSD:   289241,
+				CvdDivergence:     false,
+			},
+			Micro5m: Micro5m{
+				CandleIntent:    "mixed_signals",
+				FuturesCvdDelta: 225924,
+				SpotCvdDelta:    -109838.636,
+				OIDeltaPct:      0.03,
+				PriceDeltaPct:   0.01,
+				VolumeDelta:     335763,
+				DataQuality:     1.0,
+			},
+			OB: Orderbook{
+				ImbalanceRatio: 0.6868,
+				BidPressure:    194336,
+				AskPressure:    107756,
+				LiquidityScore: 0.7043,
+				SpoofingRisk:   0.531,
+				SupportWall: &Wall{
+					StrengthUSD:    43240,
+					DistancePct:    0,
+					IsSolid:        false,
+					StabilityScore: 0.4379,
+					FlickerCount:   266,
+				},
+			},
+		},
+		MTF: MTFAnalysis{
+			"30m": TimeframeData{
+				Channel:       ChannelInfo{Direction: "flat", CurrentPosition: "break_up", PriceRatio: 1, Quality: 1},
+				VPVR:          VPVR{DistToVAHATR: -12.1865, DistToVALATR: 5.8754},
+				SupertrendDir: "bullish",
+			},
+			"15m": TimeframeData{
+				Channel:       ChannelInfo{Direction: "flat", CurrentPosition: "break_up", PriceRatio: 1, Quality: 1},
+				VPVR:          VPVR{DistToVAHATR: -7.2669, DistToVALATR: 13.2351},
+				SupertrendDir: "bullish",
+			},
+			"4h": TimeframeData{
+				Channel:       ChannelInfo{Direction: "down", CurrentPosition: "break_up", PriceRatio: 1, Quality: 1},
+				VPVR:          VPVR{DistToVAHATR: -49.2443, DistToVALATR: -4.4772},
+				SupertrendDir: "bearish", // 4h 超级趋势为空头！
+			},
+		},
+	}
+
+	result := ComputeDirectionArbitration(in, cfg)
+
+	t.Logf("plan_side=%s | block=%v | block_reason=%s | confidence=%.3f | signal_strength=%.3f | delta=%.3f | struct_dir=%.3f | flags=%v",
+		result.PlanSide, result.BlockEntry, result.BlockReason, result.Confidence, result.SignalStrength, result.Delta, result.StructDir, result.Flags)
+
+	// 核心断言：修复后此场景必须被阻断或给出空头/中性方向
+	if result.PlanSide == SideLong && !result.BlockEntry {
+		t.Errorf("❌ 亏损回归失败：强空头宏观场景（divergent_mixed+bearish_distribution+spot_cvd_1h=-145万）仍输出 LONG 且未阻断\n"+
+			"  plan_side=%s, block_entry=%v, flags=%v", result.PlanSide, result.BlockEntry, result.Flags)
+	}
+
+	// struct_dir 应因 4h 空头约束被压制到 ≤0.5
+	if result.StructDir > 0.5 {
+		t.Errorf("❌ 4h 空头约束失效：struct_dir=%.4f 应 ≤ 0.5（4h supertrend=bearish）", result.StructDir)
+	}
+
+	// signal_strength 应低于满分（delta 不应过大）
+	if result.SignalStrength > 0.5 {
+		t.Errorf("❌ 信号强度过高：signal_strength=%.4f（空头宏观环境下多头绝对强度不应超过 0.5）", result.SignalStrength)
+	}
+}
+
+// TestDivergentBias_StrongSpotDominance 验证 computeDivergentBias 的量比推导
+func TestDivergentBias_StrongSpotDominance(t *testing.T) {
+	// 现货绝对主导（83%），现货方向空头，dominant=bearish_distribution → 应返回 -1
+	m := Macro{
+		DominantDirection: "bearish_distribution",
+		SpotCvd1hUSD:      -1450936,
+		FuturesCvd1hUSD:   289241,
+	}
+	got := computeDivergentBias(m)
+	if got >= 0 {
+		t.Errorf("强空头现货主导场景应返回负偏置，got=%.2f", got)
+	}
+	t.Logf("divergent_mixed 偏置（强空头）= %.2f", got)
+
+	// 现货主导+多头，dominant=bullish_accumulation → 应返回 +1
+	m2 := Macro{
+		DominantDirection: "bullish_accumulation",
+		SpotCvd1hUSD:      1800000,
+		FuturesCvd1hUSD:   200000,
+	}
+	got2 := computeDivergentBias(m2)
+	if got2 <= 0 {
+		t.Errorf("强多头现货主导场景应返回正偏置，got=%.2f", got2)
+	}
+	t.Logf("divergent_mixed 偏置（强多头）= %.2f", got2)
+
+	// 现货未占主导（60%），信号存疑，应走 dominant_direction 路径
+	m3 := Macro{
+		DominantDirection: "bearish_distribution",
+		SpotCvd1hUSD:      -600000,
+		FuturesCvd1hUSD:   400000,
+	}
+	got3 := computeDivergentBias(m3)
+	if got3 >= 0 {
+		t.Errorf("dominant=bearish 场景应返回负偏置，got=%.2f", got3)
+	}
+	t.Logf("divergent_mixed 偏置（dominant主导）= %.2f", got3)
+}
+
+// TestStructDir_4hBearishConstraint 验证 4h 空头背景约束（Task #3）
+func TestStructDir_4hBearishConstraint(t *testing.T) {
+	// 15m/30m: flat+break_up（修复后各 0.6），4h: supertrend=bearish
+	// struct_dir 应被 4h 约束压制到 ≤ 0.5
+	mtf := MTFAnalysis{
+		"30m": TimeframeData{
+			Channel:       ChannelInfo{Direction: "flat", CurrentPosition: "break_up", PriceRatio: 1, Quality: 1},
+			VPVR:          VPVR{},
+			SupertrendDir: "bullish",
+		},
+		"15m": TimeframeData{
+			Channel:       ChannelInfo{Direction: "flat", CurrentPosition: "break_up", PriceRatio: 1, Quality: 1},
+			VPVR:          VPVR{},
+			SupertrendDir: "bullish",
+		},
+		"4h": TimeframeData{
+			SupertrendDir: "bearish",
+		},
+	}
+
+	got := StructDirFromMTF(mtf)
+
+	// flat+break_up 修复后 0.6，sum=0.6，4h bearish → cap at 0.5
+	if got > 0.5 {
+		t.Errorf("4h 空头约束应将 struct_dir 压制到 ≤0.5，got=%.4f", got)
+	}
+	t.Logf("4h bearish 约束后 struct_dir=%.4f（期望 ≤0.5）", got)
+}
+
+// TestConfidence_SignalStrengthDecoupled 验证 confidence 和 signal_strength 的解耦
+// confidence=1.0 但 signal_strength 较低时，应能区分弱信号场景
+func TestConfidence_SignalStrengthDecoupled(t *testing.T) {
+	cfg := DefaultConfig()
+
+	// 构造一个 ofDir 和 structDir 同向但都很弱的场景
+	in := RootSymbolInput{
+		Symbol: "TESTUSDT",
+		Orderflow: Orderflow{
+			Quality: Quality{
+				Status: "正常", OverallScore: 0.80, DataLagMs: 10,
+				UpdateIntervalS: 5, CvdReliability: 0.8, OIReliability: 0.8, OrderbookReliability: 0.8,
+			},
+			Macro: Macro{TrendAlignment: "divergent_mixed", SignalStrength: 0, ConfidenceLevel: 0},
+			Micro5m: Micro5m{
+				CandleIntent: "mixed", FuturesCvdDelta: 50000, SpotCvdDelta: -30000,
+				OIDeltaPct: 0.02, PriceDeltaPct: 0.01, VolumeDelta: 100000, DataQuality: 0.8,
+			},
+			OB: Orderbook{
+				ImbalanceRatio: 0.55, BidPressure: 150000, AskPressure: 120000,
+				LiquidityScore: 0.65, SpoofingRisk: 0.2,
+			},
+		},
+		MTF: MTFAnalysis{
+			"30m": TimeframeData{
+				Channel: ChannelInfo{Direction: "flat", CurrentPosition: "break_up", PriceRatio: 1, Quality: 0.5},
+				VPVR:    VPVR{DistToVAHATR: -5, DistToVALATR: 3},
+			},
+			"15m": TimeframeData{
+				Channel: ChannelInfo{Direction: "flat", CurrentPosition: "break_up", PriceRatio: 1, Quality: 0.5},
+				VPVR:    VPVR{DistToVAHATR: -4, DistToVALATR: 2},
+			},
+		},
+	}
+
+	result := ComputeDirectionArbitration(in, cfg)
+
+	t.Logf("confidence=%.3f | signal_strength=%.3f | delta=%.3f | plan_side=%s",
+		result.Confidence, result.SignalStrength, result.Delta, result.PlanSide)
+
+	// signal_strength = |delta|，必须始终等于 |delta|
+	if math.Abs(result.SignalStrength-math.Abs(result.Delta)) > 1e-9 {
+		t.Errorf("signal_strength(%.4f) 应等于 |delta|(%.4f)", result.SignalStrength, math.Abs(result.Delta))
+	}
+
+	// 当 confidence=1.0 时，signal_strength 可能较低，两者提供不同维度信息
+	t.Logf("解耦验证：confidence=%.3f（相对方向一致性）vs signal_strength=%.3f（绝对力度）",
+		result.Confidence, result.SignalStrength)
 }

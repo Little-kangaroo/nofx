@@ -103,11 +103,14 @@ func parseMacro(data map[string]interface{}) direction.Macro {
 	}
 
 	return direction.Macro{
-		TrendAlignment:  getStringOrDefault(macroData, "trend_alignment", ""),
-		SignalStrength:  getFloatOrDefault(macroData, "signal_strength", 0),
-		ConfidenceLevel: getFloatOrDefault(macroData, "confidence_level", 0),
-		MarketRegime:    getStringOrDefault(macroData, "market_regime", ""),
-		CvdDivergence:   getBoolOrDefault(macroData, "cvd_divergence", false),
+		TrendAlignment:    getStringOrDefault(macroData, "trend_alignment", ""),
+		SignalStrength:    getFloatOrDefault(macroData, "signal_strength", 0),
+		ConfidenceLevel:   getFloatOrDefault(macroData, "confidence_level", 0),
+		MarketRegime:      getStringOrDefault(macroData, "market_regime", ""),
+		DominantDirection: getStringOrDefault(macroData, "dominant_direction", ""),
+		SpotCvd1hUSD:      getFloatOrDefault(macroData, "spot_cvd_1h_usd", 0),
+		FuturesCvd1hUSD:   getFloatOrDefault(macroData, "futures_cvd_1h_usd", 0),
+		CvdDivergence:     getBoolOrDefault(macroData, "cvd_divergence", false),
 	}
 }
 
@@ -165,7 +168,7 @@ func parseWall(data map[string]interface{}, key string) *direction.Wall {
 }
 
 // parseMTFData 解析多时间框架数据
-// 🔥 优化：只解析 15m 和 30m 的通道数据，移除 SuperTrend 和道氏理论
+// 使用 15m/30m 通道数据作为主要方向信号，4h 超级趋势作为背景约束
 func parseMTFData(data interface{}) direction.MTFAnalysis {
 	// 将 interface{} 转换为 JSON，再解析为目标结构
 	jsonData, err := json.Marshal(data)
@@ -182,8 +185,8 @@ func parseMTFData(data interface{}) direction.MTFAnalysis {
 	}
 
 	mtf := make(direction.MTFAnalysis)
-	// 🔥 优化：只使用 15m 和 30m 时间框架
-	timeframes := []string{"30m", "15m"}
+	// 15m/30m 作为主要方向信号；4h 解析超级趋势用于背景约束
+	timeframes := []string{"30m", "15m", "4h"}
 
 	for _, tf := range timeframes {
 		tfData, ok := rawData[tf].(map[string]interface{})
@@ -192,12 +195,23 @@ func parseMTFData(data interface{}) direction.MTFAnalysis {
 		}
 
 		mtf[tf] = direction.TimeframeData{
-			Channel: parseChannel(tfData),
-			VPVR:    parseVPVR(tfData),
+			Channel:       parseChannel(tfData),
+			VPVR:          parseVPVR(tfData),
+			SupertrendDir: parseSupertrend(tfData),
 		}
 	}
 
 	return mtf
+}
+
+// parseSupertrend 解析超级趋势方向
+func parseSupertrend(data map[string]interface{}) string {
+	stData, ok := data["超级趋势指标"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	dir, _ := stData["direction"].(string)
+	return dir
 }
 
 // parseChannel 解析通道数据

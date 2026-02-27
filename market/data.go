@@ -1090,16 +1090,17 @@ func FormatAsCompactData(data *Data) string {
 	var directionArbitration interface{}
 	if dirResult := ComputeDirectionForSymbol(data.Symbol, orderflowData, mtfData); dirResult != nil {
 		directionArbitration = map[string]interface{}{
-			"plan_side":    dirResult.PlanSide,
-			"block_entry":  dirResult.BlockEntry,
-			"block_reason": dirResult.BlockReason,
-			"confidence":   dirResult.Confidence,
-			"delta":        dirResult.Delta,
-			"of_dir":       dirResult.OFDir,
-			"struct_dir":   dirResult.StructDir,
-			"of_quality":   dirResult.OFQuality,
-			"flags":        dirResult.Flags,
-			"debug":        dirResult.Debug,
+			"plan_side":       dirResult.PlanSide,
+			"block_entry":     dirResult.BlockEntry,
+			"block_reason":    dirResult.BlockReason,
+			"confidence":      dirResult.Confidence,
+			"signal_strength": dirResult.SignalStrength, // 绝对信号强度 [0,1]，confidence=1但此值低时说明信号绝对力度不足
+			"delta":           dirResult.Delta,
+			"of_dir":          dirResult.OFDir,
+			"struct_dir":      dirResult.StructDir,
+			"of_quality":      dirResult.OFQuality,
+			"flags":           dirResult.Flags,
+			"debug":           dirResult.Debug,
 		}
 	} else {
 		// 如果计算失败，返回 UNKNOWN 状态

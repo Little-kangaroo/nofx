@@ -269,11 +269,14 @@ func parseMacro(data map[string]interface{}) direction.Macro {
 	}
 
 	return direction.Macro{
-		TrendAlignment:  getStringOrDefault(macroData, "trend_alignment", ""),
-		SignalStrength:  getFloatOrDefault(macroData, "signal_strength", 0),
-		ConfidenceLevel: getFloatOrDefault(macroData, "confidence_level", 0),
-		MarketRegime:    getStringOrDefault(macroData, "market_regime", ""),
-		CvdDivergence:   getBoolOrDefault(macroData, "cvd_divergence", false),
+		TrendAlignment:    getStringOrDefault(macroData, "trend_alignment", ""),
+		SignalStrength:    getFloatOrDefault(macroData, "signal_strength", 0),
+		ConfidenceLevel:   getFloatOrDefault(macroData, "confidence_level", 0),
+		MarketRegime:      getStringOrDefault(macroData, "market_regime", ""),
+		DominantDirection: getStringOrDefault(macroData, "dominant_direction", ""),
+		SpotCvd1hUSD:      getFloatOrDefault(macroData, "spot_cvd_1h_usd", 0),
+		FuturesCvd1hUSD:   getFloatOrDefault(macroData, "futures_cvd_1h_usd", 0),
+		CvdDivergence:     getBoolOrDefault(macroData, "cvd_divergence", false),
 	}
 }
 
@@ -332,24 +335,27 @@ func parseWall(data map[string]interface{}, key string) *direction.Wall {
 
 // parseMTFData 解析多时间框架数据
 func parseMTFData(data interface{}) direction.MTFAnalysis {
-	// 将 interface{} 转换为 map
 	rawData, ok := data.(map[string]interface{})
 	if !ok {
 		return nil
 	}
 
 	mtf := make(direction.MTFAnalysis)
-	timeframes := []string{"30m", "15m"}
+	timeframes := []string{"30m", "15m", "4h"}
 
 	for _, tf := range timeframes {
 		tfData, ok := rawData[tf].(map[string]interface{})
 		if !ok {
 			continue
 		}
-
+		stDir := ""
+		if stData, ok := tfData["超级趋势指标"].(map[string]interface{}); ok {
+			stDir, _ = stData["direction"].(string)
+		}
 		mtf[tf] = direction.TimeframeData{
-			Channel: parseChannel(tfData),
-			VPVR:    parseVPVR(tfData),
+			Channel:       parseChannel(tfData),
+			VPVR:          parseVPVR(tfData),
+			SupertrendDir: stDir,
 		}
 	}
 

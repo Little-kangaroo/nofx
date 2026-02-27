@@ -3,11 +3,10 @@ package direction
 import "strings"
 
 // StructDirFromMTF 从多时间框架分析计算结构方向 [-1, +1]
-// 🔥 优化：使用通道指标替代 SuperTrend + 道氏理论
+// 使用通道指标作为主要信号（15m/30m），4h 超级趋势作为背景约束上限
 // 权重：30m(60%) > 15m(40%)
-// 只使用 15m 和 30m 时间框架，提高反应速度
 func StructDirFromMTF(mtf MTFAnalysis) float64 {
-	// 时间框架权重配置（只使用 15m 和 30m）
+	// 时间框架权重配置（只使用 15m 和 30m 计算主信号）
 	weights := map[string]float64{
 		"30m": 0.60,
 		"15m": 0.40,
@@ -37,11 +36,37 @@ func StructDirFromMTF(mtf MTFAnalysis) float64 {
 		}
 	}
 
-	return clamp(sum, -1, 1)
+	sum = clamp(sum, -1, 1)
+
+	// ── 4h 超级趋势背景约束 ───────────────────────────────────────────
+	// 当 4h 超级趋势与短线信号方向相反时，将短线信号幅度上限压缩到 ±0.5
+	// 防止在高阶空头/多头趋势中，短线 break_up/break_down 产生误导性满分信号
+	if h4, ok := mtf["4h"]; ok {
+		st := strings.ToLower(h4.SupertrendDir)
+		switch st {
+		case "bearish":
+			// 4h 空头背景：多头信号最大只能到 +0.5
+			if sum > 0.5 {
+				sum = 0.5
+			}
+		case "bullish":
+			// 4h 多头背景：空头信号最大只能到 -0.5
+			if sum < -0.5 {
+				sum = -0.5
+			}
+		}
+	}
+
+	return sum
 }
 
 // channelSign 通道方向符号 [-1, +1]
-// 综合考虑通道方向、价格位置、突破情况
+// 修复：break_up/break_down 根据通道方向差异化打分，防止牛市陷阱
+//
+// 核心逻辑：
+//   - 顺势突破（up+break_up / down+break_down）：满分，确认趋势延续
+//   - 横盘突破（flat+break_up / flat+break_down）：60%，方向未确认
+//   - 逆势突破（down+break_up / up+break_down）：30%，大概率熊市反弹/牛市回踩
 func channelSign(direction, position string, priceRatio float64) float64 {
 	dir := strings.ToLower(direction)
 	// 标准化 position：去除下划线，兼容 "break_up"/"breakup"、"break_down"/"breakdown" 等格式
@@ -63,13 +88,24 @@ func channelSign(direction, position string, priceRatio float64) float64 {
 	// 根据价格位置调整信号强度
 	switch pos {
 	case "breakup":
-		// 向上突破：强看涨
-		return 1.0
+		if dir == "up" {
+			return 1.0 // 顺势突破：满分
+		}
+		if dir == "flat" || dir == "sideways" || dir == "" {
+			return 0.6 // 横盘突破：方向待确认
+		}
+		return 0.3 // 下降通道逆势 break_up：大概率熊市反弹
+
 	case "breakdown":
-		// 向下突破：强看跌
-		return -1.0
+		if dir == "down" {
+			return -1.0 // 顺势跌破：满分
+		}
+		if dir == "flat" || dir == "sideways" || dir == "" {
+			return -0.6 // 横盘跌破：方向待确认
+		}
+		return -0.3 // 上升通道逆势 break_down：大概率牛市回踩
+
 	case "lower":
-		// 处于通道下轨附近：与 inside 接近下轨逻辑一致
 		if dir == "up" {
 			return 1.0 // 上升通道下轨：强看涨
 		} else if dir == "down" {
@@ -77,7 +113,6 @@ func channelSign(direction, position string, priceRatio float64) float64 {
 		}
 		return 0.0
 	case "upper":
-		// 处于通道上轨附近
 		if dir == "up" {
 			return 0.5 // 上升通道上轨：弱看涨
 		} else if dir == "down" {
@@ -85,26 +120,23 @@ func channelSign(direction, position string, priceRatio float64) float64 {
 		}
 		return 0.0
 	case "inside":
-		// 在通道内：根据位置调整
 		if dir == "up" {
-			// 上升通道：价格越接近下轨越看涨（回调买入机会）
 			// priceRatio: 0=下轨, 1=上轨
 			if priceRatio < 0.3 {
 				return 1.0 // 接近下轨，强看涨
 			} else if priceRatio > 0.7 {
-				return 0.5 // 接近上轨，弱看涨（可能回调）
+				return 0.5 // 接近上轨，弱看涨
 			}
-			return 0.8 // 中间位置，正常看涨
+			return 0.8
 		} else if dir == "down" {
-			// 下降通道：价格越接近上轨越看跌（反弹卖出机会）
 			if priceRatio > 0.7 {
 				return -1.0 // 接近上轨，强看跌
 			} else if priceRatio < 0.3 {
-				return -0.5 // 接近下轨，弱看跌（可能反弹）
+				return -0.5 // 接近下轨，弱看跌
 			}
-			return -0.8 // 中间位置，正常看跌
+			return -0.8
 		}
-		return baseSign * 0.5 // 横盘通道，信号较弱
+		return baseSign * 0.5
 	default:
 		return baseSign * 0.5
 	}
@@ -114,14 +146,11 @@ func channelSign(direction, position string, priceRatio float64) float64 {
 // 更靠近 VAL（价值区下沿）-> 看涨 +0.10
 // 更靠近 VAH（价值区上沿）-> 看跌 -0.10
 func vpvrTieBreak(v VPVR) float64 {
-	// 计算到 VAH 和 VAL 的接近度（距离越小越接近）
 	nearVAH := 1.0 / (1.0 + abs(v.DistToVAHATR))
 	nearVAL := 1.0 / (1.0 + abs(v.DistToVALATR))
 
 	if nearVAL > nearVAH {
-		// 更靠近 VAL，看涨
 		return 0.10
 	}
-	// 更靠近 VAH，看跌
 	return -0.10
 }

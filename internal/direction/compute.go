@@ -119,10 +119,16 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 		clamp(in.Orderflow.Macro.ConfidenceLevel, 0, 1)
 	macroSign := macroAlign * macroStrength
 
-	// divergent_mixed 特殊处理：只降级不否决
+	// divergent_mixed 特殊处理：
+	// 不能直接定向，但不能无条件归零——利用 dominant_direction 和现货/期货 CVD 量比推导偏置
+	// 偏置以 50% 降级（因数据本身存在分歧，置信度打折）
 	if strings.ToLower(in.Orderflow.Macro.TrendAlignment) == "divergent_mixed" {
 		flags = append(flags, "DIVERGENT_MIXED")
-		// macroAlign==0 => macroSign==0
+		bias := computeDivergentBias(in.Orderflow.Macro)
+		if bias != 0 {
+			macroAlign = bias
+			macroSign = macroAlign * macroStrength * 0.5 // 降级50%
+		}
 	}
 
 	// ========== Step B: 微观博弈（5m）==========
@@ -196,6 +202,7 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	}
 
 	// ========== Step D: 宏观反向阻断（对应 Gate1 语义）==========
+	// 主路：macroAlign 含 divergent_mixed 偏置后的值，已能覆盖大部分情况
 	if macroAlign != 0 && side != SideNeutral &&
 		sign(macroAlign) != signSide(side) && macroStrength > 0.60 {
 		// 检查是否满足强反例条件
@@ -210,6 +217,22 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 		}
 	}
 
+	// 补充路（Task #2）：当 macroAlign 仍为 0（divergent_mixed 偏置未能确定方向）时，
+	// 使用 dominant_direction 作为最后一道宏观否决防线
+	if macroAlign == 0 && side != SideNeutral && macroStrength > 0.60 {
+		dominantDir := DominantDirMap(in.Orderflow.Macro.DominantDirection)
+		if dominantDir != 0 && sign(dominantDir) != signSide(side) {
+			if !StrongCounterexample(in, wallSign, flags) {
+				blockEntry = true
+				blockReason = "MACRO_OPPOSE"
+				flags = append(flags, "MACRO_OPPOSE_BLOCK")
+			} else {
+				flags = append(flags, "MACRO_OPPOSE_BUT_EXCEPT")
+				conf *= 0.75
+			}
+		}
+	}
+
 	// ========== 调试信息 ==========
 	dbg["macro_sign"] = macroSign
 	dbg["intent_sign"] = intentSign
@@ -219,15 +242,16 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	dbg["wall_sign"] = wallSign
 
 	return DirectionArbitration{
-		PlanSide:    side,
-		BlockEntry:  blockEntry,
-		BlockReason: blockReason,
-		Confidence:  conf,
-		Delta:       delta,
-		OFDir:       ofDir,
-		StructDir:   structDir,
-		OFQuality:   ofQ,
-		Flags:       flags,
-		Debug:       dbg,
+		PlanSide:       side,
+		BlockEntry:     blockEntry,
+		BlockReason:    blockReason,
+		Confidence:     conf,
+		SignalStrength:  abs(delta), // 绝对信号强度，与相对置信度解耦，供AI感知真实力度
+		Delta:          delta,
+		OFDir:          ofDir,
+		StructDir:      structDir,
+		OFQuality:      ofQ,
+		Flags:          flags,
+		Debug:          dbg,
 	}
 }

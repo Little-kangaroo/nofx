@@ -12,11 +12,69 @@ func AlignMap(s string) float64 {
 	case "bearish_aligned", "bearish", "distribution_phase":
 		return -1
 	case "divergent_mixed":
-		return 0
+		return 0 // 不能直接定向，由 computeDivergentBias 二次推导
 	default:
 		// 未知枚举值安全回退
 		return 0
 	}
+}
+
+// DominantDirMap 将 dominant_direction 映射到方向符号 [-1, 0, +1]
+// 直接描述市场主导力量方向
+func DominantDirMap(s string) float64 {
+	s = strings.ToLower(s)
+	switch {
+	case strings.Contains(s, "bearish") || strings.Contains(s, "distribution") ||
+		strings.Contains(s, "decline") || strings.Contains(s, "selling"):
+		return -1
+	case strings.Contains(s, "bullish") || strings.Contains(s, "accumulation") ||
+		strings.Contains(s, "rally") || strings.Contains(s, "buying"):
+		return 1
+	default:
+		return 0
+	}
+}
+
+// computeDivergentBias 在 trend_alignment=divergent_mixed 时推导方向偏置
+// 综合 dominant_direction 和现货/期货 CVD 量比，给出 [-1, 0, +1] 的方向倾向
+// 返回非零值表示有明确偏置（调用方应乘以 0.5 降级），返回 0 表示真正无法判断
+func computeDivergentBias(m Macro) float64 {
+	dominantSign := DominantDirMap(m.DominantDirection)
+
+	// 计算现货主导程度：|spot_cvd| / (|spot_cvd| + |futures_cvd|)
+	spotAbs := abs(m.SpotCvd1hUSD)
+	futAbs := abs(m.FuturesCvd1hUSD)
+	total := spotAbs + futAbs
+
+	if total == 0 {
+		// 无 CVD 数据，只靠 dominant_direction
+		return dominantSign
+	}
+
+	// 现货方向（spot CVD 的符号）
+	spotDir := 0.0
+	if m.SpotCvd1hUSD > 0 {
+		spotDir = 1.0
+	} else if m.SpotCvd1hUSD < 0 {
+		spotDir = -1.0
+	}
+
+	spotWeight := spotAbs / total
+
+	// 当现货绝对主导（>70%）时：以现货方向为准，并验证与 dominant_direction 一致
+	if spotWeight > 0.70 {
+		if dominantSign != 0 && sign(dominantSign) == sign(spotDir) {
+			return spotDir // 两者一致，偏置确认
+		}
+		if dominantSign == 0 {
+			return spotDir // dominant 未知时，以现货方向为准
+		}
+		// 现货方向与 dominant_direction 矛盾，信号冲突，回退到 0
+		return 0
+	}
+
+	// 现货未占绝对主导时（50-70%），仅 dominant_direction 可靠
+	return dominantSign
 }
 
 // NormalizeIntent 规范化 candle_intent 字符串
