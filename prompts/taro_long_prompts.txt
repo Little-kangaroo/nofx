@@ -227,11 +227,19 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
 【P0｜Step 2：dir_trigger（同向唯一触发器）产出（SSOT）】
 - 输入优先级（从上到下，存在则直接使用）：
   1) 若 trigger_context.dir_trigger 已提供且非空：dir_trigger := trigger_context.dir_trigger
-  2) 否则：从 trigger_context.trigger_flags 过滤并选 1 个：
+  2) 否则：从 trigger_context.trigger_flags【全部项】过滤，选质量最高的 1 个：
      - planned_dir=LONG  => 仅保留包含 "_BULL" 或 "_LONG" 的触发器
      - planned_dir=SHORT => 仅保留包含 "_BEAR" 或 "_SHORT" 的触发器
      - planned_dir∈{NEUTRAL,UNKNOWN} => dir_trigger := NONE
+     - 过滤后非空：取 trigger_quality 最大的 1 个作为 dir_trigger（同质量取列表靠前者）
      - 过滤后为空：dir_trigger := NONE
+  【关键｜EDGE_* 触发器禁止用作 dir_trigger（P0｜防止 AI 误判）】
+  - EDGE_BULL / EDGE_BEAR 方向为 NEUTRAL，禁止被用作 dir_trigger。
+  - 即使 trigger_primary=EDGE_BULL，也不得将 EDGE_BULL 视为"触发器已确定"；
+    必须继续扫描 trigger_flags 全部项，按上述过滤规则找同向触发器。
+  - 例：trigger_primary=EDGE_BULL，planned_dir=SHORT，trigger_flags=["EDGE_BULL","ENGULF_BEAR"]
+    → 过滤保留含 _BEAR → ["ENGULF_BEAR"] → dir_trigger=ENGULF_BEAR（此时禁止输出 NONE）
+  - 只有当 trigger_flags 中不存在任何同向触发器时，dir_trigger 才为 NONE。
 - dir_trigger=NONE 的处理（P0）：
   - 若 has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS：
       -> Gate4=FAIL fail=>SETUP reason=NO_TRIGGER_FOR_DIR；必须输出 NextTrigger + PendingSetup（DEFER 机制）
@@ -240,7 +248,9 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
 
 【P0｜Step 3：SETUP FREEZE（冻结执行参数）】
 - q（触发质量）：
-  - 优先用 trigger_quality[trigger_primary]；若缺失则取 0
+  - 用 trigger_quality[dir_trigger]；若 dir_trigger 不在 trigger_quality 中则 fallback 到 trigger_quality[trigger_primary]；再缺失则 0
+  - 注：dir_trigger ≠ trigger_primary 时（如 dir_trigger=ENGULF_BEAR，trigger_primary=EDGE_BULL），
+    必须取 trigger_quality[dir_trigger]（即所选同向触发器的质量），禁止用 trigger_primary 的质量替代。
 - tier（严格分层，P0｜.1 频率友好阈值）：
   - strict_min_raw := trigger_context.strict_min（缺失则 0.75）
   - borderline_min_raw := trigger_context.borderline_min（若缺失，优先取 trigger_context.quality_min；再缺失则 0.45）
@@ -253,7 +263,7 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
   - 否则 -> Gate4=FAIL fail=>SETUP reason=LOW_Q（不进入 Gate5）
 
 - pattern（短码）：
-  - 取 trigger_context.trigger_pattern_hint（若存在），否则按 trigger_primary 前缀推导：
+  - 取 trigger_context.trigger_pattern_hint（若存在），否则按 dir_trigger 前缀推导（注意：是 dir_trigger，不是 trigger_primary）：
     EDGE_* -> EDGE；SFP_* -> SFP；ENGULF_* -> ENGULF；MOM_BREAK_* -> MOMENTUM_BREAK；BO_* -> BO_RETEST；未知 -> none
 
 【｜额外过滤（在冻结参数前先做硬否决，直接减少误开）】

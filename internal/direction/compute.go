@@ -223,6 +223,12 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	if abs(structDir) < 0.3 && abs(ofDir) < 0.3 {
 		flags = append(flags, "WEAK_SIGNAL_FILTERED")
 		side = SideNeutral
+		// WEAK_SIGNAL_FILTERED: plan_side=NEUTRAL 时必须设 block_entry=true
+		// 否则后端发出 plan_side=NEUTRAL + block_entry=false，AI 报 DIR_INPUT_INCONSISTENT
+		if !blockEntry {
+			blockEntry = true
+			blockReason = "WEAK_SIGNAL_FILTERED"
+		}
 	} else {
 		// 只有非弱信号才进行方向裁决
 		if abs(delta) >= cfg.ThetaNeutral && conf >= cfg.MinConf {
