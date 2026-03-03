@@ -97,7 +97,7 @@ B) BREAKOUT_ALIGNMENT（突破顺势纠错｜更频率友好，用来避免”br
 【翻转后的风控硬约束（P0｜必须执行｜保守但可交易）】
 - 若允许翻转：Gate2 输出 planned_dir=（反转方向）并标记 mode=COUNTERTREND；否则 planned_dir 只能取 suggested_dir 或 NEUTRAL。
 - COUNTERTREND 固定参数（Gate4 必须强制冻结）：
-  trade_style=LTF_scalp；downgrade=on；order_type=LIMIT；risk_down=0.40；rr_min=0.55；
+  trade_style=LTF_scalp；downgrade=on；order_type=LIMIT；risk_down=0.40；rr_min=0.80；
   且 Gate5 必须设计“快速兑现”：TP1 close_pct ≥ 0.60；不得做 HTF_swing；不得追价开 STOP_LIMIT。
 - 若 Gate3 或 Gate4 识别到“反向 HTF_BARRIER_NEAR / HTF_BREAKOUT_AGAINST_DIR”，翻转单必须放弃（Gate3/4=FAIL）。
 
@@ -263,18 +263,18 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
       仅当 (tier=good 且 q≥0.88 且 pattern∈{SFP,ENGULF}) 才允许继续；否则 Gate4=FAIL fail=>STRUCT reason=HTF_BREAKOUT_AGAINST_DIR。
 
 - Gate2.mode（可选）：
-  - 若 Gate2 输出 mode=COUNTERTREND：强制 trade_style=LTF_scalp；downgrade=on；order_type=LIMIT；risk_down=0.35；rr_min=0.55（固定｜不追求高胜率但控制风险）
+  - 若 Gate2 输出 mode=COUNTERTREND：强制 trade_style=LTF_scalp；downgrade=on；order_type=LIMIT；risk_down=0.35；rr_min=0.80（固定｜逆势交易必须高RR）
   - 否则（TREND 默认为顺势）：按 tier 与 regime 决定 trade_style 与 rr_min（见下）
-- trade_style / rr_min（P0｜ 更偏盈利质量）：
+- trade_style / rr_min（P0｜提高RR要求确保期望收益为正）：
   - 若 Gate2 输出 mode=COUNTERTREND：以其冻结参数为准（不在此处二次覆盖）。
   - 否则：
     1) tier=borderline：
-       -> trade_style=LTF_scalp；rr_min=0.45（频率守护：不额外抬高 RR 门槛；通过“位置确认+风控降档”控制误开）
+       -> trade_style=LTF_scalp；rr_min=0.70（提高RR要求，确保期望收益为正）
     2) tier=good 且 market_regime_norm=trend 且 Gate3 提供 ≥1 个 HTF 锚点（1h/4h）且未触发 HTF_BARRIER_NEAR：
-       * pattern∈{BO_RETEST,EDGE} -> trade_style=HTF_swing；rr_min=0.50（默认 LIMIT）
-       * pattern=MOMENTUM_BREAK  -> trade_style=LTF_scalp；rr_min=0.45（且 Gate5 必须满足 R_clean_eval≥1.3 且 costs_R≤0.25）
+       * pattern∈{BO_RETEST,EDGE} -> trade_style=HTF_swing；rr_min=0.85（HTF交易要求更高RR）
+       * pattern=MOMENTUM_BREAK  -> trade_style=LTF_scalp；rr_min=0.70（且 Gate5 必须满足 R_clean_eval≥1.3 且 costs_R≤0.25）
     3) 其余情况：
-       -> trade_style=LTF_scalp；rr_min=0.45
+       -> trade_style=LTF_scalp；rr_min=0.70
 - downgrade（P0）：
   - tier=borderline => downgrade=on（强制）；否则 downgrade=off
 - order_type（P0）：
@@ -390,7 +390,7 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
          C3) trade_style=LTF_scalp（分段允许；修复"close_pct不可表达"的矛盾）
            【P0｜RR_MIN 单一口径（以 Gate4 rr_min 为准；修复 Range/Mixed 冲突）】
               - Gate5 的 RR 最小门槛 rr_min 的唯一来源：Gate4(TIMING/SETUP) 行中显式输出的 rr_min
-                * 若 Gate4 未输出 rr_min：默认 rr_min=0.50（常规 LTF 下限；仅用于兜底）
+                * 若 Gate4 未输出 rr_min：默认 rr_min=0.70（提高默认RR要求，确保期望收益为正）
               - 判定规则：
                 * 若 R_clean_eval < rr_min：
                   -> 必须先执行“TP1 跳级”尝试（不得直接 FAIL）：
@@ -1328,7 +1328,7 @@ C) confidence (微观执行置信度: 0~100)
          - 约束：若你最终对某个 symbol 输出 "action": "open_long" 或 "open_short"：
             * 该 symbol 的 edge_score 必须 ≥ ES_MIN；
               - ES_MIN := max(0.35, rr_min)
-              - rr_min 取 Gate4(TIMING/SETUP) 行中显式输出的 rr_min（若 Gate4 未输出 rr_min，则默认 rr_min=0.50 作为兜底）
+              - rr_min 取 Gate4(TIMING/SETUP) 行中显式输出的 rr_min（若 Gate4 未输出 rr_min，则默认 rr_min=0.70 作为兜底）
             * 若你主观判断 edge_score < ES_MIN：则该 symbol 禁止开新仓（open_long/open_short）；
               - 若 has_position=0：action="wait"
               - 若 has_position=1：action 仅允许 ∈ {"hold","close"}
