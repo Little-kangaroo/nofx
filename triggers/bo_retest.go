@@ -97,12 +97,12 @@ func DetectBoRetest(levels []LevelInfo, klines []Kline, currentPrice, atr float6
 		}
 
 		// === 步骤3：方向验证 ===
-		// 向上突破 + 回测支撑 → BO_RETEST_BULL（看多）
-		// 向下突破 + 回测阻力 → BO_RETEST_BEAR（看空）
+		// 向上突破阻力（SHORT锚点） + 回测 → BO_RETEST_BULL（看多）
+		// 向下突破支撑（LONG锚点）  + 回测 → BO_RETEST_BEAR（看空）
 		var flag string
-		if breakoutDir == "UP" && level.Side == "LONG" {
+		if breakoutDir == "UP" && level.Side == "SHORT" {
 			flag = FlagBoRetestBull
-		} else if breakoutDir == "DOWN" && level.Side == "SHORT" {
+		} else if breakoutDir == "DOWN" && level.Side == "LONG" {
 			flag = FlagBoRetestBear
 		} else {
 			continue // 方向不匹配，跳过

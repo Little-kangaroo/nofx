@@ -280,6 +280,14 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	dbg["ob_sign"] = obSign
 	dbg["wall_sign"] = wallSign
 
+	// ========== 安全网：plan_side=NEUTRAL 时始终 block_entry=true ==========
+	// 防止 AI 收到 plan_side=NEUTRAL + block_entry=false → DIR_INPUT_INCONSISTENT
+	// WEAK_SIGNAL_FILTERED 已在上方处理；此处兜底覆盖 delta/conf 不足等其余 NEUTRAL 路径
+	if side == SideNeutral && !blockEntry {
+		blockEntry = true
+		blockReason = "NEUTRAL_NO_DIR"
+	}
+
 	return DirectionArbitration{
 		PlanSide:       side,
 		BlockEntry:     blockEntry,
