@@ -111,12 +111,20 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	blockEntry := false
 	blockReason := ""
 
-	// Intent 红线检查
+	// Intent 标记处理（方向感知型，修复误封锁问题）
+	// data_insufficient：硬红线，数据不足禁止所有开仓
+	// fake_pump/fake_dump：方向感知型，不在后端强制封锁
+	//   - 在 SHORT 方向 + HTF 阻力区：fake_pump 实为做空信号（散户被诱多，聪明钱卖出）
+	//   - 其他场景由 AI 在 Gate2 根据 INTENT_PUMP_WARN 标记做上下文判断
 	intentNorm := NormalizeIntent(in.Orderflow.Micro5m.CandleIntent)
-	if IsRedlineIntent(intentNorm) {
+	if intentNorm == "data_insufficient" {
+		// 数据不足是硬红线：无法判断方向时禁止一切新开仓
 		blockEntry = true
 		blockReason = "INTENT_REDLINE"
 		flags = append(flags, "INTENT_REDLINE")
+	} else if intentNorm == "fake" {
+		// fake_pump/fake_dump 改为软警告：由 AI 根据方向上下文决定
+		flags = append(flags, "INTENT_PUMP_WARN")
 	}
 
 	// 欺骗风险红线检查

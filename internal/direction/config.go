@@ -34,9 +34,9 @@ type Config struct {
 // 🔥 优化：提高反应速度的配置调整
 func DefaultConfig() Config {
 	return Config{
-		// 数据质量阈值（提高要求，确保信号质量）
-		MinOverallScore: 0.65, // 从 0.60 提高到 0.65
-		MinMicroDQ:      0.55, // 从 0.50 提高到 0.55
+		// 数据质量阈值（恢复原始值：BTC等主流币数据评分偏低并非真实质量差）
+		MinOverallScore: 0.60, // 0.65 → 0.60（BTC连续OF_STALE，阈值偏高于真实数据质量差异）
+		MinMicroDQ:      0.50, // 0.55 → 0.50（同上）
 
 		// 欺骗风险阈值（更严格的检测）
 		SpoofHard: 0.75, // 从 0.80 降低到 0.75

@@ -64,10 +64,16 @@
 - planned_dir：Gate2 最终输出方向 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}，作为 Gate3~Gate5 的唯一方向口径。
 - block_entry：仍为后端硬否决（1=禁止新开仓；0=允许进入后续 Gate）。Gate2 不得把 block_entry=1 改回 0。
 
-【冲突探测（仅用于“是否允许翻转”的自检；不允许在 Gate2 产出结构锚点/价格）】
-- trig_dir：仅用于检测“后端方向是否与当前 5m 触发方向严重相反”，不得作为顺势交易的定向证据。
-  trig_dir 由 trigger_context.trigger_primary 推导：
-  - 包含 *_BULL 或 *_LONG 视为 LONG；包含 *_BEAR 或 *_SHORT 视为 SHORT；否则 UNKNOWN。
+【冲突探测（仅用于”是否允许翻转”的自检；不允许在 Gate2 产出结构锚点/价格）】
+- trig_dir：仅用于检测”后端方向是否与当前 5m 触发方向严重相反”，不得作为顺势交易的定向证据。
+  trig_dir 由 trigger_context.trigger_primary 推导（SSOT；修正后）：
+  【关键修正】EDGE_BULL / EDGE_BEAR 是”结构位置事件”（价格触碰支撑/阻力位），
+    不代表方向预判（价格在支撑既可能反弹做多，也可能突破做空）；
+    在冲突检测中统一视为 trig_dir=NEUTRAL，不参与强/弱冲突计算。
+  - EDGE_BULL / EDGE_BEAR                                         → trig_dir=NEUTRAL
+  - 含 SFP_BULL / ENGULF_BULL / IBB_BULL / MOMO_BULL 或含 _LONG  → trig_dir=LONG
+  - 含 SFP_BEAR / ENGULF_BEAR / IBB_BEAR / MOMO_BEAR 或含 _SHORT → trig_dir=SHORT
+  - 否则                                                          → trig_dir=NEUTRAL/UNKNOWN（不触发冲突）
 
 【有限翻转白名单（Flip Allowlist｜.1｜用于“纠错方向”，但不以牺牲频率为代价）】
 - 适用前置：has_position=0 且 block_entry=0 且 suggested_dir∈{LONG,SHORT} 且 trig_dir 与 suggested_dir 方向相反。
@@ -102,8 +108,10 @@ B) BREAKOUT_ALIGNMENT（突破顺势纠错｜更频率友好，用来避免”br
 - 若 Gate3 或 Gate4 识别到“反向 HTF_BARRIER_NEAR / HTF_BREAKOUT_AGAINST_DIR”，翻转单必须放弃（Gate3/4=FAIL）。
 
 【冲突但不满足翻转（.1｜避免误开，但不把低质量噪声也当成“冲突”而压缩频率）】
-- 若 suggested_dir 与 trig_dir 明显冲突（LONG vs SHORT），但不满足“有限翻转白名单”，按强/弱冲突分流：
-  A) 强冲突（禁开仓｜只在“高质量且新鲜”的反向触发出现时启用）：
+- 若 suggested_dir 与 trig_dir 明显冲突（LONG vs SHORT），但不满足”有限翻转白名单”，按强/弱冲突分流：
+  【前置检查｜P0】若 trig_dir=NEUTRAL（含所有 EDGE_* 触发器）：不存在冲突，跳过本节；
+    直接 planned_dir := suggested_dir（若 block_entry=0）；Gate4 将通过 dir_trigger 过滤自行处理无同向触发器的情况。
+  A) 强冲突（禁开仓｜只在”高质量且新鲜”的明确方向反向触发出现时启用）：
      - q ≥ strict_min 且
      - window_state=in（若缺失视为 in）且
      - trigger_age_bars=0（若缺失视为 0）
@@ -265,15 +273,25 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
 - Gate2.mode（可选）：
   - 若 Gate2 输出 mode=COUNTERTREND：强制 trade_style=LTF_scalp；downgrade=on；order_type=LIMIT；risk_down=0.35；rr_min=0.80（固定｜逆势交易必须高RR）
   - 否则（TREND 默认为顺势）：按 tier 与 regime 决定 trade_style 与 rr_min（见下）
-- trade_style / rr_min（P0｜提高RR要求确保期望收益为正）：
+- trade_style / rr_min（P0｜提高RR要求确保期望收益为正｜HTF_swing优先）：
   - 若 Gate2 输出 mode=COUNTERTREND：以其冻结参数为准（不在此处二次覆盖）。
   - 否则：
+    【HTF_swing 优先原则（P0）】：HTF_swing 是主要盈利来源，满足条件时必须优先使用；
+      若最终选择 LTF_scalp，必须在 reasoning 中明确写出 HTF_swing 条件不满足的具体原因，
+      不得在无解释的情况下默认降级为 LTF_scalp。
+    【market_regime=trend 的判定标准（SSOT）】：
+      满足以下任一条件即视为 trend（而非 sideways）：
+      a) 4h Channel.direction∈{up,down}（非 sideways/flat）；或
+      b) 4h SupertrendDir∈{bullish,bearish}；或
+      c) 4h/1h 道氏结构均显示 HH+HL（多头趋势）或 LH+LL（空头趋势）。
     1) tier=borderline：
-       -> trade_style=LTF_scalp；rr_min=0.70（提高RR要求，确保期望收益为正）
-    2) tier=good 且 market_regime_norm=trend 且 Gate3 提供 ≥1 个 HTF 锚点（1h/4h）且未触发 HTF_BARRIER_NEAR：
-       * pattern∈{BO_RETEST,EDGE} -> trade_style=HTF_swing；rr_min=0.85（HTF交易要求更高RR）
-       * pattern=MOMENTUM_BREAK  -> trade_style=LTF_scalp；rr_min=0.70（且 Gate5 必须满足 R_clean_eval≥1.3 且 costs_R≤0.25）
-    3) 其余情况：
+       -> trade_style=LTF_scalp；rr_min=0.70（边缘信号不做 HTF_swing）
+    2) tier=good 且 market_regime=trend 且 Gate3 提供 ≥1 个 HTF 锚点（1h/4h）且未触发 HTF_BARRIER_NEAR：
+       * pattern∈{BO_RETEST,EDGE} -> 【默认】trade_style=HTF_swing；rr_min=0.85
+         （即使 Real_R_tp1<2.0 也允许继续：若 R_struct≥2.0 且 R_clean_eval（用R_struct）≥1.5，Gate5=PASS）
+       * pattern=MOMENTUM_BREAK  -> trade_style=LTF_scalp；rr_min=0.70
+         （且 Gate5 必须满足 R_clean_eval≥1.3 且 costs_R≤0.25）
+    3) 其余情况（market_regime=sideways / 无 HTF 锚点 / tier=borderline）：
        -> trade_style=LTF_scalp；rr_min=0.70
 - downgrade（P0）：
   - tier=borderline => downgrade=on（强制）；否则 downgrade=off
@@ -291,11 +309,20 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
     * mode=COUNTERTREND：risk_down=0.25（覆盖并优先于 tier）
   - 若后端提供了风险降级建议（如 risk_down_backend）：以 min(risk_down, risk_down_backend) 为最终值（只能更保守）。
 
-【P0｜DEFER 机制（机会保留：把“时机未到/需回踩”变成下一步，而不是一次性丢弃）】
+【P0｜DEFER 机制（机会保留：把”时机未到/需回踩”变成下一步，而不是一次性丢弃）】
 - 触发条件：has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS 且 Gate4 以 fail=>TIME/SETUP 未通过（OUT_OF_WINDOW/DEFER/NO_TRIGGER_FOR_DIR/LOW_Q）
 - 必须输出（均 1 行，≤110 字符，不含具体 SL/TP 数字）：
   1) NextTrigger: need_window=in; need_trig=<dir_trigger候选>; price_cond=<retest key/Anchor1>; expire_bars=<1~3>
   2) PendingSetup: plan=<planned_dir>; key=<Anchor1/关键区>; invalidation=<一句话>; ttl=<1~3 bars>
+
+【P1｜Gate3 结构拒绝时的 NextTrigger（HTF_BARRIER_NEAR 专属）｜减少机会丢失】
+- 触发条件：has_position=0 且 Gate2=PASS 且 Gate3=FAIL reason=HTF_BARRIER_NEAR
+  （典型场景：planned_dir=SHORT 但价格贴近 HTF 强支撑/DZ；或 planned_dir=LONG 但贴近 HTF 强阻力/SZ）
+- 此场景代表”方向正确但位置不对”——结构机会存在，时机未到：
+  必须输出 1 行 NextTrigger（≤110 字符，不含 SL/TP 价位）：
+  NextTrigger: need_price_away_from_barrier=<支撑/阻力描述>; need_trig=<期望的反向结构触发>; expire_bars=<2~5>
+  例：NextTrigger: need_price_away_from=HTF_DZ@78.5-80; need_trig=EDGE_BEAR_at_resistance; expire_bars=3
+- 注意：本条 NextTrigger 仅为可观测性输出，不改变本轮 action=wait；Gate4~Gate5 仍为 DIAG(EVAL_ONLY)。
 
 【Gate4 输出行模板（强约束，便于日志检索）】
 - PASS：
@@ -523,11 +550,21 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
           -> 在“结构与方向一致”的前提下可作为加速/确认；仍不得逆结构开仓。
         * 字段缺失/矛盾：OF_QUALITY=UNKNOWN
           -> 允许引用但不得成为唯一依据；reasoning 必须标注 ctxNA/unknown 并降权。
-    1) 意图红线 (Intent Red Lines) ——【后端硬否决；模型只复述 block_entry】
-  - 若 candle_intent 命中以下之一：fake_pump / retail_driven / fake_dump
-    -> 后端应设置 block_entry=1（建议 block_reason=INTENT_FAKE_*）；
-       模型在 Gate2 直接 FAIL（reason=ENTRY_BLOCKED）；下游 Gate3~Gate5 仅允许 DIAG(EVAL_ONLY) 占位；
-       Gate4 严禁 fail=>OF / 严禁引用 candle_intent。
+    1) 意图标签处理 (Intent Labels) ——【已后端化；两类标记语义不同，模型必须区分】
+  A) 硬红线（INTENT_REDLINE | data_insufficient）：
+    - 若后端标记 flags 包含 INTENT_REDLINE（触发条件：candle_intent=data_insufficient）：
+      block_entry=1 已由后端设置；模型 Gate2 FAIL（reason=ENTRY_BLOCKED）；下游 Gate3~Gate5 仅允许 DIAG(EVAL_ONLY)。
+  B) 方向感知型警告（INTENT_PUMP_WARN | fake_pump / retail_driven / fake_dump）：
+    - 若后端标记 flags 包含 INTENT_PUMP_WARN（block_entry 不被强制设为 1）：
+      模型必须根据 planned_dir 与结构位置做出判断：
+      * planned_dir=SHORT 且 Gate3 确认价格在 HTF 阻力区（SZ/SR_R/VAH 附近）：
+        → "散户被诱多，聪明钱在上方卖出" = 强化空头信号，允许继续开仓评估；
+        → Gate4 必须强制 risk_down×0.50（因存在方向噪声）；reason 写 PUMP_WARN_SHORT_ALLOWED
+      * planned_dir=LONG（任何位置）：
+        → Gate2 FAIL（reason=ENTRY_BLOCKED）；禁止买入散户拉盘
+      * planned_dir=SHORT 但价格不在 HTF 阻力区（在支撑区或中段）：
+        → Gate2 FAIL（reason=ENTRY_BLOCKED）；位置不利，等待价格到阻力区
+      Gate4 严禁引用 candle_intent 字段；红线判断已在 Gate2 完成。
 2) 欺诈与稳定性熔断 (Spoofing Veto)【硬否决后端化；模型不在 Gate4 处理】
   - spoofing_risk > 0.8：
     -> 后端应设置 block_entry=1（建议 block_reason=OF_SPOOFING）；模型在 Gate2 直接 FAIL（reason=ENTRY_BLOCKED）。

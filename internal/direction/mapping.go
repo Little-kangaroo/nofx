@@ -116,6 +116,8 @@ func IntentMap(norm string) float64 {
 }
 
 // IsRedlineIntent 判断是否为硬红线 intent（禁止新开仓）
+// 注意：fake_pump/fake_dump 已改为方向感知型（INTENT_PUMP_WARN），不再是硬红线
+// 只有 data_insufficient 是真正的硬红线（数据不足，无法判断方向）
 func IsRedlineIntent(norm string) bool {
-	return norm == "fake" || norm == "data_insufficient"
+	return norm == "data_insufficient"
 }
