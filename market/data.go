@@ -4406,7 +4406,38 @@ func getTriggerContextForAI(data *Data, timeframeKlines map[string][]Kline) map[
 	// 🔥 P1-01-d关键修改：构建TouchInfo以启用EDGE触发器
 	// 🔥 P1-02关键修改：获取5m K线的high/low作为触碰判定价格
 	var touches []triggers.TouchInfo
-	var levels []triggers.LevelInfo // BO_RETEST暂时为空（P1阶段只实现EDGE）
+	// 🔥 修复 BO_RETEST：从 Gate2 锚点直接构建 LevelInfo（原 TODO 实现永远返回 nil）
+	var levels []triggers.LevelInfo
+	if data.StructureGate2 != nil {
+		for _, a := range data.StructureGate2.TopAnchorsLong {
+			sz := 0.0
+			if a.StrengthZ != nil {
+				sz = *a.StrengthZ
+			}
+			levels = append(levels, triggers.LevelInfo{
+				Level:     a.Level,
+				Side:      "LONG",
+				Source:    string(a.Type),
+				StrengthZ: sz,
+				TimeFrame: a.TF,
+				KeyType:   triggers.KeyLevelBoBreakoutSupport,
+			})
+		}
+		for _, a := range data.StructureGate2.TopAnchorsShort {
+			sz := 0.0
+			if a.StrengthZ != nil {
+				sz = *a.StrengthZ
+			}
+			levels = append(levels, triggers.LevelInfo{
+				Level:     a.Level,
+				Side:      "SHORT",
+				Source:    string(a.Type),
+				StrengthZ: sz,
+				TimeFrame: a.TF,
+				KeyType:   triggers.KeyLevelBoBreakoutResistance,
+			})
+		}
+	}
 
 	if data.StructureGate2 != nil && len(klines5m) > 0 {
 		// 获取最新5m K线的high和low

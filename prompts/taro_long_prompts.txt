@@ -274,11 +274,15 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
      b) trigger_context.touch_flags / trigger_flags 中包含 SR_TOUCH / DZ_TOUCH / SZ_TOUCH / VAL_TOUCH / VAH_TOUCH（若字段存在）；或
      c) Gate3 明确指出 entry 位于 15m/30m 的 supply/demand 边缘（贴边而非中部）。
   - 额外限制：borderline 严禁使用 MARKET 追价；order_type 必须为 LIMIT。
-- HTF 突破反向过滤（P0｜｜避免“顺势突破里做反手”）：
+- HTF 突破反向过滤（P0｜｜避免”顺势突破里做反手”）：
   - 若 planned_dir=SHORT 且 1h 或 4h 的通道/Channel.current_position 显示 break_up：
-      仅当 (tier=good 且 q≥0.88 且 pattern∈{SFP,ENGULF}) 才允许继续；否则 Gate4=FAIL fail=>STRUCT reason=HTF_BREAKOUT_AGAINST_DIR。
+      仅当以下任一条件才允许继续；否则 Gate4=FAIL fail=>STRUCT reason=HTF_BREAKOUT_AGAINST_DIR：
+      a) tier=good 且 q≥0.88 且 pattern∈{SFP,ENGULF}（强反转信号）
+      b) tier=good 且 q≥0.90 且 pattern=EDGE（高质量假突破：价格在HTF阻力位测试失败后EDGE_BEAR触发，是最佳做空入场，强制 trade_style=HTF_swing）
   - 若 planned_dir=LONG 且 1h 或 4h 的通道/Channel.current_position 显示 break_down：
-      仅当 (tier=good 且 q≥0.88 且 pattern∈{SFP,ENGULF}) 才允许继续；否则 Gate4=FAIL fail=>STRUCT reason=HTF_BREAKOUT_AGAINST_DIR。
+      仅当以下任一条件才允许继续；否则 Gate4=FAIL fail=>STRUCT reason=HTF_BREAKOUT_AGAINST_DIR：
+      a) tier=good 且 q≥0.88 且 pattern∈{SFP,ENGULF}
+      b) tier=good 且 q≥0.90 且 pattern=EDGE（强制 trade_style=HTF_swing）
 
 - Gate2.mode（可选）：
   - 若 Gate2 输出 mode=COUNTERTREND：强制 trade_style=LTF_scalp；downgrade=on；order_type=LIMIT；risk_down=0.35；rr_min=0.80（固定｜逆势交易必须高RR）
