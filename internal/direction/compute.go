@@ -215,11 +215,14 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	if abs(structDir) < 0.3 && abs(ofDir) < 0.3 {
 		flags = append(flags, "WEAK_SIGNAL_FILTERED")
 		side = SideNeutral
-	} else if abs(delta) >= cfg.ThetaNeutral && conf >= cfg.MinConf {
-		if delta > 0 {
-			side = SideLong
-		} else {
-			side = SideShort
+	} else {
+		// 只有非弱信号才进行方向裁决
+		if abs(delta) >= cfg.ThetaNeutral && conf >= cfg.MinConf {
+			if delta > 0 {
+				side = SideLong
+			} else {
+				side = SideShort
+			}
 		}
 	}
 
