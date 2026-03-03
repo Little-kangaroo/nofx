@@ -233,12 +233,16 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
      - planned_dir∈{NEUTRAL,UNKNOWN} => dir_trigger := NONE
      - 过滤后非空：取 trigger_quality 最大的 1 个作为 dir_trigger（同质量取列表靠前者）
      - 过滤后为空：dir_trigger := NONE
-  【关键｜EDGE_* 触发器禁止用作 dir_trigger（P0｜防止 AI 误判）】
-  - EDGE_BULL / EDGE_BEAR 方向为 NEUTRAL，禁止被用作 dir_trigger。
-  - 即使 trigger_primary=EDGE_BULL，也不得将 EDGE_BULL 视为"触发器已确定"；
-    必须继续扫描 trigger_flags 全部项，按上述过滤规则找同向触发器。
+  【关键｜EDGE_* 作为 trigger_primary 时的处理（P0｜防止 AI 用 trigger_primary 否决 trigger_flags）】
+  - 历史 bug：AI 以 trigger_primary=EDGE_BULL 为基准判断方向，发现 EDGE_BULL 不匹配 SHORT → 输出 NONE，
+    忽略了 trigger_flags 中其余的 _BEAR 触发器（如 ENGULF_BEAR）。
+  - 正确行为：trigger_primary 仅是后端推荐的"主触发器"，不代表 dir_trigger 已确定。
+    dir_trigger 必须从 trigger_flags【全部项】按过滤规则选取。
+  - EDGE_BULL 含 "_BULL"，planned_dir=SHORT 时被过滤规则自然排除；不得因此否决其余 _BEAR 触发器。
+  - EDGE_BEAR 含 "_BEAR"，planned_dir=SHORT 时是有效 dir_trigger（价格在阻力位 = 做空机会）。
+  - EDGE_BULL 含 "_BULL"，planned_dir=LONG 时是有效 dir_trigger（价格在支撑位 = 做多机会）。
   - 例：trigger_primary=EDGE_BULL，planned_dir=SHORT，trigger_flags=["EDGE_BULL","ENGULF_BEAR"]
-    → 过滤保留含 _BEAR → ["ENGULF_BEAR"] → dir_trigger=ENGULF_BEAR（此时禁止输出 NONE）
+    → 过滤保留含 _BEAR → ["ENGULF_BEAR"] → dir_trigger=ENGULF_BEAR（禁止输出 NONE）
   - 只有当 trigger_flags 中不存在任何同向触发器时，dir_trigger 才为 NONE。
 - dir_trigger=NONE 的处理（P0）：
   - 若 has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS：
