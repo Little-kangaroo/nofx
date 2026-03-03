@@ -2,6 +2,22 @@ package direction
 
 import "strings"
 
+// ========== EDGE触发器语义说明 ==========
+// 🔥 重要：EDGE触发器不预设交易方向，只标记结构测试事件
+//
+// EDGE_BULL: 价格触碰支撑位（结构测试事件）
+//   - 在下降趋势中：可能是支撑失效前的最后测试 → 观望或做空
+//   - 在上升趋势中：可能是回调买入机会 → 做多
+//   - 在震荡市中：方向不明 → 观望
+//
+// EDGE_BEAR: 价格触碰阻力位（结构测试事件）
+//   - 在上升趋势中：可能是阻力突破前的测试 → 观望或做多
+//   - 在下降趋势中：可能是反弹卖出机会 → 做空
+//   - 在震荡市中：方向不明 → 观望
+//
+// 交易方向应由HTF结构方向（struct_dir）和订单流方向（of_dir）共同决定
+// ========================================
+
 // isOFStale 判断订单流数据是否过期/不可用（P0 短路条件）
 func isOFStale(of Orderflow, cfg Config, flags *[]string) bool {
 	// 状态检查
@@ -193,7 +209,13 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 
 	// ========== Step C: 方向裁决 ==========
 	side := SideNeutral
-	if abs(delta) >= cfg.ThetaNeutral && conf >= cfg.MinConf {
+
+	// 🔥 修复：过滤弱信号，避免在震荡市中频繁亏损
+	// 当结构和订单流都是弱信号时，强制NEUTRAL
+	if abs(structDir) < 0.3 && abs(ofDir) < 0.3 {
+		flags = append(flags, "WEAK_SIGNAL_FILTERED")
+		side = SideNeutral
+	} else if abs(delta) >= cfg.ThetaNeutral && conf >= cfg.MinConf {
 		if delta > 0 {
 			side = SideLong
 		} else {

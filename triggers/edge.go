@@ -54,12 +54,16 @@ func DetectEdge(touches []TouchInfo, currentPrice float64, cfg TriggerConfig) (s
 		quality := 0.75*closeness + 0.25*strengthBoost
 
 		// === 步骤4：选择方向 ===
+		// 🔥 修复：EDGE触发器不预设方向，只标记结构测试事件
+		// - EDGE_BULL: 触碰支撑位（结构测试，方向由HTF趋势决定）
+		// - EDGE_BEAR: 触碰阻力位（结构测试，方向由HTF趋势决定）
+		// 注意：触碰支撑不等于做多信号，触碰阻力不等于做空信号
 		var flag string
 		if touch.Side == "LONG" {
-			// 支撑位 → EDGE_BULL（看多）
+			// 支撑位测试 → EDGE_BULL（中性标记，非方向信号）
 			flag = FlagEdgeBull
 		} else if touch.Side == "SHORT" {
-			// 阻力位 → EDGE_BEAR（看空）
+			// 阻力位测试 → EDGE_BEAR（中性标记，非方向信号）
 			flag = FlagEdgeBear
 		} else {
 			continue // 未知方向，跳过
