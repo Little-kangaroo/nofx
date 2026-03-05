@@ -38,12 +38,18 @@ func StructDirFromMTF(mtf MTFAnalysis) float64 {
 		switch {
 		case chSign == 0:
 			// 通道无方向（flat/sideways + inside 等）
-			// quality=0（完全无通道数据）时不贡献任何方向信号，避免引入 ST 偏差压制订单流
-			// quality>0 时以超级趋势为参考，并按质量折扣
 			if t.Channel.Quality <= 0.0 {
-				signal = 0
-				effectiveQualityF = 0
+				// quality=0：通道完全无数据（channel_width_pct=0，sideways+inside）
+				// 旧逻辑：signal=0，丢弃所有结构信号，导致在全超级趋势多头时 struct_dir 退化为
+				// VPVR 噪声（-0.10），系统反而逆势开空。
+				// 新逻辑：用超级趋势方向作为兜底，信号强度 0.50（低于通道正常 0.60），
+				// effectiveQualityF 设为 0.50 反映数据不完整性。
+				// 效果：SOL/XRP 全 ST 多头时 struct_dir 从 -0.10 提升到 +0.25，
+				// 配合 SUPERTREND_CONSENSUS_ADJUST 使系统自然持中而非逆势开空。
+				signal = stSign * 0.50
+				effectiveQualityF = 0.50
 			} else {
+				// quality>0：通道方向不明但有质量数据，以超级趋势为参考并按质量折扣
 				signal = stSign * 0.60
 				effectiveQualityF = qualityF
 			}

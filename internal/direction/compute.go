@@ -206,9 +206,19 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	structDir := StructDirFromMTF(in.MTF)
 
 	// ========== Step C: 订单流合成方向（主导方向）==========
-	// 🔥 优化：提高 CVD 和订单簿权重，降低宏观权重
+	// 🔥 顺势修复：宏观权重自适应衰减
+	// 宏观趋势反映较长周期（24h+）资金方向，CVD 反映当前 5m 实时资金流向
+	// 当两者方向相反且 CVD 信号较强（>0.30）时，宏观可能已滞后于市场——降低其权重
+	// 例：宏观仍显示 bearish_distribution，但 5m CVD 持续流入 → 可能是趋势转折早期
+	macroWeight := 0.15
+	if sign(cvdSign) != 0 && sign(macroSign) != 0 &&
+		sign(cvdSign) != sign(macroSign) && abs(cvdSign) > 0.30 {
+		macroWeight = 0.07
+		flags = append(flags, "MACRO_CVD_CONFLICT")
+	}
+
 	ofDir := clamp(
-		0.15*macroSign+      // 宏观趋势：从 30% 降低到 15%
+		macroWeight*macroSign+ // 宏观趋势：自适应 7-15%（CVD 反向时降至 7%）
 			0.15*intentSign+ // 蜡烛意图：保持 15%
 			0.30*cvdSign+    // CVD：从 20% 提高到 30%
 			0.10*oiSign+     // OI：保持 10%
