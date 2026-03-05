@@ -217,13 +217,16 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 		flags = append(flags, "MACRO_CVD_CONFLICT")
 	}
 
+	// 归一化：非宏观分量总权重固定为 0.85（intent+CVD+OI+OB+wall）
+	// 当 macroWeight 从 0.15 降至 0.07 时，其余分量按比例等比放大，确保总权重始终 = 1.0
+	otherScale := (1.0 - macroWeight) / 0.85
 	ofDir := clamp(
-		macroWeight*macroSign+ // 宏观趋势：自适应 7-15%（CVD 反向时降至 7%）
-			0.15*intentSign+ // 蜡烛意图：保持 15%
-			0.30*cvdSign+    // CVD：从 20% 提高到 30%
-			0.10*oiSign+     // OI：保持 10%
-			0.20*obSign+     // 订单簿：从 15% 提高到 20%
-			0.10*wallSign,   // 墙：保持 10%
+		macroWeight*macroSign+                           // 宏观趋势：自适应 7-15%
+			otherScale*(0.15*intentSign+ // 蜡烛意图
+				0.30*cvdSign+  // CVD
+				0.10*oiSign+   // OI
+				0.20*obSign+   // 订单簿
+				0.10*wallSign), // 墙
 		-1, 1,
 	)
 
@@ -288,6 +291,24 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 				side = SideLong
 			} else {
 				side = SideShort
+			}
+		}
+	}
+
+	// ========== Step C+: 结构方向保护 ==========
+	// 当裁决方向与结构方向冲突时，要求 |of_dir| 达到 StructOverrideMin 才允许逆势开仓
+	// 设计语义：逆结构开仓是高风险行为，需要强 OF 信号（≥0.50）作为支撑
+	// 例：struct=+0.25（ST 全多头）+ of_dir=-0.43 + side=SHORT
+	//   → abs(-0.43)=0.43 < 0.50 → STRUCT_PROTECT → side=NEUTRAL
+	// 例：struct=+0.25 + of_dir=-0.55 + side=SHORT
+	//   → abs(-0.55)=0.55 ≥ 0.50 → 允许，真正的 OF 驱动反转
+	if side != SideNeutral && sign(structDir) != 0 && sign(structDir) != signSide(side) {
+		if abs(ofDir) < cfg.StructOverrideMin {
+			flags = append(flags, "STRUCT_PROTECT")
+			side = SideNeutral
+			if !blockEntry {
+				blockEntry = true
+				blockReason = "STRUCT_PROTECT"
 			}
 		}
 	}

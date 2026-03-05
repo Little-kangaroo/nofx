@@ -24,6 +24,9 @@ type Config struct {
 	ThetaNeutral float64 // 中性区间阈值
 	MinConf      float64 // 最小置信度
 
+	// 结构方向保护阈值
+	StructOverrideMin float64 // 逆结构方向开仓所需的最低 OF 强度（|of_dir| 必须超过此值）
+
 	// 归一化尺度
 	CVDFallbackScale float64 // CVD 回退尺度（当 volume_delta 过小时）
 	OIScalePct       float64 // OI delta 百分比尺度
@@ -58,6 +61,12 @@ func DefaultConfig() Config {
 		// 🔥 修复：调整到平衡值，避免过度过滤
 		ThetaNeutral: 0.15, // 从 0.20 降低到 0.15，避免过滤中等强度信号
 		MinConf:      0.40, // 从 0.50 降低到 0.40，提高开仓率同时保持质量
+
+		// 结构方向保护：逆结构开仓需要 |of_dir| >= 0.50 的强 OF 信号
+		// 防止弱 OF（如 5m 短暂卖压 -0.43）在 ST 趋势持续期间引发反向建仓
+		// 例：struct=+0.25（ST 全多头）+ of_dir=-0.43 → 0.43<0.50 → NEUTRAL（不开 SHORT）
+		// 例：struct=+0.25 + of_dir=-0.55 → 0.55≥0.50 → 允许 SHORT（真正的反转信号）
+		StructOverrideMin: 0.50,
 
 		// 归一化尺度
 		CVDFallbackScale: 1e6,
