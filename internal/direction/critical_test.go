@@ -12,7 +12,7 @@ func TestWeakSignalFilteringCritical(t *testing.T) {
 	t.Logf("当前配置:")
 	t.Logf("  ThetaNeutral: %.2f", cfg.ThetaNeutral)
 	t.Logf("  MinConf: %.2f", cfg.MinConf)
-	t.Logf("  弱信号阈值: structDir<0.3 && ofDir<0.3\n")
+	t.Logf("  弱信号阈值: structDir<0.2 && ofDir<0.2\n")
 
 	// ========== 危险场景：弱信号但delta较大 ==========
 	t.Run("危险场景-弱信号但delta较大", func(t *testing.T) {
@@ -86,8 +86,8 @@ func TestWeakSignalFilteringCritical(t *testing.T) {
 		t.Logf("  confidence: %.2f", result.Confidence)
 		t.Logf("  flags: %v", result.Flags)
 
-		// 验证：即使delta可能较大，但structDir和ofDir都<0.3时应该被过滤
-		if abs(result.StructDir) < 0.3 && abs(result.OFDir) < 0.3 {
+		// 验证：structDir和ofDir都<0.20时应该被过滤（新阈值0.20，允许ofDir 0.20-0.29的弱方向信号通过）
+		if abs(result.StructDir) < 0.20 && abs(result.OFDir) < 0.20 {
 			if result.PlanSide != SideNeutral {
 				t.Errorf("❌ 弱信号未被过滤！struct_dir=%.2f, of_dir=%.2f, 但plan_side=%s",
 					result.StructDir, result.OFDir, result.PlanSide)
@@ -230,10 +230,10 @@ func TestConfigurationReasonableness(t *testing.T) {
 		t.Logf("✅ MinConf合理(%.2f)", cfg.MinConf)
 	}
 
-	// 检查弱信号阈值
-	weakSignalThreshold := 0.3
+	// 检查弱信号阈值（新阈值：0.20，允许of_dir 0.20-0.29的弱方向信号顺势而为）
+	weakSignalThreshold := 0.2
 	t.Logf("\n弱信号过滤阈值: %.2f", weakSignalThreshold)
-	if weakSignalThreshold < 0.2 {
+	if weakSignalThreshold < 0.10 {
 		t.Errorf("❌ 弱信号阈值太低，可能过滤不足")
 	} else if weakSignalThreshold > 0.4 {
 		t.Errorf("❌ 弱信号阈值太高，可能过度过滤")

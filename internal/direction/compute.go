@@ -172,6 +172,11 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	// 吸收提示
 	if sign(in.Orderflow.Micro5m.PriceDeltaPct) != sign(cvdRaw) && abs(cvdSign) > 0.50 {
 		flags = append(flags, "ABSORPTION_HINT")
+		// 价格在机构卖盘中仍然上涨 = 买方正在吸收卖盘
+		// smart_money_distribution 意图信号不可信，弱化负向 intentSign
+		if intentSign < 0 {
+			intentSign *= 0.20
+		}
 	}
 	if in.Orderflow.Macro.CvdDivergence {
 		flags = append(flags, "CVD_DIVERGENCE")
@@ -200,6 +205,19 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	wOF := cfg.WOFMin + (cfg.WOFMax-cfg.WOFMin)*ofQ
 	wST := 1 - wOF
 
+	// 超级趋势多时间框架共识自适应权重
+	// 当 15m/30m/4h 超级趋势高度一致时（≥2/3 同向），增加结构方向权重
+	// 防止强牛市/熊市中短期 OF 反向信号独霸方向，导致系统逆势交易
+	// consensus=0.67(2/3一致): extraST≈+0.08; consensus=1.0(3/3一致): extraST=+0.50
+	// wOF 最低降至 0.35（wST 最高升至 0.65），使结构在趋势一致时真正主导方向
+	stConsensus := SupertrendConsensus(in.MTF)
+	if abs(stConsensus) >= 0.60 && abs(structDir) >= 0.20 {
+		extraST := 0.50 * (abs(stConsensus) - 0.60) / 0.40
+		wOF = clamp(wOF-extraST, 0.35, wOF)
+		wST = 1 - wOF
+		flags = append(flags, "SUPERTREND_CONSENSUS_ADJUST")
+	}
+
 	// ========== Step C: 双边评分 ==========
 	scoreLong := wOF*max(ofDir, 0) + wST*max(structDir, 0)
 	scoreShort := wOF*max(-ofDir, 0) + wST*max(-structDir, 0)
@@ -219,8 +237,8 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	side := SideNeutral
 
 	// 🔥 修复：过滤弱信号，避免在震荡市中频繁亏损
-	// 当结构和订单流都是弱信号时，强制NEUTRAL
-	if abs(structDir) < 0.3 && abs(ofDir) < 0.3 {
+	// 当结构和订单流都是极弱信号时，强制NEUTRAL（阈值从0.3降至0.2，允许of_dir 0.20-0.29的弱方向信号通过）
+	if abs(structDir) < 0.20 && abs(ofDir) < 0.20 {
 		flags = append(flags, "WEAK_SIGNAL_FILTERED")
 		side = SideNeutral
 		// WEAK_SIGNAL_FILTERED: plan_side=NEUTRAL 时必须设 block_entry=true
@@ -244,8 +262,15 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	// 主路：macroAlign 含 divergent_mixed 偏置后的值，已能覆盖大部分情况
 	if macroAlign != 0 && side != SideNeutral &&
 		sign(macroAlign) != signSide(side) && macroStrength > 0.60 {
-		// 检查是否满足强反例条件
-		if !StrongCounterexample(in, wallSign, flags) {
+		// 多时间框架超级趋势强共识豁免：
+		// 当 15m/30m/4h 全部同向（|stConsensus| ≥ 0.95）且与 plan_side 一致时，
+		// 视为最强"强反例"——多周期趋势共识本身就是宏观信号的有力反驳
+		// 例：宏观 CVD 看跌但全部 Supertrend 看涨 → 机构在分发中仍维持多头趋势，放行做多
+		if abs(stConsensus) >= 0.95 && sign(stConsensus) == signSide(side) {
+			flags = append(flags, "MACRO_OPPOSE_BUT_EXCEPT")
+			conf *= 0.75
+		} else if !StrongCounterexample(in, wallSign, flags) {
+			// 检查是否满足强反例条件
 			blockEntry = true
 			blockReason = "MACRO_OPPOSE"
 			flags = append(flags, "MACRO_OPPOSE_BLOCK")

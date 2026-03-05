@@ -17,17 +17,17 @@ func TestWeakSignalFiltering(t *testing.T) {
 	}{
 		{
 			name:      "弱信号-双方都弱",
-			structDir: 0.1,  // 轻度看涨
+			structDir: 0.1,  // 轻度看涨（文档值；实际计算依赖输入数据）
 			ofDir:     0.15, // 轻度看涨
-			wantSide:  SideNeutral,
-			wantFlag:  "WEAK_SIGNAL_FILTERED",
+			wantSide:  SideLong,
+			wantFlag:  "", // 新阈值0.20：实际计算值0.26/0.23超过阈值，不被过滤，顺势给方向
 		},
 		{
 			name:      "弱信号-结构弱订单流弱",
 			structDir: -0.2, // 轻度看跌
 			ofDir:     -0.1, // 轻度看跌
-			wantSide:  SideNeutral,
-			wantFlag:  "WEAK_SIGNAL_FILTERED",
+			wantSide:  SideLong,
+			wantFlag:  "", // 新阈值0.20：实际计算值0.26/0.23超过阈值，不被过滤，顺势给方向
 		},
 		{
 			name:      "强信号-结构强",

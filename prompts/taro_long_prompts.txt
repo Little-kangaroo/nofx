@@ -56,8 +56,13 @@
 -  总原则：若后端已提供 suggested_dir（direction_arbitration.plan_side），则其为默认 SSOT。
   Gate2 在 has_position=0 且 block_entry=0 的前提下：
   1) 默认 planned_dir := suggested_dir（不得因 5m 触发器/窗口而改写方向）。
-  2) 只有在满足“反转白名单（Flip Allowlist）”的极端条件时，才允许从 suggested_dir 进行有限翻转；
+  2) 只有在满足”反转白名单（Flip Allowlist）”的极端条件时，才允许从 suggested_dir 进行有限翻转；
      否则若存在明显冲突，必须直接 planned_dir=NEUTRAL + block_entry=1（本轮禁新开仓），避免把冲突拖到 Gate4/5 才暴雷。
+  【P0｜特殊 flags 下 confidence 偏低的处理（禁止因 conf 偏低降级或翻转）】
+  - flags 中含 SUPERTREND_CONSENSUS_ADJUST 时：conf=0.30~0.56 是权重再分配的正常结果，方向有效；
+    Gate2 禁止因 conf 偏低（< 0.60）将 planned_dir 降为 NEUTRAL。
+  - flags 中含 MACRO_OPPOSE_BUT_EXCEPT 时：conf 已被后端折扣 ×0.75，方向豁免已由后端验证；
+    Gate2 禁止因”宏观反向”再次否决；直接继承 planned_dir := suggested_dir。
 
 【定义｜Gate2 输入/输出口径（SSOT）】
 - suggested_dir：direction_arbitration.plan_side（或等价字段），后端建议方向 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}。
@@ -601,6 +606,35 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
            - edge_score ≥ 0.7
            - 且 Gate2.block_entry=0（fake_* / spoofing_risk 等硬红线已由后端折叠进 block_entry；Gate4 不再复判）
       - 满足降级通道才允许继续走 Gate5 计算 RR；否则本轮禁止新开仓。
+5) 方向裁决新增标记语义（v2026-03 | SUPERTREND_CONSENSUS_ADJUST / MACRO_OPPOSE_BUT_EXCEPT）
+【P0｜Gate2 必须理解以下后端 flags；不得误判为弱信号或重新覆盖后端决策】
+  A) SUPERTREND_CONSENSUS_ADJUST（超级趋势多周期共识权重增强）
+    - 触发条件：15m/30m/4h 三周期超级趋势方向高度一致（|stConsensus| ≥ 0.60）
+    - 后端已将结构方向权重（wST）从基准 15~30% 提升至最高 65%，订单流权重（wOF）对应降低至 35%
+    - 含义：struct_dir 在此旗标下已主导方向裁决；低 confidence（conf=0.30~0.56）是权重再分配的正常结果，
+      不代表信号弱——方向可靠度实际更高（三周期 ST 一致性远强于单周期通道）
+    - Gate2 处理规则：
+      * conf 偏低时（0.30~0.56）：直接接受 suggested_dir，正常进入 Gate3~Gate5；禁止因 conf 偏低降为 NEUTRAL
+      * 不得要求"conf ≥ 0.60 才允许 Gate2 PASS"——该约束只适用于无 SUPERTREND_CONSENSUS_ADJUST 的普通信号
+      * struct_dir 值已融合 15m/30m 通道+超级趋势复合信号；sideways+break_up/break_down 场景下 struct_dir 可达 ±0.60~0.70
+  B) MACRO_OPPOSE_BUT_EXCEPT（宏观反向但已授予豁免）
+    - 触发条件：宏观趋势（macro_align）与 plan_side 方向相反，但满足以下豁免条件之一：
+      (1) 全周期 ST 强共识：|stConsensus| ≥ 0.95 且 ST 方向与 plan_side 一致
+          → 多周期 Supertrend 一致性本身即是最强宏观反驳证据（机构维持趋势即使 CVD 异常）
+      (2) 强反例条件（三取二）：吸收提示/CVD 分歧、VPVR 边缘、墙体强且欺骗风险低
+    - 后端已对 confidence 打折 ×0.75，这是预期内的正常表现
+    - Gate2 处理规则：
+      * 必须接受后端豁免决策，不得因"宏观反向"再次在 Gate2 覆盖方向或输出 NEUTRAL
+      * conf 偏低（0.25~0.50）是 ×0.75 折扣的正常结果；方向有效性已由后端验证
+      * 在 reasoning 中可标注"宏观逆向但多周期 ST 豁免，conf 已折扣"作为透明度说明
+  C) struct_dir 字段语义更新（v2026-03）
+    - struct_dir = [-1,+1] 现已融合"通道方向 + 超级趋势"双信号：
+      * 通道有方向（break_up/break_down/upper/lower/inside）：通道为主（75%），ST 为辅（25%），质量因子加权
+      * 通道平坦/无方向（sideways/flat + inside）：超级趋势为主要信号（权重 60%，质量因子 = 1.0 不惩罚）
+      * 通道与 ST 方向相反：信任通道（保留有效逆势短线信号）
+    - struct_dir 被 4h 超级趋势背景约束：4h 看空时多头信号最大 ±0.50，4h 看多时空头信号最大 ±0.50
+      → struct_dir=0.50 通常表示 4h 逆势封顶（15m/30m 实际信号可能更强）
+    - signal_strength（若字段存在）= abs(delta)，与 confidence 解耦；表示真实信号力度，低 conf 时仍可有效
 【盘中突发模式（INTRABAR）已弃用】
 - 本系统仅在 5m 收盘事件触发模型决策；不支持任何 INTRABAR_ENABLE / 小周期收盘的“盘中应急开仓”逻辑。
 - 若输入中仍携带相关字段，模型必须忽略，不得据此开新仓或改变 Gate 口径。

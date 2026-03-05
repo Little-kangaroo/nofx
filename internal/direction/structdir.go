@@ -3,7 +3,11 @@ package direction
 import "strings"
 
 // StructDirFromMTF 从多时间框架分析计算结构方向 [-1, +1]
-// 使用通道指标作为主要信号（15m/30m），4h 超级趋势作为背景约束上限
+// 信号融合策略：
+//   - 通道方向（channel）+ 超级趋势（supertrend）协同计算每个时间框架的结构信号
+//   - 两者方向一致时复合增强；通道平坦时以超级趋势为主；通道与超级趋势反向时信任通道
+//   - 4h 超级趋势保持原有背景约束（防止短线逆高阶趋势满分）
+//
 // 权重：30m(60%) > 15m(40%)
 func StructDirFromMTF(mtf MTFAnalysis) float64 {
 	// 时间框架权重配置（只使用 15m 和 30m 计算主信号）
@@ -22,11 +26,42 @@ func StructDirFromMTF(mtf MTFAnalysis) float64 {
 		// 通道方向符号
 		chSign := channelSign(t.Channel.Direction, t.Channel.CurrentPosition, t.Channel.PriceRatio)
 
+		// 超级趋势方向符号
+		stSign := supertrendToSign(t.SupertrendDir)
+
 		// 通道质量因子：质量越高权重越大
 		qualityF := clamp(t.Channel.Quality, 0.3, 1.0)
 
-		// 加权累加
-		sum += w * chSign * qualityF
+		// 信号融合：根据通道与超级趋势的关系选择混合策略
+		var signal float64
+		var effectiveQualityF float64
+		switch {
+		case chSign == 0:
+			// 通道无方向（flat/sideways + inside 等）
+			// quality=0（完全无通道数据）时不贡献任何方向信号，避免引入 ST 偏差压制订单流
+			// quality>0 时以超级趋势为参考，并按质量折扣
+			if t.Channel.Quality <= 0.0 {
+				signal = 0
+				effectiveQualityF = 0
+			} else {
+				signal = stSign * 0.60
+				effectiveQualityF = qualityF
+			}
+		case sign(chSign) == sign(stSign):
+			// 通道与超级趋势方向一致：复合增强
+			// 例：flat+break_up(+0.60) + bullish → 0.60×0.75 + 1.0×0.25 = 0.70
+			signal = chSign*0.75 + stSign*0.25
+			effectiveQualityF = qualityF
+		default:
+			// 通道与超级趋势方向相反（如牛市中通道跌破，或熊市中横盘向上突破）
+			// 信任通道——这是有效的 LTF 短线逆势信号，不应被滞后的超级趋势抵消
+			// 例：flat+break_down(-0.60) + bullish ST → signal = -0.60（空信号保留）
+			// 例：up+breakdown(-0.30) + bullish ST → signal = -0.30（回调空保留）
+			signal = chSign
+			effectiveQualityF = qualityF
+		}
+
+		sum += w * signal * effectiveQualityF
 	}
 
 	// VPVR tie-break：仅在方向不明确时使用
@@ -58,6 +93,43 @@ func StructDirFromMTF(mtf MTFAnalysis) float64 {
 	}
 
 	return sum
+}
+
+// supertrendToSign 将超级趋势方向字符串转换为方向符号 [-1, 0, +1]
+func supertrendToSign(dir string) float64 {
+	switch strings.ToLower(dir) {
+	case "bullish":
+		return 1.0
+	case "bearish":
+		return -1.0
+	default:
+		return 0.0
+	}
+}
+
+// SupertrendConsensus 计算多时间框架超级趋势共识度 [-1, +1]
+// 统计 15m/30m/4h 三个时间框架的超级趋势方向，返回加权平均共识：
+//   +1.0 = 全部看多（3/3 bullish）
+//   +0.67 = 多数看多（2/3 bullish）
+//    0.0 = 中立或均等
+//   -0.67 = 多数看空（2/3 bearish）
+//   -1.0 = 全部看空（3/3 bearish）
+func SupertrendConsensus(mtf MTFAnalysis) float64 {
+	tfs := []string{"15m", "30m", "4h"}
+	totalSign := 0.0
+	count := 0.0
+	for _, tf := range tfs {
+		t, ok := mtf[tf]
+		if !ok || t.SupertrendDir == "" {
+			continue
+		}
+		totalSign += supertrendToSign(t.SupertrendDir)
+		count++
+	}
+	if count == 0 {
+		return 0
+	}
+	return totalSign / count
 }
 
 // channelSign 通道方向符号 [-1, +1]
