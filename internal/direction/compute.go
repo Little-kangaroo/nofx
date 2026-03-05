@@ -18,37 +18,46 @@ import "strings"
 // 交易方向应由HTF结构方向（struct_dir）和订单流方向（of_dir）共同决定
 // ========================================
 
-// isOFStale 判断订单流数据是否过期/不可用（P0 短路条件）
-func isOFStale(of Orderflow, cfg Config, flags *[]string) bool {
-	// 状态检查
-	if of.Quality.Status != "正常" {
-		*flags = append(*flags, "OF_STATUS_BAD")
-		return true
-	}
-
-	// 整体评分检查
-	if of.Quality.OverallScore < cfg.MinOverallScore {
-		*flags = append(*flags, "OF_SCORE_LOW")
-		return true
-	}
-
-	// 微观数据质量检查
-	if of.Micro5m.DataQuality < cfg.MinMicroDQ {
-		*flags = append(*flags, "OF_MICRO_DQ_LOW")
-		return true
-	}
-
-	// 盘口数据缺失检查
+// ofStaleLevel 订单流失效等级
+// fullyStale=true  → 数据完全缺失，无法计算任何 OF 信号，必须返回 UNKNOWN
+// partialStale=true → 状态/评分异常，但底层数据存在，降级为结构主导模式继续计算
+func ofStaleLevel(of Orderflow, cfg Config, flags *[]string) (fullyStale bool, partialStale bool) {
+	// 硬失效：盘口数据为零 —— 无法计算 OB/CVD，真正无数据
 	if of.OB.LiquidityScore <= 0 {
 		*flags = append(*flags, "OF_LIQ_ZERO")
-		return true
+		return true, false
 	}
 	if of.OB.AskPressure == 0 && of.OB.BidPressure == 0 {
 		*flags = append(*flags, "OF_PRESSURE_ZERO")
-		return true
+		return true, false
 	}
 
-	return false
+	// 软失效：状态异常但盘口数据存在 —— 降级继续计算（结构主导）
+	// 历史观察：ETHUSDT 持续 OF_STATUS_BAD，但 CVD/OB 数据实际可用
+	if of.Quality.Status != "正常" {
+		*flags = append(*flags, "OF_STATUS_BAD")
+		return false, true
+	}
+
+	// 软失效：整体评分低
+	if of.Quality.OverallScore < cfg.MinOverallScore {
+		*flags = append(*flags, "OF_SCORE_LOW")
+		return false, true
+	}
+
+	// 软失效：微观数据质量低
+	if of.Micro5m.DataQuality < cfg.MinMicroDQ {
+		*flags = append(*flags, "OF_MICRO_DQ_LOW")
+		return false, true
+	}
+
+	return false, false
+}
+
+// isOFStale 保留向后兼容的完全失效判断（供测试引用）
+func isOFStale(of Orderflow, cfg Config, flags *[]string) bool {
+	fully, _ := ofStaleLevel(of, cfg, flags)
+	return fully
 }
 
 // StrongCounterexample 判断是否满足强反例条件（宏观反向时的豁免条件）
@@ -91,8 +100,11 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	var flags []string
 	dbg := map[string]float64{}
 
-	// ========== Step A: OF_STALE 短路 ==========
-	if isOFStale(in.Orderflow, cfg, &flags) {
+	// ========== Step A: OF_STALE 分级处理 ==========
+	// fullyStale  → 盘口数据为零，无法计算任何信号，直接返回 UNKNOWN
+	// partialStale → 状态/评分异常但数据存在，降级为结构主导模式（wOF=0.30）继续计算
+	fullyStale, partialStale := ofStaleLevel(in.Orderflow, cfg, &flags)
+	if fullyStale {
 		flags = append(flags, "OF_STALE")
 		return DirectionArbitration{
 			PlanSide:    SideUnknown,
@@ -105,6 +117,10 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 			OFQuality:   0,
 			Flags:       flags,
 		}
+	}
+	ofDegraded := partialStale
+	if ofDegraded {
+		flags = append(flags, "OF_STALE_DEGRADED")
 	}
 
 	// ========== Step A: Redline 标记（只设置 block_entry，不阻止计算）==========
@@ -201,9 +217,17 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 		-1, 1,
 	)
 
-	// ========== Step C: 动态权重（订单流权重更高）==========
+	// ========== Step C: 动态权重 ==========
 	wOF := cfg.WOFMin + (cfg.WOFMax-cfg.WOFMin)*ofQ
 	wST := 1 - wOF
+
+	// OF降级模式：数据状态异常时切换为结构主导（wOF=0.30）
+	// 保留OF方向作为参考，但让结构方向主导最终裁决
+	if ofDegraded {
+		wOF = 0.30
+		wST = 0.70
+		flags = append(flags, "STRUCT_DOMINANT")
+	}
 
 	// 超级趋势多时间框架共识自适应权重
 	// 当 15m/30m/4h 超级趋势高度一致时（≥2/3 同向），增加结构方向权重
@@ -262,11 +286,19 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	// 主路：macroAlign 含 divergent_mixed 偏置后的值，已能覆盖大部分情况
 	if macroAlign != 0 && side != SideNeutral &&
 		sign(macroAlign) != signSide(side) && macroStrength > 0.60 {
-		// 多时间框架超级趋势强共识豁免：
+		// 豁免条件 1：多时间框架超级趋势强共识（3/3 同向）
 		// 当 15m/30m/4h 全部同向（|stConsensus| ≥ 0.95）且与 plan_side 一致时，
 		// 视为最强"强反例"——多周期趋势共识本身就是宏观信号的有力反驳
-		// 例：宏观 CVD 看跌但全部 Supertrend 看涨 → 机构在分发中仍维持多头趋势，放行做多
 		if abs(stConsensus) >= 0.95 && sign(stConsensus) == signSide(side) {
+			flags = append(flags, "MACRO_OPPOSE_BUT_EXCEPT")
+			conf *= 0.75
+		} else if sign(structDir) == signSide(side) && sign(ofDir) == signSide(side) &&
+			abs(structDir) >= 0.40 && abs(ofDir) >= 0.35 {
+			// 豁免条件 2：结构+订单流双向强度一致（新增）
+			// 触发条件：struct_dir ≥ 0.40 且 of_dir ≥ 0.35 且两者方向与 plan_side 一致
+			// 语义：本地多周期多维信号均看多/空时，宏观滞后信号不应硬阻断
+			// 安全设计：要求 OF 信号达到 0.35（强于仅符号一致），避免在宏观大单反向时误豁免
+			// 例：struct=+0.55, of=+0.38, plan=LONG, macro=bearish → 允许开多，conf×0.75
 			flags = append(flags, "MACRO_OPPOSE_BUT_EXCEPT")
 			conf *= 0.75
 		} else if !StrongCounterexample(in, wallSign, flags) {
