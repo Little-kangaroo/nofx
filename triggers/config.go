@@ -87,9 +87,9 @@ func DefaultConfig() TriggerConfig {
 
 		// 🔥 P0新增：BO_RETEST配置
 		BoLookbackBars: 30,   // 回看K线数量
-		BoMaxAgeBars:   6,    // 最大年龄
+		BoMaxAgeBars:   12,   // 最大年龄（6→12：允许突破后1小时内回测，真实市场回测窗口更宽）
 		BoBreakMinAtr:  0.20, // 最小突破幅度（ATR倍数）
-		BoRetestTolBps: 10,   // 回测容差（基点）
+		BoRetestTolBps: 15,   // 回测容差（基点，10→15：减少"差1美元被拒"的临界拒绝）
 		BoConfirmMinQ:  0.30, // 确认最小质量
 
 		// 量能配置
