@@ -14,9 +14,9 @@ const (
 type DirectionArbitration struct {
 	PlanSide       DirectionSide      `json:"plan_side"`        // 计划方向（SSOT）
 	BlockEntry     bool               `json:"block_entry"`      // 是否禁止新开仓
-	BlockReason    string             `json:"-"`                // 禁止原因（内部使用）
-	Confidence     float64            `json:"-"`                // 相对置信度（内部使用）
-	SignalStrength float64            `json:"-"`                // 绝对信号强度 = |delta|，供AI区分弱/强信号
+	BlockReason    string             `json:"block_reason,omitempty"` // 禁止原因（供AI展示：SPOOF_HIGH/OF_STALE/MACRO_OPPOSE/STRUCT_PROTECT/...）
+	Confidence     float64            `json:"confidence"`       // 相对置信度 [0,1]，供AI感知方向把握度
+	SignalStrength float64            `json:"signal_strength"`  // 绝对信号强度 = |delta|，供AI区分弱/强信号（0.05=弱，0.30+=强）
 	Delta          float64            `json:"-"`                // ScoreLong - ScoreShort（内部使用）
 	OFDir          float64            `json:"-"`                // 订单流方向（内部使用）
 	StructDir      float64            `json:"-"`                // 结构方向（内部使用）

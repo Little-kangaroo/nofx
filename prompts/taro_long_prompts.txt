@@ -68,6 +68,17 @@
 - suggested_dir：direction_arbitration.plan_side（或等价字段），后端建议方向 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}。
 - planned_dir：Gate2 最终输出方向 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}，作为 Gate3~Gate5 的唯一方向口径。
 - block_entry：仍为后端硬否决（1=禁止新开仓；0=允许进入后续 Gate）。Gate2 不得把 block_entry=1 改回 0。
+- block_reason（新增）：block_entry=1 时的后端封锁原因，直接用于 Gate2 reason 字段输出（避免 AI 重复推导）。
+  常见值：SPOOF_HIGH / OF_STALE / MACRO_OPPOSE / STRUCT_PROTECT / WEAK_SIGNAL_FILTERED / OF_MACRO_PROTECT / INTENT_REDLINE
+  Gate2 FAIL 时 reason 优先引用 block_reason，格式：reason=ENTRY_BLOCKED(block_reason=SPOOF_HIGH)
+- confidence（新增）：direction_arbitration.confidence [0,1]，方向的相对置信度。
+  * conf<0.40：信号弱，即使 plan_side 有方向也需更严格结构验证；
+  * conf≥0.60：信号较强，Gate3~Gate5 可正常放行；
+  * conf 受 SUPERTREND_CONSENSUS_ADJUST 影响时为正常现象（0.30~0.56），不代表信号弱。
+- signal_strength（新增）：direction_arbitration.signal_strength = |delta|，绝对信号强度。
+  * 0.00~0.10：极弱信号（噪声级别，Gate2 可降权）；
+  * 0.10~0.25：弱方向偏置（允许开仓但 risk_down 应偏保守）；
+  * 0.25+：中等以上信号（常规评估，Gate3~Gate5 正常执行）。
 
 【冲突探测（仅用于”是否允许翻转”的自检；不允许在 Gate2 产出结构锚点/价格）】
 - trig_dir：仅用于检测”后端方向是否与当前 5m 触发方向严重相反”，不得作为顺势交易的定向证据。
@@ -193,9 +204,18 @@ Gate3）结构格局门槛（Structural Context Gate｜Gate3(STRUCTURE)）
   3) SWING 的 HTF Anchor 下限（P0）：
      - 若 trade_style 计划为 HTF_swing/波段：Anchor1/Anchor2 中至少 1 个必须来自 1h 或 4h（可通过 tf/TF_bonus 证明）；
      - 若无法提供 HTF Anchor：不得做 HTF_swing；仅允许降级为 LTF_scalp（必须写 downgrade=on），否则 Gate3=FAIL（reason=NO_HTF_ANCHOR）。
-  4) 反向贴脸障碍硬否决（减少“白白算到 Gate5 才失败”）：
+  4) 反向贴脸障碍硬否决（减少”白白算到 Gate5 才失败”）：
      - planned_dir=LONG 且 1h/4h 明确 SZ/强阻力/VAH 压制距离过近（结构空间不足）→ Gate3=FAIL reason=HTF_BARRIER_NEAR；
      - planned_dir=SHORT 且 1h/4h 明确 DZ/强支撑/VAL 承接距离过近 → Gate3=FAIL reason=HTF_BARRIER_NEAR。
+  5) 【P0｜价格处于 HTF 供需区内部的硬否决（防 Gate5 RR_CTX_MISSING）】：
+     - 若 planned_dir=LONG 且 Gate3 识别 pos 包含 inside_HTF_SZ / inside_SZ / inside_supply（价格在 4h/1h 供给区内部）：
+       → Gate3=FAIL reason=HTF_BARRIER_NEAR（价格在供给区内部，上方即为卖压密集区，LONG 无有效 TP 空间）。
+       → 必须输出 NextTrigger: need_price_below=SZ_bottom; need_trig=EDGE_BULL_at_support; expire_bars=3
+     - 若 planned_dir=SHORT 且 Gate3 识别 pos 包含 inside_HTF_DZ / inside_DZ / inside_demand（价格在 4h/1h 需求区内部）：
+       → Gate3=FAIL reason=HTF_BARRIER_NEAR（价格在需求区内部，下方即为买压密集区，SHORT 无有效 TP 空间）。
+       → 必须输出 NextTrigger: need_price_above=DZ_top; need_trig=EDGE_BEAR_at_resistance; expire_bars=3
+     - 此规则优先级高于”多周期 ST 共识”：即使 ST 3/3 同向，只要价格 inside_HTF_SZ/DZ，也必须 Gate3=FAIL。
+     - 理由：ST 共识反映方向正确，但位置错误——正确策略是等价格离开供需区后，在区边缘触发信号再进场。
 Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓住“可盈利窗口”，减少漏开与追价）
 - 本段替换原 Gate4-A/B 全部内容（重写｜不改变 Gate1→Gate5 总架构，不新增顶层 JSON 字段）。
 【P0｜Gate4 职责边界（必须遵守）】
@@ -246,8 +266,15 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
   - EDGE_BULL 含 "_BULL"，planned_dir=SHORT 时被过滤规则自然排除；不得因此否决其余 _BEAR 触发器。
   - EDGE_BEAR 含 "_BEAR"，planned_dir=SHORT 时是有效 dir_trigger（价格在阻力位 = 做空机会）。
   - EDGE_BULL 含 "_BULL"，planned_dir=LONG 时是有效 dir_trigger（价格在支撑位 = 做多机会）。
-  - 例：trigger_primary=EDGE_BULL，planned_dir=SHORT，trigger_flags=["EDGE_BULL","ENGULF_BEAR"]
+  【P0｜严禁方向错误的 EDGE 触发器（历史 bug：LONG 用了 EDGE_BEAR，SHORT 用了 EDGE_BULL）】
+  - EDGE_BEAR 语义：价格在阻力位测试。planned_dir=LONG 时必须排除（阻力贴脸，上方无空间）；禁止将 EDGE_BEAR 作为 LONG 的 dir_trigger。
+  - EDGE_BULL 语义：价格在支撑位测试。planned_dir=SHORT 时必须排除（支撑贴脸，下方无空间）；禁止将 EDGE_BULL 作为 SHORT 的 dir_trigger。
+  - 若 planned_dir=LONG 且 trigger_flags 仅含 EDGE_BEAR（无任何 _BULL/_LONG）：dir_trigger=NONE → Gate4=FAIL fail=>SETUP reason=NO_TRIGGER_FOR_DIR（DEFER）。
+  - 若 planned_dir=SHORT 且 trigger_flags 仅含 EDGE_BULL（无任何 _BEAR/_SHORT）：dir_trigger=NONE → Gate4=FAIL fail=>SETUP reason=NO_TRIGGER_FOR_DIR（DEFER）。
+  - 正例：trigger_primary=EDGE_BULL，planned_dir=SHORT，trigger_flags=["EDGE_BULL","ENGULF_BEAR"]
     → 过滤保留含 _BEAR → ["ENGULF_BEAR"] → dir_trigger=ENGULF_BEAR（禁止输出 NONE）
+  - 反例：trigger_primary=EDGE_BEAR，planned_dir=LONG，trigger_flags=["EDGE_BEAR"]
+    → 过滤含 _BULL → 空 → dir_trigger=NONE（禁止使用 EDGE_BEAR，不得输出 PASS）
   - 只有当 trigger_flags 中不存在任何同向触发器时，dir_trigger 才为 NONE。
 - dir_trigger=NONE 的处理（P0）：
   - 若 has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS：
@@ -583,7 +610,11 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
       * planned_dir=SHORT 且 Gate3 确认价格在 HTF 阻力区（SZ/SR_R/VAH 附近）：
         → "散户被诱多，聪明钱在上方卖出" = 强化空头信号，允许继续开仓评估；
         → Gate4 必须强制 risk_down×0.50（因存在方向噪声）；reason 写 PUMP_WARN_SHORT_ALLOWED
-      * planned_dir=LONG（任何位置）：
+      * planned_dir=LONG 且 flags 包含 ABSORPTION_HINT 且 struct_dir≥0.50 且 价格在 HTF 支撑区（DZ/SR_S/VAL 附近）：
+        → "假 pump 中机构正在吸收卖盘" = ABSORPTION_HINT 推翻 fake_pump 负面含义，视为强多信号；
+        → 允许继续开仓评估；Gate4 必须强制 risk_down×0.60；reason 写 PUMP_WARN_ABSORBED_LONG_ALLOWED
+        → 解释：price 在支撑区 + 卖压出现 + 价格未跌反升 = 机构在买入，散户 fake_pump 标签失效
+      * planned_dir=LONG（其他情况，无 ABSORPTION_HINT 或不在支撑区）：
         → Gate2 FAIL（reason=ENTRY_BLOCKED）；禁止买入散户拉盘
       * planned_dir=SHORT 但价格不在 HTF 阻力区（在支撑区或中段）：
         → Gate2 FAIL（reason=ENTRY_BLOCKED）；位置不利，等待价格到阻力区
