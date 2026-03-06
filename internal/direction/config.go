@@ -25,7 +25,11 @@ type Config struct {
 	MinConf      float64 // 最小置信度
 
 	// 结构方向保护阈值
+	StructProtectMin  float64 // STRUCT_PROTECT 触发的最小结构强度（|struct_dir| 低于此值视为噪声，不触发保护）
 	StructOverrideMin float64 // 逆结构方向开仓所需的最低 OF 强度（|of_dir| 必须超过此值）
+
+	// 宏观+OF 双重反向保护
+	OFMacroFloor float64 // plan_side=LONG 时若宏观为负且 of_dir < -OFMacroFloor，强制 NEUTRAL
 
 	// 归一化尺度
 	CVDFallbackScale float64 // CVD 回退尺度（当 volume_delta 过小时）
@@ -66,7 +70,14 @@ func DefaultConfig() Config {
 		// 防止弱 OF（如 5m 短暂卖压 -0.43）在 ST 趋势持续期间引发反向建仓
 		// 例：struct=+0.25（ST 全多头）+ of_dir=-0.43 → 0.43<0.50 → NEUTRAL（不开 SHORT）
 		// 例：struct=+0.25 + of_dir=-0.55 → 0.55≥0.50 → 允许 SHORT（真正的反转信号）
+		StructProtectMin:  0.15, // struct_dir 低于此值视为噪声，不触发 STRUCT_PROTECT
 		StructOverrideMin: 0.50,
+
+		// 宏观+OF 双重反向：禁止"结构孤军 LONG"
+		// 当 plan_side=LONG 且宏观看空且 of_dir < -0.25 时，强制 NEUTRAL
+		// 例：SOL struct=+0.66, of=-0.37, macro=bearish → 0.37>0.25 → NEUTRAL（消除无效噪声）
+		// 例：ETH struct=+0.70, of=-0.12, macro=bearish → 0.12<0.25 → 允许（弱 OF 不阻断）
+		OFMacroFloor: 0.25,
 
 		// 归一化尺度
 		CVDFallbackScale: 1e6,

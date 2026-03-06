@@ -297,12 +297,13 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 
 	// ========== Step C+: 结构方向保护 ==========
 	// 当裁决方向与结构方向冲突时，要求 |of_dir| 达到 StructOverrideMin 才允许逆势开仓
-	// 设计语义：逆结构开仓是高风险行为，需要强 OF 信号（≥0.50）作为支撑
+	// 前置条件：abs(structDir) >= StructProtectMin（排除噪声级别的结构信号，如 +0.02）
 	// 例：struct=+0.25（ST 全多头）+ of_dir=-0.43 + side=SHORT
 	//   → abs(-0.43)=0.43 < 0.50 → STRUCT_PROTECT → side=NEUTRAL
-	// 例：struct=+0.25 + of_dir=-0.55 + side=SHORT
-	//   → abs(-0.55)=0.55 ≥ 0.50 → 允许，真正的 OF 驱动反转
-	if side != SideNeutral && sign(structDir) != 0 && sign(structDir) != signSide(side) {
+	// 例：struct=+0.02（通道平坦噪声）+ of_dir=-0.48 + side=SHORT
+	//   → abs(struct)=0.02 < StructProtectMin=0.15 → 不触发保护 → SHORT 正常放行
+	if side != SideNeutral && abs(structDir) >= cfg.StructProtectMin &&
+		sign(structDir) != signSide(side) {
 		if abs(ofDir) < cfg.StructOverrideMin {
 			flags = append(flags, "STRUCT_PROTECT")
 			side = SideNeutral
@@ -310,6 +311,29 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 				blockEntry = true
 				blockReason = "STRUCT_PROTECT"
 			}
+		}
+	}
+
+	// ========== Step C++: 宏观+OF 双重反向保护 ==========
+	// 当 plan_side=LONG 且宏观看空（macroSign<0，macroStrength>0.50）且 of_dir < -OFMacroFloor 时，
+	// 禁止"结构孤军 LONG"——这类信号三个反向（宏观+OF+意图），仅凭通道/ST 结构开多风险极高
+	// 例：SOL struct=+0.66, of=-0.37, macro=bearish_distribution → NEUTRAL（AI 必拒，提前过滤）
+	// 例：ETH struct=+0.70, of=-0.12, macro=bearish → of=-0.12 > -0.25 → 允许（OF 尚弱）
+	// 对称保护（SHORT 方向同理）：plan_side=SHORT + macro 看多 + of_dir > OFMacroFloor → NEUTRAL
+	if side == SideLong && macroSign < 0 && ofDir < -cfg.OFMacroFloor && macroStrength > 0.50 {
+		flags = append(flags, "OF_MACRO_PROTECT")
+		side = SideNeutral
+		if !blockEntry {
+			blockEntry = true
+			blockReason = "OF_MACRO_PROTECT"
+		}
+	}
+	if side == SideShort && macroSign > 0 && ofDir > cfg.OFMacroFloor && macroStrength > 0.50 {
+		flags = append(flags, "OF_MACRO_PROTECT")
+		side = SideNeutral
+		if !blockEntry {
+			blockEntry = true
+			blockReason = "OF_MACRO_PROTECT"
 		}
 	}
 
