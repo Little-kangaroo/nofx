@@ -245,10 +245,12 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	// 超级趋势多时间框架共识自适应权重
 	// 当 15m/30m/4h 超级趋势高度一致时（≥2/3 同向），增加结构方向权重
 	// 防止强牛市/熊市中短期 OF 反向信号独霸方向，导致系统逆势交易
-	// consensus=0.67(2/3一致): extraST≈+0.08; consensus=1.0(3/3一致): extraST=+0.50
+	// consensus=0.67(2/3一致): extraST≈+0.09; consensus=1.0(3/3一致): extraST=+0.4375
 	// wOF 最低降至 0.35（wST 最高升至 0.65），使结构在趋势一致时真正主导方向
+	// 注意：ofDegraded 时跳过此调整——wOF=0.30 已比 SUPERTREND 下限 0.35 更保守，
+	//       若允许执行，clamp(lo=0.35, hi=0.30) 会把 wOF 从 0.30 错误地升至 0.35（反效果）
 	stConsensus := SupertrendConsensus(in.MTF)
-	if abs(stConsensus) >= 0.60 && abs(structDir) >= 0.20 {
+	if !ofDegraded && abs(stConsensus) >= 0.60 && abs(structDir) >= 0.20 {
 		extraST := 0.50 * (abs(stConsensus) - 0.60) / 0.40
 		wOF = clamp(wOF-extraST, 0.35, wOF)
 		wST = 1 - wOF
@@ -358,8 +360,13 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 			conf *= 0.75
 		} else if !StrongCounterexample(in, wallSign, flags) {
 			// 检查是否满足强反例条件
-			blockEntry = true
-			blockReason = "MACRO_OPPOSE"
+			// 保留首个 blockReason（优先显示最早触发的封锁原因，如 SPOOF_HIGH）
+			if !blockEntry {
+				blockEntry = true
+				blockReason = "MACRO_OPPOSE"
+			} else {
+				blockEntry = true // 确保已封锁
+			}
 			flags = append(flags, "MACRO_OPPOSE_BLOCK")
 		} else {
 			// 满足强反例，放行但降级
@@ -374,8 +381,13 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 		dominantDir := DominantDirMap(in.Orderflow.Macro.DominantDirection)
 		if dominantDir != 0 && sign(dominantDir) != signSide(side) {
 			if !StrongCounterexample(in, wallSign, flags) {
-				blockEntry = true
-				blockReason = "MACRO_OPPOSE"
+				// 保留首个 blockReason（优先显示最早触发的封锁原因）
+				if !blockEntry {
+					blockEntry = true
+					blockReason = "MACRO_OPPOSE"
+				} else {
+					blockEntry = true
+				}
 				flags = append(flags, "MACRO_OPPOSE_BLOCK")
 			} else {
 				flags = append(flags, "MACRO_OPPOSE_BUT_EXCEPT")

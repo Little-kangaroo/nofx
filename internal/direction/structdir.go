@@ -223,11 +223,16 @@ func channelSign(direction, position string, priceRatio float64) float64 {
 // vpvrTieBreak VPVR tie-break 逻辑
 // 更靠近 VAL（价值区下沿）-> 看涨 +0.10
 // 更靠近 VAH（价值区上沿）-> 看跌 -0.10
+// 修复：完全对称位置（价格处于价值区中点）返回 0，避免系统性空头偏差
 func vpvrTieBreak(v VPVR) float64 {
 	nearVAH := 1.0 / (1.0 + abs(v.DistToVAHATR))
 	nearVAL := 1.0 / (1.0 + abs(v.DistToVALATR))
 
-	if nearVAL > nearVAH {
+	diff := nearVAL - nearVAH
+	if abs(diff) < 0.05 { // 接近中点（距离差 < 5%）：无偏置，返回中立
+		return 0.0
+	}
+	if diff > 0 {
 		return 0.10
 	}
 	return -0.10
