@@ -45,8 +45,13 @@ func DefaultConfig() Config {
 		MinOverallScore: 0.60, // 0.65 → 0.60（BTC连续OF_STALE，阈值偏高于真实数据质量差异）
 		MinMicroDQ:      0.50, // 0.55 → 0.50（同上）
 
-		// 欺骗风险阈值（更严格的检测）
-		SpoofHard: 0.75, // 从 0.80 降低到 0.75
+		// 欺骗风险阈值
+		// SpoofHard 从 0.75 回调至 0.80：与 MinOverallScore 调整逻辑一致——
+		// BTC/ETH 主流币 spoofing_risk 系统性偏高（触发值 0.76-0.89），
+		// 是订单簿大量挂单的正常特征，而非真实欺骗更强烈；
+		// 过低的 0.75 阈值错误屏蔽了 7/17 条 A/B 级信号（conf≥0.69）。
+		// 0.80+ 才是真正高危的欺骗风险。
+		SpoofHard: 0.80, // 0.75 → 0.80（与主流币订单簿特征匹配）
 		SpoofSoft: 0.60,
 
 		// 流动性阈值
