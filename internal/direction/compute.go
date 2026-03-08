@@ -22,7 +22,16 @@ import "strings"
 // fullyStale=true  → 数据完全缺失，无法计算任何 OF 信号，必须返回 UNKNOWN
 // partialStale=true → 状态/评分异常，但底层数据存在，降级为结构主导模式继续计算
 func ofStaleLevel(of Orderflow, cfg Config, flags *[]string) (fullyStale bool, partialStale bool) {
-	// 硬失效：盘口数据为零 —— 无法计算 OB/CVD，真正无数据
+	// 软失效优先：状态异常时直接降级为结构主导，不得被后续 LiquidityScore=0 升级为 fullStale
+	// 场景：BTC/ETH 盘口 WebSocket 断联 → LiquidityScore=0 + Status=异常
+	//   旧逻辑：LiquidityScore<=0 先判 → fullStale → UNKNOWN（错误，丢失结构信号）
+	//   新逻辑：Status!=正常 先判 → partialStale → 结构主导（ob_sign=0，CVD/OI/struct 仍可用）
+	if of.Quality.Status != "正常" {
+		*flags = append(*flags, "OF_STATUS_BAD")
+		return false, true
+	}
+
+	// 硬失效：状态正常但盘口数据为零 —— 真正无数据（非断联，而是流动性极差）
 	if of.OB.LiquidityScore <= 0 {
 		*flags = append(*flags, "OF_LIQ_ZERO")
 		return true, false
@@ -30,13 +39,6 @@ func ofStaleLevel(of Orderflow, cfg Config, flags *[]string) (fullyStale bool, p
 	if of.OB.AskPressure == 0 && of.OB.BidPressure == 0 {
 		*flags = append(*flags, "OF_PRESSURE_ZERO")
 		return true, false
-	}
-
-	// 软失效：状态异常但盘口数据存在 —— 降级继续计算（结构主导）
-	// 历史观察：ETHUSDT 持续 OF_STATUS_BAD，但 CVD/OB 数据实际可用
-	if of.Quality.Status != "正常" {
-		*flags = append(*flags, "OF_STATUS_BAD")
-		return false, true
 	}
 
 	// 软失效：整体评分低

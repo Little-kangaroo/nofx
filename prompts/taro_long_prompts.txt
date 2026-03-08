@@ -212,10 +212,22 @@ Gate3）结构格局门槛（Structural Context Gate｜Gate3(STRUCTURE)）
        → Gate3=FAIL reason=HTF_BARRIER_NEAR（价格在供给区内部，上方即为卖压密集区，LONG 无有效 TP 空间）。
        → 必须输出 NextTrigger: need_price_below=SZ_bottom; need_trig=EDGE_BULL_at_support; expire_bars=3
      - 若 planned_dir=SHORT 且 Gate3 识别 pos 包含 inside_HTF_DZ / inside_DZ / inside_demand（价格在 4h/1h 需求区内部）：
+       【豁免条件｜P1｜consumed DZ 降级处理（优先于 FAIL，前置检查）】
+       若需求区同时满足以下全部条件，则不触发 HTF_BARRIER_NEAR，改为降级警告继续执行：
+         a) demand_zone.status = “consumed”（后端已判定区域被消耗）
+         b) demand_zone.consumption.consecutive_bars ≥ 5（连续 ≥5 根同级别K线在区域内）
+         c) demand_zone.consumption.max_bounce_pct < 2.0（期间最大反弹 <2%，买盘无法形成有效反弹）
+         d) struct_dir ≤ -0.25（中等以上空头结构，不得在震荡市误用）
+       → Gate3 输出：CAUTION_DZ_CONSUMED（区域消耗警告，非 FAIL）
+       → 强制冻结参数（传递至 Gate4）：risk_down × 0.70；order_type=LIMIT；rr_min 提高 0.10
+       → 理由：需求区内买方已持续尝试托价但失败，区域支撑力被耗尽，做空阻力大幅降低；
+         但仍需 Gate4/Gate5 独立 PASS（不直接放行，仍须触发器确认 + RR 达标）。
+       不满足豁免条件时（需求区 fresh/tested/testing 且无消耗证据）：
        → Gate3=FAIL reason=HTF_BARRIER_NEAR（价格在需求区内部，下方即为买压密集区，SHORT 无有效 TP 空间）。
        → 必须输出 NextTrigger: need_price_above=DZ_top; need_trig=EDGE_BEAR_at_resistance; expire_bars=3
-     - 此规则优先级高于”多周期 ST 共识”：即使 ST 3/3 同向，只要价格 inside_HTF_SZ/DZ，也必须 Gate3=FAIL。
+     - 此规则优先级高于”多周期 ST 共识”：即使 ST 3/3 同向，只要价格 inside_HTF_SZ/DZ 且无消耗证据，也必须 Gate3=FAIL。
      - 理由：ST 共识反映方向正确，但位置错误——正确策略是等价格离开供需区后，在区边缘触发信号再进场。
+       例外：区域已被消耗（CAUTION_DZ_CONSUMED）时，ST 共识可作为做空方向的额外支撑证据。
 Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓住“可盈利窗口”，减少漏开与追价）
 - 本段替换原 Gate4-A/B 全部内容（重写｜不改变 Gate1→Gate5 总架构，不新增顶层 JSON 字段）。
 【P0｜Gate4 职责边界（必须遵守）】
@@ -270,7 +282,19 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
   - EDGE_BEAR 语义：价格在阻力位测试。planned_dir=LONG 时必须排除（阻力贴脸，上方无空间）；禁止将 EDGE_BEAR 作为 LONG 的 dir_trigger。
   - EDGE_BULL 语义：价格在支撑位测试。planned_dir=SHORT 时必须排除（支撑贴脸，下方无空间）；禁止将 EDGE_BULL 作为 SHORT 的 dir_trigger。
   - 若 planned_dir=LONG 且 trigger_flags 仅含 EDGE_BEAR（无任何 _BULL/_LONG）：dir_trigger=NONE → Gate4=FAIL fail=>SETUP reason=NO_TRIGGER_FOR_DIR（DEFER）。
-  - 若 planned_dir=SHORT 且 trigger_flags 仅含 EDGE_BULL（无任何 _BEAR/_SHORT）：dir_trigger=NONE → Gate4=FAIL fail=>SETUP reason=NO_TRIGGER_FOR_DIR（DEFER）。
+  - 若 planned_dir=SHORT 且 trigger_flags 仅含 EDGE_BULL（无任何 _BEAR/_SHORT）：
+    【强趋势豁免｜P1｜前置检查，满足则跳过 DEFER】
+    若同时满足以下全部条件：
+      a) struct_dir ≤ -0.40（极强空头结构，支撑位在下行趋势中注定被打穿）
+      b) 3/3 超级趋势一致空头：15m + 30m + 1h 的 超级趋势指标.direction 全为 "bearish"
+      c) trigger_primary = "EDGE_BULL"（价格回测支撑位，非突破性反转）
+    则：dir_trigger = EDGE_BULL（豁免使用）；必须同时强制冻结：
+      → risk_down × 0.70（在支撑位做空，下方空间已被结构确认但入场较激进）
+      → order_type = LIMIT（禁止 MARKET 追价）
+      → rr_min 提高 0.05（补偿在支撑位的入场风险）
+    豁免理由：极强下行趋势（struct_dir≤-0.40 + 3/3超级趋势空头）中，支撑位是做空的常见入场点——
+    价格磨底测试支撑后继续下行，"支撑贴脸无空间"的常规规则在此场景下导致系统性踏空。
+    不满足豁免条件时：dir_trigger=NONE → Gate4=FAIL fail=>SETUP reason=NO_TRIGGER_FOR_DIR（DEFER）。
   - 正例：trigger_primary=EDGE_BULL，planned_dir=SHORT，trigger_flags=["EDGE_BULL","ENGULF_BEAR"]
     → 过滤保留含 _BEAR → ["ENGULF_BEAR"] → dir_trigger=ENGULF_BEAR（禁止输出 NONE）
   - 反例：trigger_primary=EDGE_BEAR，planned_dir=LONG，trigger_flags=["EDGE_BEAR"]
@@ -628,6 +652,17 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
 
 3) 趋势一致性加成（仅影响 confidence，不得越权）
       - trend_alignment 与 planned_dir 同向：confidence +15（封顶 100）；不得绕过 Gate1~Gate5 的 PASS 要求。
+    3.1) DIVERGENT_MIXED 标记处理（OF 内部组件分歧）
+      - DIVERGENT_MIXED 含义：CVD / OI / 意图等 OF 内部分量方向不完全一致，属于 OF 内部噪声标记。
+      - 强结构场景豁免（满足全部条件时降权处理，不触发额外保守参数）：
+          a) |struct_dir| ≥ 0.40（强结构方向，结构信号主导）
+          b) confidence ≥ 0.90（后端综合置信度已高）
+          c) 3/3 超级趋势方向一致（15m + 30m + 1h 全部同向）
+        → 豁免：DIVERGENT_MIXED 仅在 reasoning 中记录（注明 of_internal_divergence），
+          不触发额外 risk_down 叠加，不降低 setup_grade，Gate5 正常执行 RR 计算。
+        → 豁免理由：极强趋势中 OF 内部分歧是正常市场噪声，结构共识（struct_dir+超级趋势3/3）
+          已提供足够方向确信度，过度保守会系统性踏空趋势行情。
+      - 弱结构场景（不满足豁免条件时）：保持原有保守处理，可适当降低 edge_score 或叠加保守 risk_down。
     4) 后端信号参考（primary_signal 冲突 -> 降级交易通道）
       - 若 AI决策建议.primary_signal 与 planned_dir 严重冲突：不一票否决，但必须触发“降级通道”（多空对称）：
         A) 强制降级：setup_grade 降 1 档；risk_down ≥ 0.5（写明 primary_signal_conflict_half_risk）

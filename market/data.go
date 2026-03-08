@@ -1595,6 +1595,15 @@ func extractCompactSupplyDemand(data *SupplyDemandData, symbol string) map[strin
 			"status":   zone.Status,
 		}
 
+		// 区域消耗数据（仅在有连续停留记录时输出，减少token）
+		if zone.ConsecutiveBarsInZone > 0 {
+			zoneInfo["consumption"] = map[string]interface{}{
+				"consecutive_bars": zone.ConsecutiveBarsInZone,
+				"max_bounce_pct":   FormatByDataTypeAndSymbol(zone.MaxBounceInZone, "percentage", symbol),
+				"is_consumed":      zone.Status == StatusConsumed,
+			}
+		}
+
 		// 添加上下文评分
 		if zone.Context != nil {
 			zoneInfo["ctx"] = map[string]interface{}{

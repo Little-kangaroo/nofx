@@ -199,16 +199,34 @@ func (wm *WSManager) handleConnection(wsConn *WSConnection) {
 	for {
 		if err := wm.connectAndListen(wsConn); err != nil {
 			log.Printf("❌ WebSocket连接错误 %s: %v", wsConn.symbol, err)
-			
+
 			wsConn.reconnectCount++
-			if wsConn.reconnectCount >= wsConn.maxReconnects {
-				log.Printf("❌ 达到最大重连次数，停止重连: %s", wsConn.symbol)
-				break
+
+			// 计算等待时间：指数退避，上限5分钟
+			// 第1-10次：30s（BaseInterval）
+			// 第11次起：60s → 120s → 240s → 300s（封顶）
+			waitDuration := wm.config.ReconnectInterval
+			if wsConn.reconnectCount > wsConn.maxReconnects {
+				// 超出常规重连次数后进入指数退避阶段，但永不放弃
+				extraAttempts := wsConn.reconnectCount - wsConn.maxReconnects
+				backoff := time.Duration(1<<uint(extraAttempts)) * wm.config.ReconnectInterval
+				if backoff > 5*time.Minute {
+					backoff = 5 * time.Minute
+				}
+				waitDuration = backoff
+				log.Printf("🔄 [指数退避] %s 第%d次重试，等待%.0f秒后重连（永不放弃）",
+					wsConn.symbol, wsConn.reconnectCount, waitDuration.Seconds())
+			} else {
+				log.Printf("🔄 尝试重连 %s (%d/%d)", wsConn.symbol, wsConn.reconnectCount, wsConn.maxReconnects)
 			}
 
-			// 等待重连
-			time.Sleep(wm.config.ReconnectInterval)
-			log.Printf("🔄 尝试重连 %s (%d/%d)", wsConn.symbol, wsConn.reconnectCount, wsConn.maxReconnects)
+			time.Sleep(waitDuration)
+		} else {
+			// 连接成功，重置重连计数器
+			if wsConn.reconnectCount > 0 {
+				log.Printf("✅ [重连成功] %s 在第%d次重试后恢复连接，重置计数器", wsConn.symbol, wsConn.reconnectCount)
+				wsConn.reconnectCount = 0
+			}
 		}
 
 		// 检查是否需要停止

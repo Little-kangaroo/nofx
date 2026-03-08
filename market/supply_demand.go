@@ -1186,10 +1186,123 @@ func (sda *SupplyDemandAnalyzer) updateZoneStatuses(zones []*SupplyDemandZone, k
 		if sda.config.EnableValidation {
 			zone.Validation = sda.validateZoneReaction(zone, klines)
 		}
+
+		// ===== 区域消耗检测 =====
+		// 当价格连续多根K线困在区域内而无有效弹出时，说明买卖力量被耗尽（区域被消化）
+		// 此时做空（需求区）或做多（供给区）的阻力已大幅降低，可降级处理而非硬封锁
+		sda.updateZoneConsumption(zone, klines)
 	}
 }
 
-// isZoneBroken 检查区域是否被突���
+// updateZoneConsumption 计算区域消耗状态
+// 从最近一根K线向前遍历，统计连续处于区域内的K线数及期间最大有效反弹幅度。
+// 触发条件（默认）：
+//   - 需求区：连续 >= 5 根K线在区域内 且 向上最大反弹 < 2.0% → StatusConsumed
+//   - 供给区：连续 >= 5 根K线在区域内 且 向下最大回落 < 2.0% → StatusConsumed
+//
+// 消耗状态表示：买方（需求区）或卖方（供给区）虽尝试守住区域但失败，
+// 区域保护能力已大幅下降，Gate3 可降级处理而非硬拒绝。
+func (sda *SupplyDemandAnalyzer) updateZoneConsumption(zone *SupplyDemandZone, klines []Kline) {
+	// 仅对 testing/tested/weakened 状态的活跃区域进行消耗检测
+	// broken/expired/consumed 区域跳过（已处理过或已失效）
+	if !zone.IsActive || zone.IsBroken {
+		return
+	}
+	if zone.Status == StatusBroken || zone.Status == StatusExpired {
+		return
+	}
+
+	// 消耗检测阈值
+	const (
+		consumptionBarsThreshold  = 5   // 连续在区域内的K线数阈值
+		consumptionBounceMaxPct   = 2.0 // 最大允许的有效反弹幅度%
+	)
+
+	if len(klines) == 0 {
+		return
+	}
+
+	// 找到区域进入点：从最近K线向前找到第一次进入区域的位置
+	// 连续计数：只要有一根K线脱离区域就中断
+	consecutiveBars := 0
+	maxBouncePct := 0.0
+
+	// 找区域首次进入K线的收盘价作为参考基准价
+	entryClose := 0.0
+
+	for i := len(klines) - 1; i >= 0; i-- {
+		k := klines[i]
+		inZone := sda.priceInZone(k.High, k.Low, zone)
+		if !inZone {
+			break // 价格脱离区域，连续中断
+		}
+		consecutiveBars++
+
+		// 记录最早进入K线的收盘价作为基准
+		entryClose = k.Close
+
+		// 计算本K线的有效反弹幅度（相对于区域边界的弹出程度）
+		var bouncePct float64
+		if zone.Type == DemandZone && zone.LowerBound > 0 {
+			// 需求区：向上反弹 = (High - LowerBound) / LowerBound * 100
+			bouncePct = (k.High - zone.LowerBound) / zone.LowerBound * 100
+		} else if zone.Type == SupplyZone && zone.UpperBound > 0 {
+			// 供给区：向下回落 = (UpperBound - Low) / UpperBound * 100
+			bouncePct = (zone.UpperBound - k.Low) / zone.UpperBound * 100
+		}
+		if bouncePct > maxBouncePct {
+			maxBouncePct = bouncePct
+		}
+	}
+
+	zone.ConsecutiveBarsInZone = consecutiveBars
+
+	// 计算相对于入场价的最大反弹（更直观的有效反弹衡量）
+	if entryClose > 0 && consecutiveBars > 0 {
+		lastK := klines[len(klines)-1]
+		var priceBouncePct float64
+		if zone.Type == DemandZone {
+			// 找到连续区间内最高价
+			highInZone := lastK.High
+			for i := len(klines) - consecutiveBars; i < len(klines); i++ {
+				if i >= 0 && klines[i].High > highInZone {
+					highInZone = klines[i].High
+				}
+			}
+			if entryClose > 0 {
+				priceBouncePct = (highInZone - entryClose) / entryClose * 100
+			}
+		} else {
+			// 供给区：找到连续区间内最低价
+			lowInZone := lastK.Low
+			for i := len(klines) - consecutiveBars; i < len(klines); i++ {
+				if i >= 0 && klines[i].Low < lowInZone {
+					lowInZone = klines[i].Low
+				}
+			}
+			if entryClose > 0 {
+				priceBouncePct = (entryClose - lowInZone) / entryClose * 100
+			}
+		}
+		// 取两种计量的最大值（更宽松，避免误判为消耗）
+		if priceBouncePct > maxBouncePct {
+			maxBouncePct = priceBouncePct
+		}
+	}
+
+	zone.MaxBounceInZone = maxBouncePct
+
+	// 判断是否达到消耗状态
+	if consecutiveBars >= consumptionBarsThreshold && maxBouncePct < consumptionBounceMaxPct {
+		if zone.Status != StatusConsumed {
+			zone.Status = StatusConsumed
+			log.Printf("🔥 [区域消耗] %s 区域%s已被消耗: 连续%d根K线在区内，最大反弹仅%.2f%%（<%.1f%%）",
+				zone.Type, zone.ID, consecutiveBars, maxBouncePct, consumptionBounceMaxPct)
+		}
+	}
+}
+
+// isZoneBroken 检查区域是否被突破
 func (sda *SupplyDemandAnalyzer) isZoneBroken(zone *SupplyDemandZone, klines []Kline, currentPrice float64) bool {
 	threshold := sda.config.BreakoutThreshold
 

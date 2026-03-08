@@ -856,6 +856,11 @@ type SupplyDemandZone struct {
 	MaxPenetrationPct float64 `json:"max_penetration_pct"` // 最大穿透深度百分比
 	DeepTouchCount    int     `json:"deep_touch_count"`    // 深度触及次数 (穿透>50%)
 	LastPenetrationPct float64 `json:"last_penetration_pct"` // 最近一次穿透深度
+
+	// ===== 区域消耗检测字段 =====
+	// 当价格长期困在区域内而无有效方向弹出时，区域内买卖力量被耗尽
+	ConsecutiveBarsInZone int     `json:"consecutive_bars_in_zone"` // 当前连续在区域内的K线数
+	MaxBounceInZone       float64 `json:"max_bounce_in_zone"`       // 进入区域后的最大反弹幅度%（需求区向上反弹，供给区向下反弹）
 }
 
 // ZoneType 区域类型
@@ -916,6 +921,7 @@ const (
 	StatusTested    ZoneStatus = "tested"    // 已测试：已触碰但未破坏
 	StatusTesting   ZoneStatus = "testing"   // 正在测试：价格刺破但未达到突破阈值（SFP/假突破）
 	StatusWeakened  ZoneStatus = "weakened"  // 已弱化：触碰>3次或深度穿透>50%
+	StatusConsumed  ZoneStatus = "consumed"  // 已消耗：连续多根K线在区域内但无有效反弹，买卖盘被耗尽
 	StatusBroken    ZoneStatus = "broken"    // 已突破：失效
 	StatusExpired   ZoneStatus = "expired"   // 已过期：时间过长失效
 )
