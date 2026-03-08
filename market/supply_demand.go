@@ -1225,68 +1225,48 @@ func (sda *SupplyDemandAnalyzer) updateZoneConsumption(zone *SupplyDemandZone, k
 	// 找到区域进入点：从最近K线向前找到第一次进入区域的位置
 	// 连续计数：只要有一根K线脱离区域就中断
 	consecutiveBars := 0
-	maxBouncePct := 0.0
 
-	// 找区域首次进入K线的收盘价作为参考基准价
+	// 找区域首次进入K线的收盘价作为参考基准价（用于后续反弹计算）
 	entryClose := 0.0
 
 	for i := len(klines) - 1; i >= 0; i-- {
 		k := klines[i]
-		inZone := sda.priceInZone(k.High, k.Low, zone)
-		if !inZone {
+		if !sda.priceInZone(k.High, k.Low, zone) {
 			break // 价格脱离区域，连续中断
 		}
 		consecutiveBars++
-
-		// 记录最早进入K线的收盘价作为基准
-		entryClose = k.Close
-
-		// 计算本K线的有效反弹幅度（相对于区域边界的弹出程度）
-		var bouncePct float64
-		if zone.Type == DemandZone && zone.LowerBound > 0 {
-			// 需求区：向上反弹 = (High - LowerBound) / LowerBound * 100
-			bouncePct = (k.High - zone.LowerBound) / zone.LowerBound * 100
-		} else if zone.Type == SupplyZone && zone.UpperBound > 0 {
-			// 供给区：向下回落 = (UpperBound - Low) / UpperBound * 100
-			bouncePct = (zone.UpperBound - k.Low) / zone.UpperBound * 100
-		}
-		if bouncePct > maxBouncePct {
-			maxBouncePct = bouncePct
-		}
+		entryClose = k.Close // 不断向前推，最终为最早进入时的收盘价
 	}
 
 	zone.ConsecutiveBarsInZone = consecutiveBars
 
-	// 计算相对于入场价的最大反弹（更直观的有效反弹衡量）
+	// 计算进入区域后的有效反弹幅度
+	// 使用"入场价相对法"：从连续区间最早K线的收盘价出发，计算期间最大反弹%
+	// 不使用"区域底部绝对法"（boundary-based），该方法对宽区间会系统性虚高反弹值
+	maxBouncePct := 0.0
 	if entryClose > 0 && consecutiveBars > 0 {
-		lastK := klines[len(klines)-1]
-		var priceBouncePct float64
+		startIdx := len(klines) - consecutiveBars
+		if startIdx < 0 {
+			startIdx = 0
+		}
 		if zone.Type == DemandZone {
-			// 找到连续区间内最高价
-			highInZone := lastK.High
-			for i := len(klines) - consecutiveBars; i < len(klines); i++ {
-				if i >= 0 && klines[i].High > highInZone {
+			// 需求区：从进入时收盘价，期间最高价是否有效回升？
+			highInZone := klines[startIdx].High
+			for i := startIdx; i < len(klines); i++ {
+				if klines[i].High > highInZone {
 					highInZone = klines[i].High
 				}
 			}
-			if entryClose > 0 {
-				priceBouncePct = (highInZone - entryClose) / entryClose * 100
-			}
+			maxBouncePct = max(0, (highInZone-entryClose)/entryClose*100)
 		} else {
-			// 供给区：找到连续区间内最低价
-			lowInZone := lastK.Low
-			for i := len(klines) - consecutiveBars; i < len(klines); i++ {
-				if i >= 0 && klines[i].Low < lowInZone {
+			// 供给区：从进入时收盘价，期间最低价是否有效下跌？
+			lowInZone := klines[startIdx].Low
+			for i := startIdx; i < len(klines); i++ {
+				if klines[i].Low < lowInZone {
 					lowInZone = klines[i].Low
 				}
 			}
-			if entryClose > 0 {
-				priceBouncePct = (entryClose - lowInZone) / entryClose * 100
-			}
-		}
-		// 取两种计量的最大值（更宽松，避免误判为消耗）
-		if priceBouncePct > maxBouncePct {
-			maxBouncePct = priceBouncePct
+			maxBouncePct = max(0, (entryClose-lowInZone)/entryClose*100)
 		}
 	}
 
