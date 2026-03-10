@@ -58,9 +58,10 @@ export function RegisterPage() {
       setOtpSecret(result.otpSecret || '');
       setQrCodeURL(result.qrCodeURL || '');
       setStep('setup-otp');
-    } else {
+    } else if (!result.success) {
       setError(result.message || t('registrationFailed', language));
     }
+    // else: success without userID = OTP已关闭，AuthContext已完成登录并跳转
     
     setLoading(false);
   };

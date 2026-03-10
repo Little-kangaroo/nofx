@@ -78,6 +78,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             requiresOTP: true,
             message: data.message,
           };
+        } else if (data.token) {
+          // OTP已关闭，后端直接返回token，完成登录
+          const userInfo = { id: data.user_id, email: data.email };
+          setToken(data.token);
+          setUser(userInfo);
+          localStorage.setItem('auth_token', data.token);
+          localStorage.setItem('auth_user', JSON.stringify(userInfo));
+          window.history.pushState({}, '', '/');
+          window.dispatchEvent(new PopStateEvent('popstate'));
+          return { success: true, message: data.message };
         }
       } else {
         return { success: false, message: data.error };
@@ -107,6 +117,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await response.json();
 
       if (response.ok) {
+        if (data.token) {
+          // OTP已关闭，后端直接返回token，注册即登录
+          const userInfo = { id: data.user_id, email: data.email };
+          setToken(data.token);
+          setUser(userInfo);
+          localStorage.setItem('auth_token', data.token);
+          localStorage.setItem('auth_user', JSON.stringify(userInfo));
+          window.history.pushState({}, '', '/');
+          window.dispatchEvent(new PopStateEvent('popstate'));
+          return { success: true, message: data.message };
+        }
         return {
           success: true,
           userID: data.user_id,
