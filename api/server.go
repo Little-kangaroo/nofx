@@ -1258,21 +1258,24 @@ func (s *Server) handleRegister(c *gin.Context) {
 		return
 	}
 
-	// 生成OTP密钥
-	otpSecret, err := auth.GenerateOTPSecret()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "OTP密钥生成失败"})
-		return
+	// OTP已关闭时跳过密钥生成
+	var otpSecret string
+	if auth.IsOTPEnabled() {
+		otpSecret, err = auth.GenerateOTPSecret()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "OTP密钥生成失败"})
+			return
+		}
 	}
 
-	// 创建用户（未验证OTP状态）
+	// 创建用户（OTP关闭时直接标记为已验证）
 	userID := uuid.New().String()
 	user := &config.User{
 		ID:           userID,
 		Email:        req.Email,
 		PasswordHash: passwordHash,
 		OTPSecret:    otpSecret,
-		OTPVerified:  false,
+		OTPVerified:  !auth.IsOTPEnabled(),
 	}
 
 	err = s.database.CreateUser(user)
@@ -1293,15 +1296,34 @@ func (s *Server) handleRegister(c *gin.Context) {
 		}
 	}
 
-	// 返回OTP设置信息
-	qrCodeURL := auth.GetOTPQRCodeURL(otpSecret, req.Email)
-	c.JSON(http.StatusOK, gin.H{
-		"user_id":     userID,
-		"email":       req.Email,
-		"otp_secret":  otpSecret,
-		"qr_code_url": qrCodeURL,
-		"message":     "请使用Google Authenticator扫描二维码并验证OTP",
-	})
+	// 返回注册结果
+	if auth.IsOTPEnabled() {
+		// OTP已启用：返回二维码信息，需要用户扫码完成注册
+		qrCodeURL := auth.GetOTPQRCodeURL(otpSecret, req.Email)
+		c.JSON(http.StatusOK, gin.H{
+			"user_id":     userID,
+			"email":       req.Email,
+			"otp_secret":  otpSecret,
+			"qr_code_url": qrCodeURL,
+			"message":     "请使用Google Authenticator扫描二维码并验证OTP",
+		})
+	} else {
+		// OTP已关闭：直接颁发token，注册即登录
+		token, err := auth.GenerateJWT(userID, req.Email)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成token失败"})
+			return
+		}
+		if err := s.initUserDefaultConfigs(userID); err != nil {
+			log.Printf("初始化用户默认配置失败: %v", err)
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"token":   token,
+			"user_id": userID,
+			"email":   req.Email,
+			"message": "注册成功",
+		})
+	}
 }
 
 // handleCompleteRegistration 完成注册（验证OTP）
@@ -1379,6 +1401,22 @@ func (s *Server) handleLogin(c *gin.Context) {
 	// 验证密码
 	if !auth.CheckPassword(req.Password, user.PasswordHash) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "邮箱或密码错误"})
+		return
+	}
+
+	// OTP已关闭：密码验证通过后直接颁发token
+	if !auth.IsOTPEnabled() {
+		token, err := auth.GenerateJWT(user.ID, user.Email)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成token失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"token":   token,
+			"user_id": user.ID,
+			"email":   user.Email,
+			"message": "登录成功",
+		})
 		return
 	}
 

@@ -30,6 +30,7 @@ type LeverageConfig struct {
 type ConfigFile struct {
 	AdminMode          bool           `json:"admin_mode"`
 	BetaMode           bool           `json:"beta_mode"`
+	OTPEnabled         bool           `json:"otp_enabled"`
 	APIServerPort      int            `json:"api_server_port"`
 	UseDefaultCoins    bool           `json:"use_default_coins"`
 	DefaultCoins       []string       `json:"default_coins"`
@@ -69,6 +70,7 @@ func syncConfigToDatabase(database *config.Database) error {
 	configs := map[string]string{
 		"admin_mode":           fmt.Sprintf("%t", configFile.AdminMode),
 		"beta_mode":            fmt.Sprintf("%t", configFile.BetaMode),
+		"otp_enabled":          fmt.Sprintf("%t", configFile.OTPEnabled),
 		"api_server_port":      strconv.Itoa(configFile.APIServerPort),
 		"use_default_coins":    fmt.Sprintf("%t", configFile.UseDefaultCoins),
 		"coin_pool_api_url":    configFile.CoinPoolAPIURL,
@@ -261,6 +263,16 @@ func main() {
 	// 获取管理员模式配置
 	adminModeStr, _ := database.GetSystemConfig("admin_mode")
 	adminMode := adminModeStr != "false" // 默认为true
+
+	// 获取OTP验证开关配置
+	otpEnabledStr, _ := database.GetSystemConfig("otp_enabled")
+	otpEnabled := otpEnabledStr == "true" // 默认关闭
+	auth.SetOTPEnabled(otpEnabled)
+	if otpEnabled {
+		log.Printf("✓ Google Authenticator 双因素验证已启用")
+	} else {
+		log.Printf("✓ Google Authenticator 双因素验证已关闭（仅密码登录）")
+	}
 
 	// 设置JWT密钥
 	jwtSecret, _ := database.GetSystemConfig("jwt_secret")

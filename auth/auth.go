@@ -17,6 +17,9 @@ var JWTSecret []byte
 // AdminMode 管理员模式标志
 var AdminMode bool = false
 
+// OTPEnabled Google Authenticator 双因素验证开关，默认关闭
+var OTPEnabled bool = false
+
 // OTPIssuer OTP发行者名称
 const OTPIssuer = "nofxAI"
 
@@ -33,6 +36,16 @@ func SetAdminMode(enabled bool) {
 // IsAdminMode 检查是否为管理员模式
 func IsAdminMode() bool {
 	return AdminMode
+}
+
+// SetOTPEnabled 设置OTP验证开关
+func SetOTPEnabled(enabled bool) {
+	OTPEnabled = enabled
+}
+
+// IsOTPEnabled 检查OTP验证是否启用
+func IsOTPEnabled() bool {
+	return OTPEnabled
 }
 
 // Claims JWT声明
