@@ -308,6 +308,19 @@ func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) 
 		return nil, err
 	}
 
+	// 精度截断后重新校验名义价值，防止截断导致低于100 USDT
+	if price, priceErr := t.GetMarketPrice(symbol); priceErr == nil && price > 0 {
+		if actualQty, parseErr := strconv.ParseFloat(quantityStr, 64); parseErr == nil {
+			if actualQty*price < 100.0 {
+				minQty := 100.0 / price
+				if adjusted, fmtErr := t.FormatQuantity(symbol, minQty); fmtErr == nil {
+					log.Printf("  ⚠️ [MinNotional] 精度截断后名义价值不足，调整数量: %s → %s (≥100 USDT)", quantityStr, adjusted)
+					quantityStr = adjusted
+				}
+			}
+		}
+	}
+
 	// 创建市价买入订单
 	log.Printf("🌐 [Binance API] 调用: NewCreateOrderService() - Symbol=%s, Side=BUY, PositionSide=LONG, Type=MARKET, Quantity=%s", symbol, quantityStr)
 	order, err := t.client.NewCreateOrderService().
@@ -350,6 +363,19 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 	quantityStr, err := t.FormatQuantity(symbol, quantity)
 	if err != nil {
 		return nil, err
+	}
+
+	// 精度截断后重新校验名义价值，防止截断导致低于100 USDT
+	if price, priceErr := t.GetMarketPrice(symbol); priceErr == nil && price > 0 {
+		if actualQty, parseErr := strconv.ParseFloat(quantityStr, 64); parseErr == nil {
+			if actualQty*price < 100.0 {
+				minQty := 100.0 / price
+				if adjusted, fmtErr := t.FormatQuantity(symbol, minQty); fmtErr == nil {
+					log.Printf("  ⚠️ [MinNotional] 精度截断后名义价值不足，调整数量: %s → %s (≥100 USDT)", quantityStr, adjusted)
+					quantityStr = adjusted
+				}
+			}
+		}
 	}
 
 	// 创建市价卖出订单
