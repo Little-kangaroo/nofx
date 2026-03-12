@@ -158,7 +158,7 @@ func NewAutoTrader(config AutoTraderConfig, database *config.Database) (*AutoTra
 		log.Printf("🤖 [%s] 使用自定义AI API: %s (模型: %s)", config.Name, config.CustomAPIURL, config.CustomModelName)
 	} else if config.AIModel == "claude" {
 		// 使用Anthropic Claude
-		mcpClient.SetClaudeAPI(config.ClaudeKey, config.CustomModelName)
+		mcpClient.SetClaudeAPI(config.ClaudeKey, config.CustomAPIURL, config.CustomModelName)
 		if config.CustomModelName != "" {
 			log.Printf("🤖 [%s] 使用Anthropic Claude (模型: %s)", config.Name, config.CustomModelName)
 		} else {

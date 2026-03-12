@@ -198,15 +198,22 @@ func (client *Client) SetAnthropicAPI(apiURL, apiKey, modelName string) {
 	log.Printf("🔧 [MCP] API Key: %s...%s", apiKey[:4], apiKey[len(apiKey)-4:])
 }
 
-// SetClaudeAPI 设置Anthropic Claude API（官方直连）
-// customModel 为空时使用默认模型 claude-sonnet-4-6
-func (client *Client) SetClaudeAPI(apiKey string, customModel string) {
+// SetClaudeAPI 设置Anthropic Claude API
+// customURL 为空时使用官方地址，customModel 为空时使用默认模型 claude-sonnet-4-6
+func (client *Client) SetClaudeAPI(apiKey string, customURL string, customModel string) {
 	client.Provider = ProviderClaude
 	client.APIKey = apiKey
-	client.BaseURL = "https://api.anthropic.com/v1/messages"
 	client.UseFullURL = true
 	client.RequestFormat = "anthropic"
 	client.Timeout = 600 * time.Second
+
+	if customURL != "" {
+		client.BaseURL = customURL
+		log.Printf("🔧 [MCP] Claude 使用自定义 BaseURL: %s", customURL)
+	} else {
+		client.BaseURL = "https://api.anthropic.com/v1/messages"
+		log.Printf("🔧 [MCP] Claude 使用默认 BaseURL: %s", client.BaseURL)
+	}
 
 	if customModel != "" {
 		client.Model = customModel
