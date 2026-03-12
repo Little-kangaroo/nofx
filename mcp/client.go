@@ -219,7 +219,7 @@ func (client *Client) SetClaudeAPI(apiKey string, customURL string, customModel 
 		client.Model = customModel
 		log.Printf("🔧 [MCP] Claude 使用自定义模型: %s", customModel)
 	} else {
-		client.Model = "claude-sonnet-4-6"
+		client.Model = "claude-opus-4-6"
 		log.Printf("🔧 [MCP] Claude 使用默认模型: %s", client.Model)
 	}
 
