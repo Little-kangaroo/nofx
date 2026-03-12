@@ -208,12 +208,8 @@ func (client *Client) SetClaudeAPI(apiKey string, customURL string, customModel 
 	client.Timeout = 600 * time.Second
 
 	if customURL != "" {
-		// 自动补全 /v1/messages 路径（用户可能只填了域名）
-		if !strings.HasSuffix(customURL, "/messages") {
-			customURL = strings.TrimRight(customURL, "/") + "/v1/messages"
-		}
-		client.BaseURL = customURL
-		log.Printf("🔧 [MCP] Claude 使用自定义 BaseURL: %s", customURL)
+		client.BaseURL = strings.TrimRight(customURL, "/")
+		log.Printf("🔧 [MCP] Claude 使用自定义 BaseURL: %s", client.BaseURL)
 	} else {
 		client.BaseURL = "https://api.anthropic.com/v1/messages"
 		log.Printf("🔧 [MCP] Claude 使用默认 BaseURL: %s", client.BaseURL)
