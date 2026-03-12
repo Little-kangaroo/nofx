@@ -668,7 +668,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                 <div className="flex items-center gap-3 md:gap-4">
                   <div className="w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center flex-shrink-0"
                        style={{
-                         background: trader.ai_model.includes('deepseek') ? '#60a5fa' : '#c084fc',
+                         background: trader.ai_model.includes('deepseek') ? '#60a5fa' : trader.ai_model.includes('claude') ? '#D97757' : '#c084fc',
                          color: '#fff'
                        }}>
                     <Bot className="w-5 h-5 md:w-6 md:h-6" />
@@ -678,7 +678,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                       {trader.trader_name}
                     </div>
                     <div className="text-xs md:text-sm truncate" style={{
-                      color: trader.ai_model.includes('deepseek') ? '#60a5fa' : '#c084fc'
+                      color: trader.ai_model.includes('deepseek') ? '#60a5fa' : trader.ai_model.includes('claude') ? '#D97757' : '#c084fc'
                     }}>
                       {getModelDisplayName(trader.ai_model.split('_').pop() || trader.ai_model)} Model • {trader.exchange_id?.toUpperCase()}
                     </div>

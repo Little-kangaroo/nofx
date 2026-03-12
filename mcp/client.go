@@ -20,6 +20,7 @@ const (
 	ProviderDeepSeek Provider = "deepseek"
 	ProviderQwen     Provider = "qwen"
 	ProviderCustom   Provider = "custom"
+	ProviderClaude   Provider = "claude"
 )
 
 // === Prompt Caching Usage 观测相关结构体 ===
@@ -195,6 +196,33 @@ func (client *Client) SetAnthropicAPI(apiURL, apiKey, modelName string) {
 	log.Printf("🔧 [MCP] BaseURL: %s", client.BaseURL)
 	log.Printf("🔧 [MCP] Model: %s", client.Model)
 	log.Printf("🔧 [MCP] API Key: %s...%s", apiKey[:4], apiKey[len(apiKey)-4:])
+}
+
+// SetClaudeAPI 设置Anthropic Claude API（官方直连）
+// customModel 为空时使用默认模型 claude-sonnet-4-6
+func (client *Client) SetClaudeAPI(apiKey string, customModel string) {
+	client.Provider = ProviderClaude
+	client.APIKey = apiKey
+	client.BaseURL = "https://api.anthropic.com/v1/messages"
+	client.UseFullURL = true
+	client.RequestFormat = "anthropic"
+	client.Timeout = 600 * time.Second
+
+	if customModel != "" {
+		client.Model = customModel
+		log.Printf("🔧 [MCP] Claude 使用自定义模型: %s", customModel)
+	} else {
+		client.Model = "claude-sonnet-4-6"
+		log.Printf("🔧 [MCP] Claude 使用默认模型: %s", client.Model)
+	}
+
+	client.CustomHeaders = map[string]string{
+		"x-api-key":         apiKey,
+		"anthropic-version": "2023-06-01",
+		"content-type":      "application/json",
+	}
+
+	log.Printf("🔧 [MCP] Claude API配置完成, Key: %s...%s", apiKey[:4], apiKey[len(apiKey)-4:])
 }
 
 // SetClient 设置完整的AI配置（高级用户）

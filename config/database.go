@@ -405,6 +405,7 @@ func (d *Database) initDefaultData() error {
 	}{
 		{"deepseek", "DeepSeek", "deepseek"},
 		{"qwen", "Qwen", "qwen"},
+		{"claude", "Claude", "claude"},
 	}
 
 	for _, model := range aiModels {

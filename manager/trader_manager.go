@@ -268,6 +268,8 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		traderConfig.QwenKey = aiModelCfg.APIKey
 	} else if aiModelCfg.Provider == "deepseek" {
 		traderConfig.DeepSeekKey = aiModelCfg.APIKey
+	} else if aiModelCfg.Provider == "claude" {
+		traderConfig.ClaudeKey = aiModelCfg.APIKey
 	} else if aiModelCfg.Provider == "custom" {
 		traderConfig.CustomAPIKey = aiModelCfg.APIKey
 	}
@@ -394,6 +396,8 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		traderConfig.QwenKey = aiModelCfg.APIKey
 	} else if aiModelCfg.Provider == "deepseek" {
 		traderConfig.DeepSeekKey = aiModelCfg.APIKey
+	} else if aiModelCfg.Provider == "claude" {
+		traderConfig.ClaudeKey = aiModelCfg.APIKey
 	} else if aiModelCfg.Provider == "custom" {
 		traderConfig.CustomAPIKey = aiModelCfg.APIKey
 	}
@@ -965,6 +969,8 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 		traderConfig.QwenKey = aiModelCfg.APIKey
 	} else if aiModelCfg.Provider == "deepseek" {
 		traderConfig.DeepSeekKey = aiModelCfg.APIKey
+	} else if aiModelCfg.Provider == "claude" {
+		traderConfig.ClaudeKey = aiModelCfg.APIKey
 	} else if aiModelCfg.Provider == "custom" {
 		traderConfig.CustomAPIKey = aiModelCfg.APIKey
 	}

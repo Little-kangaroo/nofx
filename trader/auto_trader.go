@@ -61,9 +61,10 @@ type AutoTraderConfig struct {
 	CoinPoolAPIURL string
 
 	// AI配置
-	UseQwen     bool
+	UseQwen    bool
 	DeepSeekKey string
 	QwenKey     string
+	ClaudeKey   string
 
 	// 自定义AI API配置
 	CustomAPIURL    string
@@ -155,6 +156,14 @@ func NewAutoTrader(config AutoTraderConfig, database *config.Database) (*AutoTra
 		// 使用自定义API
 		mcpClient.SetCustomAPI(config.CustomAPIURL, config.CustomAPIKey, config.CustomModelName)
 		log.Printf("🤖 [%s] 使用自定义AI API: %s (模型: %s)", config.Name, config.CustomAPIURL, config.CustomModelName)
+	} else if config.AIModel == "claude" {
+		// 使用Anthropic Claude
+		mcpClient.SetClaudeAPI(config.ClaudeKey, config.CustomModelName)
+		if config.CustomModelName != "" {
+			log.Printf("🤖 [%s] 使用Anthropic Claude (模型: %s)", config.Name, config.CustomModelName)
+		} else {
+			log.Printf("🤖 [%s] 使用Anthropic Claude", config.Name)
+		}
 	} else if config.UseQwen || config.AIModel == "qwen" {
 		// 使用Qwen (支持自定义URL和Model)
 		mcpClient.SetQwenAPIKey(config.QwenKey, config.CustomAPIURL, config.CustomModelName)
