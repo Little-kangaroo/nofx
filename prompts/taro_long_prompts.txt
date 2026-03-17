@@ -64,6 +64,28 @@
   - flags 中含 MACRO_OPPOSE_BUT_EXCEPT 时：conf 已被后端折扣 ×0.75，方向豁免已由后端验证；
     Gate2 禁止因”宏观反向”再次否决；直接继承 planned_dir := suggested_dir。
 
+【P1｜Gate2 弱结构逆势硬禁（防止 struct_dir≈0 时误开逆势单）】
+- 适用前置：has_position=0 且 block_entry=0 且 planned_dir ∈ {LONG, SHORT}
+- 硬约束（P0｜必须在 Gate2 执行，不得推迟到 Gate3/Gate4）：
+  若 |struct_dir| < 0.20：
+    - 禁止任何逆结构方向开仓：
+      * planned_dir=LONG  且 struct_dir < 0（结构偏空）→ 强制 planned_dir=NEUTRAL，block_entry=1
+      * planned_dir=SHORT 且 struct_dir > 0（结构偏多）→ 强制 planned_dir=NEUTRAL，block_entry=1
+    - reason=STRUCT_TOO_WEAK_FOR_COUNTER（|struct_dir|=<值>，结构信号不足以支撑逆结构开仓）
+    - 理由：struct_dir 接近 0 代表”无结构”状态，AI 不得将轻微正值解读为”多头背景”来支持逆势空单，
+      也不得将轻微负值解读为”空头背景”来支持逆势多单；此时应等待结构明确后再评估。
+  注意：若 planned_dir 与 struct_dir 同向（顺势），则不受此规则约束，正常继续。
+
+【P2｜Gate2 弱结构置信度上限（防止弱结构时 AI 过度自信）】
+- 适用前置：has_position=0 且 block_entry=0 且 planned_dir ∈ {LONG, SHORT}
+- 置信度压制规则（在 Gate2 输出 confidence 时强制执行）：
+  * |struct_dir| < 0.15 → confidence 上限 = 60%（输出时取 min(confidence, 0.60)）
+  * |struct_dir| < 0.25 → confidence 上限 = 70%（输出时取 min(confidence, 0.70)）
+  * |struct_dir| ≥ 0.25 → confidence 不受此规则约束
+  - 若触发压制：reasoning 必须注明 CONF_CAPPED_WEAK_STRUCT（|struct_dir|=<值>，conf 压制至 <上限>%）
+  - 例外：flags 含 SUPERTREND_CONSENSUS_ADJUST 且 |struct_dir| ≥ 0.20 时，不触发此压制
+    （SUPERTREND_CONSENSUS_ADJUST 已对 conf 做了权重再分配，属正常现象）
+
 【定义｜Gate2 输入/输出口径（SSOT）】
 - suggested_dir：direction_arbitration.plan_side（或等价字段），后端建议方向 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}。
 - planned_dir：Gate2 最终输出方向 ∈ {LONG, SHORT, NEUTRAL, UNKNOWN}，作为 Gate3~Gate5 的唯一方向口径。
@@ -205,8 +227,19 @@ Gate3）结构格局门槛（Structural Context Gate｜Gate3(STRUCTURE)）
      - 若 trade_style 计划为 HTF_swing/波段：Anchor1/Anchor2 中至少 1 个必须来自 1h 或 4h（可通过 tf/TF_bonus 证明）；
      - 若无法提供 HTF Anchor：不得做 HTF_swing；仅允许降级为 LTF_scalp（必须写 downgrade=on），否则 Gate3=FAIL（reason=NO_HTF_ANCHOR）。
   4) 反向贴脸障碍硬否决（减少”白白算到 Gate5 才失败”）：
-     - planned_dir=LONG 且 1h/4h 明确 SZ/强阻力/VAH 压制距离过近（结构空间不足）→ Gate3=FAIL reason=HTF_BARRIER_NEAR；
-     - planned_dir=SHORT 且 1h/4h 明确 DZ/强支撑/VAL 承接距离过近 → Gate3=FAIL reason=HTF_BARRIER_NEAR。
+     【P0｜量化标准（必须基于 RR 空间判断，禁止主观”感觉太近”）】
+     - 判断”距离过近”的唯一量化标准：
+       * 计算 space_R = |entry 到最近反向障碍的距离| / |entry 到合理 sl 的距离|
+       * 若 space_R < 1.5（即障碍距离不足 1.5 倍止损距离）→ 视为”过近”，触发 HTF_BARRIER_NEAR
+       * 若 space_R ≥ 1.5 → 不触发 HTF_BARRIER_NEAR，Gate3 应 PASS（有足够 RR 空间）
+       * 若无法计算 sl（ATR 缺失）：用 entry * 0.0020 作为 sl 距离估算
+     - Gate3 以 NEAR_RESISTANCE / NEAR_SUPPORT_SHORT 为由 FAIL 时，必须在 reasoning 中给出：
+       a) 障碍距离（pips 或 pct）
+       b) 估算 sl 距离
+       c) space_R 计算值
+       禁止仅凭主观判断”太近”而不给出数字依据。
+     - planned_dir=LONG 且 space_R < 1.5（1h/4h 明确 SZ/强阻力/VAH 压制）→ Gate3=FAIL reason=HTF_BARRIER_NEAR；
+     - planned_dir=SHORT 且 space_R < 1.5（1h/4h 明确 DZ/强支撑/VAL 承接）→ Gate3=FAIL reason=HTF_BARRIER_NEAR。
   5) 【P0｜价格处于 HTF 供需区内部的硬否决（防 Gate5 RR_CTX_MISSING）】：
      - 若 planned_dir=LONG 且 Gate3 识别 pos 包含 inside_HTF_SZ / inside_SZ / inside_supply（价格在 4h/1h 供给区内部）：
        → Gate3=FAIL reason=HTF_BARRIER_NEAR（价格在供给区内部，上方即为卖压密集区，LONG 无有效 TP 空间）。
@@ -256,6 +289,14 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
   2) 否则（window_state 缺失）：
      - 若 trigger_flags 为空/缺失：window := no_trigger
      - 若 trigger_flags 非空：window := in（保守允许继续；最终是否开仓由 Gate5 决定）
+  【P0｜trigger_age_bars 补充规则（防止有效触发被误判为 no_trigger）】
+  - 若 trigger_context.trigger_age_bars 存在：
+    * trigger_age_bars = 0（当前K线触发）：无论 window_state 如何，必须视为 window=in；
+      禁止以"窗口已过"为由 DEFER（当前K线触发是最新鲜的信号）
+    * trigger_age_bars ≤ 2（触发后2根K线内）且 trigger_flags 非空：视为 window=in
+    * trigger_age_bars > 2：按正常 window_state 判断（信号可能已过期）
+  - 理由：后端 trigger_age_bars=0 代表本根K线收盘时触发，是系统设计的标准触发时机；
+    AI 不得因 window_state 字段缺失或其他原因将此类信号误判为 no_trigger。
 - window 不在 "in"：
   - 若 has_position=0 且 Gate2.block_entry=0 且 Gate3=PASS：
       -> Gate4=FAIL fail=>TIME reason=DEFER（必须输出 NextTrigger + PendingSetup；见《DEFER 机制》）
@@ -417,11 +458,17 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
               - SHORT：sl > entry；且 sl 位于"主结构失效边界"之外 + buffer
               - buffer 取：max(0.25*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
               - 若无法给出满足方向正确性的 sl -> 视为 RR_CTX_MISSING（reason=RR_CTX_MISSING; detail=NO_VALID_SL）
-              【P1｜risk 下限（防止 costs_R 被极小 risk 放大）】
-              - 定义 risk_floor = max(0.30*ATR14(15m), 0.60*ATR14(5m), entry*0.0020)；若 ATR(15m) 缺失则去掉该项；若 ATR 缺失则仅用 entry*0.0020
+              【P1｜risk 下限（防止 costs_R 被极小 risk 放大 / 防止止损过紧被噪音扫出）】
+              - 定义 risk_floor = max(0.50*ATR14(5m), 0.30*ATR14(15m), entry*0.0020)；若 ATR 缺失则仅用 entry*0.0020
+                （注：ATR14(5m) 权重从 0.60 提升至 0.50 作为主要下限，确保止损距离覆盖至少半根5m K线的平均波动）
               - 若 risk < risk_floor：
-                * 对 LIMIT 候选：优先尝试 entry_candidate_2（更保守回踩）重新计算（提升 risk 与 RR 稳定性）
-                * 若仍 < risk_floor：该候选视为不可执行（reason=RISK_TOO_TIGHT），不得用于“选最优候选”
+                * 步骤1：优先尝试将 sl 扩展至 entry ± risk_floor（LONG: sl=entry-risk_floor；SHORT: sl=entry+risk_floor），
+                  重新计算 risk/reward/RR；若扩展后 sl 仍在结构失效边界之外，则使用扩展后的 sl
+                * 步骤2：若扩展后 R_clean_eval ≥ rr_min：正常继续，reasoning 注明 SL_EXPANDED_TO_ATR_FLOOR
+                * 步骤3：若扩展后 R_clean_eval < rr_min：
+                  -> 进入 C1.5 DEFER_LIMIT 流程（等待更优入场点），reasoning 注明 SL_TOO_TIGHT_DEFER
+                  -> 不得强行使用过紧止损开仓（禁止 reason=RISK_TOO_TIGHT 后直接放弃，必须先尝试 DEFER）
+                * 步骤4：若 ATR 完全缺失且无法计算 risk_floor：仅用 entry*0.0020 作为下限，并在 reasoning 注明 ATR_MISSING
           A3) tp1 生成规则（禁止把"磁铁位"当主 TP1）
               - tp1 优先取"最近反向结构/首个 Respect 障碍"的有效边界；若该障碍导致 R_clean 不足，允许跳到"第二近 Respect 障碍"（详见 E) OBSTACLE_CLUSTER 处理）：
                 * LONG：最近 supply / swing_high / SR_R / VAH/VAL 边界等（禁止 VPVR POC、区间中轴）
@@ -565,8 +612,15 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
   * 锚点：最多 2 个（优先 Anchor1/Anchor2）；必须引用 Gate3 行已出现信息；禁止新增第 3 个价位/区间。
   * 触发 T：只允许 1 项触发短码（优先 dir_trigger）；禁止枚举长列表或复述形态细节。
 - DIAG(EVAL_ONLY) 使用硬约束：
-  * 当 Gate1=PASS 且 Gate3=PASS：Gate3 必须输出 PASS 或 FAIL（禁止 DIAG）。
-  * 仅在“上游 FAIL 已锁定本次 action”的场景，允许下游 Gate3~Gate5 以 DIAG(EVAL_ONLY) 诊断占位；Gate5 reason 必须为 SKIP_UPSTREAM_FAIL。
+  * 当 Gate1=PASS 且 Gate2=PASS（planned_dir∈{LONG,SHORT} 且 block_entry=0）：
+    Gate3 必须输出明确的 PASS 或 FAIL，禁止任何形式的 DIAG(EVAL_ONLY)。
+    【P0｜禁止 SKIP_UNKNOWN 逃避行为】：
+    - Gate3 禁止以 DIAG(EVAL_ONLY) reason=SKIP_UNKNOWN 或 reason=SKIP_UPSTREAM_FAIL 作为结构评估结论；
+    - 若结构信息不完整或存在不确定性：必须基于现有信息给出 PASS 或 FAIL，并在 reasoning 说明不确定因素；
+    - 若确实无法判断结构（极端数据缺失）：输出 Gate3=FAIL reason=INSUFFICIENT_STRUCTURE_DATA，
+      并在 NextTrigger 说明缺少哪些数据；禁止静默 SKIP。
+    - 违反此规则（Gate2=PASS 后 Gate3 输出 DIAG/SKIP）视为系统性漏单错误。
+  * 仅在”上游 FAIL 已锁定本次 action”的场景，允许下游 Gate3~Gate5 以 DIAG(EVAL_ONLY) 诊断占位；Gate5 reason 必须为 SKIP_UPSTREAM_FAIL。
   * 【DIAG(EVAL_ONLY) 占位规则（防回溯）｜P0】当进入 DIAG(EVAL_ONLY)（即：上游 FAIL 已锁定 action）时：
     - PROD_LITE（默认）：下游 Gate 行必须使用固定短码 reason=SKIP_UPSTREAM_FAIL；禁止新增结构锚点/触发器/entry/sl/tp/RR 计算或任何价位推导。
     - REPLAY_FULL/OUTPUT_PROFILE=FULL：允许下游 Gate 做“最小诊断”，但仍不得改变已锁定的 action。
