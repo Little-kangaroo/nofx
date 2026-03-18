@@ -130,16 +130,29 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	blockReason := ""
 
 	// Intent 标记处理（方向感知型，修复误封锁问题）
-	// data_insufficient：硬红线，数据不足禁止所有开仓
+	// data_insufficient：分级处理
+	//   - 完全断联（ob_sign==0 且 cvd 接近 0）：硬红线，block=true
+	//   - 仅 candle_intent 不足但 OB/CVD 数据存在：降级为 INTENT_WARN，允许强结构信号通过
 	// fake_pump/fake_dump：方向感知型，不在后端强制封锁
 	//   - 在 SHORT 方向 + HTF 阻力区：fake_pump 实为做空信号（散户被诱多，聪明钱卖出）
 	//   - 其他场景由 AI 在 Gate2 根据 INTENT_PUMP_WARN 标记做上下文判断
 	intentNorm := NormalizeIntent(in.Orderflow.Micro5m.CandleIntent)
 	if intentNorm == "data_insufficient" {
-		// 数据不足是硬红线：无法判断方向时禁止一切新开仓
-		blockEntry = true
-		blockReason = "INTENT_REDLINE"
-		flags = append(flags, "INTENT_REDLINE")
+		// 判断是否完全断联：OB 盘口数据和 CVD 原始数据均为零
+		obLiq := in.Orderflow.OB.LiquidityScore
+		cvdRawVal := in.Orderflow.Micro5m.FuturesCvdDelta + in.Orderflow.Micro5m.SpotCvdDelta
+		fullyDisconnected := obLiq <= 0 && abs(cvdRawVal) < 1e-9
+
+		if fullyDisconnected {
+			// 完全断联：硬红线，无任何数据支撑，禁止一切新开仓
+			blockEntry = true
+			blockReason = "INTENT_REDLINE"
+			flags = append(flags, "INTENT_REDLINE")
+		} else {
+			// 仅 candle_intent 数据不足，但 OB/CVD 仍有数据：降级为软警告
+			// AI 可在 Gate2 感知此标记，对强结构信号（struct_dir>=0.60）允许通过但需 risk_down×0.50
+			flags = append(flags, "INTENT_WARN")
+		}
 	} else if intentNorm == "fake" {
 		// fake_pump/fake_dump 改为软警告：由 AI 根据方向上下文决定
 		flags = append(flags, "INTENT_PUMP_WARN")
@@ -274,6 +287,25 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 		conf *= 0.70
 	}
 
+	// ========== Step C: 弱结构置信度上限 ==========
+	// 🔥 修复：struct_dir 极弱时 conf 被 OF 信号推至 1.0，导致 AI 过度信任弱结构信号
+	// 例：struct=-0.18 + of=-0.427 → conf=1.0（虚高），实际结构支撑极弱
+	// 修复：按 |struct_dir| 分级压制 conf 上限
+	absStruct := abs(structDir)
+	if absStruct < 0.20 {
+		// 极弱结构：conf 上限 0.65
+		if conf > 0.65 {
+			conf = 0.65
+			flags = append(flags, "CONF_CAP_WEAK_STRUCT")
+		}
+	} else if absStruct < 0.30 {
+		// 弱结构：conf 上限 0.80
+		if conf > 0.80 {
+			conf = 0.80
+			flags = append(flags, "CONF_CAP_WEAK_STRUCT")
+		}
+	}
+
 	// ========== Step C: 方向裁决 ==========
 	side := SideNeutral
 
@@ -306,9 +338,23 @@ func ComputeDirectionArbitration(in RootSymbolInput, cfg Config) DirectionArbitr
 	//   → abs(-0.43)=0.43 < 0.50 → STRUCT_PROTECT → side=NEUTRAL
 	// 例：struct=+0.02（通道平坦噪声）+ of_dir=-0.48 + side=SHORT
 	//   → abs(struct)=0.02 < StructProtectMin=0.15 → 不触发保护 → SHORT 正常放行
-	if side != SideNeutral && abs(structDir) >= cfg.StructProtectMin &&
-		sign(structDir) != signSide(side) {
-		if abs(ofDir) < cfg.StructOverrideMin {
+	//
+	// 🔥 修复：struct_dir 在 (0, StructProtectMin) 区间时的弱结构逆向保护
+	// 旧逻辑：abs(struct)<StructProtectMin 时完全不保护，导致 struct=+0.10 + of=-0.37 → SHORT 漏网
+	// 新逻辑：0 < abs(struct) < StructProtectMin 时，提高 StructOverrideMin 至 0.60（更严格）
+	// 例：struct=+0.10 + of=-0.374 + side=SHORT
+	//   → abs(struct)=0.10 > 0 但 < StructProtectMin=0.15 → 需要 |of|>=0.60 → 0.374<0.60 → STRUCT_PROTECT
+	if side != SideNeutral && sign(structDir) != signSide(side) {
+		var overrideMin float64
+		absStruct := abs(structDir)
+		if absStruct >= cfg.StructProtectMin {
+			// 正常保护区间：使用标准 StructOverrideMin
+			overrideMin = cfg.StructOverrideMin
+		} else if absStruct > 0 {
+			// 弱结构区间 (0, StructProtectMin)：提高门槛至 0.60
+			overrideMin = 0.60
+		}
+		if overrideMin > 0 && abs(ofDir) < overrideMin {
 			flags = append(flags, "STRUCT_PROTECT")
 			side = SideNeutral
 			if !blockEntry {

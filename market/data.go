@@ -4545,10 +4545,48 @@ func getTriggerContextForAI(data *Data, timeframeKlines map[string][]Kline) map[
 		}
 	}
 
-	// 🔥 新增：格式化trigger_quality为2位小数
+	// 🔥 新增：格式化trigger_quality为2位小数，并施加 age 衰减和 volume_z 惩罚
+	// age 衰减：触发信号越老，质量越低（入场价格已偏离触发时价格）
+	//   age=0: ×1.00（当根K线，无衰减）
+	//   age=1: ×0.85
+	//   age=2: ×0.70
+	// volume_z 惩罚：极端放量吞没形态更可能是诱空/诱多陷阱
+	//   volume_z > 4.0: ×0.70（极端放量，高度警惕）
+	//   volume_z > 3.0: ×0.85（显著放量，轻度警惕）
+	ageDecay := 1.0
+	switch {
+	case ageBars >= 2:
+		ageDecay = 0.70
+	case ageBars == 1:
+		ageDecay = 0.85
+	}
+
+	volZPenalty := 1.0
+	absVolZ := volZ
+	if absVolZ < 0 {
+		absVolZ = -absVolZ
+	}
+	switch {
+	case absVolZ > 4.0:
+		volZPenalty = 0.70
+	case absVolZ > 3.0:
+		volZPenalty = 0.85
+	}
+
+	qualityScale := ageDecay * volZPenalty
+
 	formattedQuality := make(map[string]float64)
 	for k, v := range result.AIQuality {
-		formattedQuality[k] = float64(int(v*100+0.5)) / 100 // 四舍五入保留2位小数
+		scaled := v * qualityScale
+		formattedQuality[k] = float64(int(scaled*100+0.5)) / 100 // 四舍五入保留2位小数
+	}
+
+	// volume_z 标记：供 AI 在 Gate4 感知异常放量
+	var volumeFlags []string
+	if absVolZ > 4.0 {
+		volumeFlags = append(volumeFlags, "VOLUME_SPIKE")
+	} else if absVolZ > 3.0 {
+		volumeFlags = append(volumeFlags, "VOLUME_HIGH")
 	}
 
 	// 🔥 P0新增：计算window_state（窗口状态）
@@ -4593,6 +4631,8 @@ func getTriggerContextForAI(data *Data, timeframeKlines map[string][]Kline) map[
 		"raw_quality":    result.RawQuality,    // PostProcess前的所有质量评分
 		"strict_flags":   result.StrictFlags,   // Strict层过滤后的触发器（QualityMin）
 		"strict_quality": result.StrictQuality, // Strict层质量评分
+		// 🔥 P1新增：volume 异常标记（供 AI Gate4 感知）
+		"volume_flags": volumeFlags,
 		// 元数据
 		"klines_count": len(triggerKlines),
 		"状态":         "正常",
@@ -4639,6 +4679,8 @@ func buildEmptyTriggerContext(reason string) map[string]interface{} {
 		"raw_quality":    map[string]float64{},
 		"strict_flags":   []string{},
 		"strict_quality": map[string]float64{},
+		// 🔥 P1新增：volume 异常标记（空值）
+		"volume_flags": []string{},
 		// 元数据
 		"klines_count": 0,
 		"状态":         reason,

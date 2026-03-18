@@ -459,8 +459,12 @@ Gate4）TIMING/SETUP（整段替换 v3｜SSOT 单段流程｜目的：更准抓�
               - buffer 取：max(0.25*ATR14(5m), entry*0.0010)；若 ATR 缺失仅用 entry*0.0010
               - 若无法给出满足方向正确性的 sl -> 视为 RR_CTX_MISSING（reason=RR_CTX_MISSING; detail=NO_VALID_SL）
               【P1｜risk 下限（防止 costs_R 被极小 risk 放大 / 防止止损过紧被噪音扫出）】
-              - 定义 risk_floor = max(0.50*ATR14(5m), 0.30*ATR14(15m), entry*0.0020)；若 ATR 缺失则仅用 entry*0.0020
-                （注：ATR14(5m) 权重从 0.60 提升至 0.50 作为主要下限，确保止损距离覆盖至少半根5m K线的平均波动）
+              - 🔥 修复：生产数据显示亏损交易SL/ATR均值2.1x，盈利交易3.1x，原0.50x下限严重不足
+              - 定义 risk_floor（按 trade_style 分级）：
+                * LTF_scalp：risk_floor = max(2.0*ATR14(5m), 0.50*ATR14(15m), entry*0.0025)
+                * HTF_swing：risk_floor = max(1.5*ATR14(5m), 1.0*ATR14(15m), entry*0.0030)
+                * 若 ATR 缺失则仅用 entry*0.0025（LTF）或 entry*0.0030（HTF）
+                （注：LTF_scalp 提升至 2.0x ATR5m，确保止损覆盖正常5m波动范围，防止被噪声扫出）
               - 若 risk < risk_floor：
                 * 步骤1：优先尝试将 sl 扩展至 entry ± risk_floor（LONG: sl=entry-risk_floor；SHORT: sl=entry+risk_floor），
                   重新计算 risk/reward/RR；若扩展后 sl 仍在结构失效边界之外，则使用扩展后的 sl
@@ -679,9 +683,14 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
         * 字段缺失/矛盾：OF_QUALITY=UNKNOWN
           -> 允许引用但不得成为唯一依据；reasoning 必须标注 ctxNA/unknown 并降权。
     1) 意图标签处理 (Intent Labels) ——【已后端化；两类标记语义不同，模型必须区分】
-  A) 硬红线（INTENT_REDLINE | data_insufficient）：
-    - 若后端标记 flags 包含 INTENT_REDLINE（触发条件：candle_intent=data_insufficient）：
+  A) 硬红线（INTENT_REDLINE | data_insufficient 完全断联）：
+    - 若后端标记 flags 包含 INTENT_REDLINE（触发条件：OB盘口+CVD均为零，完全断联）：
       block_entry=1 已由后端设置；模型 Gate2 FAIL（reason=ENTRY_BLOCKED）；下游 Gate3~Gate5 仅允许 DIAG(EVAL_ONLY)。
+  A2) 软警告（INTENT_WARN | candle_intent 数据不足但 OB/CVD 仍有数据）：
+    - 若后端标记 flags 包含 INTENT_WARN（block_entry 不被强制设为 1）：
+      * struct_dir ≥ 0.60（强结构）：允许继续开仓评估；Gate4 必须强制 risk_down×0.50；reason 写 INTENT_WARN_STRONG_STRUCT
+      * struct_dir < 0.60（弱/中等结构）：Gate2 FAIL（reason=ENTRY_BLOCKED(INTENT_WARN_STRUCT_WEAK)）；等待数据恢复
+      * 说明：candle_intent 仅反映5m蜡烛意图，OB/CVD数据仍可用时结构信号有效，强结构下不应硬封锁
   B) 方向感知型警告（INTENT_PUMP_WARN | fake_pump / retail_driven / fake_dump）：
     - 若后端标记 flags 包含 INTENT_PUMP_WARN（block_entry 不被强制设为 1）：
       模型必须根据 planned_dir 与结构位置做出判断：
@@ -838,6 +847,16 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
     约定：
       - 建议每次请求都提供 trigger_context；若缺失，则等价于 trigger_flags=[]（无触发器）。
       - 触发器枚举（MVP）：SFP_BULL/SFP_BEAR, ENGULF_BULL/ENGULF_BEAR, IBB_BULL/IBB_BEAR, MOMO_BULL/MOMO_BEAR
+      - volume_flags 字段：后端根据 volume_z 预计算的放量标记，Gate4 必须感知：
+        * VOLUME_SPIKE（volume_z > 4.0）：极端放量，trigger_quality 已被后端惩罚×0.70。
+          → 极端放量吞没形态更可能是诱空/诱多陷阱（主力完成大规模成交后反向）。
+          → Gate4 必须额外叠加 risk_down×0.80；order_type 强制 LIMIT；reasoning 注明 VOLUME_SPIKE_CAUTION。
+          → 若 trigger_quality（惩罚后）< borderline_min：Gate4 FAIL（reason=TRIGGER_QUALITY_TOO_LOW）。
+        * VOLUME_HIGH（volume_z > 3.0）：显著放量，trigger_quality 已被后端惩罚×0.85。
+          → 仅作为软警告：reasoning 注明 VOLUME_HIGH，不强制额外参数调整。
+      - trigger_age_bars 衰减：后端已对 age≥1 的 trigger_quality 施加衰减（age=1:×0.85, age=2:×0.70）。
+        → Gate4 看到的 trigger_quality 已是衰减后的值，无需 AI 重复折扣。
+        → 但 age≥2 时 reasoning 必须注明 TRIGGER_AGED，提示入场价格可能已偏离触发时价格。
 3) 交易环境（ExchangeMeta）
 {
   "tick_size": 0.1,
@@ -920,17 +939,20 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
     - 若执行上述惩罚后计算出的 `R_clean < 1.5`，**action 必须强制为 "wait"**。
     - (宁可错过，不做弱防守的交易)。
 - 止损锚点映射表（根据 Entry 依托的主要结构，选择最硬的盾牌）：
-   0) 依托【触发器失效位】(Trigger Invalidation｜强兜底｜优先于所有结构)
-    - 适用：当 trigger_context 中存在“失效位”类型（例如 *invalid_low / *invalid_high）：
-      * trigger_key_level_type ∈ {sfp_invalid_low, sfp_invalid_high, engulf_invalid_low, engulf_invalid_high, ibb_invalid_low, ibb_invalid_high, momo_invalid_low, momo_invalid_high ...}
+   0) 依托【触发器失效位】(Trigger Invalidation｜兜底路径，优先级低于HTF结构)
+    - 🔥 修复：生产数据显示 engulf_invalid_low 作为SL依据时SL/ATR仅1.0-1.6x，极易被噪声扫出
+    - 适用条件（必须同时满足）：
+      * trigger_context 中存在失效位类型（trigger_key_level_type ∈ {engulf_invalid_low/high, sfp_invalid_low/high 等}）
       * 且 trigger_key_level 为有效数值（≠0）
+      * 且【无更强的HTF结构锚点可用】（即 Gate3 Anchor 中无 1h/4h DZ/FVG/SR 在SL候选位附近）
     - 规则（多空对称）：
       * LONG：init_stop = trigger_key_level - Buffer_trig
       * SHORT：init_stop = trigger_key_level + Buffer_trig
-      * Buffer_trig = max(0.30 * ATR("5m"), 2 * tick_size)；若 tick_size 缺失：Buffer_trig = 0.10 * ATR("5m")
-    - 禁止：
-      * 不得因为“no_demand_near / no_supply_near / no_clean_sl”直接否决；
-        必须回退到 Trigger Invalidation 生成 init_stop（这是强制兜底路径）。
+      * Buffer_trig = max(1.5 * ATR(“5m”), 2 * tick_size)
+        🔥 修复：Buffer_trig 从 0.30*ATR 提升至 1.5*ATR，确保触发器失效位SL至少覆盖1.5根5m K线波动
+    - 强制校验：计算出的 init_stop 必须满足 risk_floor（见上方分级标准）；若不满足必须外扩至 risk_floor
+    - 优先级说明：若 Gate3 Anchor 中存在 15m/30m/1h 结构支撑/阻力，优先使用结构锚点（见下方1-3条），
+      触发器失效位仅作为”无结构可用时”的最后兜底，不得覆盖更强的HTF结构SL
   1) 依托【区域/实体结构】 (最强防守)
      * 供需区 (Supply/Demand):
        - LONG: SL < Demand_Zone.Low
@@ -987,8 +1009,11 @@ C1.5) RR 不达标但可通过“更优入场”改善时：DEFER_LIMIT（减少
       - 方案 A：外扩 SL 至满足最小 ATR 要求，并按风险预算下调 qty（保持单笔风险金额不变）；
       - 方案 B：若外扩后 R_clean < 1.5，则放弃本次交易 (action="wait")。
   - LTF_scalp 模式硬约束：
-    * 物理止损距离 必须 ≥ 0.8 * ATR("5m")；
-    * 若不满足：必须外扩 SL 或 action="wait"（不得用“过紧止损”换取抢跑）。
+    * 🔥 修复：生产数据亏损交易SL/ATR均值2.1x，盈利3.1x，原0.8x下限严重不足
+    * 物理止损距离 必须 ≥ 2.0 * ATR(“5m”)；
+    * 建议值：2.5 ~ 3.5 * ATR(“5m”)，优先吸附至最近 15m/30m 结构支撑/阻力外侧
+    * 若结构SL距离 < 2.0*ATR(“5m”)：必须外扩至 2.0*ATR(“5m”)，并按风险预算下调 qty
+    * 若外扩后 R_clean < rr_min：action=”wait”（不得用过紧止损换取抢跑）
   - 规则优先级（防止互相打架）：
     1) 先确保 SL 在结构 invalidation 之外；
     2) 再应用最小噪音容忍度（按风格）；
