@@ -21,33 +21,31 @@ import (
 	"testing"
 )
 
-// breakevenMilestones 包含新增的 3% 保本节点，与 DefaultConfig 完全对齐
-var breakevenMilestones = []prodMilestone{
-	{0.03, 0.00}, // 新增：3% ROI → 保本（止损 = 入场价）
-	{0.05, 0.03},
-	{0.08, 0.05},
-	{0.12, 0.08},
-	{0.16, 0.11},
-	{0.20, 0.14},
-	{0.25, 0.18},
-	{0.30, 0.22},
-	{0.40, 0.30},
-	{0.50, 0.38},
-	{0.60, 0.45},
-	{0.80, 0.55},
-	{1.00, 0.70},
-}
+// breakevenMilestones 从 DefaultConfig 动态生成，与配置完全对齐
+// V-22.0: 1%粒度里程碑，关键节点：2%→保本, 5%→锁3.5%, 10%→锁8%, 20%→锁17.2%, 30%→锁26.2%
+var breakevenMilestones = func() []prodMilestone {
+	cfg := DefaultConfig()
+	// 取关键档位用于梯度测试
+	keyROIs := []float64{0.02, 0.03, 0.05, 0.08, 0.10, 0.20, 0.30, 0.50, 0.80, 1.00}
+	var ms []prodMilestone
+	for _, roi := range keyROIs {
+		if floor, ok := cfg.StopLossMilestones[roi]; ok {
+			ms = append(ms, prodMilestone{roi, floor})
+		}
+	}
+	return ms
+}()
 
 // ─────────────────────────────────────────────────────────────────
 // 一、基础触发
 // ─────────────────────────────────────────────────────────────────
 
-// TestBreakeven_Long_BasicTrigger LONG 3% ROI 触发保本
+// TestBreakeven_Long_BasicTrigger LONG 2% ROI 触发保本（V-22.0: 保本点从3%降至2%）
 func TestBreakeven_Long_BasicTrigger(t *testing.T) {
 	eng := prodEng()
 
 	// Entry=100000, Leverage=10
-	// 3% ROI → LastPrice = 100000 × (1 + 0.03/10) = 100300
+	// 2% ROI → LastPrice = 100000 × (1 + 0.02/10) = 100200
 	// 保本 floor = Entry × (1 + 0.00/10) = 100000
 	pos := PositionState{
 		Symbol:          "BTCUSDT",
@@ -61,14 +59,14 @@ func TestBreakeven_Long_BasicTrigger(t *testing.T) {
 		StopTriggerType: TriggerLast,
 		OpenTimeMs:      1_000_000,
 	}
-	price := 100300.0
+	price := 100200.0
 	plan := eng.Evaluate(pos, MarketSnapshot{
 		Symbol: "BTCUSDT", LastPrice: price, MarkPrice: price, TickSize: 0.1, NowMs: 1_030_000,
 	})
 
-	// ROI ≈ 3%
-	if math.Abs(plan.RoiUnr-0.03) > 0.001 {
-		t.Errorf("RoiUnr=%.4f, want ~0.03", plan.RoiUnr)
+	// ROI ≈ 2%
+	if math.Abs(plan.RoiUnr-0.02) > 0.001 {
+		t.Errorf("RoiUnr=%.4f, want ~0.02", plan.RoiUnr)
 	}
 	// ROIArmed 应被激活
 	if !plan.NextROIArmed {
@@ -97,12 +95,12 @@ func TestBreakeven_Long_BasicTrigger(t *testing.T) {
 	t.Logf("✓ LONG保本: ROI=%.2f%%, NewStop=%.2f (entry=%.2f)", plan.RoiUnr*100, plan.NewStop, pos.Entry)
 }
 
-// TestBreakeven_Short_BasicTrigger SHORT 3% ROI 触发保本
+// TestBreakeven_Short_BasicTrigger SHORT 2% ROI 触发保本（V-22.0: 保本点从3%降至2%）
 func TestBreakeven_Short_BasicTrigger(t *testing.T) {
 	eng := prodEng()
 
 	// Entry=100000, Leverage=10
-	// 3% ROI → LastPrice = 100000 × (1 - 0.03/10) = 99700
+	// 2% ROI → LastPrice = 100000 × (1 - 0.02/10) = 99800
 	// 保本 floor = Entry × (1 - 0.00/10) = 100000
 	pos := PositionState{
 		Symbol:          "BTCUSDT",
@@ -116,13 +114,13 @@ func TestBreakeven_Short_BasicTrigger(t *testing.T) {
 		StopTriggerType: TriggerLast,
 		OpenTimeMs:      1_000_000,
 	}
-	price := 99700.0
+	price := 99800.0
 	plan := eng.Evaluate(pos, MarketSnapshot{
 		Symbol: "BTCUSDT", LastPrice: price, MarkPrice: price, TickSize: 0.1, NowMs: 1_030_000,
 	})
 
-	if math.Abs(plan.RoiUnr-0.03) > 0.001 {
-		t.Errorf("RoiUnr=%.4f, want ~0.03", plan.RoiUnr)
+	if math.Abs(plan.RoiUnr-0.02) > 0.001 {
+		t.Errorf("RoiUnr=%.4f, want ~0.02", plan.RoiUnr)
 	}
 	if !plan.NextROIArmed {
 		t.Errorf("NextROIArmed=false, want true")
@@ -151,47 +149,47 @@ func TestBreakeven_Short_BasicTrigger(t *testing.T) {
 // 二、ROI 门槛边界
 // ─────────────────────────────────────────────────────────────────
 
-// TestBreakeven_BelowThreshold_NoTrigger ROI < 3% 时全标的均不触发
+// TestBreakeven_BelowThreshold_NoTrigger ROI < 1.5% 时全标的均不触发（V-22.0）
 func TestBreakeven_BelowThreshold_NoTrigger(t *testing.T) {
 	eng := prodEng()
 
 	for _, sym := range tradingSymbols {
 		for _, side := range []Side{Long, Short} {
 			pos := prodPos(sym, side, false)
-			// 2.6% + 0.002 缓冲 = 2.8% ROI（低于 3% 门槛）
-			price := prodPriceAtROI(side, sym.Entry, 0.026, sym.Leverage)
+			// 1.2% ROI（低于 1.5% 门槛）
+			price := prodPriceAtROI(side, sym.Entry, 0.012, sym.Leverage)
 			plan := eng.Evaluate(pos, prodMkSnap(sym, price, 2_000_000))
 
 			if plan.ShouldUpdate {
-				t.Errorf("%s/%s: ROI=%.3f%% < 3%%，不应触发; NewStop=%.8f",
+				t.Errorf("%s/%s: ROI=%.3f%% < 1.5%%，不应触发; NewStop=%.8f",
 					sym.Symbol, side, plan.RoiUnr*100, plan.NewStop)
 			}
 			if plan.NextROIArmed {
-				t.Errorf("%s/%s: ROI=%.3f%% < 3%%，NextROIArmed 不应为 true",
+				t.Errorf("%s/%s: ROI=%.3f%% < 1.5%%，NextROIArmed 不应为 true",
 					sym.Symbol, side, plan.RoiUnr*100)
 			}
 		}
 	}
-	t.Logf("✓ 全标的 ROI < 3%% 均未触发（%d 组）", len(tradingSymbols)*2)
+	t.Logf("✓ 全标的 ROI < 1.5%% 均未触发（%d 组）", len(tradingSymbols)*2)
 }
 
-// TestBreakeven_ExactThreshold_Triggers ROI 精确达到 3% 时全标的触发
+// TestBreakeven_ExactThreshold_Triggers ROI 精确达到 2% 时全标的触发（V-22.0）
 func TestBreakeven_ExactThreshold_Triggers(t *testing.T) {
 	eng := prodEng()
 
 	for _, sym := range tradingSymbols {
 		for _, side := range []Side{Long, Short} {
 			pos := prodPos(sym, side, false)
-			// 3% + 0.002 缓冲确保稳定穿越浮点门槛
-			price := prodPriceAtROI(side, sym.Entry, 0.03, sym.Leverage)
+			// 2% + 0.002 缓冲确保稳定穿越浮点门槛
+			price := prodPriceAtROI(side, sym.Entry, 0.02, sym.Leverage)
 			plan := eng.Evaluate(pos, prodMkSnap(sym, price, 2_000_000))
 
 			if !plan.NextROIArmed {
-				t.Errorf("%s/%s: ROI=%.3f%% >= 3%%，NextROIArmed 应为 true",
+				t.Errorf("%s/%s: ROI=%.3f%% >= 2%%，NextROIArmed 应为 true",
 					sym.Symbol, side, plan.RoiUnr*100)
 			}
 			if !plan.ShouldUpdate {
-				t.Errorf("%s/%s: ROI=%.3f%% >= 3%%，应触发更新; reasons=%v",
+				t.Errorf("%s/%s: ROI=%.3f%% >= 2%%，应触发更新; reasons=%v",
 					sym.Symbol, side, plan.RoiUnr*100, plan.Reasons)
 			}
 			// 保本 floor 应接近 entry（允许 2 tick 浮点误差）
@@ -201,14 +199,14 @@ func TestBreakeven_ExactThreshold_Triggers(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("✓ 全标的 ROI >= 3%% 均触发保本（%d 组）", len(tradingSymbols)*2)
+	t.Logf("✓ 全标的 ROI >= 2%% 均触发保本（%d 组）", len(tradingSymbols)*2)
 }
 
 // ─────────────────────────────────────────────────────────────────
 // 三、ROIArmed 状态机
 // ─────────────────────────────────────────────────────────────────
 
-// TestBreakeven_ROIArmedTransition ROIArmed=false 时，首次到达 3% ROI
+// TestBreakeven_ROIArmedTransition ROIArmed=false 时，首次到达 2% ROI
 // 应在同一次 Evaluate 调用中完成激活并执行保本，不需要等下一个 tick
 func TestBreakeven_ROIArmedTransition(t *testing.T) {
 	eng := prodEng()
@@ -225,7 +223,7 @@ func TestBreakeven_ROIArmedTransition(t *testing.T) {
 		OpenTimeMs:      1_000_000,
 	}
 	plan := eng.Evaluate(pos, MarketSnapshot{
-		Symbol: "BTCUSDT", LastPrice: 100300, MarkPrice: 100300, TickSize: 0.1, NowMs: 1_030_000,
+		Symbol: "BTCUSDT", LastPrice: 100200, MarkPrice: 100200, TickSize: 0.1, NowMs: 1_030_000,
 	})
 
 	// 必须在单次调用中完成激活
@@ -244,7 +242,7 @@ func TestBreakeven_ROIArmedTransition(t *testing.T) {
 // 四、保本价格精确等于入场价（多标的 × 多杠杆）
 // ─────────────────────────────────────────────────────────────────
 
-// TestBreakeven_FloorEqualsEntry_AllSymbols 全标的保本 floor 精确等于入场价
+// TestBreakeven_FloorEqualsEntry_AllSymbols 全标的保本 floor 精确等于入场价（V-22.0: ROI=2%）
 func TestBreakeven_FloorEqualsEntry_AllSymbols(t *testing.T) {
 	eng := prodEng()
 
@@ -255,7 +253,7 @@ func TestBreakeven_FloorEqualsEntry_AllSymbols(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
 				pos := prodPos(sym, side, false)
-				price := prodPriceAtROI(side, sym.Entry, 0.03, sym.Leverage)
+				price := prodPriceAtROI(side, sym.Entry, 0.02, sym.Leverage)
 				plan := eng.Evaluate(pos, prodMkSnap(sym, price, 2_000_000))
 
 				if !plan.ShouldUpdate {
@@ -273,7 +271,7 @@ func TestBreakeven_FloorEqualsEntry_AllSymbols(t *testing.T) {
 	}
 }
 
-// TestBreakeven_FloorEqualsEntry_MultiLeverage 不同杠杆下保本均精确等于入场价
+// TestBreakeven_FloorEqualsEntry_MultiLeverage 不同杠杆下保本均精确等于入场价（V-22.0: ROI=2%）
 func TestBreakeven_FloorEqualsEntry_MultiLeverage(t *testing.T) {
 	eng := prodEng()
 	leverages := []float64{1, 3, 5, 10, 20, 50}
@@ -295,8 +293,8 @@ func TestBreakeven_FloorEqualsEntry_MultiLeverage(t *testing.T) {
 				StopTriggerType: TriggerLast,
 				OpenTimeMs:      1_000_000,
 			}
-			// 3% ROI（含缓冲），价格随杠杆变化
-			price := entry * (1 + (0.03+0.002)/lev)
+			// 2% ROI（含缓冲），价格随杠杆变化
+			price := entry * (1 + (0.02+0.002)/lev)
 			plan := eng.Evaluate(pos, MarketSnapshot{
 				Symbol: "BTCUSDT", LastPrice: price, MarkPrice: price, TickSize: 0.1, NowMs: 1_030_000,
 			})
@@ -519,14 +517,14 @@ func TestBreakeven_Simulation_Long(t *testing.T) {
 		desc       string
 	}
 	steps := []step{
-		{100200, 0.02, false, 0, "ROI 2%，未达 3% 门槛"},
-		{100300, 0.03, true, 100000, "ROI 3%，触发保本（止损=入场价）"},
-		{100400, 0.04, false, 0, "ROI 4%，单调性拦截（floor=entry=PrevStop）"},
-		{100500, 0.05, true, 100300, "ROI 5%，锁住 3%（止损=entry+0.3%@10x）"},
-		{100800, 0.08, true, 100500, "ROI 8%，锁住 5%"},
-		{101200, 0.12, true, 100800, "ROI 12%，锁住 8%"},
-		{102000, 0.20, true, 101400, "ROI 20%，锁住 14%"},
-		{103000, 0.30, true, 102200, "ROI 30%，锁住 22%"},
+		{100100, 0.01, false, 0, "ROI 1%，未达 1.5% 门槛"},
+		{100200, 0.02, true, 100000, "ROI 2%，触发保本（止损=入场价）"},
+		{100250, 0.025, false, 0, "ROI 2.5%，单调性拦截（floor=entry=PrevStop）"},
+		{100300, 0.03, true, 100070, "ROI 3%，锁住0.7%（止损=entry+0.07%@10x）"},
+		{100500, 0.05, true, 100350, "ROI 5%，锁住3.5%"},
+		{100800, 0.08, true, 100608, "ROI 8%，锁住6.08%"},
+		{102000, 0.20, true, 101720, "ROI 20%，锁住17.2%"},
+		{103000, 0.30, true, 102620, "ROI 30%，锁住26.2%"},
 	}
 
 	nowMs := int64(1_030_000)
@@ -592,14 +590,14 @@ func TestBreakeven_Simulation_Short(t *testing.T) {
 		desc       string
 	}
 	steps := []step{
-		{99800, 0.02, false, 0, "ROI 2%，未达 3% 门槛"},
-		{99700, 0.03, true, 100000, "ROI 3%，触发保本（止损=入场价）"},
-		{99600, 0.04, false, 0, "ROI 4%，单调性拦截（floor=entry=PrevStop）"},
-		{99500, 0.05, true, 99700, "ROI 5%，锁住 3%（止损=entry-0.3%@10x）"},
-		{99200, 0.08, true, 99500, "ROI 8%，锁住 5%"},
-		{98800, 0.12, true, 99200, "ROI 12%，锁住 8%"},
-		{98000, 0.20, true, 98600, "ROI 20%，锁住 14%"},
-		{97000, 0.30, true, 97800, "ROI 30%，锁住 22%"},
+		{99900, 0.01, false, 0, "ROI 1%，未达 1.5% 门槛"},
+		{99800, 0.02, true, 100000, "ROI 2%，触发保本（止损=入场价）"},
+		{99750, 0.025, false, 0, "ROI 2.5%，单调性拦截（floor=entry=PrevStop）"},
+		{99700, 0.03, true, 99930, "ROI 3%，锁住0.7%（止损=entry-0.07%@10x）"},
+		{99500, 0.05, true, 99650, "ROI 5%，锁住3.5%"},
+		{99200, 0.08, true, 99392, "ROI 8%，锁住6.08%"},
+		{98000, 0.20, true, 98280, "ROI 20%，锁住17.2%"},
+		{97000, 0.30, true, 97380, "ROI 30%，锁住26.2%"},
 	}
 
 	nowMs := int64(1_030_000)
@@ -643,7 +641,7 @@ func TestBreakeven_Simulation_Short(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────
 
 // TestBreakeven_ProfitZeroAtStop 验证保本止损触发时 ROI 精确为 0
-// 核心生产保证：止损挂在入场价，触发时不亏不赚
+// 核心生产保证：止损挂在入场价，触发时不亏不赚（V-22.0: 保本点=2% ROI，floor=0.000）
 func TestBreakeven_ProfitZeroAtStop(t *testing.T) {
 	eng := prodEng()
 
@@ -655,7 +653,7 @@ func TestBreakeven_ProfitZeroAtStop(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
 				pos := prodPos(sym, side, false)
-				price := prodPriceAtROI(side, sym.Entry, 0.03, sym.Leverage)
+				price := prodPriceAtROI(side, sym.Entry, 0.02, sym.Leverage)
 				plan := eng.Evaluate(pos, prodMkSnap(sym, price, 2_000_000))
 
 				if !plan.ShouldUpdate {

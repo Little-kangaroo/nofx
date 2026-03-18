@@ -58,20 +58,18 @@ type prodMilestone struct {
 	LockPct float64 // 锁住 ROI
 }
 
-var prodMilestones = []prodMilestone{
-	{0.05, 0.03},
-	{0.08, 0.05},
-	{0.12, 0.08},
-	{0.16, 0.11},
-	{0.20, 0.14},
-	{0.25, 0.18},
-	{0.30, 0.22},
-	{0.40, 0.30},
-	{0.50, 0.38},
-	{0.60, 0.45},
-	{0.80, 0.55},
-	{1.00, 0.70},
-}
+// prodMilestones 从 DefaultConfig 动态生成，与配置完全对齐（V-22.0）
+var prodMilestones = func() []prodMilestone {
+	cfg := DefaultConfig()
+	keyROIs := []float64{0.05, 0.08, 0.12, 0.16, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.80, 1.00}
+	var ms []prodMilestone
+	for _, roi := range keyROIs {
+		if floor, ok := cfg.StopLossMilestones[roi]; ok {
+			ms = append(ms, prodMilestone{roi, floor})
+		}
+	}
+	return ms
+}()
 
 // ─────────────────────────────────────────────────────────────────
 // 辅助函数
@@ -511,7 +509,7 @@ func TestProd_Cooldown(t *testing.T) {
 
 // ─────────────────────────────────────────────────────────────────
 // 八、ROI 触发门槛边界
-// 2.8% ROI → 不触发；3.2% ROI → 触发保本
+// 1.2% ROI → 不触发；2.0% ROI → 触发保本
 // ─────────────────────────────────────────────────────────────────
 
 func TestProd_ROIThresholdBoundary(t *testing.T) {
@@ -526,28 +524,28 @@ func TestProd_ROIThresholdBoundary(t *testing.T) {
 				t.Parallel()
 				pos := prodPos(sym, side, false)
 
-				// 2.8% ROI：低于 3% 门槛，不触发
-				priceBelow := prodPriceAtROI(side, sym.Entry, 0.026, sym.Leverage) // 2.6%+缓冲 ≈ 2.8%
+				// 1.2% ROI：低于 1.5% 门槛，不触发
+				priceBelow := prodPriceAtROI(side, sym.Entry, 0.010, sym.Leverage) // 1.0%+缓冲 ≈ 1.2%
 				planA := eng.Evaluate(pos, prodMkSnap(sym, priceBelow, 2_000_000))
 				if planA.ShouldUpdate {
-					t.Errorf("ROI=%.2f%% < 3%%，不应触发（当前ROI=%.3f%%）",
-						2.8, planA.RoiUnr*100)
+					t.Errorf("ROI=%.2f%% < 1.5%%，不应触发（当前ROI=%.3f%%）",
+						1.2, planA.RoiUnr*100)
 				}
 				if planA.NextROIArmed {
-					t.Errorf("ROI<3%% 时 NextROIArmed 不应为 true")
+					t.Errorf("ROI<1.5%% 时 NextROIArmed 不应为 true")
 				}
 
-				// 3.2% ROI：高于 3% 门槛，触发保本
-				priceAbove := prodPriceAtROI(side, sym.Entry, 0.03, sym.Leverage) // 3%+0.002缓冲 = 3.2%
+				// 2.0% ROI：高于 1.5% 门槛，触发保本
+				priceAbove := prodPriceAtROI(side, sym.Entry, 0.02, sym.Leverage) // 2%+0.002缓冲 = 2.2%
 				planB := eng.Evaluate(pos, prodMkSnap(sym, priceAbove, 2_000_000))
 				if !planB.ShouldUpdate {
-					t.Errorf("ROI=%.2f%% ≥ 3%%，应触发: %v %s",
+					t.Errorf("ROI=%.2f%% ≥ 1.5%%，应触发: %v %s",
 						planB.RoiUnr*100, planB.Reasons, planB.Note)
 				}
 				if !planB.NextROIArmed {
-					t.Errorf("ROI≥3%% 后 NextROIArmed 应为 true")
+					t.Errorf("ROI≥1.5%% 后 NextROIArmed 应为 true")
 				}
-				// 触发后止损在保本位（允许 == entry），不可超过 entry 的不利方向
+				// 触发后止损在保本位附近，不可超过 entry 的不利方向
 				if planB.ShouldUpdate {
 					if side == Long && planB.NewStop < sym.Entry-sym.TickSize {
 						t.Errorf("LONG: 触发后 NewStop=%.8f 应 >= entry-1tick=%.8f（保本）",

@@ -51,8 +51,9 @@ func TestDOGEUSDTStopUpdateFix(t *testing.T) {
 		t.Errorf("R0计算错误: %.6f, 期望%.6f", plan.R0, expectedR0)
 	}
 
-	// 验证盈利地板：floor = Entry × (1 + 0.03/10) = 0.124520 × 1.003 = 0.124894
-	expectedFloor := 0.124894
+	// 验证盈利地板：V-22.0: ROI=5.7% → milestone 5% → lockPct=0.035
+	// floor = Entry × (1 + 0.035/10) = 0.124520 × 1.0035 = 0.124956
+	expectedFloor := 0.124956
 	if plan.Floor < expectedFloor-0.000010 || plan.Floor > expectedFloor+0.000010 {
 		t.Errorf("盈利地板计算错误: %.6f, 期望约%.6f", plan.Floor, expectedFloor)
 	}
@@ -62,15 +63,15 @@ func TestDOGEUSDTStopUpdateFix(t *testing.T) {
 		t.Errorf("ROI=5.70%%，应该触发止损更新。原因: %v, 备注: %s", plan.Reasons, plan.Note)
 	}
 
-	// 验证新止损价格（FloorToTick(0.124894, 0.00001) = 0.124890）
-	expectedNewStop := 0.124890
+	// 验证新止损价格（FloorToTick(0.124956, 0.00001) = 0.124950）
+	expectedNewStop := 0.124950
 	if plan.NewStop < expectedNewStop-0.000010 || plan.NewStop > expectedNewStop+0.000010 {
 		t.Errorf("新止损价格错误: %.6f, 期望约%.6f", plan.NewStop, expectedNewStop)
 	}
 
 	// 验证止损上移距离
 	stopMove := plan.NewStop - pos.PrevStop
-	expectedMove := 0.002090
+	expectedMove := 0.002150
 	if stopMove < expectedMove-0.000010 || stopMove > expectedMove+0.000010 {
 		t.Errorf("止损移动距离错误: %.6f, 期望约%.6f", stopMove, expectedMove)
 	}

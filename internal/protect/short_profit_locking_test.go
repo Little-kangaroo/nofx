@@ -121,12 +121,12 @@ func TestSHORTProfitLocking_Integration(t *testing.T) {
 		ROIArmed:             false,
 	}
 
-	// 场景1：价格刚开始下跌，ROI 3%（未达到触发阈值5%）
-	t.Run("ROI 3% - 未触发锁盈", func(t *testing.T) {
+	// 场景1：价格刚开始下跌，ROI 1%（未达到触发阈值1.5%）
+	t.Run("ROI 1% - 未触发锁盈", func(t *testing.T) {
 		snap := MarketSnapshot{
 			Symbol:    "SOLUSDT",
-			LastPrice: 126.79, // 下跌0.38，ROI约3%
-			MarkPrice: 126.79,
+			LastPrice: 127.043, // 下跌0.127，ROI约1%
+			MarkPrice: 127.043,
 			TickSize:  0.001,
 			NowMs:     time.Now().UnixMilli(),
 		}
@@ -135,7 +135,7 @@ func TestSHORTProfitLocking_Integration(t *testing.T) {
 		t.Logf("ROI: %.2f%%, 应该更新: %v", plan.RoiUnr*100, plan.ShouldUpdate)
 
 		if plan.ShouldUpdate {
-			t.Errorf("ROI未达到5%%，不应该触发锁盈")
+			t.Errorf("ROI未达到1.5%%，不应该触发锁盈")
 		}
 	})
 

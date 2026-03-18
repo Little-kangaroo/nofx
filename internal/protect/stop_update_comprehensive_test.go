@@ -28,24 +28,24 @@ func TestLONGStopUpdateComprehensive(t *testing.T) {
 		ROIArmed:             false,
 	}
 
-	t.Run("场景1: ROI未触发 (2%)", func(t *testing.T) {
+	t.Run("场景1: ROI未触发 (1.2%)", func(t *testing.T) {
 		pos := basePos
 		snap := MarketSnapshot{
 			Symbol:    "BTCUSDT",
-			LastPrice: 100200.0, // ROI = 2%
-			MarkPrice: 100200.0,
+			LastPrice: 100120.0, // ROI = 1.2%
+			MarkPrice: 100120.0,
 			TickSize:  0.1,
 			NowMs:     time.Now().UnixMilli(),
 		}
 
 		plan := eng.Evaluate(pos, snap)
 
-		if plan.RoiUnr < 0.019 || plan.RoiUnr > 0.021 {
-			t.Errorf("ROI计算错误: %.4f, 期望约0.02", plan.RoiUnr)
+		if plan.RoiUnr < 0.011 || plan.RoiUnr > 0.013 {
+			t.Errorf("ROI计算错误: %.4f, 期望约0.012", plan.RoiUnr)
 		}
 
 		if plan.ShouldUpdate {
-			t.Errorf("ROI未达到3%%，不应触发更新")
+			t.Errorf("ROI未达到1.5%%，不应触发更新")
 		}
 
 		t.Logf("✓ ROI=%.2f%%, 未触发更新（正确）", plan.RoiUnr*100)
@@ -71,8 +71,8 @@ func TestLONGStopUpdateComprehensive(t *testing.T) {
 			t.Errorf("ROI达到5%%，应该触发更新。原因: %v, 备注: %s", plan.Reasons, plan.Note)
 		}
 
-		// 验证盈利地板：entry × (1 + 3%/10) = 100000 × 1.003 = 100300
-		expectedFloor := 100300.0
+		// 验证盈利地板：entry × (1 + 3.5%/10) = 100000 × 1.0035 = 100350
+		expectedFloor := 100350.0
 		if plan.Floor < expectedFloor-1 || plan.Floor > expectedFloor+1 {
 			t.Errorf("盈利地板错误: %.2f, 期望约%.2f", plan.Floor, expectedFloor)
 		}
@@ -98,11 +98,11 @@ func TestLONGStopUpdateComprehensive(t *testing.T) {
 			expectedROI   float64
 			expectedStopPct float64
 		}{
-			{"5% ROI", 100500.0, 0.05, 0.03},
-			{"8% ROI", 100800.0, 0.08, 0.05},
-			{"12% ROI", 101200.0, 0.12, 0.08},
-			{"20% ROI", 102000.0, 0.20, 0.14},
-			{"30% ROI", 103000.0, 0.30, 0.22},
+			{"5% ROI", 100500.0, 0.05, 0.0350},
+			{"8% ROI", 100800.0, 0.08, 0.0608},
+			{"12% ROI", 101200.0, 0.12, 0.0974},
+			{"20% ROI", 102000.0, 0.20, 0.1720},
+			{"30% ROI", 103000.0, 0.30, 0.2620},
 		}
 
 		prevStop := 0.0
@@ -291,24 +291,24 @@ func TestSHORTStopUpdateComprehensive(t *testing.T) {
 		ROIArmed:             false,
 	}
 
-	t.Run("场景1: ROI未触发 (2%)", func(t *testing.T) {
+	t.Run("场景1: ROI未触发 (1.2%)", func(t *testing.T) {
 		pos := basePos
 		snap := MarketSnapshot{
 			Symbol:    "BTCUSDT",
-			LastPrice: 99800.0, // ROI = 2%
-			MarkPrice: 99800.0,
+			LastPrice: 99880.0, // ROI = 1.2%
+			MarkPrice: 99880.0,
 			TickSize:  0.1,
 			NowMs:     time.Now().UnixMilli(),
 		}
 
 		plan := eng.Evaluate(pos, snap)
 
-		if plan.RoiUnr < 0.019 || plan.RoiUnr > 0.021 {
-			t.Errorf("ROI计算错误: %.4f, 期望约0.02", plan.RoiUnr)
+		if plan.RoiUnr < 0.011 || plan.RoiUnr > 0.013 {
+			t.Errorf("ROI计算错误: %.4f, 期望约0.012", plan.RoiUnr)
 		}
 
 		if plan.ShouldUpdate {
-			t.Errorf("ROI未达到3%%，不应触发更新")
+			t.Errorf("ROI未达到1.5%%，不应触发更新")
 		}
 
 		t.Logf("✓ ROI=%.2f%%, 未触发更新（正确）", plan.RoiUnr*100)
@@ -334,8 +334,8 @@ func TestSHORTStopUpdateComprehensive(t *testing.T) {
 			t.Errorf("ROI达到5%%，应该触发更新。原因: %v, 备注: %s", plan.Reasons, plan.Note)
 		}
 
-		// 验证盈利地板：entry × (1 - 3%/10) = 100000 × 0.997 = 99700
-		expectedFloor := 99700.0
+		// 验证盈利地板：entry × (1 - 3.5%/10) = 100000 × 0.9965 = 99650
+		expectedFloor := 99650.0
 		if plan.Floor < expectedFloor-1 || plan.Floor > expectedFloor+1 {
 			t.Errorf("盈利地板错误: %.2f, 期望约%.2f", plan.Floor, expectedFloor)
 		}
@@ -371,11 +371,11 @@ func TestSHORTStopUpdateComprehensive(t *testing.T) {
 			expectedROI   float64
 			expectedStopPct float64
 		}{
-			{"5% ROI", 99500.0, 0.05, 0.03},
-			{"8% ROI", 99200.0, 0.08, 0.05},
-			{"12% ROI", 98800.0, 0.12, 0.08},
-			{"20% ROI", 98000.0, 0.20, 0.14},
-			{"30% ROI", 97000.0, 0.30, 0.22},
+			{"5% ROI", 99500.0, 0.05, 0.0350},
+			{"8% ROI", 99200.0, 0.08, 0.0608},
+			{"12% ROI", 98800.0, 0.12, 0.0974},
+			{"20% ROI", 98000.0, 0.20, 0.1720},
+			{"30% ROI", 97000.0, 0.30, 0.2620},
 		}
 
 		prevStop := 999999.0 // 初始化为很大的值（SHORT止损递减）
