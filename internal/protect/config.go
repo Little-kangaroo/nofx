@@ -6,7 +6,7 @@ type SchedulerConfig struct {
 	EnableSoftStopInFastLoop bool  // 是否在快速循环中启用软止损（默认false）
 }
 
-// Config 锁盈引擎配置（V-20.0 简化版：纯ROI锁盈）
+// Config 锁盈引擎配置（V-22.0 简化版：纯ROI锁盈）
 type Config struct {
 	// ROI锁盈（唯一触发机制）
 	ROILockTrigger float64 // 0.05 - 5%浮盈触发锁盈（无时间约束）
@@ -17,6 +17,13 @@ type Config struct {
 
 	// 🎯 V-21.0: ROI止损里程碑（ROI-based progressive stop-loss）
 	StopLossMilestones map[float64]float64 // ROI阈值 -> 止损百分比 (如：0.10 -> 0.05表示10%ROI时止损移到entry+5%)
+
+	// 🎯 V-23.0: 浮亏时间保护（DrawdownProtection）
+	// 触发条件：持仓 ≥ DrawdownMinMinutes 且 R_unrealized ≤ -DrawdownTriggerR 且 MaxFavorableROI ≤ DrawdownMaxFavorableROI
+	DrawdownMinMinutes    float64 // 20.0 - 触发保护的最小持仓时长（分钟）
+	DrawdownTriggerR      float64 // 0.50 - 触发保护的浮亏阈值（R倍数，正数表示亏损）
+	DrawdownMaxFavorableR float64 // 0.30 - 持仓期间曾达到的最高浮盈不超过此值才触发（防止误伤已盈利仓位）
+	DrawdownHTFSwingExtra float64 // 40.0 - HTF_swing交易的额外豁免时长（分钟），即HTF_swing需持仓≥60分钟才触发
 
 	// 执行控制与防抖
 	StopDistanceMinTicks int64 // 3 - 止损最小距离（tick数）
@@ -31,7 +38,7 @@ type Config struct {
 func DefaultConfig() Config {
 	c := Config{
 		// ROI锁盈（无时间约束）
-		ROILockTrigger: 0.015, // 1.5%触发（更早介入保护）
+		ROILockTrigger: 0.005, // 0.5%触发（V-24.0：更早介入保护，减少静默浮亏）
 		FloorPriceBps:  20,   // 盈利地板（仅在无StopLossMilestones时使用）
 
 		// 🎯 V-19.0: ROI止盈里程碑
@@ -41,10 +48,13 @@ func DefaultConfig() Config {
 			0.50: 0.70, // 50% ROI → 70% 止盈
 		},
 
-		// 🎯 V-22.0: ROI止损里程碑（1%粒度+分段线性单调收紧，覆盖至200% ROI）
-		// 关键节点回撤比例：2%→100%, 5%→30%, 10%→20%, 20%→14%, 50%→10%, 100%→8%, 150%→7%, 200%→6%
+		// 🎯 V-24.0: ROI止损里程碑（0.5%起步，1%粒度，覆盖至200% ROI）
+		// 0.5%-1.5%区间：宽松缓冲（防噪音止损）；2%+：逐步收紧
+		// 关键节点回撤比例：0.5%→宽松, 1%→宽松, 2%→100%, 5%→30%, 10%→20%, 50%→10%, 200%→6%
 		StopLossMilestones: map[float64]float64{
-			0.015: -0.005, // 1.5% ROI → 止损移至入场价-0.05%（缓冲防噪音）
+			0.005: -0.010, // 0.5% ROI → 止损移至入场价-0.10%（微盈时宽松缓冲，防噪音）
+			0.010: -0.007, // 1.0% ROI → 止损移至入场价-0.07%（稍收紧缓冲）
+			0.015: -0.005, // 1.5% ROI → 止损移至入场价-0.05%（接近盈亏平衡）
 			0.020: 0.0000, // 2% ROI → 锁住0.00%（回撤100.0%）
 			0.030: 0.0070, // 3% ROI → 锁住0.70%（回撤76.7%）
 			0.040: 0.0187, // 4% ROI → 锁住1.87%（回撤53.2%）
@@ -258,6 +268,12 @@ func DefaultConfig() Config {
 		CheckIntervalSec:         10,
 		EnableSoftStopInFastLoop: false,
 	}
+
+	// 🎯 V-23.0: 浮亏时间保护默认值
+	c.DrawdownMinMinutes = 20.0    // 持仓满20分钟后才检查
+	c.DrawdownTriggerR = 0.50      // 浮亏达到 -0.5R 触发
+	c.DrawdownMaxFavorableR = 0.30 // 持仓期间从未超过 +0.3R 才触发
+	c.DrawdownHTFSwingExtra = 40.0 // HTF_swing 额外豁免40分钟（共需60分钟）
 
 	return c
 }

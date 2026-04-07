@@ -322,10 +322,28 @@ func (s *Scheduler) tickOnce(ctx context.Context) {
 
 		log.Printf("")
 
+		// ========== 浮亏时间保护日志 ==========
+		if plan.DrawdownTimeout {
+			log.Printf("   🚨 [DRAWDOWN_TIMEOUT] 浮亏超时保护触发！持仓%.1f分钟 | 浮亏%.2fR | 从未盈利超过%.2fR",
+				plan.HoldMinutes, plan.DrawdownR, s.Eng.Cfg.DrawdownMaxFavorableR)
+			log.Printf("      建议 AI 在下一个决策周期执行 action=close reason=DRAWDOWN_TIMEOUT")
+		} else if s.Eng.Cfg.DrawdownMinMinutes > 0 && plan.DrawdownR < 0 {
+			remainMin := s.Eng.Cfg.DrawdownMinMinutes - plan.HoldMinutes
+			if remainMin > 0 {
+				log.Printf("   ⏳ 浮亏保护监控: 当前%.2fR | 还需持仓%.1f分钟后触发检查（阈值-%.2fR）",
+					plan.DrawdownR, remainMin, s.Eng.Cfg.DrawdownTriggerR)
+			}
+		}
+
 		// 回写状态机（即使没有改单，也要保持armed/stage）
 		pos.ROIArmed = plan.NextROIArmed
 		pos.BreakEvenArmed = plan.NextBreakEvenArmed
 		pos.RLockStage = plan.NextRLockStage
+
+		// 更新 MaxFavorableROI（持仓期间曾达到的最高有利ROI，用于浮亏保护判断）
+		if plan.RoiUnr > pos.MaxFavorableROI {
+			pos.MaxFavorableROI = plan.RoiUnr
+		}
 
 		if !plan.ShouldUpdate {
 			// 无需更新，仅保存状态

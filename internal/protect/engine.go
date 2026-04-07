@@ -125,6 +125,10 @@ func (e *Engine) Evaluate(pos PositionState, m MarketSnapshot) StopUpdatePlan {
 		roiArmed = true
 		plan.Reasons = append(plan.Reasons, ReasonROIArm)
 	}
+
+	// ========== 浮亏时间保护评估（独立于ROI锁盈，ROI未触发时也检查） ==========
+	e.evaluateDrawdownProtection(pos, m, r0, plan.RUnr, &plan)
+
 	if !roiArmed {
 		plan.Reasons = append(plan.Reasons, ReasonNoChange)
 		plan.Note = "ROI not triggered"
@@ -192,6 +196,49 @@ func (e *Engine) Evaluate(pos PositionState, m MarketSnapshot) StopUpdatePlan {
 	plan.Note = "ROI lock update"
 	plan.NextROIArmed = roiArmed
 	return plan
+}
+
+// evaluateDrawdownProtection 评估浮亏时间保护
+// 触发条件：持仓时长 ≥ DrawdownMinMinutes 且 R_unrealized ≤ -DrawdownTriggerR 且 持仓期间最高浮盈 ≤ DrawdownMaxFavorableR
+// 触发后设置 plan.DrawdownTimeout=true，由上层（scheduler/auto_trader）决定是否执行 close
+func (e *Engine) evaluateDrawdownProtection(pos PositionState, m MarketSnapshot, r0 float64, rUnr float64, plan *StopUpdatePlan) {
+	if e.Cfg.DrawdownMinMinutes <= 0 || e.Cfg.DrawdownTriggerR <= 0 {
+		return
+	}
+	if pos.OpenTimeMs <= 0 || m.NowMs <= 0 {
+		return
+	}
+
+	holdMs := m.NowMs - pos.OpenTimeMs
+	holdMinutes := float64(holdMs) / 60000.0
+	plan.HoldMinutes = holdMinutes
+	plan.DrawdownR = rUnr
+
+	// 更新 MaxFavorableROI（持仓期间曾达到的最高有利ROI）
+	currentROI := ROIUnrealized(pos, m.LastPrice)
+	_ = currentROI // MaxFavorableROI 由外部持久化，此处仅读取
+
+	// 检查基本浮亏条件
+	if rUnr > -e.Cfg.DrawdownTriggerR {
+		return // 浮亏未达阈值
+	}
+
+	// 检查持仓时长（HTF_swing 使用更长的豁免时长）
+	minMinutes := e.Cfg.DrawdownMinMinutes
+	// HTF_swing 豁免由上层根据 trade_style 判断，此处统一使用基础阈值
+	// auto_trader 会传入已调整后的 DrawdownMinMinutes
+	if holdMinutes < minMinutes {
+		return // 持仓时间未达阈值
+	}
+
+	// 检查持仓期间是否曾有明显盈利（若曾盈利则不触发，避免误伤回撤仓位）
+	if pos.MaxFavorableROI > e.Cfg.DrawdownMaxFavorableR {
+		return // 曾经盈利超过 DrawdownMaxFavorableR，不触发
+	}
+
+	// 全部条件满足，标记浮亏超时
+	plan.DrawdownTimeout = true
+	plan.Reasons = append(plan.Reasons, ReasonDrawdownTimeout)
 }
 
 // maxFloat 返回两个浮点数中的最大值（忽略NaN）

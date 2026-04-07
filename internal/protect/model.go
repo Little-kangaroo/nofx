@@ -35,6 +35,9 @@ type PositionState struct {
 	OpenTimeMs           int64 // 开仓时间戳（毫秒）
 	LastStopUpdateTimeMs int64 // 上次止损更新时间戳（毫秒）
 
+	// 🎯 浮亏时间保护（DrawdownProtection）
+	MaxFavorableROI float64 // 持仓期间曾达到的最高浮盈ROI（用于判断"从未向有利方向发展"）
+
 	StopTriggerType TriggerType // 止损触发类型
 
 	// 状态机持久化（避免反复触发判定）
@@ -63,14 +66,15 @@ type FeeModel struct {
 type ReasonCode string
 
 const (
-	ReasonCooldown     ReasonCode = "COOLDOWN"           // 冷却期内
-	ReasonStepTooSmall ReasonCode = "STEP_TOO_SMALL"     // 移动距离不足
-	ReasonExecGap      ReasonCode = "EXEC_GAP"           // 可执行边界冲突
-	ReasonROIArm       ReasonCode = "ROI_LOCK_ARMED"     // ROI锁盈触发
-	ReasonBreakEven    ReasonCode = "BREAK_EVEN_ARMED"   // [V-20.0 DEPRECATED] Break-even触发（已移除）
-	ReasonRLock        ReasonCode = "R_LOCK"             // [V-20.0 DEPRECATED] R_lock里程碑触发（已移除）
-	ReasonNoChange     ReasonCode = "NO_CHANGE"          // 无改善
-	ReasonInvalidInput ReasonCode = "INVALID_INPUT"      // 输入数据无效
+	ReasonCooldown        ReasonCode = "COOLDOWN"             // 冷却期内
+	ReasonStepTooSmall    ReasonCode = "STEP_TOO_SMALL"       // 移动距离不足
+	ReasonExecGap         ReasonCode = "EXEC_GAP"             // 可执行边界冲突
+	ReasonROIArm          ReasonCode = "ROI_LOCK_ARMED"       // ROI锁盈触发
+	ReasonBreakEven       ReasonCode = "BREAK_EVEN_ARMED"     // [V-20.0 DEPRECATED] Break-even触发（已移除）
+	ReasonRLock           ReasonCode = "R_LOCK"               // [V-20.0 DEPRECATED] R_lock里程碑触发（已移除）
+	ReasonNoChange        ReasonCode = "NO_CHANGE"            // 无改善
+	ReasonInvalidInput    ReasonCode = "INVALID_INPUT"        // 输入数据无效
+	ReasonDrawdownTimeout ReasonCode = "DRAWDOWN_TIMEOUT"     // 浮亏超时保护触发
 )
 
 // StopUpdatePlan 止损更新计划（包含armed/stage回写字段）
@@ -101,6 +105,11 @@ type StopUpdatePlan struct {
 	NextROIArmed       bool // 下次ROIArmed状态
 	NextBreakEvenArmed bool // [V-20.0 DEPRECATED] 下次BreakEvenArmed状态（已移除，保留字段用于兼容）
 	NextRLockStage     int  // [V-20.0 DEPRECATED] 下次RLockStage状态（已移除，保留字段用于兼容）
+
+	// 🎯 浮亏时间保护结果
+	DrawdownTimeout    bool    // 是否触发浮亏超时保护（建议 AI 执行 close）
+	HoldMinutes        float64 // 当前持仓时长（分钟，用于日志）
+	DrawdownR          float64 // 当前浮亏R倍数（用于日志）
 }
 
 // ExecBounds 可执行边界（止损价格必须在此范围内）

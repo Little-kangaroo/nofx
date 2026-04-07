@@ -28,24 +28,24 @@ func TestLONGStopUpdateComprehensive(t *testing.T) {
 		ROIArmed:             false,
 	}
 
-	t.Run("场景1: ROI未触发 (1.2%)", func(t *testing.T) {
+	t.Run("场景1: ROI未触发 (0.3%)", func(t *testing.T) {
 		pos := basePos
 		snap := MarketSnapshot{
 			Symbol:    "BTCUSDT",
-			LastPrice: 100120.0, // ROI = 1.2%
-			MarkPrice: 100120.0,
+			LastPrice: 100030.0, // ROI = 0.3%
+			MarkPrice: 100030.0,
 			TickSize:  0.1,
 			NowMs:     time.Now().UnixMilli(),
 		}
 
 		plan := eng.Evaluate(pos, snap)
 
-		if plan.RoiUnr < 0.011 || plan.RoiUnr > 0.013 {
-			t.Errorf("ROI计算错误: %.4f, 期望约0.012", plan.RoiUnr)
+		if plan.RoiUnr < 0.002 || plan.RoiUnr > 0.004 {
+			t.Errorf("ROI计算错误: %.4f, 期望约0.003", plan.RoiUnr)
 		}
 
 		if plan.ShouldUpdate {
-			t.Errorf("ROI未达到1.5%%，不应触发更新")
+			t.Errorf("ROI未达到0.5%%，不应触发更新")
 		}
 
 		t.Logf("✓ ROI=%.2f%%, 未触发更新（正确）", plan.RoiUnr*100)
@@ -291,24 +291,24 @@ func TestSHORTStopUpdateComprehensive(t *testing.T) {
 		ROIArmed:             false,
 	}
 
-	t.Run("场景1: ROI未触发 (1.2%)", func(t *testing.T) {
+	t.Run("场景1: ROI未触发 (0.3%)", func(t *testing.T) {
 		pos := basePos
 		snap := MarketSnapshot{
 			Symbol:    "BTCUSDT",
-			LastPrice: 99880.0, // ROI = 1.2%
-			MarkPrice: 99880.0,
+			LastPrice: 99970.0, // ROI = 0.3%
+			MarkPrice: 99970.0,
 			TickSize:  0.1,
 			NowMs:     time.Now().UnixMilli(),
 		}
 
 		plan := eng.Evaluate(pos, snap)
 
-		if plan.RoiUnr < 0.011 || plan.RoiUnr > 0.013 {
-			t.Errorf("ROI计算错误: %.4f, 期望约0.012", plan.RoiUnr)
+		if plan.RoiUnr < 0.002 || plan.RoiUnr > 0.004 {
+			t.Errorf("ROI计算错误: %.4f, 期望约0.003", plan.RoiUnr)
 		}
 
 		if plan.ShouldUpdate {
-			t.Errorf("ROI未达到1.5%%，不应触发更新")
+			t.Errorf("ROI未达到0.5%%，不应触发更新")
 		}
 
 		t.Logf("✓ ROI=%.2f%%, 未触发更新（正确）", plan.RoiUnr*100)

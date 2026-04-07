@@ -75,7 +75,7 @@ func TestProfitFloor_Semantics(t *testing.T) {
 
 	cases := []struct {
 		currentROI float64
-		floorPct   float64 // 期望锁住的ROI（V-22.0）
+		floorPct   float64 // 期望锁住的ROI（V-24.0）
 	}{
 		{0.05, 0.0350},
 		{0.08, 0.0608},
@@ -170,16 +170,16 @@ func TestROITrigger_BelowThreshold(t *testing.T) {
 	pos := newLong(100000, 95000, 95000, 10)
 	pos.ROIArmed = false
 
-	// ROI = 1.2%，低于 1.5% 门槛（V-22.0）
-	// price = entry × (1 + 0.012/10) = 100120
-	m := snap(100120, 0.1, 2_000_000)
+	// ROI = 0.3%，低于 0.5% 门槛（V-24.0）
+	// price = entry × (1 + 0.003/10) = 100030
+	m := snap(100030, 0.1, 2_000_000)
 	plan := eng.Evaluate(pos, m)
 
 	if plan.ShouldUpdate {
-		t.Errorf("ROI=1.2%%：不应触发更新")
+		t.Errorf("ROI=0.3%%：不应触发更新")
 	}
 	if plan.NextROIArmed {
-		t.Errorf("ROI=1.2%%：ROIArmed 不应为 true")
+		t.Errorf("ROI=0.3%%：ROIArmed 不应为 true")
 	}
 }
 
@@ -247,7 +247,7 @@ func TestLong_FullMilestoneProgression(t *testing.T) {
 	}
 
 	steps := []step{
-		{"ROI=1.2%（未达门槛）", 100120, 0.012, 0, false},
+		{"ROI=0.3%（未达门槛）", 100030, 0.003, 0, false},
 		{"ROI=5%（触发+锁3.5%）", 100500, 0.05, 0.0350, true},
 		{"ROI=8%（锁6.08%）", 100800, 0.08, 0.0608, true},
 		{"ROI=12%（锁9.74%）", 101200, 0.12, 0.0974, true},
@@ -366,7 +366,7 @@ func TestShort_FullMilestoneProgression(t *testing.T) {
 	}
 
 	steps := []step{
-		{"ROI=1.2%（未达门槛）", 99988, 0.012, 0, false},
+		{"ROI=0.3%（未达门槛）", 99970, 0.003, 0, false},
 		{"ROI=5%（触发+锁3.5%）", 99500, 0.05, 0.0350, true},
 		{"ROI=12%（锁9.74%）", 98800, 0.12, 0.0974, true},
 		{"ROI=20%（锁17.2%）", 98000, 0.20, 0.1720, true},
@@ -609,7 +609,7 @@ func TestRealScenario_DOGEUSDT_FullHistory(t *testing.T) {
 		shouldUpdate bool
 		minLockedROI float64
 	}{
-		{0.091800 * 1.001, false, 0},      // 1% ROI → 未触发（低于1.5%门槛）
+		{0.091800 * 1.0003, false, 0},      // 0.3% ROI → 未触发（低于0.5%门槛）
 		{0.091800 * 1.0052, true, 0.034},  // ~5.2% ROI → 命中5%里程碑，锁3.5%
 		{0.091800 * 1.0082, true, 0.059},  // ~8.2% ROI → 命中8%里程碑，锁6.08%
 		{0.091800 * 1.0122, true, 0.096},  // ~12.2% ROI → 命中12%里程碑，锁9.74%

@@ -509,7 +509,7 @@ func TestProd_Cooldown(t *testing.T) {
 
 // ─────────────────────────────────────────────────────────────────
 // 八、ROI 触发门槛边界
-// 1.2% ROI → 不触发；2.0% ROI → 触发保本
+// 0.3% ROI → 不触发；0.6% ROI → 触发（V-24.0: 阈值0.5%）
 // ─────────────────────────────────────────────────────────────────
 
 func TestProd_ROIThresholdBoundary(t *testing.T) {
@@ -524,38 +524,28 @@ func TestProd_ROIThresholdBoundary(t *testing.T) {
 				t.Parallel()
 				pos := prodPos(sym, side, false)
 
-				// 1.2% ROI：低于 1.5% 门槛，不触发
-				priceBelow := prodPriceAtROI(side, sym.Entry, 0.010, sym.Leverage) // 1.0%+缓冲 ≈ 1.2%
+				// 0.2% ROI：低于 0.5% 门槛，不触发
+				priceBelow := prodPriceAtROI(side, sym.Entry, 0.002, sym.Leverage)
 				planA := eng.Evaluate(pos, prodMkSnap(sym, priceBelow, 2_000_000))
 				if planA.ShouldUpdate {
-					t.Errorf("ROI=%.2f%% < 1.5%%，不应触发（当前ROI=%.3f%%）",
-						1.2, planA.RoiUnr*100)
+					t.Errorf("ROI=%.2f%% < 0.5%%，不应触发（当前ROI=%.3f%%）",
+						0.2, planA.RoiUnr*100)
 				}
 				if planA.NextROIArmed {
-					t.Errorf("ROI<1.5%% 时 NextROIArmed 不应为 true")
+					t.Errorf("ROI<0.5%% 时 NextROIArmed 不应为 true")
 				}
 
-				// 2.0% ROI：高于 1.5% 门槛，触发保本
-				priceAbove := prodPriceAtROI(side, sym.Entry, 0.02, sym.Leverage) // 2%+0.002缓冲 = 2.2%
+				// 0.8% ROI：高于 0.5% 门槛，触发
+				priceAbove := prodPriceAtROI(side, sym.Entry, 0.008, sym.Leverage)
 				planB := eng.Evaluate(pos, prodMkSnap(sym, priceAbove, 2_000_000))
 				if !planB.ShouldUpdate {
-					t.Errorf("ROI=%.2f%% ≥ 1.5%%，应触发: %v %s",
+					t.Errorf("ROI=%.2f%% ≥ 0.5%%，应触发: %v %s",
 						planB.RoiUnr*100, planB.Reasons, planB.Note)
 				}
 				if !planB.NextROIArmed {
-					t.Errorf("ROI≥1.5%% 后 NextROIArmed 应为 true")
+					t.Errorf("ROI≥0.5%% 后 NextROIArmed 应为 true")
 				}
-				// 触发后止损在保本位附近，不可超过 entry 的不利方向
-				if planB.ShouldUpdate {
-					if side == Long && planB.NewStop < sym.Entry-sym.TickSize {
-						t.Errorf("LONG: 触发后 NewStop=%.8f 应 >= entry-1tick=%.8f（保本）",
-							planB.NewStop, sym.Entry-sym.TickSize)
-					}
-					if side == Short && planB.NewStop > sym.Entry+sym.TickSize {
-						t.Errorf("SHORT: 触发后 NewStop=%.8f 应 <= entry+1tick=%.8f（保本）",
-							planB.NewStop, sym.Entry+sym.TickSize)
-					}
-				}
+				// 0.5%-2% 区间止损仍在入场价不利方向（缓冲区），不做保本断言
 
 				t.Logf("✓ 门槛验证: ROI=%.2f%%不触发 / ROI=%.2f%%触发(保本)",
 					planA.RoiUnr*100, planB.RoiUnr*100)

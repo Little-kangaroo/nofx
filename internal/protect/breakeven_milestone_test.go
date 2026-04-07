@@ -149,28 +149,28 @@ func TestBreakeven_Short_BasicTrigger(t *testing.T) {
 // 二、ROI 门槛边界
 // ─────────────────────────────────────────────────────────────────
 
-// TestBreakeven_BelowThreshold_NoTrigger ROI < 1.5% 时全标的均不触发（V-22.0）
+// TestBreakeven_BelowThreshold_NoTrigger ROI < 0.5% 时全标的均不触发（V-24.0）
 func TestBreakeven_BelowThreshold_NoTrigger(t *testing.T) {
 	eng := prodEng()
 
 	for _, sym := range tradingSymbols {
 		for _, side := range []Side{Long, Short} {
 			pos := prodPos(sym, side, false)
-			// 1.2% ROI（低于 1.5% 门槛）
-			price := prodPriceAtROI(side, sym.Entry, 0.012, sym.Leverage)
+			// 0.2% ROI（低于 0.5% 门槛）
+			price := prodPriceAtROI(side, sym.Entry, 0.002, sym.Leverage)
 			plan := eng.Evaluate(pos, prodMkSnap(sym, price, 2_000_000))
 
 			if plan.ShouldUpdate {
-				t.Errorf("%s/%s: ROI=%.3f%% < 1.5%%，不应触发; NewStop=%.8f",
+				t.Errorf("%s/%s: ROI=%.3f%% < 0.5%%，不应触发; NewStop=%.8f",
 					sym.Symbol, side, plan.RoiUnr*100, plan.NewStop)
 			}
 			if plan.NextROIArmed {
-				t.Errorf("%s/%s: ROI=%.3f%% < 1.5%%，NextROIArmed 不应为 true",
+				t.Errorf("%s/%s: ROI=%.3f%% < 0.5%%，NextROIArmed 不应为 true",
 					sym.Symbol, side, plan.RoiUnr*100)
 			}
 		}
 	}
-	t.Logf("✓ 全标的 ROI < 1.5%% 均未触发（%d 组）", len(tradingSymbols)*2)
+	t.Logf("✓ 全标的 ROI < 0.5%% 均未触发（%d 组）", len(tradingSymbols)*2)
 }
 
 // TestBreakeven_ExactThreshold_Triggers ROI 精确达到 2% 时全标的触发（V-22.0）
@@ -517,7 +517,8 @@ func TestBreakeven_Simulation_Long(t *testing.T) {
 		desc       string
 	}
 	steps := []step{
-		{100100, 0.01, false, 0, "ROI 1%，未达 1.5% 门槛"},
+		{100050, 0.005, true, 0, "ROI 0.5%，触发（新阈值0.5%），止损移至入场价-0.10%"},
+		{100100, 0.01, true, 0, "ROI 1%，止损移至入场价-0.07%（稍收紧）"},
 		{100200, 0.02, true, 100000, "ROI 2%，触发保本（止损=入场价）"},
 		{100250, 0.025, false, 0, "ROI 2.5%，单调性拦截（floor=entry=PrevStop）"},
 		{100300, 0.03, true, 100070, "ROI 3%，锁住0.7%（止损=entry+0.07%@10x）"},
@@ -590,7 +591,8 @@ func TestBreakeven_Simulation_Short(t *testing.T) {
 		desc       string
 	}
 	steps := []step{
-		{99900, 0.01, false, 0, "ROI 1%，未达 1.5% 门槛"},
+		{99950, 0.005, true, 0, "ROI 0.5%，触发（新阈值0.5%），止损移至入场价+0.10%"},
+		{99900, 0.01, true, 0, "ROI 1%，止损移至入场价+0.07%（稍收紧）"},
 		{99800, 0.02, true, 100000, "ROI 2%，触发保本（止损=入场价）"},
 		{99750, 0.025, false, 0, "ROI 2.5%，单调性拦截（floor=entry=PrevStop）"},
 		{99700, 0.03, true, 99930, "ROI 3%，锁住0.7%（止损=entry-0.07%@10x）"},

@@ -34,7 +34,7 @@ func TestLONGProfitSimulation(t *testing.T) {
 	t.Logf("   Entry: %.2f, InitStop: %.2f, R0: %.2f", pos.Entry, pos.InitStop, pos.Entry-pos.InitStop)
 	t.Logf("   Leverage: %.0fx", pos.Leverage)
 
-	// 模拟价格上涨过程（V-22.0: 触发阈值1.5%，每30s步长均超过25s冷却期）
+	// 模拟价格上涨过程（V-24.0: 触发阈值0.5%，每30s步长均超过25s冷却期）
 	priceSteps := []struct {
 		time        int64
 		price       float64
@@ -42,15 +42,15 @@ func TestLONGProfitSimulation(t *testing.T) {
 		shouldUpdate bool
 		description string
 	}{
-		{30, 100100.0, 0.01, false, "价格上涨0.1%，ROI 1%，未触发（低于1.5%）"},
-		{60, 100200.0, 0.02, true, "价格上涨0.2%，ROI 2%，触发保本（V-22.0）"},
-		{90, 100300.0, 0.03, true, "价格上涨0.3%，ROI 3%，触发锁0.7%"},
-		{120, 100400.0, 0.04, true, "价格上涨0.4%，ROI 4%，触发锁1.87%"},
-		{150, 100500.0, 0.05, true, "价格上涨0.5%，ROI 5%，触发锁3.5%"},
-		{180, 100600.0, 0.06, true, "价格上涨0.6%，ROI 6%，触发锁4.32%"},
-		{210, 100800.0, 0.08, true, "价格上涨0.8%，ROI 8%，触发锁6.08%"},
-		{240, 101000.0, 0.10, true, "价格上涨1.0%，ROI 10%，触发锁8%"},
-		{270, 101200.0, 0.12, true, "价格上涨1.2%，ROI 12%，触发锁9.74%"},
+		{30, 100050.0, 0.005, true, "价格上涨0.05%，ROI 0.5%，触发（新阈值0.5%）"},
+		{60, 100100.0, 0.01, true, "价格上涨0.1%，ROI 1%，触发锁-0.07%（缓冲）"},
+		{90, 100200.0, 0.02, true, "价格上涨0.2%，ROI 2%，触发保本（V-24.0）"},
+		{120, 100300.0, 0.03, true, "价格上涨0.3%，ROI 3%，触发锁0.7%"},
+		{150, 100400.0, 0.04, true, "价格上涨0.4%，ROI 4%，触发锁1.87%"},
+		{180, 100500.0, 0.05, true, "价格上涨0.5%，ROI 5%，触发锁3.5%"},
+		{210, 100600.0, 0.06, true, "价格上涨0.6%，ROI 6%，触发锁4.32%"},
+		{240, 100800.0, 0.08, true, "价格上涨0.8%，ROI 8%，触发锁6.08%"},
+		{270, 101000.0, 0.10, true, "价格上涨1.0%，ROI 10%，触发锁8%"},
 		{300, 101500.0, 0.15, true, "价格上涨1.5%，ROI 15%，触发锁12.45%"},
 		{330, 102000.0, 0.20, true, "价格上涨2.0%，ROI 20%，触发锁17.2%"},
 		{360, 102500.0, 0.25, true, "价格上涨2.5%，ROI 25%，触发锁21.67%"},
@@ -132,8 +132,8 @@ func TestLONGProfitSimulation(t *testing.T) {
 	t.Logf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	// 验证最终状态
-	if updateCount != 12 {
-		t.Errorf("期望12次止损更新（V-22.0: 1.5%%触发，每步均更新），实际%d次", updateCount)
+	if updateCount != 13 {
+		t.Errorf("期望13次止损更新（V-24.0: 0.5%%触发，每步均更新），实际%d次", updateCount)
 	}
 
 	if pos.PrevStop <= pos.Entry {
@@ -170,7 +170,7 @@ func TestSHORTProfitSimulation(t *testing.T) {
 	t.Logf("   Entry: %.2f, InitStop: %.2f, R0: %.2f", pos.Entry, pos.InitStop, pos.InitStop-pos.Entry)
 	t.Logf("   Leverage: %.0fx", pos.Leverage)
 
-	// 模拟价格下跌过程（V-22.0: 触发阈值1.5%，每30s步长均超过25s冷却期）
+	// 模拟价格下跌过程（V-24.0: 触发阈值0.5%，每30s步长均超过25s冷却期）
 	priceSteps := []struct {
 		time        int64
 		price       float64
@@ -178,15 +178,15 @@ func TestSHORTProfitSimulation(t *testing.T) {
 		shouldUpdate bool
 		description string
 	}{
-		{30, 99900.0, 0.01, false, "价格下跌0.1%，ROI 1%，未触发（低于1.5%）"},
-		{60, 99800.0, 0.02, true, "价格下跌0.2%，ROI 2%，触发保本（V-22.0）"},
-		{90, 99700.0, 0.03, true, "价格下跌0.3%，ROI 3%，触发锁0.7%"},
-		{120, 99600.0, 0.04, true, "价格下跌0.4%，ROI 4%，触发锁1.87%"},
-		{150, 99500.0, 0.05, true, "价格下跌0.5%，ROI 5%，触发锁3.5%"},
-		{180, 99400.0, 0.06, true, "价格下跌0.6%，ROI 6%，触发锁4.32%"},
-		{210, 99200.0, 0.08, true, "价格下跌0.8%，ROI 8%，触发锁6.08%"},
-		{240, 99000.0, 0.10, true, "价格下跌1.0%，ROI 10%，触发锁8%"},
-		{270, 98800.0, 0.12, true, "价格下跌1.2%，ROI 12%，触发锁9.74%"},
+		{30, 99950.0, 0.005, true, "价格下跌0.05%，ROI 0.5%，触发（新阈值0.5%）"},
+		{60, 99900.0, 0.01, true, "价格下跌0.1%，ROI 1%，触发锁+0.07%（缓冲）"},
+		{90, 99800.0, 0.02, true, "价格下跌0.2%，ROI 2%，触发保本（V-24.0）"},
+		{120, 99700.0, 0.03, true, "价格下跌0.3%，ROI 3%，触发锁0.7%"},
+		{150, 99600.0, 0.04, true, "价格下跌0.4%，ROI 4%，触发锁1.87%"},
+		{180, 99500.0, 0.05, true, "价格下跌0.5%，ROI 5%，触发锁3.5%"},
+		{210, 99400.0, 0.06, true, "价格下跌0.6%，ROI 6%，触发锁4.32%"},
+		{240, 99200.0, 0.08, true, "价格下跌0.8%，ROI 8%，触发锁6.08%"},
+		{270, 99000.0, 0.10, true, "价格下跌1.0%，ROI 10%，触发锁8%"},
 		{300, 98500.0, 0.15, true, "价格下跌1.5%，ROI 15%，触发锁12.45%"},
 		{330, 98000.0, 0.20, true, "价格下跌2.0%，ROI 20%，触发锁17.2%"},
 		{360, 97500.0, 0.25, true, "价格下跌2.5%，ROI 25%，触发锁21.67%"},
@@ -242,8 +242,8 @@ func TestSHORTProfitSimulation(t *testing.T) {
 				t.Errorf("   ❌ 止损%.2f应该在当前价%.2f上方", plan.NewStop, snap.LastPrice)
 			}
 
-			// 验证止损在entry下方（锁定利润）
-			if plan.NewStop > pos.Entry {
+			// 验证止损在entry下方（锁定利润）—— ROI>=2%后才保本
+			if plan.RoiUnr >= 0.02 && plan.NewStop > pos.Entry {
 				t.Errorf("   ❌ 止损%.2f应该在entry%.2f下方（锁定利润）", plan.NewStop, pos.Entry)
 			}
 
@@ -273,8 +273,8 @@ func TestSHORTProfitSimulation(t *testing.T) {
 	t.Logf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	// 验证最终状态
-	if updateCount != 12 {
-		t.Errorf("期望12次止损更新（V-22.0: 1.5%%触发，每步均更新），实际%d次", updateCount)
+	if updateCount != 13 {
+		t.Errorf("期望13次止损更新（V-24.0: 0.5%%触发，每步均更新），实际%d次", updateCount)
 	}
 
 	if pos.PrevStop >= pos.Entry {
